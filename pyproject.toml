@@ -1,0 +1,28 @@
+[project]
+
+name = "FundusVesselsToolkit"
+version = '0.0.5'
+authors = [
+    {name= 'Gabriel Lepetit-Aimon', email= 'gabriel.lepetit-aimon@polymtl.ca'},
+]
+description = """A bundle of tools to segment, classify, skeletonize fundus vascular tree."""
+readme = 'README.md'
+
+requires-python = '>=3.10'
+dependencies = [
+    'torch',
+    'nntemplate',
+    'kiria'
+]
+
+[project.urls]
+Homepage = 'https://github.com/gabriel-lepetitaimon/fundus-vessels-toolkit'
+Source = 'https://github.com/gabriel-lepetitaimon/fundus-vessels-toolkit'
+
+
+[build-system]
+requires = ["wheel", "setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "lib"}
