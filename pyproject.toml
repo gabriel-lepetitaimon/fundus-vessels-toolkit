@@ -10,9 +10,12 @@ readme = 'README.md'
 
 requires-python = '>=3.10'
 dependencies = [
-    'torch',
+    'torch>=2.0.0',
+    'torch-geometric',
     'nntemplate',
-    'kiria'
+    'kornia',
+    'scikit-image',
+    'scipy'
 ]
 
 [project.urls]
