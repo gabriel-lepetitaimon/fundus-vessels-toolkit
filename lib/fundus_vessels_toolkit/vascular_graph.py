@@ -2,7 +2,7 @@ from torch_geometric.data import Data
 import torch
 import kornia as K
 
-from .skeletonization import torch_medial_axis
+from .seg2graph import torch_medial_axis
 
 
 class VascularGraph(Data):
