@@ -16,8 +16,6 @@ import torch
 import torch.nn.functional as F
 from typing import Tuple
 
-from nntemplate.misc.function_tools import LogTimer
-
 # ====================== NUMPY IMPLEMENTATION =============================
 
 # Pre-compute masks for junctions and endpoints detections
@@ -130,54 +128,54 @@ def skeletonize(vessel_map: np.ndarray, return_distance=False, fix_hollow=True, 
     sqr3 = np.ones((3, 3), dtype=bool)
 
     # === Compute the medial axis ===
-    with LogTimer("Compute skeleton"):
-        if return_distance:
-            bin_skel, skel_dist = medial_axis(vessel_map, return_distance=return_distance, random_state=0)
-        else:
-            bin_skel = skeletonize(vessel_map)
-            skel_dist = None
-        skel = bin_skel.astype(np.int8)
-        bin_skel_patches = extract_patches(bin_skel, bin_skel, (3, 3), True)
+    # with LogTimer("Compute skeleton"):
+    if return_distance:
+        bin_skel, skel_dist = medial_axis(vessel_map, return_distance=return_distance, random_state=0)
+    else:
+        bin_skel = skeletonize(vessel_map)
+        skel_dist = None
+    skel = bin_skel.astype(np.int8)
+    bin_skel_patches = extract_patches(bin_skel, bin_skel, (3, 3), True)
 
     # === Build the skeleton with junctions and endpoints ===
-    with LogTimer("Detect junctions"):
-        # Detect junctions
-        skel[fast_hit_or_miss(bin_skel, bin_skel_patches, *junction_3lines_masks)] = 2
-        skel += fast_hit_or_miss(bin_skel, bin_skel_patches, *junction_4lines_masks) * 2
+    #with LogTimer("Detect junctions"):
+    # Detect junctions
+    skel[fast_hit_or_miss(bin_skel, bin_skel_patches, *junction_3lines_masks)] = 2
+    skel += fast_hit_or_miss(bin_skel, bin_skel_patches, *junction_4lines_masks) * 2
 
     # Fix hollow cross junctions
     if fix_hollow:
 
-        with LogTimer("Fix hollow cross") as log:
-            # Fix hollow cross junctions interpreted as multiple 3-lines junctions
-            junction_hollow_cross = fast_hit_or_miss(bin_skel, bin_skel_patches, *hollow_cross_mask)
-            log.print('Hollow cross found')
-            skel -= scimage.convolve(junction_hollow_cross.astype(np.int8), sqr3.astype(np.int8))
-            skel = skel.clip(0) + junction_hollow_cross
+        # with LogTimer("Fix hollow cross") as log:
+        # Fix hollow cross junctions interpreted as multiple 3-lines junctions
+        junction_hollow_cross = fast_hit_or_miss(bin_skel, bin_skel_patches, *hollow_cross_mask)
+        # log.print('Hollow cross found')
+        skel -= scimage.convolve(junction_hollow_cross.astype(np.int8), sqr3.astype(np.int8))
+        skel = skel.clip(0) + junction_hollow_cross
 
-            log.print('Hollow cross quick fix, starting post fix')
-            for y, x in zip(*np.where(junction_hollow_cross)):
-                neighborhood = skel[y - 1:y + 2, x - 1:x + 2]
-                if np.sum(neighborhood) == 1:
-                    skel[y, x] = 0
-                if any(scimage.binary_hit_or_miss(neighborhood, *m)[1, 1] for m in zip(*junction_4lines_masks)):
-                    skel[y, x] = 3
-                elif any(scimage.binary_hit_or_miss(neighborhood, *m)[1, 1] for m in zip(*junction_3lines_masks)):
-                    skel[y, x] = 2
-                else:
-                    skel[y, x] = 1
+        # log.print('Hollow cross quick fix, starting post fix')
+        for y, x in zip(*np.where(junction_hollow_cross)):
+            neighborhood = skel[y - 1:y + 2, x - 1:x + 2]
+            if np.sum(neighborhood) == 1:
+                skel[y, x] = 0
+            if any(scimage.binary_hit_or_miss(neighborhood, *m)[1, 1] for m in zip(*junction_4lines_masks)):
+                skel[y, x] = 3
+            elif any(scimage.binary_hit_or_miss(neighborhood, *m)[1, 1] for m in zip(*junction_3lines_masks)):
+                skel[y, x] = 2
+            else:
+                skel[y, x] = 1
 
     skel += skel.astype(bool)
 
     # Detect endpoints
-    with LogTimer('Detect endpoints') as log:
-        bin_skel = skel > 0
-        skel -= fast_hit_or_miss(bin_skel, bin_skel, *endpoint_masks)
+    # with LogTimer('Detect endpoints') as log:
+    bin_skel = skel > 0
+    skel -= fast_hit_or_miss(bin_skel, bin_skel, *endpoint_masks)
 
-    with LogTimer('Remove 1px small end branches'):
-        if remove_small_ends > 0:
-            # Remove small end branches
-            skel = remove_1px_endpoints(skel, endpoint_masks, sqr3)
+    # with LogTimer('Remove 1px small end branches'):
+    if remove_small_ends > 0:
+        # Remove small end branches
+        skel = remove_1px_endpoints(skel, endpoint_masks, sqr3)
 
     # === Create branches labels ===
     branches_label_required = branches_label is not None or remove_small_ends >= 2
@@ -187,11 +185,11 @@ def skeletonize(vessel_map: np.ndarray, return_distance=False, fix_hollow=True, 
         assert branches_label.shape == vessel_map.shape, "branches_label must have the same shape as vessel_map"
         assert branches_label.dtype == np.int32, "branches_label must be of type np.int32"
 
-        with LogTimer('Create branches labels'):
-            junctions = skel >= 3
-            junction_neighbours = scimage.binary_dilation(junctions, sqr3)
-            binskel_no_junctions = (skel >= 1) & ~junction_neighbours
-            branches_label[:], nb_branches = label(binskel_no_junctions, return_num=True, connectivity=2)
+        # with LogTimer('Create branches labels'):
+        junctions = skel >= 3
+        junction_neighbours = scimage.binary_dilation(junctions, sqr3)
+        binskel_no_junctions = (skel >= 1) & ~junction_neighbours
+        branches_label[:], nb_branches = label(binskel_no_junctions, return_num=True, connectivity=2)
     else:
         nb_branches = 0
         branches_label = None
@@ -199,40 +197,40 @@ def skeletonize(vessel_map: np.ndarray, return_distance=False, fix_hollow=True, 
     # === Remove small branches ===
     if remove_small_ends >= 2:
         # --- Remove larger than 1 px endpoints branches ---
-        with LogTimer('Remove small branches') as log:
-            # Select small branches
-            branch_sizes = np.bincount(branches_label.ravel())
-            small_branches_id = np.where(branch_sizes < remove_small_ends)[0]
-            log.print(f'Found {len(small_branches_id)} small branches.')
+        # with LogTimer('Remove small branches') as log:
+        # Select small branches
+        branch_sizes = np.bincount(branches_label.ravel())
+        small_branches_id = np.where(branch_sizes < remove_small_ends)[0]
+        # log.print(f'Found {len(small_branches_id)} small branches.')
 
-            # Select branches which including endpoints
-            endpoint_branches_id = np.unique(branches_label[skel == 1])
-            log.print(f'Found {len(endpoint_branches_id)} branches shich includes endpoints.')
+        # Select branches which including endpoints
+        endpoint_branches_id = np.unique(branches_label[skel == 1])
+        # log.print(f'Found {len(endpoint_branches_id)} branches shich includes endpoints.')
 
-            # Identify small branches labels
-            branches_to_remove = np.intersect1d(endpoint_branches_id, small_branches_id, assume_unique=True)
-            log.print(f' => {len(branches_to_remove)} branches to be removed.')
+        # Identify small branches labels
+        branches_to_remove = np.intersect1d(endpoint_branches_id, small_branches_id, assume_unique=True)
+        # log.print(f' => {len(branches_to_remove)} branches to be removed.')
 
-            label_lookup = np.zeros(nb_branches + 1, dtype=np.int32)
-            label_lookup[branches_to_remove] = 1
-            label_lookup = np.arange(nb_branches + 1, dtype=np.int32) - np.cumsum(label_lookup)
-            nb_branches = nb_branches - len(branches_to_remove)
-            log.print(f'Computed label_lookup')
+        label_lookup = np.zeros(nb_branches + 1, dtype=np.int32)
+        label_lookup[branches_to_remove] = 1
+        label_lookup = np.arange(nb_branches + 1, dtype=np.int32) - np.cumsum(label_lookup)
+        nb_branches = nb_branches - len(branches_to_remove)
+        # log.print(f'Computed label_lookup')
 
-            # Remove small branches from the skeleton.
-            skel[np.isin(branches_label, branches_to_remove)] = 0
+        # Remove small branches from the skeleton.
+        skel[np.isin(branches_label, branches_to_remove)] = 0
 
-            # Remove small branches labels from the label map
-            branches_label[:] = label_lookup[branches_label]
+        # Remove small branches labels from the label map
+        branches_label[:] = label_lookup[branches_label]
 
-            log.print(f'Small branch has been removed')
-            # At this point small branches have been reduced to 1px endpoints and must be removed again.
-            bin_skel = skel > 0
-            skel -= fast_hit_or_miss(bin_skel, bin_skel, *endpoint_masks)
-            log.print(f'Endpoints detected again')
+        # log.print(f'Small branch has been removed')
+        # At this point small branches have been reduced to 1px endpoints and must be removed again.
+        bin_skel = skel > 0
+        skel -= fast_hit_or_miss(bin_skel, bin_skel, *endpoint_masks)
+        # log.print(f'Endpoints detected again')
 
-            skel = remove_1px_endpoints(skel, endpoint_masks, sqr3)
-            log.print(f'1px branch removed')
+        skel = remove_1px_endpoints(skel, endpoint_masks, sqr3)
+        # log.print(f'1px branch removed')
 
     if return_distance:
         return skel, skel_dist
@@ -499,22 +497,77 @@ def extract_graph(vessel_map: np.ndarray, return_label=False, junctions_merge_di
     junctions_ring = extract_unravelled_pattern(labeled_branches, (jy, jx), ring_pattern, return_coordinates=False)
 
     # Build the matrix of connections from branches to junctions
-    connections = np.zeros((nb_branches+1, nb_junctions), dtype=bool)
-    connections[junctions_ring.flatten(), np.tile(np.arange(nb_junctions), ring_pattern.sum())] = 1
-    connections = connections[1:, :]
+    branches_by_junctions = np.zeros((nb_branches+1, nb_junctions), dtype=bool)
+    branches_by_junctions[junctions_ring.flatten(), np.repeat(np.arange(nb_junctions), ring_pattern.sum())] = 1
+    branches_by_junctions = branches_by_junctions[1:, :]
 
     # Detect junctions clusters
     cluster_structure = skmorph.disk(junctions_merge_distance) > 0
     junctions_clusters_by_junctions = extract_unravelled_pattern(labels_junctions, (jy, jx), cluster_structure)
     junctions_clusters = np.zeros((nb_junctions+1, nb_junctions), dtype=bool)
     junctions_clusters[junctions_clusters_by_junctions.flatten(),
-                       np.tile(np.arange(nb_junctions), np.sum(cluster_structure))] = 1
-    junctions_clusters = junctions_clusters[1:, :]
+                       np.repeat(np.arange(nb_junctions), np.sum(cluster_structure))] = 1
+    junctions_clusters = connectivity_matrix2clusters(junctions_clusters[1:, :])
+
+    # Merge junctions
+    branches_by_junctions, branch_lookup, jonction_lookup = merge_junctions(branches_by_junctions, junctions_clusters)
 
     if return_label:
-        return junctions_clusters, labeled_branches, (jy, jx)
+        labeled_branches = branch_lookup[labeled_branches]
+        (jy, jx) = np.mean.at(jonction_lookup, (jy, jx), (jy, jx), where=jonction_lookup != 0)
+        return branches_by_junctions, labeled_branches, (jy, jx)
     else:
-        return connections
+        return branches_by_junctions
+
+
+def merge_junctions(branches_by_junctions, junctions_clusters):
+    junction_table = np.arange(branches_by_junctions.shape[1], dtype=np.int64)
+    branches_to_remove = np.zeros(branches_by_junctions.shape[0], dtype=bool)
+    junction_to_remove = np.zeros(branches_by_junctions.shape[1], dtype=bool)
+    for cluster in junctions_clusters:
+        branches_to_remove[np.where(np.sum(branches_by_junctions[:, cluster], axis=1) >= 2)] = True
+        junction_table[cluster] = cluster[0]
+        junction_to_remove[cluster[1:]] = True
+
+    branches_by_junctions = np.delete(branches_by_junctions, np.concatenate(branches_to_remove), axis=0)
+    branches_lookup = np.cumsum(~branches_to_remove) - 1
+    junction_lookup = np.cumsum(~junction_to_remove) - 1
+
+    nb_branches = branches_lookup[-1] + 1
+    nb_junctions = junction_lookup[-1] + 1
+    branches_by_junctions = np.add.at(np.zeros_like(branches_by_junctions, shape=(nb_branches, nb_junctions)),
+                                      junction_table, branches_by_junctions)
+
+    return branches_by_junctions, branches_lookup, junction_lookup
+
+
+def connectivity_matrix2clusters(conn):
+    clusters = []
+    for j1, j2 in zip(*np.where((conn > 0) & ~np.eye(len(conn), dtype=bool))):
+        for i, c in enumerate(clusters):
+            if j1 in c:
+                for i2, c2 in tuple(enumerate(clusters))[i + 1:]:
+                    if j2 in c2:
+                        del clusters[i2]
+                        c |= c2
+                        break
+                else:
+                    c |= {j2}
+            elif j2 in c:
+                for i1, c1 in tuple(enumerate(clusters))[i + 1:]:
+                    if j1 in c1:
+                        del clusters[i1]
+                        c |= c1
+                        break
+                else:
+                    c |= {j1}
+            else:
+                continue
+            break
+        else:
+            clusters += [{j1, j2}]
+    return clusters
+
 
 # ====================== TORCH IMPLEMENTATION =============================
 
