@@ -9,12 +9,11 @@
 #
 ########################################################################################################################
 
-__all__ = ['skeletonize', 'torch_medial_axis', 'extract_patches', 'extract_graph']
+__all__ = ['skeletonize', 'extract_patches', 'compute_adjacency_branches_nodes']
 
 import numpy as np
-import torch
-import torch.nn.functional as F
-from typing import Tuple
+import networkx as nx
+from typing import Tuple, Dict
 
 # ====================== NUMPY IMPLEMENTATION =============================
 
@@ -64,8 +63,11 @@ def compute_junction_endpoint_masks():
                      [1, 0, 1]],
                     [[0, 1, 0],
                      [1, 1, 1],
-                     [0, 1, 0]]
-                ], dtype=bool)
+                     [0, 1, 0]],
+                    [[2, 2, 2],
+                     [2, 1, 1],
+                     [2, 1, 1]],
+                ])
                 masks += [masks_4]
             masks = np.concatenate(masks)
             return masks == 1, masks == 0
@@ -98,7 +100,7 @@ def compute_junction_endpoint_masks():
 
 
 def skeletonize(vessel_map: np.ndarray, return_distance=False, fix_hollow=True, remove_small_ends=5,
-                branches_label: np.ndarray | None = None):
+                branches_label: np.ndarray | None = None, skeletonize_method=None):
     """
     Skeletonize a binary image of retinal vessels using the medial axis transform.
     Junctions and endpoints are detected and labeled, and simple cleanup operations are performed on the skeleton.
@@ -129,11 +131,11 @@ def skeletonize(vessel_map: np.ndarray, return_distance=False, fix_hollow=True, 
 
     # === Compute the medial axis ===
     # with LogTimer("Compute skeleton"):
-    if return_distance:
+    if skeletonize_method == 'medial_axis':
         bin_skel, skel_dist = medial_axis(vessel_map, return_distance=return_distance, random_state=0)
     else:
-        bin_skel = skeletonize(vessel_map)
-        skel_dist = None
+        bin_skel = skeletonize(vessel_map, method=skeletonize_method) > 0
+        skel_dist = scimage.distance_transform_edt(bin_skel) if return_distance else None
     skel = bin_skel.astype(np.int8)
     bin_skel_patches = extract_patches(bin_skel, bin_skel, (3, 3), True)
 
@@ -141,14 +143,13 @@ def skeletonize(vessel_map: np.ndarray, return_distance=False, fix_hollow=True, 
     #with LogTimer("Detect junctions"):
     # Detect junctions
     skel[fast_hit_or_miss(bin_skel, bin_skel_patches, *junction_3lines_masks)] = 2
-    skel += fast_hit_or_miss(bin_skel, bin_skel_patches, *junction_4lines_masks) * 2
+    skel[fast_hit_or_miss(bin_skel, bin_skel_patches, *junction_4lines_masks)] = 3
 
     # Fix hollow cross junctions
     if fix_hollow:
 
         # with LogTimer("Fix hollow cross") as log:
-        # Fix hollow cross junctions interpreted as multiple 3-lines junctions
-        junction_hollow_cross = fast_hit_or_miss(bin_skel, bin_skel_patches, *hollow_cross_mask)
+        junction_hollow_cross = scimage.morphology.binary_hit_or_miss(bin_skel, *hollow_cross_mask)
         # log.print('Hollow cross found')
         skel -= scimage.convolve(junction_hollow_cross.astype(np.int8), sqr3.astype(np.int8))
         skel = skel.clip(0) + junction_hollow_cross
@@ -315,7 +316,6 @@ def fast_hit_or_miss(map: np.ndarray, mask: np.ndarray | Tuple[np.ndarray, Tuple
     negative_patterns = negative_patterns.reshape((negative_patterns.shape[0], -1))
     patches = patches.reshape((patches.shape[0], -1))
 
-    # print(positive_patterns)
     hit_patches = binary1d_hit_or_miss(patches, positive_patterns, negative_patterns)
 
     # Aggregate the response of hit-or-miss for each patterns
@@ -387,7 +387,8 @@ def binary1d_hit_or_miss(samples, positive_patterns, negative_patterns=None):
     assert samples.dtype == bool, "samples must be of type bool"
     assert positive_patterns.dtype == bool, "positive_patterns must be of type bool"
     assert positive_patterns.ndim == 2 and samples.ndim == 2, "samples and positive_patterns must be 2D"
-    assert positive_patterns.shape[1] == samples.shape[1], "samples and positive_patterns must have the same number of columns"
+    assert positive_patterns.shape[1] == samples.shape[1], "samples and positive_patterns must have the same number of columns " \
+                                                           f"positive_patterns.shape = {positive_patterns.shape}, samples.shape = {samples.shape}"
     if negative_patterns is None:
         negative_patterns = ~positive_patterns
     else:
@@ -455,7 +456,34 @@ def extract_unravelled_pattern(map: np.ndarray, where: np.ndarray | Tuple[np.nda
         return map
 
 
-def extract_graph(vessel_map: np.ndarray, return_label=False, junctions_merge_distance=3):
+def compute_adjacency_branches_nodes(vessel_map: np.ndarray, return_label=False, nodes_merge_distance=True,
+                                     merge_small_cycles=0, simplify_topology=True):
+    """
+    Extract the naive vasculature graph from a vessel map.
+    If return label is True, the label map of branches and nodes are also computed and returned.
+
+    Small topological corrections are applied to the graph:
+        - nodes too close to each other are merged (max distance=5√2/2 by default)
+        - cycles with small perimeter are merged (max size=15% of the image width by default)
+        - if simplify_topology is True, the graph is simplified by merging equivalent branches (branches connecting the same junctions)
+            and removing nodes with degree 2.
+
+    Args:
+        vessel_map: The vessel map. Shape: (H, W) where H and W are the map height and width.
+        return_label: If True, return the label map of branches and nodes.
+        nodes_merge_distance: If not 0, nodes separated by less than this distance are merged (5√2/2 by default).
+        merge_small_cycles: If not 0, cycles with a perimeter smaller than this value are merged (disabled by default).
+        simplify_topology: If True, the graph is simplified by merging equivalent branches (branches connecting the same junctions)
+            and removing nodes with degree 2.
+
+    Returns:
+        The adjacency matrix of the graph.
+        Shape: (nBranch, nNode) where nBranch and nNode are the number of branches and nodes (junctions or terminations).
+
+        If return_label is True, also return the label map of branches
+            (where each branch of the skeleton is labeled by a unique integer corresponding to its index in the adjacency matrix)
+        and the coordinates of the nodes as a tuple of (y, x) where y and x are vectors of length nNode.
+    """
     import networkx as nx
     import scipy.ndimage as scimage
     import skimage.morphology as skmorph
@@ -468,178 +496,276 @@ def extract_graph(vessel_map: np.ndarray, return_label=False, junctions_merge_di
         skel = vessel_map
 
     bin_skel = skel > 0
-    junctions = skel >= 3
+    nodes = (skel >= 3) | (skel == 1)
     sqr3 = np.ones((3, 3), dtype=bool)
 
     # Label branches
-    skel_no_junctions = bin_skel & ~scimage.binary_dilation(junctions, sqr3)
-    labeled_branches, nb_branches = label(skel_no_junctions, return_num=True)
-    labeled_branches = expand_labels(labeled_branches, 2) * bin_skel
+    skel_no_nodes = bin_skel & ~scimage.binary_dilation(nodes, sqr3)
+    labeled_branches, nb_branches = label(skel_no_nodes, return_num=True)
+    labeled_branches = expand_labels(labeled_branches, 2) * (bin_skel & ~nodes)
 
-    # Label junctions
-    jy, jx = np.where(junctions)
-    labels_junctions = np.zeros_like(labeled_branches)
-    labels_junctions[jy, jx] = np.arange(1, len(jy)+1)
-    nb_junctions = len(jy)
+    # Label nodes
+    node_y, node_x = np.where(nodes)
+    labels_nodes = np.zeros_like(labeled_branches)
+    labels_nodes[node_y, node_x] = np.arange(1, len(node_y)+1)
+    nb_nodes = len(node_y)
 
     # Identify branches connected to each junction
-    # junctions_ring = [(jy - 1, jx + 1), (jy, jx + 1),
-    #                  (jy + 1, jx + 1), (jy + 1, jx),
-    #                  (jy + 1, jx - 1), (jy, jx - 1),
-    #                  (jy - 1, jx - 1), (jy - 1, jx)]
-    # junctions_ring = tuple(np.clip(yx, 0, hw-1)
-    #                       for yx, hw in zip(np.asarray(junctions_ring).transpose((1, 0, 2)), labeled_branches.shape))
-    # junctions_ring = labeled_branches[junctions_ring]
-
     ring_pattern = np.asarray([[1, 1, 1],
                                [1, 0, 1],
                                [1, 1, 1]], dtype=bool)
-    junctions_ring = extract_unravelled_pattern(labeled_branches, (jy, jx), ring_pattern, return_coordinates=False)
+    nodes_ring = extract_unravelled_pattern(labeled_branches, (node_y, node_x), ring_pattern, return_coordinates=False)
 
-    # Build the matrix of connections from branches to junctions
-    branches_by_junctions = np.zeros((nb_branches+1, nb_junctions), dtype=bool)
-    branches_by_junctions[junctions_ring.flatten(), np.repeat(np.arange(nb_junctions), ring_pattern.sum())] = 1
-    branches_by_junctions = branches_by_junctions[1:, :]
+    # Build the matrix of connections from branches to nodes
+    branches_by_nodes = np.zeros((nb_branches+1, nb_nodes), dtype=bool)
+    branches_by_nodes[nodes_ring.flatten(), np.repeat(np.arange(nb_nodes), ring_pattern.sum())] = 1
+    branches_by_nodes = branches_by_nodes[1:, :]
 
-    # Detect junctions clusters
-    cluster_structure = skmorph.disk(junctions_merge_distance) > 0
-    junctions_clusters_by_junctions = extract_unravelled_pattern(labels_junctions, (jy, jx), cluster_structure)
-    junctions_clusters = np.zeros((nb_junctions+1, nb_junctions), dtype=bool)
-    junctions_clusters[junctions_clusters_by_junctions.flatten(),
-                       np.repeat(np.arange(nb_junctions), np.sum(cluster_structure))] = 1
-    junctions_clusters = connectivity_matrix2clusters(junctions_clusters[1:, :])
+    if nodes_merge_distance is True:
+        nodes_merge_distance = 2.5 * np.sqrt(2)
+    if nodes_merge_distance > 0:
+        # Merge nodes clusters
+        # - Generate the structure placed at each junction to detect its neighbor nodes which should be merged
+        cluster_structure = skmorph.disk(nodes_merge_distance) > 0
+        structure_numel = cluster_structure.sum()
+        # - Extract the nodes index in the neighborhood of each junction; shape: [nb_nodes, structure_numel]
+        nodes_clusters_by_nodes = extract_unravelled_pattern(labels_nodes, (node_y, node_x), cluster_structure)
+        # - Build the proximity connectivity matrix between nodes
+        nodes_clusters = np.zeros((nb_nodes+1, nb_nodes), dtype=bool)
+        nodes_clusters[nodes_clusters_by_nodes,
+                           np.tile(np.arange(nb_nodes)[:, None], (1, structure_numel))] = 1
+        nodes_clusters = nodes_clusters[1:, :] - np.eye(nb_nodes)
+        # - Identify clusters as a list of lists of nodes indices
+        nodes_clusters = [_ for _ in nx.find_cliques(nx.from_numpy_array(nodes_clusters))
+                              if len(_) > 1]
+        # - Merge nodes
+        branches_by_nodes, branch_lookup, node_lookup = merge_junctions_clusters(branches_by_nodes, nodes_clusters)
+        if node_lookup is not None:
+            node_y, node_x = apply_node_lookup_on_coordinates((node_y, node_x), node_lookup)
+            nb_nodes = len(node_y)
+    else:
+        branch_lookup = None
 
-    # Merge junctions
-    branches_by_junctions, branch_lookup, jonction_lookup = merge_junctions(branches_by_junctions, junctions_clusters)
+    # Merge small cycles
+    if merge_small_cycles > 0:
+        if merge_small_cycles < 1:
+            merge_small_cycles = merge_small_cycles * vessel_map.shape[0]
+        # - Identify cycles
+        node_adjency_matrix = branches_by_nodes.T@branches_by_nodes-np.eye(nb_nodes)
+        cycles = [_ for _ in nx.chordless_cycles(nx.from_numpy_array(node_adjency_matrix)) if len(_) > 2]
+        # - Select chord less cycles with small perimeter
+        cycles_perimeters = [perimeter_from_vertices(np.asarray((node_y, node_x)).T[cycle]) for cycle in cycles]
+        cycles = [cycle for cycle, perimeter in zip(cycles, cycles_perimeters)
+                   if perimeter < merge_small_cycles]
+        # - Merge cycles
+        branches_by_nodes, branch_lookup_2, node_lookup = merge_junctions_clusters(branches_by_nodes, cycles,
+                                                                                   remove_branches_labels=False)
+        # - Apply the lookup tables on nodes and branches
+        if node_lookup is not None:
+            node_y, node_x = apply_node_lookup_on_coordinates((node_y, node_x), node_lookup)
+        if branch_lookup_2 is not None:
+            if branch_lookup is not None:
+                branch_lookup = branch_lookup_2[branch_lookup]
+            else:
+                branch_lookup = branch_lookup_2
+
+    if simplify_topology:
+        # Merge equivalent branches
+        branches_by_nodes, branch_lookup_2, node_to_keep = merge_equivalent_branches(branches_by_nodes)
+        # - Apply the lookup tables on nodes and branches
+        if node_to_keep is not None:
+            node_y, node_x = node_y[node_to_keep], node_x[node_to_keep]
+        if branch_lookup_2 is not None:
+            if branch_lookup is not None:
+                branch_lookup = branch_lookup_2[branch_lookup]
+            else:
+                branch_lookup = branch_lookup_2
 
     if return_label:
-        labeled_branches = branch_lookup[labeled_branches]
-        (jy, jx) = np.mean.at(jonction_lookup, (jy, jx), (jy, jx), where=jonction_lookup != 0)
-        return branches_by_junctions, labeled_branches, (jy, jx)
+        if branch_lookup is not None:
+            # Update branch labels
+            branch_lookup = np.concatenate(([0], branch_lookup+1))
+            labeled_branches = branch_lookup[labeled_branches]
+        return branches_by_nodes, labeled_branches, (node_y, node_x)
     else:
-        return branches_by_junctions
+        return branches_by_nodes
 
 
-def merge_junctions(branches_by_junctions, junctions_clusters):
-    junction_table = np.arange(branches_by_junctions.shape[1], dtype=np.int64)
-    branches_to_remove = np.zeros(branches_by_junctions.shape[0], dtype=bool)
-    junction_to_remove = np.zeros(branches_by_junctions.shape[1], dtype=bool)
-    for cluster in junctions_clusters:
-        branches_to_remove[np.where(np.sum(branches_by_junctions[:, cluster], axis=1) >= 2)] = True
-        junction_table[cluster] = cluster[0]
-        junction_to_remove[cluster[1:]] = True
-
-    branches_by_junctions = np.delete(branches_by_junctions, np.concatenate(branches_to_remove), axis=0)
-    branches_lookup = np.cumsum(~branches_to_remove) - 1
-    junction_lookup = np.cumsum(~junction_to_remove) - 1
-
-    nb_branches = branches_lookup[-1] + 1
-    nb_junctions = junction_lookup[-1] + 1
-    branches_by_junctions = np.add.at(np.zeros_like(branches_by_junctions, shape=(nb_branches, nb_junctions)),
-                                      junction_table, branches_by_junctions)
-
-    return branches_by_junctions, branches_lookup, junction_lookup
+def branches_by_nodes_to_node_graph(branches_by_nodes, node_pos=None):
+    branches = np.arange(branches_by_nodes.shape[0]) + 1
+    branches_by_nodes = branches_by_nodes.astype(bool)
+    node_adjacency = branches_by_nodes.T @ (branches_by_nodes * branches[:, None])
+    graph = nx.from_numpy_array((node_adjacency > 0) & (~np.eye(branches_by_nodes.shape[1], dtype=bool)))
+    if node_pos is not None:
+        node_y, node_x = node_pos
+        nx.set_node_attributes(graph, node_y, 'y')
+        nx.set_node_attributes(graph, node_x, 'x')
+    for edge in graph.edges():
+        graph.edges[edge]['branch'] = node_adjacency[edge[0], edge[1]] - 1
+    return graph
 
 
-def connectivity_matrix2clusters(conn):
-    clusters = []
-    for j1, j2 in zip(*np.where((conn > 0) & ~np.eye(len(conn), dtype=bool))):
-        for i, c in enumerate(clusters):
-            if j1 in c:
-                for i2, c2 in tuple(enumerate(clusters))[i + 1:]:
-                    if j2 in c2:
-                        del clusters[i2]
-                        c |= c2
-                        break
-                else:
-                    c |= {j2}
-            elif j2 in c:
-                for i1, c1 in tuple(enumerate(clusters))[i + 1:]:
-                    if j1 in c1:
-                        del clusters[i1]
-                        c |= c1
-                        break
-                else:
-                    c |= {j1}
-            else:
-                continue
-            break
-        else:
-            clusters += [{j1, j2}]
-    return clusters
-
-
-# ====================== TORCH IMPLEMENTATION =============================
-
-def torch_medial_axis(vessel_maps: torch.Tensor, keep_distance=True) -> torch.Tensor:
-    """Compute the medial axis of a binary image.
-    Args:
-        vessel_maps (torch.Tensor): the input image with shape :math:`(B?, 1?, H, W)`.
-    Returns:
-        torch.Tensor: the skeletonized image with shape :math:`(B, 1, H, W)`.
+def merge_junctions_clusters(branches_by_junctions, junctions_clusters, remove_branches_labels=True):
     """
-    from kornia.contrib import distance_transform
+    Merge junctions in the connectivity matrix of branches and junctions.
+    """
+    node_table = np.arange(branches_by_junctions.shape[1], dtype=np.int64)
+    branches_to_remove = np.zeros(branches_by_junctions.shape[0], dtype=bool)
+    branches_lookup = np.arange(branches_by_junctions.shape[0], dtype=np.int64)
+    node_to_remove = np.zeros(branches_by_junctions.shape[1], dtype=bool)
 
-    shape = vessel_maps.shape
-    vessel_maps = _check_vessel_map(vessel_maps)
-
-    # Compute Distance Transform
-    dt = distance_transform(vessel_maps.unsqueeze(1).float())
-
-    @torch.jit.script
-    def rift_maxima(patch):
-        v = patch[4]
-        zero = torch.zeros_like(v)
-        if torch.all(v == zero):
-            return v
+    for cluster in junctions_clusters:
+        cluster = np.asarray(tuple(cluster), dtype=np.int64)
+        cluster.sort()
+        cluster_branches = np.where(np.sum(branches_by_junctions[:, cluster].astype(bool), axis=1) >= 2)[0]
+        cluster_branches.sort()
+        branches_to_remove[cluster_branches] = True
+        incoming_cluster_branches = np.where(np.sum(branches_by_junctions[:, cluster].astype(bool), axis=1) == 1)[0]
+        if len(incoming_cluster_branches):
+            apply_lookup_inplace((cluster_branches, branches_lookup[incoming_cluster_branches[0]]), branches_lookup)
         else:
-            q = torch.quantile(patch, 7 / 9, interpolation='lower')
-            return v if torch.all(zero < q <= v) else zero
+            branches_lookup[cluster_branches] = np.nan
+        node_table[cluster] = cluster[0]
+        node_to_remove[cluster[1:]] = True
 
-    rift_maxima = torch.func.vmap(rift_maxima)
-
-    dt = F.unfold(dt, kernel_size=3, padding=1)
-    dt = dt.permute(0, 2, 1).reshape(-1, 9)
-    dt = rift_maxima(dt)
-    dt = dt.reshape(shape[0], -1, shape[-2], shape[-1])
-    return dt if keep_distance else dt > 0
-
-    # Mask pixel with 0 distance
-    not_null_image, not_null_row, not_null_col = torch.where(vessel_maps != 0)
-    not_null_index = not_null_image * np.prod(vessel_maps.shape[1:]) + not_null_row * vessel_maps.shape[
-        2] + not_null_col
-    not_null_index = not_null_index.reshape(-1)
-
-    # Cancel out any pixels that do not belong the local maximas rifts
-    unfold_dt = F.unfold(dt, kernel_size=3, padding=1)
-    unfold_dt = unfold_dt.permute(0, 2, 1).reshape(-1, 9)[not_null_index]
-    quantile = torch.quantile(unfold_dt, 7 / 9, dim=1, interpolation='lower')
-
-    print(unfold_dt.shape, quantile.shape)
-    not_local_maxima = torch.where((quantile > 0) & (unfold_dt[:, 4] > quantile))[0]
-    dt = dt.reshape(-1)[not_null_index]
-    dt[not_local_maxima] = 0
-
-    final_shape = (shape[0],) + tuple(shape[-2:])
-    skeleton = torch.zeros(np.prod(final_shape), dtype=dt.dtype, device=vessel_maps.device)
-    skeleton[not_null_index] = dt
-    skeleton = skeleton.reshape(final_shape)
-    if not keep_distance:
-        return skeleton > 0
+    if branches_to_remove.any():
+        branches_by_junctions = branches_by_junctions[~branches_to_remove, :]
+        branches_lookup = (np.cumsum(~branches_to_remove) - 1)[branches_lookup]
+        if remove_branches_labels:
+            branches_lookup[branches_to_remove] = np.nan
     else:
-        return skeleton
+        branches_lookup = None
+    nb_branches = branches_by_junctions.shape[0]
+
+    node_lookup = np.cumsum(~node_to_remove) - 1
+    nb_nodes = node_lookup[-1] + 1
+    node_table = node_lookup[node_table]
+
+    nodes_by_branches = np.zeros_like(branches_by_junctions, shape=(nb_nodes, nb_branches))
+    np.add.at(nodes_by_branches, node_table, branches_by_junctions.T)
+
+    return nodes_by_branches.T, branches_lookup, node_table
 
 
-def _check_vessel_map(vessel_maps):
-    if vessel_maps.ndim == 4:
-        assert vessel_maps.shape[
-                   1] == 1, f"Expected 2D vessels map of shapes (B, 1, H, W), but provided maps has multiple channels."
-        vessel_maps = vessel_maps.squeeze(1)
-    elif vessel_maps.ndim == 2:
-        vessel_maps = vessel_maps.unsqueeze(0)
+def merge_equivalent_branches(branches_by_node, remove_2branches_nodes=True):
+    branches_by_node, branches_lookup = np.unique(branches_by_node, return_inverse=True, axis=0)
+    nodes_to_remove = None
+    if remove_2branches_nodes:
+        nodes_to_remove = np.sum(branches_by_node.astype(bool), axis=0) == 2
+        if np.any(nodes_to_remove):
+            branches_by_node, branch_lookup2 = fuse_node(branches_by_node, nodes_to_remove)
+            branches_lookup = branch_lookup2[branches_lookup]
+    return branches_by_node, branches_lookup, ~nodes_to_remove
+
+
+def fuse_node(branches_by_nodes, nodes_id):
+    """
+    Remove a node from the connectivity matrix of branches and nodes.
+    """
+    assert nodes_id.ndim == 1, "nodes_id must be a 1D array"
+    if nodes_id.dtype == bool:
+        assert len(nodes_id) == branches_by_nodes.shape[1], "nodes_id must be a boolean array of the same length as the number of nodes," \
+                                                            f" got len(nodes_id)={len(nodes_id)} instead of {branches_by_nodes.shape[1]}."
+        nodes_id = np.where(nodes_id)[0]
+    assert nodes_id.dtype == np.int64, "nodes_id must be a boolean or integer array"
+
+    nb_branches = branches_by_nodes.shape[0]
+    branch_lookup = np.arange(nb_branches, dtype=np.int64)
+
+    branches_by_fused_nodes = branches_by_nodes[:, nodes_id]
+    invalid_fused_node = np.sum(branches_by_fused_nodes, axis=0) > 2
+    if np.any(invalid_fused_node):
+        print("Warning: some nodes are connected to more than 2 branches and won't be fused.")
+        branches_by_fused_nodes = branches_by_fused_nodes[:, ~invalid_fused_node]
+    branch1_ids = np.argmax(branches_by_fused_nodes, axis=0)
+    branch2_ids = nb_branches - np.argmax(branches_by_fused_nodes[::-1], axis=0) - 1
+
+    sort_id = np.argsort(branch1_ids)[::-1]
+    branch1_ids = branch1_ids[sort_id]
+    branch2_ids = branch2_ids[sort_id]
+
+    # Sequential merge is required when a branch appear both in branch1_ids and branch2_ids (because 2 adjacent nodes are fused)
+    for b1, b2 in zip(branch1_ids, branch2_ids):
+        branches_by_nodes[b1] |= branches_by_nodes[b2]
+    for b1, b2 in zip(branch1_ids[::-1], branch2_ids[::-1]):
+        branch_lookup[b2] = branch_lookup[b1]
+    # Instead of:
+    # branch_subids, branch2_nodes_ids = np.where(branches_by_nodes[branch2_ids])
+    # branches_by_nodes[branch1_ids[branch_subids], branch2_nodes_ids] = True
+
+    branches_by_nodes = np.delete(branches_by_nodes, branch2_ids, axis=0)
+    branches_by_nodes = np.delete(branches_by_nodes, nodes_id, axis=1)
+
+    branch_shift_lookup = np.cumsum(np.isin(np.arange(len(branch_lookup)), branch2_ids, invert=True))-1
+    branch_lookup = branch_shift_lookup[branch_lookup]
+
+    # for b1, n in zip(branch1_ids[branch_subids], branch2_nodes_ids):
+    #     print(f"redirect branches: {b1} to node: {n}")
+
+    return branches_by_nodes, branch_lookup
+
+
+def apply_node_lookup_on_coordinates(junctions_coord, junction_lookup):
+    """
+    Apply a lookup table on a set of coordinates to merge coordinates of junctions and return their barycenter.
+    """
+    jy, jx = junctions_coord
+    coord = np.zeros((np.max(junction_lookup) + 1, 2), dtype=np.float64)
+    np.add.at(coord, junction_lookup, np.asarray((jy, jx)).T)
+    coord = coord / np.bincount(junction_lookup, minlength=coord.shape[0])[:, np.newaxis]
+    return coord.T
+
+
+def perimeter_from_vertices(coord: np.ndarray):
+    coord = np.asarray(coord)
+    next_coord = np.roll(coord, 1, axis=0)
+    return np.sum(np.linalg.norm(coord - next_coord, axis=1))
+
+
+def vascular_graph_edit_distance(branch_to_node1, node1_yx, branch_to_node2, node2_yx):
+    ny1, nx1 = node1_yx
+    ny2, nx2 = node2_yx
+    ny1 = ny1[:, None]
+    nx1 = nx1[:, None]
+    ny2 = ny2[None, :]
+    nx2 = nx2[None, :]
+    node_dist = np.sqrt((ny1 - ny2)**2 + (nx1 - nx2)**2)
+    del ny1, nx1, ny2, nx2
+
+    node_extended_match = node_dist < 10
+    node_dist = 1/(node_dist+1e8)
+    node_dist[~node_extended_match] = 0
+    n1_match = np.where(np.sum(node_extended_match, axis=1))[0]
+    n2_match = np.argmax(node_dist[n1_match], axis=0)
+    del node_dist, node_extended_match
+
+    lookup_n1_idx = np.concatenate([n1_match, np.isin(np.arange(len(node1_yx[0])), n1_match, invert=True, assume_unique=True)])
+    lookup_n2_idx = np.concatenate([n2_match, np.isin(np.arange(len(node2_yx[0])), n2_match, invert=True, assume_unique=True)])
+
+    node_to_branch1 = branch_to_node1.T[lookup_n1_idx]
+    node_to_branch2 = branch_to_node2.T[lookup_n2_idx]
+
+    g1 = branches_by_nodes_to_node_graph(node_to_branch1.T)
+    g2 = branches_by_nodes_to_node_graph(node_to_branch2.T)
+
+    return 0
+
+
+def apply_lookup_inplace(mapping: Dict[int, int] | Tuple[np.ndarray, np.ndarray] | np.array, array: np.ndarray) -> np.ndarray:
+    lookup = mapping
+    if not isinstance(mapping, np.ndarray):
+        lookup = np.arange(len(array), dtype=np.int64)
+        if isinstance(mapping, dict):
+            mapping = tuple(zip(mapping.keys(), mapping.values()))
+        search = mapping[0]
+        replace = mapping[1]
+        if not isinstance(replace, np.ndarray):
+            replace = [replace] * len(search)
+        for s, r in zip(search, replace):
+            lookup[lookup == s] = r
+    nan_array = np.isnan(array)
+    if np.any(nan_array):
+        array[~nan_array] = lookup[array[~nan_array]]
     else:
-        assert vessel_maps.ndim == 3, f"Expected 2D vessels maps of shapes (B?, 1?, H, W), got {vessel_maps.ndim}D tensor."
-
-    if vessel_maps.dtype != torch.bool:
-        vessel_maps = vessel_maps > 0.5
-    return vessel_maps
+        array[:] = lookup[array]
+    return array
