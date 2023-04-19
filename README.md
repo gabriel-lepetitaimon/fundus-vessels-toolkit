@@ -21,9 +21,15 @@ Steered Convolutionnal Neurons can be used as replacement of standard convolutio
 ```python
 from steered_cnn import SteeredConv2d, SteerableKernelBase
 
+# Define batched image x and vector field α
+x = torch.empty(8, 3, 512, 512)       # (b, [r,g,b], h, w)
+α = torch.empty(8, 2, 512, 512 )  # (b, [cos(α),sin(α)], h, w) or simply torch.empty(8, 512, 512) to provide α in radians.
+
+
 # Create a steerable kernel base equivalent to a 5x5 gaussian kernel (the actual kernel size is 7x7 to accommodate 45 degrees rotation).
 steerable_base = SteerableKernelBase.create_radial(5)
 steered_conv = SteeredConv2d(64, padding='same', steerable_base=steerable_base, nonlinearity='relu') 
+y = steered_conv(x, α)
 ```
 
 or through predefined models architectures:
@@ -31,21 +37,7 @@ or through predefined models architectures:
 from steered_cnn.models import SteeredUNet
 
 model = SteeredUNet(3, 2, nfeatures=6, depth=2, nscale=5, base=steerable_base)
+pred = model(x, alpha=α)
 ```
 
-We provided pretrained models for some of these architectures. See the [pretrained models](#pretrained-models) section for more details.
 
-### Metrics
-Standard segmentation metrics are imperfect to measure the quality of vessels segmentation: besides the class imbalance,
-they are often too sensitive to small variation on the main vessels boundaries while being too insensitive to miss 
-detection of small vessels.
-
-To overcome this issue, we propose to use the following metrics:
-- **Skeleton Precision (SP)**: the percentage of pixels in the skeleton of the ground truth that were predicted as vessels.
-- **Skeleton Recall (SR)**: the percentage of pixels in the skeleton of the prediction that were labelled as vessels.
-- **Skeleton F1 (SF1)**: the harmonic mean of SP and SR.
-- **Vascular Graph Distance (VGD)**:
-
-
-### Pretrained Models
-The models were pretrained on FIVES, DRIVE, MESSIDOR, IDRID (RETA) datasets.
