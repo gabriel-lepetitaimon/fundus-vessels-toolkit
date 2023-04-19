@@ -15,7 +15,7 @@ pip install -e fundus-vessels-toolkit
 
 ### Steered Convolutional Neuron
 Steered CNN is a specific architecture to segment and classify vessels which implements rotational equivariance in CNN.
-It is described in the - yet to be published - paper "Steered CNNs for Vessel Segmentation and Classification".
+It is described in the paper "Steered Convolutional Neurons for Retinal Vessels Classification" (ISBI2023). Please cite this paper if you want to use this code in a published work.
 
 Steered Convolutionnal Neurons can be used as replacement of standard convolutional layer:
 ```python
@@ -40,4 +40,7 @@ model = SteeredUNet(3, 2, nfeatures=6, depth=2, nscale=5, base=steerable_base)
 pred = model(x, alpha=α)
 ```
 
-
+## Soon to come...
+- Pretrained models for both segmentation and classification;
+- _clDice_ and _connectivity metrics_ as `TorchMetric`;
+- optimized skeletonization and vascular graph extraction from the segmentation map.
