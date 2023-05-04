@@ -9,7 +9,7 @@
 from typing import Mapping, Literal
 
 from .skeletonization import skeletonize, SkeletonizeMethod
-from .graph_extraction import compute_adjacency_branches_nodes, branches_by_nodes_to_node_graph, \
+from .graph_extraction import seg_to_adjacency_branches_nodes, branches_by_nodes_to_node_graph, \
                               NodeMergeDistanceParam, SimplifyTopology
 
 
@@ -67,11 +67,11 @@ class Seg2Graph:
                            skeletonize_method=self.skeletonize_method)
 
     def skel2adjacency(self, skel, return_label=False):
-        return compute_adjacency_branches_nodes(skel, return_label=return_label,
-                                                max_spurs_distance=self.max_spurs_distance,
-                                                nodes_merge_distance=self.nodes_merge_distance,
-                                                merge_small_cycles=self.merge_small_cycles,
-                                                simplify_topology=self.simplify_topology)
+        return seg_to_adjacency_branches_nodes(skel, return_label=return_label,
+                                               max_spurs_distance=self.max_spurs_distance,
+                                               nodes_merge_distance=self.nodes_merge_distance,
+                                               merge_small_cycles=self.merge_small_cycles,
+                                               simplify_topology=self.simplify_topology)
 
     def seg2adjacency(self, vessel_map, return_label=False):
         skel = self.skeletonize(vessel_map)
@@ -84,12 +84,13 @@ class RetinalVesselSeg2Graph(Seg2Graph):
     """
     def __init__(self, max_vessel_diameter=5):
         max_radius = max_vessel_diameter // 2 + 1
-        merge_distance = dict(termination=max_radius, junction=max_vessel_diameter, node=max_radius-1)
         super(RetinalVesselSeg2Graph, self).__init__(fix_hollow=True,
                                                      skeletonize_method='lee',
                                                      max_spurs_length=1,
-                                                     max_spurs_distance=max_vessel_diameter-2,
-                                                     nodes_merge_distance=merge_distance,
+                                                     max_spurs_distance=max_vessel_diameter,
+                                                     nodes_merge_distance=dict(junction=max_vessel_diameter,
+                                                                               termination=max_vessel_diameter,
+                                                                               node=max_radius-1),
                                                      merge_small_cycles=max_vessel_diameter * 3,
                                                      simplify_topology='node', )
 

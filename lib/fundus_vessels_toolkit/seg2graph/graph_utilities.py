@@ -10,7 +10,8 @@ def add_empty_to_lookup(lookup: np.ndarray) -> np.ndarray:
     return np.concatenate([[0], lookup+1], dtype=lookup.dtype)
 
 
-def apply_lookup(array: np.ndarray | None, mapping: Dict[int, int] | Tuple[np.ndarray, np.ndarray] | np.array | None) \
+def apply_lookup(array: np.ndarray | None, mapping: Dict[int, int] | Tuple[np.ndarray, np.ndarray] | np.array | None,
+                 apply_inplace_on: np.ndarray | None = None) \
         -> np.ndarray:
     lookup = mapping
     if mapping is None:
@@ -25,6 +26,9 @@ def apply_lookup(array: np.ndarray | None, mapping: Dict[int, int] | Tuple[np.nd
             replace = [replace] * len(search)
         for s, r in zip(search, replace):
             lookup[lookup == s] = r
+
+    if apply_inplace_on is not None:
+        apply_inplace_on[:] = lookup[apply_inplace_on]
 
     return lookup if array is None else lookup[array]
 
@@ -100,7 +104,7 @@ def delete_nodes(branches_by_nodes, nodes_id):
     Delete a node and its connected branch from the connectivity matrix of branches and nodes.
     """
     # Check parameters and compute the initial branch lookup
-    branch_lookup, nodes_mask = _prepare_node_deletion(branches_by_nodes, nodes_id)
+    branch_lookup, nodes_mask, nodes_id = _prepare_node_deletion(branches_by_nodes, nodes_id)
 
     deleted_branches = branches_by_nodes[:, nodes_id].any(axis=1)
     branches_id = np.where(deleted_branches)[0]
@@ -115,13 +119,13 @@ def delete_nodes(branches_by_nodes, nodes_id):
     return branches_by_nodes, branch_shift_lookup[branch_lookup], nodes_mask
 
 
-def fuse_nodes(branches_by_nodes, nodes_id):
+def fuse_nodes(branches_by_nodes, nodes_id, node_coord: Tuple[np.ndarray, np.ndarray] | None = None):
     """
     Fuse a node from the connectivity matrix of branches and nodes.
     The node is removed and the two branches connected to it are fused into one.
     """
     # Check parameters and compute the initial branch lookup
-    branch_lookup, nodes_mask = _prepare_node_deletion(branches_by_nodes, nodes_id)
+    branch_lookup, nodes_mask, nodes_id = _prepare_node_deletion(branches_by_nodes, nodes_id)
     nb_branches = len(branch_lookup)
 
     branches_by_fused_nodes = branches_by_nodes[:, nodes_id]
@@ -135,6 +139,8 @@ def fuse_nodes(branches_by_nodes, nodes_id):
     sort_id = np.argsort(branch1_ids)[::-1]
     branch1_ids = branch1_ids[sort_id]
     branch2_ids = branch2_ids[sort_id]
+    if node_coord is not None:
+        node_coord = tuple(c[nodes_id[sort_id]] for c in node_coord)
     branches_to_delete = []
 
     # Sequential merge is required when a branch appear both in branch1_ids and branch2_ids
@@ -150,9 +156,13 @@ def fuse_nodes(branches_by_nodes, nodes_id):
     branches_by_nodes = np.delete(branches_by_nodes, nodes_id, axis=1)
 
     branch_shift_lookup = np.cumsum(np.isin(np.arange(len(branch_lookup)), branches_to_delete, invert=True))-1
-    branch_lookup = branch_shift_lookup[branch_lookup]
+    branch_lookup = add_empty_to_lookup(branch_shift_lookup[branch_lookup])
 
-    return branches_by_nodes, add_empty_to_lookup(branch_lookup), nodes_mask
+    if node_coord is not None:
+        nodes_labels = node_coord[0], node_coord[1], branch_lookup[branch1_ids+1]
+        return branches_by_nodes, branch_lookup, nodes_mask, nodes_labels
+    else:
+        return branches_by_nodes, branch_lookup, nodes_mask
 
 
 def _prepare_node_deletion(branches_by_nodes, nodes_id):
@@ -171,7 +181,7 @@ def _prepare_node_deletion(branches_by_nodes, nodes_id):
         nodes_mask = np.isin(np.arange(branches_by_nodes.shape[1], dtype=np.int64), nodes_id, invert=True)
 
     nb_branches = branches_by_nodes.shape[0]
-    return np.arange(nb_branches, dtype=np.int64), nodes_mask
+    return np.arange(nb_branches, dtype=np.int64), nodes_mask, nodes_id
 
 
 def invert_lookup(lookup):
@@ -201,22 +211,23 @@ def merge_equivalent_branches(branches_by_node, max_nodes_distance=None, nodes_c
         small_branches_by_node = branches_by_node[small_branches]
 
         # Identify equivalent small branches
-        small_branches_by_node, unique_idx = np.unique(small_branches_by_node, return_inverse=True, axis=0)
-        branches_to_remove = small_branches_lookup[
-            np.isin(np.arange(len(unique_idx), dtype=np.int64), unique_idx, invert=True)]
+        small_branches_by_node, unique_idx, unique_count = np.unique(small_branches_by_node, axis=0,
+                                                                     return_inverse=True, return_counts=True)
+        branches_to_remove = []
+        for duplicate_id in np.where(unique_count > 1)[0]:
+            duplicated_branches = small_branches_lookup[np.where(unique_idx == duplicate_id)[0]]
+            branches_to_remove.append(duplicated_branches[1:])
 
         if len(branches_to_remove) == 0:
             return branches_by_node, None
 
         branches_lookup = np.arange(len(branches_by_node), dtype=np.int64)
 
-        # Update branches_by_node to match the order of unique branches and remove duplicates
-        branches_by_node[small_branches] = small_branches_by_node[unique_idx]
+        # Delete duplicated branches
+        branches_to_remove = np.concatenate(branches_to_remove)
         branches_by_node = np.delete(branches_by_node, branches_to_remove, axis=0)
 
-        # Compute branches_lookup accordingly
         branches_lookup_shift = np.cumsum(np.isin(branches_lookup, branches_to_remove, invert=True)) - 1
-        branches_lookup[small_branches] = small_branches_lookup[unique_idx]
         branches_lookup = branches_lookup_shift[branches_lookup]
 
     return branches_by_node, add_empty_to_lookup(branches_lookup)
