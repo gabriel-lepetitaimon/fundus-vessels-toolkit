@@ -88,9 +88,13 @@ class RetinalVesselSeg2Graph(Seg2Graph):
                                                      skeletonize_method='lee',
                                                      max_spurs_length=1,
                                                      max_spurs_distance=max_vessel_diameter,
-                                                     nodes_merge_distance=dict(junction=max_vessel_diameter,
+                                                     nodes_merge_distance=dict(junction=max_radius,
                                                                                termination=max_vessel_diameter,
                                                                                node=max_radius-1),
-                                                     merge_small_cycles=max_vessel_diameter * 3,
+                                                     merge_small_cycles=max_vessel_diameter * 4,
                                                      simplify_topology='node', )
 
+    def __call__(self, vessel_map):
+        from ..vgraph import VascularGraph
+        adj_mtx, branch_labels, node_yx_coord = self.seg2node_graph(vessel_map, return_label=True)
+        return VascularGraph(adj_mtx, branch_labels, node_yx_coord)

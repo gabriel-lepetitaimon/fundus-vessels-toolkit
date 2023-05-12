@@ -301,7 +301,6 @@ def merge_nodes_clusters(branches_by_junctions, nodes_clusters, remove_branches_
 
     if branches_to_remove.any():
         branches_by_junctions = branches_by_junctions[~branches_to_remove, :]
-        # TODO: check if this is correct
         if remove_branches_labels:
             branches_lookup[np.where(branches_to_remove)[0]+1] = 0
         branches_lookup_shift = np.cumsum(np.concatenate(([True], ~branches_to_remove))) - 1
@@ -327,8 +326,58 @@ def node_rank(branches_by_nodes):
     return np.sum(branches_by_nodes, axis=0)
 
 
-def simple_graph_matching(branch_by_node1, node1_yx, branch_by_node2, node2_yx):
-    from scipy.spatial.distance import directed_hausdorff
+def simple_graph_matching(node1_yx: tuple[np.ndarray, np.ndarray], node2_yx: tuple[np.ndarray, np.ndarray],
+                          max_matching_distance: float | None = None, return_distance: bool = False):
+    """
+    Match nodes from two graphs based on the euclidian distance between nodes.
+
+    Each node from the first graph is matched to the closest node from the second graph, if their distance is below
+      max_matching_distance. When multiple nodes from both graph are near each other, minimize the sum of the distance
+      between matched nodes.
+
+    This implementation use the Hungarian algorithm to maximize the sum of the inverse of the distance between
+        matched nodes.
+
+
+    Args:
+        node1_yx: tuple (y, x), where y and x are vectors of the same length and encode the coordinates of the nodes
+                    of the first graph.
+        node2_yx: same format as node1_yx but for the second graph.
+        max_matching_distance: maximum distance between two nodes to be considered as a match.
+        return_distance: if True, return the distance between each matched nodes.
+    Returns:
+        A tuple (node1_matched, node2_matched), where node1_matched and node2_matched are vectors of the same length.
+          Every (node1_matched[i], node2_matched[i]) encode a match, node1_matched being the index of a node from the
+          first graph and node2_matched the index of the corresponding node from the second graph.
+
+        If return_distance is True, returns ((node1_matched, node2_matched), nodes_distance), where nodes_distance
+          is a vector of the same length as node1_matched and node2_matched, and encode the distance between each
+          matched nodes.
+    """
+    from pygmtools.linear_solvers import hungarian
+    yx1 = np.stack(node1_yx, axis=1)
+    yx2 = np.stack(node2_yx, axis=1)
+    n1 = len(yx1)
+    n2 = len(yx2)
+
+    # Compute the euclidian distance between each node
+    euclidian_distance = np.linalg.norm(yx1[:, None] - yx2[None, :], axis=2)
+
+    # Compute the weight as the distance inverse (the hungarian method maximise the sum of the weight)
+    weight = 1 / (1e-8 + euclidian_distance)
+
+    # Set the cost of unmatch nodes to half the inverse of the maximum distance,
+    #  so that nodes separated by more than max_distance are better left unmatched.
+    min_weight = 0.5 / (1e-8 + max_matching_distance) if max_matching_distance is not None else 0
+
+    # Compute the hungarian matching
+    matched_nodes = hungarian(weight[None, ...], [n1], [n2], np.repeat([[min_weight]], n1, axis=1),
+                              np.repeat([[min_weight]], n2, axis=1))[0]
+    matched_nodes = np.where(matched_nodes)
+
+    if return_distance:
+        return matched_nodes, euclidian_distance[matched_nodes]
+    return matched_nodes
 
 
 def solve_clusters(pairwise_connection: list[Tuple[int, int]] | tuple[np.ndarray, np.ndarray]) -> list[set]:

@@ -131,14 +131,15 @@ def seg_to_adjacency_branches_nodes(vessel_map: np.ndarray, return_label=False,
         # Merge small cycles
         # - Identify cycles
         nodes_adjacency_matrix = branches_by_nodes.T @ branches_by_nodes - np.eye(len(node_y))
-        cycles = [_ for _ in nx.chordless_cycles(nx.from_numpy_array(nodes_adjacency_matrix)) if len(_) > 2]
+        cycles = [_ for _ in nx.chordless_cycles(nx.from_numpy_array(nodes_adjacency_matrix), length_bound=4)
+                  if len(_) > 2]
         # - Select chord less cycles with small perimeter
         cycles_perimeters = [perimeter_from_vertices(np.asarray((node_y, node_x)).T[cycle]) for cycle in cycles]
         cycles = [cycle for cycle, perimeter in zip(cycles, cycles_perimeters)
                   if perimeter < merge_small_cycles]
         # - Merge cycles
         branches_by_nodes, branch_lookup_2, nodes_mask = merge_nodes_clusters(branches_by_nodes, cycles,
-                                                                              remove_branches_labels=False)
+                                                                              remove_branches_labels=True)
         # - Apply the lookup tables on nodes and branches
         node_y, node_x = apply_node_lookup_on_coordinates((node_y, node_x), nodes_mask)
         branch_lookup = apply_lookup(branch_lookup, branch_lookup_2, node_labels[2])
