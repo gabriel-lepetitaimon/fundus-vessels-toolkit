@@ -1,6 +1,3 @@
-from nntemplate import Cfg
-from nntemplate.task.metrics import MetricCfg, register_metric
-from nntemplate.torch_utils.clip_pad import select_pixels_by_mask
 import numpy as np
 import torch
 from torchmetrics import Metric as TorchMetric
@@ -64,24 +61,32 @@ class ClDice(TorchMetric):
         return 2 * self.precision * self.recall / (self.precision + self.recall)
 
 
-@register_metric('clDice')
-class CfgClDice(MetricCfg):
-    max_struct_width = Cfg.int(5, min=0, help='Estimation of the maximum width of the structure element '
-                                              '(e.g. largest vessel diameter). Any branch smaller than this will be'
-                                              'considered as a spurs (i.e. an artefact of the skeletonization) and will'
-                                              'be removed from the skeleton.')
 
-    def prepare_data(self, pred, target, mask=None):
-        if mask is not None:
-            pred, target = select_pixels_by_mask(pred, target, mask=mask)
-            return pred, target
-        else:
-            return pred, target
+try:
+    from nntemplate import Cfg
+    from nntemplate.task.metrics import MetricCfg, register_metric
+    from nntemplate.torch_utils.clip_pad import select_pixels_by_mask
+except ImportError:
+    pass
+else:
+    @register_metric('clDice')
+    class CfgClDice(MetricCfg):
+        max_struct_width = Cfg.int(5, min=0, help='Estimation of the maximum width of the structure element '
+                                                  '(e.g. largest vessel diameter). Any branch smaller than this will be'
+                                                  'considered as a spurs (i.e. an artefact of the skeletonization) and will'
+                                                  'be removed from the skeleton.')
 
-    def create(self):
-        return ClDice(max_struct_width=self.max_struct_width)
+        def prepare_data(self, pred, target, mask=None):
+            if mask is not None:
+                pred, target = select_pixels_by_mask(pred, target, mask=mask)
+                return pred, target
+            else:
+                return pred, target
 
-    def log(self, module: pl.LightningModule, name: str, metric: tm.Metric):
-        module.log(f'{name}.clPrecision', metric.precision, add_dataloader_idx=False, enable_graph=False)
-        module.log(f'{name}.clRecall', metric.recall, add_dataloader_idx=False, enable_graph=False)
-        module.log(f'{name}.clDice', metric, add_dataloader_idx=False, enable_graph=False)
+        def create(self):
+            return ClDice(max_struct_width=self.max_struct_width)
+
+        def log(self, module: pl.LightningModule, name: str, metric: tm.Metric):
+            module.log(f'{name}.clPrecision', metric.precision, add_dataloader_idx=False, enable_graph=False)
+            module.log(f'{name}.clRecall', metric.recall, add_dataloader_idx=False, enable_graph=False)
+            module.log(f'{name}.clDice', metric, add_dataloader_idx=False, enable_graph=False)

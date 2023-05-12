@@ -1,6 +1,6 @@
 __all__ = ['segmentation_model', 'segment', 'SegmentModel']
 
-from nntemplate.torch_utils import crop_pad
+from steered_cnn.utils.torch import crop_pad
 import torch
 from torch.utils import model_zoo
 from typing import Literal
