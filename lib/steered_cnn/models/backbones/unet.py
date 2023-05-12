@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from nntemplate.torch_utils import ConvBN, cat_crop
+from ...utils.torch import ConvBN, cat_crop
 from .model import Model
 
 

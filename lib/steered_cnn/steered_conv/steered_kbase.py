@@ -5,8 +5,7 @@ import torch.nn.functional as F
 
 from ..kbase_conv import KernelBase
 from .steerable_filters import max_steerable_harmonics, radial_steerable_filter, cos_sin_ka
-from ..utils import normalize_vector, torch_norm2d
-from nntemplate.utils import clip_pad_center
+from ..utils.torch import normalize_vector, torch_norm2d, crop_pad
 
 from collections import OrderedDict
 from typing import Union, Dict, List
@@ -426,7 +425,7 @@ class SteerableKernelBase(KernelBase):
 
         # --- ALPHA ---
         if alpha is not None:
-            alpha = clip_pad_center(alpha, (h, w), broadcastable=True)
+            alpha = crop_pad(alpha, (h, w), broadcastable=True)
 
             assert 4 <= alpha.dim() <= 6, f'Invalid number of dimensions for alpha: alpha.shape={alpha.shape}.\n' \
                                           'alpha shape should be like ([2, [k_max]], b, n_out, h, w)'
@@ -473,7 +472,7 @@ class SteerableKernelBase(KernelBase):
             else:
                 rho = torch.Tensor([rho]).to(device=input.device)[:, None, None, None]
         elif rho is not None:
-            rho = clip_pad_center(rho, (h, w), broadcastable=True)
+            rho = crop_pad(rho, (h, w), broadcastable=True)
 
             assert 3 <= rho.dim() <= 4, f'Invalid number of dimensions for rho: rho.shape={rho.shape}.\n' \
                                           'rho shape should be like (b, [n_out], h, w)'
