@@ -1,3 +1,6 @@
+import torch
+from typing import Union, Tuple
+
 def normalize_vector(vector: Union[Tuple[torch.Tensor], torch.Tensor], epsilon: int = 1e-8):
     """
     Normalize a vector field to unitary norm.
