@@ -27,7 +27,7 @@ def segment(x, model_name: SegmentModel = 'resnet34', device: torch.device = 'cu
                 x = img_to_torch(x, device)
                 final_shape = x.shape
 
-                if 1000 < final_shape[3] < 1500:
+                if not (1000 < final_shape[3] < 1500):
                     warnings.warn(f'Image size {x.shape[-2:]} is not optimal for {model_name}.\n'
                                   f'Consider resizing the image to a size close to 1024x1024.')
 
