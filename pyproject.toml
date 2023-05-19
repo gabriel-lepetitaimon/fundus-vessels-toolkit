@@ -12,11 +12,11 @@ requires-python = '>=3.10'
 dependencies = [
     'numpy',
     
-    'opencv-python-headless'
+    'opencv-python-headless',
     'scikit-image',
     'scipy',
     
-    'pygmtools'
+    'pygmtools',
     'networkx>=3.1',
     
     'torch>=2.0.0',
@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-samples = ['jppype']
+samples = ['jppype', 'jupyterlab']
 experimentations = ['nntemplate']
 
 [project.urls]

@@ -14,7 +14,7 @@ pip install -e fundus-vessels-toolkit
 If you plan to use the commmon use-case example provided as Jupyter Notebooks in the `samples/` folder, you should 
 also install their dependencies:
 ```bash
-pip install -e fundus-vessels-toolkit[samples]
+pip install -e "fundus-vessels-toolkit[samples]"
 ```
 
 ## Vessels Segmentation and Classification
