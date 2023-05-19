@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from .backbones import UNet
-from nntemplate.torch_utils import ConvBN, cat_crop
+from ..utils.torch import ConvBN, cat_crop
 
 
 class OriginalHemelingNet(UNet):

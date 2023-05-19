@@ -27,6 +27,7 @@ def polar_space(size, center=None):
 def spectral_power(arr: 'θ.hw', plot=False, split=False, sort=True, mask=None):
     from scipy.fftpack import fft
     import matplotlib.pyplot as plt
+    import plot as plot_utils
 
     if mask == 'disk':
         r = min(arr.shape[-2:])
@@ -97,7 +98,7 @@ def spectral_power(arr: 'θ.hw', plot=False, split=False, sort=True, mask=None):
     return spe
 
 
-def polar_spectral_power(arr: '.hw', theta=8, plot=False, split=False, mask=None):
+def polar_spectral_power(arr: np.ndarray, theta=8, plot=False, split=False, mask=None):
     if mask == 'auto':
         pad = 'auto'
         mask = None
@@ -271,113 +272,3 @@ def clip_pad_center(array, shape, pad_mode='constant', broadcastable=False, **kw
     if x1 or y1:
         tensor = np.pad(tensor, (y1-yodd, y1, x1-xodd, x1), mode=pad_mode, **kwargs)
     return tensor
-
-
-#####################################################################################
-#                           Custom pyplot Scales                                    #
-#####################################################################################
-import matplotlib.scale as mscale
-import matplotlib.transforms as mtransforms
-import matplotlib.ticker as ticker
-
-
-class SquareRootScale(mscale.ScaleBase):
-    """
-    ScaleBase class for generating square root scale.
-    """
-
-    name = 'sqrt'
-
-    def __init__(self, axis, **kwargs):
-        # note in older versions of matplotlib (<3.1), this worked fine.
-        mscale.ScaleBase.__init__(self)
-
-        # In newer versions (>=3.1), you also need to pass in `axis` as an arg
-        #mscale.ScaleBase.__init__(self, axis)
-
-    def set_default_locators_and_formatters(self, axis):
-        axis.set_major_locator(ticker.AutoLocator())
-        axis.set_major_formatter(ticker.ScalarFormatter())
-        axis.set_minor_locator(ticker.NullLocator())
-        axis.set_minor_formatter(ticker.NullFormatter())
-
-    def limit_range_for_scale(self, vmin, vmax, minpos):
-        return  max(0., vmin), vmax
-
-    class SquareRootTransform(mtransforms.Transform):
-        input_dims = 1
-        output_dims = 1
-        is_separable = True
-
-        def transform_non_affine(self, a):
-            return np.array(a)**0.5
-
-        def inverted(self):
-            return SquareRootScale.InvertedSquareRootTransform()
-
-    class InvertedSquareRootTransform(mtransforms.Transform):
-        input_dims = 1
-        output_dims = 1
-        is_separable = True
-
-        def transform(self, a):
-            return np.array(a)**2
-
-        def inverted(self):
-            return SquareRootScale.SquareRootTransform()
-
-    def get_transform(self):
-        return self.SquareRootTransform()
-
-
-class SquareScale(mscale.ScaleBase):
-    """
-    ScaleBase class for generating square root scale.
-    """
-
-    name = 'sqr'
-
-    def __init__(self, axis, **kwargs):
-        # note in older versions of matplotlib (<3.1), this worked fine.
-        mscale.ScaleBase.__init__(self)
-
-        # In newer versions (>=3.1), you also need to pass in `axis` as an arg
-        #mscale.ScaleBase.__init__(self, axis)
-
-    def set_default_locators_and_formatters(self, axis):
-        axis.set_major_locator(ticker.AutoLocator())
-        axis.set_major_formatter(ticker.ScalarFormatter())
-        axis.set_minor_locator(ticker.NullLocator())
-        axis.set_minor_formatter(ticker.NullFormatter())
-
-    def limit_range_for_scale(self, vmin, vmax, minpos):
-        return  max(0., vmin), vmax
-
-    class SquareTransform(mtransforms.Transform):
-        input_dims = 1
-        output_dims = 1
-        is_separable = True
-
-        def transform_non_affine(self, a):
-            return np.array(a)**2
-
-        def inverted(self):
-            return SquareScale.InvertedSquareTransform()
-
-    class InvertedSquareTransform(mtransforms.Transform):
-        input_dims = 1
-        output_dims = 1
-        is_separable = True
-
-        def transform(self, a):
-            return np.array(a)**.5
-
-        def inverted(self):
-            return SquareScale.SquareTransform()
-
-    def get_transform(self):
-        return self.SquareTransform()
-
-
-mscale.register_scale(SquareRootScale)
-mscale.register_scale(SquareScale)

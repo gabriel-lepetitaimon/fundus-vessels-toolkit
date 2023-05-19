@@ -4,7 +4,7 @@ import math
 
 from .steered_kbase import SteerableKernelBase
 from .ortho_kbase import OrthoKernelBase
-from nntemplate.torch_utils import normalize_vector
+from ..utils.torch import normalize_vector
 
 DEFAULT_STEERABLE_BASE = SteerableKernelBase.create_radial(3)
 DEFAULT_ATTENTION_BASE = OrthoKernelBase.create_radial(3)

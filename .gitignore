@@ -1,4 +1,12 @@
-/.idea/
+# IDE
+.idea/
+
+# Cache
+*.py[cod]
 **/.ipynb_checkpoints/
-**/__pycache__
+**/__pycache__/
+
+# Distribution / packaging
+/build/
 **/*.egg-info
+

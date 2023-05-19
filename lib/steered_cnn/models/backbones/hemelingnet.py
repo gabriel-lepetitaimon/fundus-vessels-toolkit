@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from collections import OrderedDict
-from nntemplate.torch_utils import cat_crop, ConvBN
+from ...utils.torch import cat_crop, ConvBN
 from .model import Model
 
 

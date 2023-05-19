@@ -2,8 +2,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import numpy as np
-from ..utils import compute_padding
-from nntemplate.utils import clip_pad_center
+from ..utils.torch import compute_padding, crop_pad
 
 
 class KernelBase:
@@ -22,7 +21,7 @@ class KernelBase:
         for b in normed_base:
             for r in torch.arange(c % 1, c, 1):
                 i0, i1 = int(c-r-1), int(c+r)
-                if torch.max(b - clip_pad_center(b[i0:i1, i0:i1], b.shape)) < epsilon:
+                if torch.max(b - crop_pad(b[i0:i1, i0:i1], b.shape)) < epsilon:
                     self.r += [r]
                     break
             else:
@@ -90,7 +89,7 @@ class KernelBase:
 
         device = kernels.device
         kernels = kernels.detach().cpu()
-        kernels = clip_pad_center(kernels, (n, m))
+        kernels = crop_pad(kernels, (n, m))
 
         kernels = kernels.numpy()
         X = base.reshape((k, n*m)).T
