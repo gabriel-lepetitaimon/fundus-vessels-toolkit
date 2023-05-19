@@ -1,1 +1,1 @@
-from .seg2graph import *
+from .fundus_utilities import *

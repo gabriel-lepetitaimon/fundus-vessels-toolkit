@@ -11,7 +11,28 @@ git clone https://github.com/gabriel-lepetitaimon/fundus-vessels-toolkit.git
 pip install -e fundus-vessels-toolkit
 ```
 
+If you plan to use the commmon use-case example provided as Jupyter Notebooks in the `samples/` folder, you should 
+also install their dependencies:
+```bash
+pip install -e fundus-vessels-toolkit[samples]
+```
+
 ## Vessels Segmentation and Classification
+
+### Pretrained Segmentation Models
+For now, the only model pretrained model for vasculaire segmentation available through this repository 
+is a UNet using a Resnet34 as a backbone and trained on FIVES.
+
+But we aim to provide more models using different architecture and trained on more datasets in the near future.
+
+```python
+import cv2
+from fundus_vessels_toolkit.models import segment
+
+raw = cv2.imread('path/to/raw/fundus/image.jpg')
+segmented = segment(raw)
+```
+
 
 ### Steered Convolutional Neuron
 Steered CNN is a specific architecture to segment and classify vessels which implements rotational equivariance in CNN.
@@ -47,5 +68,3 @@ To overcome this issue, we propose to use the following metrics:
 - **Vascular Graph Distance (VGD)**:
 
 
-### Pretrained Models
-The models were pretrained on FIVES, DRIVE, MESSIDOR, IDRID (RETA) datasets.

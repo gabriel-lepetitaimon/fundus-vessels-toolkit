@@ -13,14 +13,16 @@ SegmentModel = Literal['resnet34']
 _last_model = (None, None)
 
 
-def segment(x, model_name: SegmentModel = 'resnet34', device: torch.device = 'cuda'):
+def segment(x, model_name: SegmentModel = 'resnet34', roi_mask='auto', device: torch.device = 'cuda'):
     global _last_model
     if _last_model[0] == model_name:
         model = _last_model[1]
     else:
         model = segmentation_model(model_name).to(device=device)
         _last_model = (model, model_name)
-
+    
+    raw = x
+    
     match model_name:
         case 'resnet34':
             with torch.no_grad():
@@ -35,7 +37,15 @@ def segment(x, model_name: SegmentModel = 'resnet34', device: torch.device = 'cu
                 x = crop_pad(x, padded_shape)
                 y = model(x)
                 y = crop_pad(y, final_shape)[0, 1] > 0.5
-                return y.cpu().numpy()
+                y = y.cpu().numpy()
+    
+    if roi_mask == 'auto':
+        from ..fundus_utilities import compute_ROI_mask
+        roi_mask = compute_ROI_mask(raw)
+    if roi_mask is not None:
+        y *= roi_mask
+        
+    return y
 
 
 def segmentation_model(model_name: SegmentModel = 'resnet34'):
