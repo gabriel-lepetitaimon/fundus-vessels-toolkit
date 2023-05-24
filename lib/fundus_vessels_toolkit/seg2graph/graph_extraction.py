@@ -1,3 +1,4 @@
+import warnings
 from typing import Mapping, Literal, TypedDict, TypeAlias
 
 import numpy as np
@@ -8,7 +9,7 @@ from skimage.segmentation import expand_labels
 
 from .skeleton_utilities import extract_unravelled_pattern
 from .graph_utilities import apply_lookup, apply_node_lookup_on_coordinates, branch_by_nodes_to_adjacency_list, \
-    compute_is_endpoints, delete_nodes, fuse_nodes, merge_nodes_by_distance, \
+    compute_is_endpoints, delete_nodes, fuse_nodes, index_to_mask, merge_nodes_by_distance, \
     merge_nodes_clusters, merge_equivalent_branches, node_rank, perimeter_from_vertices, solve_clusters
 
 
@@ -139,7 +140,7 @@ def seg_to_adjacency_branches_nodes(vessel_map: np.ndarray, return_label=False,
                   if perimeter < merge_small_cycles]
         # - Merge cycles
         branches_by_nodes, branch_lookup_2, nodes_mask = merge_nodes_clusters(branches_by_nodes, cycles,
-                                                                              remove_branches_labels=True)
+                                                                              erase_branches=True)
         # - Apply the lookup tables on nodes and branches
         node_y, node_x = apply_node_lookup_on_coordinates((node_y, node_x), nodes_mask)
         branch_lookup = apply_lookup(branch_lookup, branch_lookup_2, node_labels[2])
@@ -214,7 +215,7 @@ def compute_branches_by_nodes_matrix(skel: np.ndarray):
     nodes_ring = extract_unravelled_pattern(labeled_branches - labels_nodes,
                                             (node_y, node_x), ring_pattern, return_coordinates=False)
     branch_neighbors = np.maximum(nodes_ring, 0)
-    nodes_neighbors = -np.minimum(nodes_ring, 0)
+    nodes_neighbors = np.maximum(-nodes_ring, 0)
 
     # Build the matrix of connections from branches to nodes
     nb_nodes = len(node_y)
@@ -228,20 +229,39 @@ def compute_branches_by_nodes_matrix(skel: np.ndarray):
                                     nodes_neighbors[pair_adjacent_nodes[0], pair_adjacent_nodes[1]] - 1), axis=1)
     pair_adjacent_nodes.sort(axis=1)
     pair_adjacent_nodes = np.unique(pair_adjacent_nodes, axis=0)
-    removable_nodes = []
-    for cluster in solve_clusters(pair_adjacent_nodes):
-        if len(cluster) > 1:
-            cluster = list(cluster)
-            removable_nodes.append(cluster[1:])
-            branches_by_nodes[:, cluster[0]] = np.any(branches_by_nodes[:, cluster], axis=1)
 
-    if removable_nodes:
-        removable_nodes = np.concatenate(removable_nodes)
-        nb_junctions -= np.sum(removable_nodes < nb_junctions)
+    if len(pair_adjacent_nodes):
+        nb_nodes = len(node_y)
+        node_lookup = np.arange(nb_nodes)
+        node_mask = np.ones(nb_nodes, dtype=bool)
+        for cluster in solve_clusters(pair_adjacent_nodes):
+            if len(cluster) > 1:
+                # Convert the cluster index tso the new nodes index (to account for the previously merged nodes).
+                cluster = np.asarray(list(cluster), dtype=np.int64)
 
-        node_mask = np.isin(np.arange(nb_nodes), removable_nodes, invert=True)
+                # Redirect branches to the first node of the cluster
+                branches_by_nodes[:, cluster[0]] = np.any(branches_by_nodes[:, cluster], axis=1)
+
+                # Mark the nodes to be merged into the first node of the cluster
+                node_mask[cluster[1:]] = False
+                node_lookup[cluster[1:]] = cluster[0]
+
+        # Compute the node index shift due to nodes deletion
+        node_shift = np.cumsum(node_mask) - 1
+        node_lookup = node_shift[node_lookup]
+
+        # Remove the merged nodess
         branches_by_nodes = branches_by_nodes[:, node_mask]
-        node_y, node_x = apply_node_lookup_on_coordinates((node_y, node_x), np.cumsum(node_mask)-1)
+        node_y, node_x = apply_node_lookup_on_coordinates((node_y, node_x), node_lookup)
+
+    invalid_branches = np.sum(branches_by_nodes, axis=1) != 2
+    if np.any(invalid_branches):
+        warnings.warn(f'{np.sum(invalid_branches)} branches are invalid (connecting more or less than 2 nodes).\n'
+                      f'Those branches will be removed the graph. But this will probably cause invalid topology.\n'
+                      f'You should report this issue to the developer.')
+        branch_lookup = np.concatenate(([0], np.cumsum(~invalid_branches)))
+        labeled_branches = branch_lookup[labeled_branches]
+        branches_by_nodes = branches_by_nodes[~invalid_branches, :]
 
     return branches_by_nodes, labeled_branches, (node_y, node_x), nb_junctions
 

@@ -96,5 +96,5 @@ class RetinalVesselSeg2Graph(Seg2Graph):
 
     def __call__(self, vessel_map):
         from ..vgraph import VascularGraph
-        adj_mtx, branch_labels, node_yx_coord = self.seg2node_graph(vessel_map, return_label=True)
+        adj_mtx, branch_labels, node_yx_coord = self.seg2adjacency(vessel_map, return_label=True)
         return VascularGraph(adj_mtx, branch_labels, node_yx_coord)
