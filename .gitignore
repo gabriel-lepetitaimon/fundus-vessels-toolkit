@@ -10,3 +10,7 @@
 /build/
 **/*.egg-info
 
+# Cython compilation
+/cython_build/
+**/*.so
+**/*.dll
