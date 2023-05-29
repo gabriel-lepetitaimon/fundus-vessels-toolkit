@@ -20,6 +20,7 @@ def compute_ROI_mask(img: np.ndarray, median_blur_size: int | None = None, thres
     
     if median_blur_size is None:
         median_blur_size = int(math.ceil(img.shape[1]/50))
+        median_blur_size += median_blur_size % 2 == 0
     
     if img.dtype != np.uint8:
         if img.max() <= 1:
