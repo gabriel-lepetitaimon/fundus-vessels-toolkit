@@ -33,7 +33,7 @@ Source = 'https://github.com/gabriel-lepetitaimon/fundus-vessels-toolkit'
 
 
 [build-system]
-requires = ["wheel", "setuptools", "Cython~=3.0.0"]
+requires = ["wheel", "setuptools", "Cython~=3.0.0b3", "numpy"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]

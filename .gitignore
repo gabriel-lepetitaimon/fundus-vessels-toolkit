@@ -14,3 +14,4 @@
 /cython_build/
 **/*.so
 **/*.dll
+/cython_debug/

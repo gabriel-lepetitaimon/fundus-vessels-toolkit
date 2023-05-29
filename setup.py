@@ -13,8 +13,8 @@ Options.annotate = False
 # Modules to be compiled and include_dirs when necessary
 extensions = [
     Extension(
-        "fundus_vessels_toolkit.vgraph.graph_cython",
-        ["lib/fundus_vessels_toolkit/vgraph/graph_cython.pyx"],
+        "fundus_vessels_toolkit.vgraph.graph_utils_cython",
+        ["lib/fundus_vessels_toolkit/vgraph/graph_utils_cython.pyx"],
         include_dirs=[numpy.get_include()],
         define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
     ),
