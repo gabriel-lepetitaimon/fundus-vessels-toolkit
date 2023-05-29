@@ -82,17 +82,40 @@ class RetinalVesselSeg2Graph(Seg2Graph):
     """
     Specialization of Seg2Graph for retinal vessels.
     """
-    def __init__(self, max_vessel_diameter=5):
-        max_radius = max_vessel_diameter // 2 + 1
+    def __init__(self, max_vessel_diameter=5, fix_segmentation=True):
         super(RetinalVesselSeg2Graph, self).__init__(fix_hollow=True,
                                                      skeletonize_method='lee',
                                                      max_spurs_length=1,
-                                                     max_spurs_distance=max_vessel_diameter,
-                                                     nodes_merge_distance=dict(junction=max_radius,
-                                                                               termination=max_vessel_diameter,
-                                                                               node=max_radius-1),
-                                                     merge_small_cycles=max_vessel_diameter * 4,
                                                      simplify_topology='node', )
+        self.fix_segmentation = fix_segmentation
+        self.max_vessel_diameter = max_vessel_diameter
+
+    @property
+    def max_vessel_diameter(self):
+        return self._max_vessel_diameter
+
+    @max_vessel_diameter.setter
+    def max_vessel_diameter(self, max_diameter):
+        self._max_vessel_diameter = max_diameter
+        max_radius = max_diameter // 2 + 1
+        self.nodes_merge_distance = dict(junction=max_radius,
+                                         termination=max_diameter,
+                                         node=max_radius-1)
+        self.max_spurs_distance = max_diameter
+        self.merge_small_cycles = max_diameter * 4
+
+    def skeletonize(self, vessel_map):
+        if self.fix_segmentation:
+            import skimage.morphology as skmorph
+            import numpy as np
+
+            disk = skmorph.disk(self.max_vessel_diameter//4)
+            skmorph.binary_closing(vessel_map, selem=disk, out=vessel_map)
+
+            min_size = (self.max_vessel_diameter//4)**2*np.pi
+            skmorph.remove_small_objects(vessel_map, min_size=min_size, connectivity=2, out=vessel_map)
+
+        return super(RetinalVesselSeg2Graph, self).skeletonize(vessel_map)
 
     def __call__(self, vessel_map):
         from ..vgraph import VascularGraph
