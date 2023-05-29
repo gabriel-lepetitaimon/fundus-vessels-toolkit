@@ -42,6 +42,7 @@ def simple_graph_matching(node1_yx: tuple[np.ndarray, np.ndarray], node2_yx: tup
     # Compute the euclidian distance between each node
     euclidian_distance = np.linalg.norm(node1_yx[:, None] - node2_yx[None, :], axis=2)
     max_distance = euclidian_distance.max()
+
     def dist2weight(dist):
         return np.exp(-gamma * dist / 1e3) if gamma != 0 else max_distance - dist
 
@@ -60,3 +61,70 @@ def simple_graph_matching(node1_yx: tuple[np.ndarray, np.ndarray], node2_yx: tup
     if return_distance:
         return matched_nodes, euclidian_distance[matched_nodes]
     return matched_nodes
+
+
+def edit_distance(adj_list1, adj_list2, matched_nodes: int):
+    from .graph_utils_cython import shortest_secondary_path as cython_shortest_path
+    primary_nodes = np.arange(matched_nodes)
+
+    nb_node1 = adj_list1.max() + 1
+    dist1, backtrack1 = cython_shortest_path(adj_list1, primary_nodes, np.arange(matched_nodes, nb_node1))
+
+    nb_node2 = adj_list2.max() + 1
+    dist2, backtrack2 = cython_shortest_path(adj_list2, primary_nodes, np.arange(matched_nodes, nb_node2))
+
+    return dist1, dist2, backtrack1, backtrack2
+
+
+def backtrack_edges(from_node, to_primary_node, backtrack):
+    edges = []
+    backtrack = backtrack[to_primary_node]
+    node = from_node
+
+    if backtrack[node, 1] == -1:
+        return []
+
+    while node != to_primary_node:
+        next_edge, next_node = backtrack[node]
+        edges.append(next_edge)
+        node = next_node
+
+    return edges
+
+
+def label_edge_diff(vgraph_pred, vgraph_true, nmatch):
+    dist_pred, dist_true, backtrack_pred, backtrack_true = edit_distance(vgraph_pred.node_adjacency_list(),
+                                                                         vgraph_true.node_adjacency_list(), nmatch)
+    edge_id_pred = backtrack_pred[..., 0]
+    edge_id_true = backtrack_true[..., 0]
+
+    prim_adj_true = dist_true[:, :nmatch]
+    prim_adj_pred = dist_pred[:, :nmatch]
+
+    valid_edges = np.where((prim_adj_true == 1) & (prim_adj_pred == 1))
+    fused_edges = np.where((prim_adj_true > 1) & (prim_adj_pred == 1))
+    split_edges = np.where((prim_adj_true == 1) & (prim_adj_pred > 1))
+
+    # Assign labels to prediction graph edges
+    #  - False positive (default)
+    pred_edge_labels = np.zeros((vgraph_pred.branches_count), dtype=np.int8)
+    #  - True positive
+    pred_edge_labels[edge_id_pred[valid_edges]] = 1
+    #  - Split edges (single branch in true, multiple branch in pred)
+    fused_pred_edge = np.concatenate([backtrack_edges(*e, backtrack=backtrack_pred) for e in zip(*split_edges)])
+    pred_edge_labels[fused_pred_edge] = 2
+    #  - Fused edges (multiple branch in true, single branch in pred)
+    pred_edge_labels[edge_id_pred[fused_edges]] = 3
+
+    # Assign labels to true graph edges
+    #  - False negative (default)
+    true_edge_labels = np.zeros((vgraph_true.branches_count), dtype=np.int8)
+    #  - True positive
+    true_edge_labels[edge_id_true[valid_edges]] = 1
+    #  - Fused edges (multiple branch in true, single branch in pred)
+    fused_true_edge = np.concatenate([backtrack_edges(*e, backtrack=backtrack_true) for e in zip(*fused_edges)])
+    true_edge_labels[fused_true_edge] = 2
+    #  - Split edges (single branch in true, multiple branch in pred)
+    true_edge_labels[edge_id_true[split_edges]] = 3
+
+    return pred_edge_labels, true_edge_labels
