@@ -1,5 +1,5 @@
 import numpy as np
-from skimage.morphology import medial_axis
+from skimage.morphology import medial_axis, remove_small_objects
 from skimage.morphology import skeletonize as skimage_skeletonize
 from skimage.measure import label
 import scipy.ndimage as scimage
@@ -46,6 +46,7 @@ def skeletonize(vessel_map: np.ndarray, return_distance=False, fix_hollow=True, 
     else:
         bin_skel = skimage_skeletonize(vessel_map, method=skeletonize_method) > 0
         skel_dist = scimage.distance_transform_edt(bin_skel) if return_distance else None
+    remove_small_objects(bin_skel, min_size=3, connectivity=2, out=bin_skel)
     skel = bin_skel.astype(np.int8)
     bin_skel_patches = extract_patches(bin_skel, bin_skel, (3, 3), True)
 
