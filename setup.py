@@ -13,11 +13,18 @@ Options.annotate = False
 # Modules to be compiled and include_dirs when necessary
 extensions = [
     Extension(
-        "fundus_vessels_toolkit.vgraph.graph_utils_cython",
-        ["lib/fundus_vessels_toolkit/vgraph/graph_utils_cython.pyx"],
+        "fundus_vessels_toolkit.vgraph.edit_distance_cy",
+        ["lib/fundus_vessels_toolkit/vgraph/edit_distance_cy.pyx"],
         include_dirs=[numpy.get_include()],
         define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
     ),
+    Extension(
+        "fundus_vessels_toolkit.seg2graph.graph_utilities_cy",
+        ["lib/fundus_vessels_toolkit/seg2graph/graph_utilities_cy.pyx"],
+        include_dirs=[numpy.get_include()],
+        define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
+    ),
+
 ]
 
 
@@ -27,5 +34,6 @@ setup(
                           nthreads=os.cpu_count(),
                           build_dir=CYTHON_BUILD_DIR,
                           force=True,
+                            annotate=True,
                           ),
 )

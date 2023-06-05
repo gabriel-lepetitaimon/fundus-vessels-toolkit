@@ -7,10 +7,11 @@ import scipy.ndimage as scimage
 from skimage.measure import label
 from skimage.segmentation import expand_labels
 
-from .skeleton_utilities import extract_unravelled_pattern
+from .skeleton_utilities import extract_unravelled_pattern, fast_expand_branch_labels
 from .graph_utilities import apply_lookup, apply_node_lookup_on_coordinates, branch_by_nodes_to_adjacency_list, \
-    compute_is_endpoints, delete_nodes, fuse_nodes, index_to_mask, merge_nodes_by_distance, \
+    compute_is_endpoints, delete_nodes, fuse_nodes, merge_nodes_by_distance, \
     merge_nodes_clusters, merge_equivalent_branches, node_rank, perimeter_from_vertices, solve_clusters
+from .graph_utilities_cy import label_skeleton
 
 
 class NodeMergeDistanceDict(TypedDict):
@@ -62,8 +63,9 @@ def seg_to_adjacency_branches_nodes(vessel_map: np.ndarray, return_label=False,
     else:
         skel = vessel_map
 
-    branches_by_nodes, labeled_branches, (node_y, node_x), nb_junctions = compute_branches_by_nodes_matrix(skel)
-    is_endpoint = np.arange(len(node_y)) >= nb_junctions
+    # branches_by_nodes, labeled_branches, (node_y, node_x), nb_junctions = extract_branches_by_nodes_matrix(skel)
+    branches_by_nodes, labeled_branches, (node_y, node_x) = fast_extract_branches_by_nodes_matrix(skel)
+    is_endpoint = compute_is_endpoints(branches_by_nodes)
 
     branch_lookup = None
     node_labels = (np.asarray([], dtype=np.int64),) * 3
@@ -76,7 +78,7 @@ def seg_to_adjacency_branches_nodes(vessel_map: np.ndarray, return_label=False,
         #    by each terminal branch
         spurs_junction, spurs_endpoint = branch_by_nodes_to_adjacency_list(branches_by_nodes[spurs_branches]).T
         # - Discard branches whose first node is not a junction (branches connecting 2 endpoints)
-        single_branches = spurs_junction >= nb_junctions
+        single_branches = is_endpoint[spurs_junction]
         spurs_junction = spurs_junction[~single_branches]
         spurs_endpoint = spurs_endpoint[~single_branches]
         # - Compute the distance between those nodes for each terminal branch
@@ -85,8 +87,8 @@ def seg_to_adjacency_branches_nodes(vessel_map: np.ndarray, return_label=False,
         # - Select every endpoint connected to a terminal branch with a distance smaller than max_spurs_distance
         node_to_delete = np.unique(np.concatenate((spurs_junction[spurs_distance < max_spurs_distance],
                                                    spurs_endpoint[spurs_distance < max_spurs_distance])))
-        node_to_fuse = node_to_delete[node_to_delete < nb_junctions]
-        node_to_delete = node_to_delete[node_to_delete >= nb_junctions]
+        node_to_fuse = node_to_delete[~is_endpoint[node_to_delete]]
+        node_to_delete = node_to_delete[is_endpoint[node_to_delete]]
         # - Delete those nodes
         branches_by_nodes, branch_lookup2, nodes_mask = delete_nodes(branches_by_nodes, node_to_delete)
         # - Apply the lookup tables on nodes and branches
@@ -104,7 +106,7 @@ def seg_to_adjacency_branches_nodes(vessel_map: np.ndarray, return_label=False,
             node_labels = tuple(np.concatenate((n, n1)) for n, n1 in zip(node_labels, node_labels2))
             node_y, node_x = node_y[nodes_mask], node_x[nodes_mask]
 
-        is_endpoint = np.arange(len(node_y)) >= nb_junctions
+        is_endpoint = compute_is_endpoints(branches_by_nodes)
 
     if nodes_merge_distance is True:
         nodes_merge_distance = 2.5 * np.sqrt(2)
@@ -186,7 +188,30 @@ def seg_to_adjacency_branches_nodes(vessel_map: np.ndarray, return_label=False,
         return branches_by_nodes
 
 
-def compute_branches_by_nodes_matrix(skel: np.ndarray):
+def fast_extract_branches_by_nodes_matrix(skel: np.ndarray):
+    labeled_branches, branch_adj_list, node_yx = label_skeleton(skel)
+    labeled_branches = labeled_branches.clip(0).astype(np.uint32)
+
+    invalid_branches = np.any(branch_adj_list==-1, axis=1)
+    if np.any(invalid_branches):
+        warnings.warn(f'{np.sum(invalid_branches)} branches are invalid (connecting less than 2 nodes).\n'
+                      f'Those branches will be removed from the graph. But this will probably cause invalid topology.\n'
+                      f'You should report this issue to the developer.')
+        branch_lookup = np.concatenate(([0], np.cumsum(~invalid_branches)))
+        branch_lookup[invalid_branches] = 0
+        labeled_branches = branch_lookup[labeled_branches]
+        branch_adj_list = branch_adj_list[~invalid_branches, :]
+
+    n_branch = branch_adj_list.shape[0]
+    n_node = node_yx.shape[0]
+    branch_by_node = np.zeros((n_branch, n_node), dtype=bool)
+    branch_by_node[np.arange(n_branch)[:, None], branch_adj_list] = True
+    
+    return branch_by_node, labeled_branches, tuple(node_yx.T)
+
+
+def extract_branches_by_nodes_matrix(skel: np.ndarray):
+    # TODO: remove this function when fast_extract_branches_by_nodes_matrix is stable
     bin_skel = skel > 0
     junctions_map = skel >= 3
     end_points_map = skel == 1
@@ -196,7 +221,9 @@ def compute_branches_by_nodes_matrix(skel: np.ndarray):
     # Label branches
     skel_no_nodes = bin_skel & ~scimage.binary_dilation(nodes_map, sqr3)
     labeled_branches, nb_branches = label(skel_no_nodes, return_num=True)
-    labeled_branches = expand_labels(labeled_branches, 2) * (bin_skel & ~nodes_map)
+    labeled_branches = fast_expand_branch_labels(labeled_branches, bin_skel,
+                                                 junctions_map, end_points_map)
+    # labeled_branches = expand_labels(labeled_branches, 2) * (bin_skel & ~nodes_map)
 
     # Label nodes
     jy, jx = np.where(junctions_map)

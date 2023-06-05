@@ -64,7 +64,7 @@ def simple_graph_matching(node1_yx: tuple[np.ndarray, np.ndarray], node2_yx: tup
 
 
 def edit_distance(adj_list1, adj_list2, matched_nodes: int):
-    from .graph_utils_cython import shortest_secondary_path as cython_shortest_path
+    from .edit_distance_cy import shortest_secondary_path as cython_shortest_path
     primary_nodes = np.arange(matched_nodes)
 
     nb_node1 = adj_list1.max() + 1

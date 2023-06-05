@@ -8,7 +8,7 @@ np.import_array()
 from libcpp cimport bool
 from libcpp.vector cimport vector
 from libcpp.list cimport list as cpplist
-from libc.stdlib cimport malloc, free
+# from libc.stdlib cimport malloc, free
 
 
 DTYPE = int
