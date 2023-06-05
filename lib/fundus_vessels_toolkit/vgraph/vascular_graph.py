@@ -53,7 +53,7 @@ class VascularGraph:
         assert node_indexes.ndim == 1 and node_indexes.shape[0] <= self.nodes_count, \
             f'node_indexes must be a 1D array of maximum size {self.nodes_count}'
 
-        if node_indexes.shape[0] < self._branch_by_node.shape[0]:
+        if node_indexes.shape[0] < self._branch_by_node.shape[1]:
             node_indexes = np.concatenate((node_indexes, np.setdiff1d(np.arange(self.nodes_count), node_indexes)))
 
         self._branch_by_node = self._branch_by_node[:, node_indexes]
