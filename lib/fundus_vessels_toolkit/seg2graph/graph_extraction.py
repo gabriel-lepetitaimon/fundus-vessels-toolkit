@@ -7,7 +7,7 @@ import scipy.ndimage as scimage
 from skimage.measure import label
 from skimage.segmentation import expand_labels
 
-from .skeleton_utilities import extract_unravelled_pattern, fast_expand_branch_labels
+from .skeleton_utilities import extract_unravelled_pattern
 from .graph_utilities import apply_lookup, apply_node_lookup_on_coordinates, branch_by_nodes_to_adjacency_list, \
     compute_is_endpoints, delete_nodes, fuse_nodes, merge_nodes_by_distance, \
     merge_nodes_clusters, merge_equivalent_branches, node_rank, perimeter_from_vertices, solve_clusters
