@@ -6,10 +6,8 @@
 #
 #
 ########################################################################################################################
-from typing import Mapping, Literal
-
 from .skeletonization import skeletonize, SkeletonizeMethod
-from .graph_extraction import seg_to_adjacency_branches_nodes, branches_by_nodes_to_node_graph, \
+from .graph_extraction import seg_to_branches_list, branches_by_nodes_to_node_graph, \
                               NodeMergeDistanceParam, SimplifyTopology
 
 
@@ -67,7 +65,7 @@ class Seg2Graph:
                            skeletonize_method=self.skeletonize_method)
 
     def skel2adjacency(self, skel, return_label=False):
-        return seg_to_adjacency_branches_nodes(skel, return_label=return_label,
+        return seg_to_branches_list(skel, return_label=return_label,
                                                max_spurs_distance=self.max_spurs_distance,
                                                nodes_merge_distance=self.nodes_merge_distance,
                                                merge_small_cycles=self.merge_small_cycles,
@@ -91,7 +89,7 @@ class RetinalVesselSeg2Graph(Seg2Graph):
                                                      nodes_merge_distance=dict(junction=max_radius,
                                                                                termination=max_vessel_diameter,
                                                                                node=max_radius-1),
-                                                     merge_small_cycles=max_vessel_diameter * 4,
+                                                     merge_small_cycles=max_vessel_diameter,
                                                      simplify_topology='node', )
 
     def __call__(self, vessel_map):
