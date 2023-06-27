@@ -33,8 +33,20 @@ Source = 'https://github.com/gabriel-lepetitaimon/fundus-vessels-toolkit'
 
 
 [build-system]
-requires = ["wheel", "setuptools"]
+requires = ["wheel", "setuptools", "Cython~=3.0.0b3", "numpy"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = {"" = "lib"}
+
+[tool.ruff]
+# Enable flake8-bugbear (`B`) rules.
+select = ["E", "F", "B"]
+
+ignore = ["E501",       # Ignore line length
+          "E402"]       # Ignore import at top file violation
+
+# Avoid trying to fix flake8-bugbear (`B`) violations.
+unfixable = ["B"]
+
+target-version = "py310"

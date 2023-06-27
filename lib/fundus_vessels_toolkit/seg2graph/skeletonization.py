@@ -1,11 +1,11 @@
 import numpy as np
-from skimage.morphology import medial_axis
+from skimage.morphology import medial_axis, remove_small_objects
 from skimage.morphology import skeletonize as skimage_skeletonize
-from skimage.measure import label
 import scipy.ndimage as scimage
 from typing import Literal, TypeAlias
 
 from .skeleton_utilities import extract_patches, fast_hit_or_miss, compute_junction_endpoint_masks, remove_1px_endpoints
+from .graph_utilities_cy import label_skeleton
 
 
 SkeletonizeMethod: TypeAlias = Literal['medial_axis', 'zhang', 'lee']
@@ -46,6 +46,7 @@ def skeletonize(vessel_map: np.ndarray, return_distance=False, fix_hollow=True, 
     else:
         bin_skel = skimage_skeletonize(vessel_map, method=skeletonize_method) > 0
         skel_dist = scimage.distance_transform_edt(bin_skel) if return_distance else None
+    remove_small_objects(bin_skel, min_size=3, connectivity=2, out=bin_skel)
     skel = bin_skel.astype(np.int8)
     bin_skel_patches = extract_patches(bin_skel, bin_skel, (3, 3), True)
 
@@ -97,10 +98,11 @@ def skeletonize(vessel_map: np.ndarray, return_distance=False, fix_hollow=True, 
         assert branches_label.dtype == np.int32, "branches_label must be of type np.int32"
 
         # with LogTimer('Create branches labels'):
-        junctions = skel >= 3
-        junction_neighbours = scimage.binary_dilation(junctions, sqr3)
-        binskel_no_junctions = (skel >= 1) & ~junction_neighbours
-        branches_label[:], nb_branches = label(binskel_no_junctions, return_num=True, connectivity=2)
+        # junctions = skel >= 3
+        # junction_neighbours = scimage.binary_dilation(junctions, sqr3)
+        # binskel_no_junctions = (skel >= 1) & ~junction_neighbours
+        branches_label, branch_list, _ = label_skeleton(skel)
+        nb_branches = len(branch_list)
     else:
         nb_branches = 0
         branches_label = None
