@@ -1,18 +1,24 @@
-import numpy as np
-from skimage.morphology import medial_axis, remove_small_objects
-from skimage.morphology import skeletonize as skimage_skeletonize
-import scipy.ndimage as scimage
 from typing import Literal, TypeAlias
 
-from .skeleton_utilities import extract_patches, fast_hit_or_miss, compute_junction_endpoint_masks, remove_1px_endpoints
+import numpy as np
+import scipy.ndimage as scimage
+from skimage.morphology import medial_axis, remove_small_objects
+from skimage.morphology import skeletonize as skimage_skeletonize
+
 from .graph_utilities_cy import label_skeleton
+from .skeleton_utilities import compute_junction_endpoint_masks, extract_patches, fast_hit_or_miss, remove_1px_endpoints
+
+SkeletonizeMethod: TypeAlias = Literal["medial_axis", "zhang", "lee"]
 
 
-SkeletonizeMethod: TypeAlias = Literal['medial_axis', 'zhang', 'lee']
-
-
-def skeletonize(vessel_map: np.ndarray, return_distance=False, fix_hollow=True, max_spurs_length=0,
-                branches_label: np.ndarray | None = None, skeletonize_method: SkeletonizeMethod = 'lee') -> np.ndarray:
+def skeletonize(
+    vessel_map: np.ndarray,
+    return_distance=False,
+    fix_hollow=True,
+    max_spurs_length=0,
+    branches_label: np.ndarray | None = None,
+    skeletonize_method: SkeletonizeMethod = "lee",
+) -> np.ndarray:
     """
     Skeletonize a binary image of retinal vessels using the medial axis transform.
     Junctions and endpoints are detected and labeled, and simple cleanup operations are performed on the skeleton.
@@ -41,7 +47,7 @@ def skeletonize(vessel_map: np.ndarray, return_distance=False, fix_hollow=True, 
 
     # === Compute the medial axis ===
     # with LogTimer("Compute skeleton"):
-    if skeletonize_method == 'medial_axis':
+    if skeletonize_method == "medial_axis":
         bin_skel, skel_dist = medial_axis(vessel_map, return_distance=return_distance, random_state=0)
     else:
         bin_skel = skimage_skeletonize(vessel_map, method=skeletonize_method) > 0
@@ -51,14 +57,13 @@ def skeletonize(vessel_map: np.ndarray, return_distance=False, fix_hollow=True, 
     bin_skel_patches = extract_patches(bin_skel, bin_skel, (3, 3), True)
 
     # === Build the skeleton with junctions and endpoints ===
-    #with LogTimer("Detect junctions"):
+    # with LogTimer("Detect junctions"):
     # Detect junctions
     skel[fast_hit_or_miss(bin_skel, bin_skel_patches, *junction_3lines_masks)] = 2
     skel[fast_hit_or_miss(bin_skel, bin_skel_patches, *junction_4lines_masks)] = 3
 
     # Fix hollow cross junctions
     if fix_hollow:
-
         # with LogTimer("Fix hollow cross") as log:
         junction_hollow_cross = scimage.morphology.binary_hit_or_miss(bin_skel, *hollow_cross_mask)
         # log.print('Hollow cross found')
@@ -67,7 +72,7 @@ def skeletonize(vessel_map: np.ndarray, return_distance=False, fix_hollow=True, 
 
         # log.print('Hollow cross quick fix, starting post fix')
         for y, x in zip(*np.where(junction_hollow_cross)):
-            neighborhood = skel[y - 1:y + 2, x - 1:x + 2]
+            neighborhood = skel[y - 1 : y + 2, x - 1 : x + 2]
             if np.sum(neighborhood) == 1:
                 skel[y, x] = 0
             if any(scimage.binary_hit_or_miss(neighborhood, *m)[1, 1] for m in zip(*junction_4lines_masks)):

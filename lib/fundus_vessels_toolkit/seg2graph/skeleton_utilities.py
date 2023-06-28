@@ -1,5 +1,6 @@
-import numpy as np
 from typing import Tuple
+
+import numpy as np
 
 
 def binary1d_hit_or_miss(samples, positive_patterns, negative_patterns=None):

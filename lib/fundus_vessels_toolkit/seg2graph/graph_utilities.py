@@ -1,18 +1,21 @@
 import warnings
-import numpy as np
 from typing import Dict, List, Tuple
+
+import numpy as np
 
 
 def add_empty_to_lookup(lookup: np.ndarray) -> np.ndarray:
     """
     Add an empty entry to a lookup table.
     """
-    return np.concatenate([[0], lookup+1], dtype=lookup.dtype)
+    return np.concatenate([[0], lookup + 1], dtype=lookup.dtype)
 
 
-def apply_lookup(array: np.ndarray | None, mapping: Dict[int, int] | Tuple[np.ndarray, np.ndarray] | np.array | None,
-                 apply_inplace_on: np.ndarray | None = None) \
-        -> np.ndarray:
+def apply_lookup(
+    array: np.ndarray | None,
+    mapping: Dict[int, int] | Tuple[np.ndarray, np.ndarray] | np.array | None,
+    apply_inplace_on: np.ndarray | None = None,
+) -> np.ndarray:
     lookup = mapping
     if mapping is None:
         return array
@@ -33,8 +36,9 @@ def apply_lookup(array: np.ndarray | None, mapping: Dict[int, int] | Tuple[np.nd
     return lookup if array is None else lookup[array]
 
 
-def apply_node_lookup_on_coordinates(nodes_coord, nodes_lookup: np.ndarray | None,
-                                     nodes_weight: np.ndarray | None = None):
+def apply_node_lookup_on_coordinates(
+    nodes_coord, nodes_lookup: np.ndarray | None, nodes_weight: np.ndarray | None = None
+):
     """
     Apply a lookup table on a set of coordinates to merge specific nodes and return their barycenter.
 
@@ -54,9 +58,10 @@ def apply_node_lookup_on_coordinates(nodes_coord, nodes_lookup: np.ndarray | Non
     nodes_weight = nodes_weight + 1e-8
 
     assert len(nodes_coord) == 2, f"nodes_coord must be a tuple of two 1D arrays. Got {len(nodes_coord)} elements."
-    assert len(nodes_coord[0]) == len(nodes_coord[1]) == len(nodes_lookup) == len(nodes_weight), \
-        f"nodes_coord, nodes_lookup and nodes_weight must have the same length. Got {len(nodes_coord[0])}, " \
+    assert len(nodes_coord[0]) == len(nodes_coord[1]) == len(nodes_lookup) == len(nodes_weight), (
+        f"nodes_coord, nodes_lookup and nodes_weight must have the same length. Got {len(nodes_coord[0])}, "
         f"{len(nodes_lookup)} and {len(nodes_weight)} respectively."
+    )
 
     jy, jx = nodes_coord
     nodes_coord = np.zeros((np.max(nodes_lookup) + 1, 2), dtype=np.float64)
@@ -170,11 +175,11 @@ def fuse_nodes(branches_by_nodes, nodes_id, node_coord: Tuple[np.ndarray, np.nda
     branches_by_nodes = np.delete(branches_by_nodes, branches_to_delete, axis=0)
     branches_by_nodes = np.delete(branches_by_nodes, nodes_id, axis=1)
 
-    branch_shift_lookup = np.cumsum(index_to_mask(branches_to_delete, len(branch_lookup), invert=True))-1
+    branch_shift_lookup = np.cumsum(index_to_mask(branches_to_delete, len(branch_lookup), invert=True)) - 1
     branch_lookup = add_empty_to_lookup(branch_shift_lookup[branch_lookup])
 
     if node_coord is not None:
-        nodes_labels = node_coord[0], node_coord[1], branch_lookup[branch1_ids+1]
+        nodes_labels = node_coord[0], node_coord[1], branch_lookup[branch1_ids + 1]
         return branches_by_nodes, branch_lookup, nodes_mask, nodes_labels
     else:
         return branches_by_nodes, branch_lookup, nodes_mask
@@ -183,9 +188,10 @@ def fuse_nodes(branches_by_nodes, nodes_id, node_coord: Tuple[np.ndarray, np.nda
 def _prepare_node_deletion(branches_by_nodes, nodes_id):
     assert nodes_id.ndim == 1, "nodes_id must be a 1D array"
     if nodes_id.dtype == bool:
-        assert len(nodes_id) == branches_by_nodes.shape[
-            1], "nodes_id must be a boolean array of the same length as the number of nodes," \
-                f" got len(nodes_id)={len(nodes_id)} instead of {branches_by_nodes.shape[1]}."
+        assert len(nodes_id) == branches_by_nodes.shape[1], (
+            "nodes_id must be a boolean array of the same length as the number of nodes,"
+            f" got len(nodes_id)={len(nodes_id)} instead of {branches_by_nodes.shape[1]}."
+        )
         nodes_mask = ~nodes_id
         nodes_id = np.where(nodes_id)[0]
     else:
@@ -219,9 +225,11 @@ def invert_lookup(lookup):
     return np.array([np.array(s[0], dtype=np.int64) for s in splits])
 
 
-def merge_equivalent_branches(branches_by_nodes: np.ndarray, 
-                              max_nodes_distance: int | None = None, 
-                              nodes_coordinates: Tuple[np.ndarray, np.ndarray]=None) -> Tuple[np.ndarray, np.ndarray]:
+def merge_equivalent_branches(
+    branches_by_nodes: np.ndarray,
+    max_nodes_distance: int | None = None,
+    nodes_coordinates: Tuple[np.ndarray, np.ndarray] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Merge branches that are equivalent (same nodes) and return the resulting branch_by_node matrix and a lookup table for branch labels.
 
@@ -229,9 +237,9 @@ def merge_equivalent_branches(branches_by_nodes: np.ndarray,
         branches_by_node: A (N, M) boolean matrix where N is the number of branches and M the number of nodes.
         max_nodes_distance: If not None, only branches connecting two nodes seperated by a distance smaller than this value
                             will be merged.
-        nodes_coordinates: A (2, M) array or tuples of array containing the coordinates of the nodes. 
+        nodes_coordinates: A (2, M) array or tuples of array containing the coordinates of the nodes.
                            Must be provided if max_nodes_distance is not None.
-        
+
     Returns:
         branches_by_node: A (N', M) boolean matrix where N' is the number of branches after merging.
         branch_lookup: A (N,) array containing the new branch labels.
@@ -244,9 +252,9 @@ def merge_equivalent_branches(branches_by_nodes: np.ndarray,
         branches_n1, branches_n2 = branch_by_nodes_to_adjacency_list(branches_by_nodes).T
         nodes_coordinates = np.stack(nodes_coordinates, axis=1)
         branches_node_dist = np.linalg.norm(nodes_coordinates[branches_n1] - nodes_coordinates[branches_n2], axis=1)
-        
+
         branches_to_remove = np.zeros(branches_by_nodes.shape[0], dtype=bool)
-        branches_lookup = np.arange(branches_by_nodes.shape[0]+1, dtype=np.int64)
+        branches_lookup = np.arange(branches_by_nodes.shape[0] + 1, dtype=np.int64)
 
         small_branches = branches_node_dist <= max_nodes_distance
         small_branches_lookup = np.where(small_branches)[0]
@@ -256,13 +264,15 @@ def merge_equivalent_branches(branches_by_nodes: np.ndarray,
         small_branches_by_node = branches_by_nodes[small_branches]
 
         # Identify equivalent small branches
-        small_branches_by_node, unique_idx, unique_count = np.unique(small_branches_by_node, axis=0,
-                                                                     return_inverse=True, return_counts=True)
+        small_branches_by_node, unique_idx, unique_count = np.unique(
+            small_branches_by_node, axis=0, return_inverse=True, return_counts=True
+        )
         for duplicate_id in np.where(unique_count > 1)[0]:
             duplicated_branches = small_branches_lookup[np.where(unique_idx == duplicate_id)[0]]
             branches_to_remove[duplicated_branches[1:]] = True
-            branches_lookup = apply_lookup(branches_lookup,
-                                           (duplicated_branches[1:] + 1, branches_lookup[duplicated_branches[0] + 1]))
+            branches_lookup = apply_lookup(
+                branches_lookup, (duplicated_branches[1:] + 1, branches_lookup[duplicated_branches[0] + 1])
+            )
 
         if len(branches_to_remove) == 0:
             return branches_by_nodes, None
@@ -276,11 +286,12 @@ def merge_equivalent_branches(branches_by_nodes: np.ndarray,
     return branches_by_nodes, branches_lookup
 
 
-def merge_nodes_by_distance(branches_by_nodes: np.ndarray, nodes_coord: Tuple[np.ndarray, np.ndarray],
-                            distance: float | List[Tuple[np.ndarray, float, bool]]):
-    """
-
-    """
+def merge_nodes_by_distance(
+    branches_by_nodes: np.ndarray,
+    nodes_coord: Tuple[np.ndarray, np.ndarray],
+    distance: float | List[Tuple[np.ndarray, float, bool]],
+):
+    """ """
     if isinstance(distance, float):
         distance = [(None, distance, True)]
 
@@ -299,31 +310,35 @@ def merge_nodes_by_distance(branches_by_nodes: np.ndarray, nodes_coord: Tuple[np
 
         lookup = np.arange(len(nodes_coord[0]), dtype=np.int64)
         lookup = lookup[mask] if mask is not None else lookup
-        nodes_clusters = [tuple(lookup[_] for _ in cluster)
-                          for cluster in solve_clusters(np.where(proximity_matrix)) if len(cluster) > 1]
+        nodes_clusters = [
+            tuple(lookup[_] for _ in cluster)
+            for cluster in adjacency_list_connected_components(np.where(proximity_matrix))
+            if len(cluster) > 1
+        ]
         endpoints_nodes = compute_is_endpoints(branches_by_nodes)
 
-        branches_by_nodes, branch_lookup2, node_lookup = merge_nodes_clusters(branches_by_nodes, nodes_clusters,
-                                                                              erase_branches=remove_branch)
+        branches_by_nodes, branch_lookup2, node_lookup = merge_nodes_clusters(
+            branches_by_nodes, nodes_clusters, erase_branches=remove_branch
+        )
 
         nodes_coord = apply_node_lookup_on_coordinates(nodes_coord, node_lookup, nodes_weight=endpoints_nodes)
         branch_lookup = apply_lookup(branch_lookup, branch_lookup2)
         inverted_lookup = invert_lookup(node_lookup)
 
-        for j, (m, d, r) in enumerate(distance[i+1:]):
+        for j, (m, d, r) in enumerate(distance[i + 1 :]):
             if m is not None:
-                distance[j+i+1] = (m[inverted_lookup], d, r)
+                distance[j + i + 1] = (m[inverted_lookup], d, r)
 
     return branches_by_nodes, branch_lookup, nodes_coord
 
 
 def merge_nodes_clusters(branches_by_nodes: np.ndarray, nodes_clusters: List[set], erase_branches=True):
     """
-    Merge nodes according to a set of clusters. Return the resulting branch_by_node matrix and lookup tables for branch and  node labels. 
+    Merge nodes according to a set of clusters. Return the resulting branch_by_node matrix and lookup tables for branch and  node labels.
 
     Args:
         branches_by_nodes: A (N, M) boolean matrix where N is the number of branches and M the number of nodes.
-        nodes_clusters: A list of sets of nodes to merge. 
+        nodes_clusters: A list of sets of nodes to merge.
                         The implementation assume that each nodes is only present in one cluster.
         erase_branches: If True, branches connecting two nodes of the same cluster will be deleted, otherwise they
                         will be relabeled as one of the branches incoming to the cluster.
@@ -335,7 +350,7 @@ def merge_nodes_clusters(branches_by_nodes: np.ndarray, nodes_clusters: List[set
     """
     node_lookup = np.arange(branches_by_nodes.shape[1], dtype=np.int64)
     branches_to_remove = np.zeros(branches_by_nodes.shape[0], dtype=bool)
-    branches_lookup = np.arange(branches_by_nodes.shape[0]+1, dtype=np.int64)
+    branches_lookup = np.arange(branches_by_nodes.shape[0] + 1, dtype=np.int64)
     node_to_remove = np.zeros(branches_by_nodes.shape[1], dtype=bool)
 
     for cluster in nodes_clusters:
@@ -347,17 +362,18 @@ def merge_nodes_clusters(branches_by_nodes: np.ndarray, nodes_clusters: List[set
         incoming_cluster_branches = np.where(np.sum(branches_by_nodes[:, cluster].astype(bool), axis=1) == 1)[0]
 
         if len(incoming_cluster_branches):
-            branches_lookup = apply_lookup(branches_lookup,
-                                           (cluster_branches + 1, branches_lookup[incoming_cluster_branches[0] + 1]))
+            branches_lookup = apply_lookup(
+                branches_lookup, (cluster_branches + 1, branches_lookup[incoming_cluster_branches[0] + 1])
+            )
         else:
-            branches_lookup[cluster_branches+1] = 0
+            branches_lookup[cluster_branches + 1] = 0
         node_lookup[cluster[1:]] = cluster[0]
         node_to_remove[cluster[1:]] = True
 
     if branches_to_remove.any():
         branches_by_nodes = branches_by_nodes[~branches_to_remove, :]
         if erase_branches:
-            branches_lookup[np.where(branches_to_remove)[0]+1] = 0
+            branches_lookup[np.where(branches_to_remove)[0] + 1] = 0
         branches_lookup_shift = np.cumsum(np.concatenate(([True], ~branches_to_remove))) - 1
         branches_lookup = branches_lookup_shift[branches_lookup]
     else:
@@ -381,14 +397,18 @@ def node_rank(branches_by_nodes):
     return np.sum(branches_by_nodes, axis=0)
 
 
-def solve_clusters(pairwise_connection: List[Tuple[int, int]] | Tuple[np.ndarray, np.ndarray]) -> List[set]:
+def adjacency_list_connected_components(
+    pairwise_connection: List[Tuple[int, int]] | Tuple[np.ndarray, np.ndarray]
+) -> List[set]:
     """
     Generate a list of clusters from a list of pairwise connections.
     """
 
     if isinstance(pairwise_connection, tuple):
         assert len(pairwise_connection) == 2, "pairwise_connection must be a tuple of two arrays"
-        assert pairwise_connection[0].shape == pairwise_connection[1].shape, "pairwise_connection must be a tuple of two arrays of the same shape"
+        assert (
+            pairwise_connection[0].shape == pairwise_connection[1].shape
+        ), "pairwise_connection must be a tuple of two arrays of the same shape"
         pairwise_connection = zip(*pairwise_connection, strict=True)
 
     # TODO: check and use the cython implementation: graph_utilities_cy.solve_clusters
@@ -397,7 +417,7 @@ def solve_clusters(pairwise_connection: List[Tuple[int, int]] | Tuple[np.ndarray
     for p1, p2 in pairwise_connection:
         for i, c in enumerate(clusters):
             if p1 in c:
-                for j, c2 in enumerate(clusters[i+1:]):
+                for j, c2 in enumerate(clusters[i + 1 :]):
                     if p2 in c2:
                         c.update(c2)
                         del clusters[j]
@@ -406,7 +426,7 @@ def solve_clusters(pairwise_connection: List[Tuple[int, int]] | Tuple[np.ndarray
                     c.add(p2)
                 break
             elif p2 in c:
-                for j, c1 in enumerate(clusters[i+1:]):
+                for j, c1 in enumerate(clusters[i + 1 :]):
                     if p1 in c1:
                         c.update(c1)
                         del clusters[j]
@@ -416,6 +436,20 @@ def solve_clusters(pairwise_connection: List[Tuple[int, int]] | Tuple[np.ndarray
                 break
         else:
             clusters.append({p1, p2})
+    return clusters
+
+
+def reduce_clusters(clusters: List[Tuple[int, ...]]) -> List[set]:
+    """
+    Merge clusters that share at least one element.
+    """
+    clusters = [set(c) for c in clusters]
+    for i, c in enumerate(clusters):
+        for j, c2 in enumerate(clusters[i + 1 :]):
+            if c.intersection(c2):
+                c.update(c2)
+                del clusters[j]
+                break
     return clusters
 
 
