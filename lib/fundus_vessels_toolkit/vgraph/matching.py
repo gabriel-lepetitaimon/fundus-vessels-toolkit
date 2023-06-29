@@ -7,8 +7,10 @@ def simple_graph_matching(
     node1_yx: tuple[np.ndarray, np.ndarray],
     node2_yx: tuple[np.ndarray, np.ndarray],
     max_matching_distance: float | None = None,
-    return_distance: bool = False,
+    min_matching_distance: float | None = None,
+    density_sigma: float | None = None,
     gamma: float = 0,
+    return_distance: bool = False,
 ):
     """
     Match nodes from two graphs based on the euclidian distance between nodes.
@@ -48,31 +50,78 @@ def simple_graph_matching(
     n2 = len(node2_yx)
 
     # Compute the euclidian distance between each node
-    euclidian_distance = np.linalg.norm(node1_yx[:, None] - node2_yx[None, :], axis=2)
-    max_distance = euclidian_distance.max()
+    cross_euclidian_distance = np.linalg.norm(node1_yx[:, None] - node2_yx[None, :], axis=2)
+    max_distance = cross_euclidian_distance.max()
 
-    def dist2weight(dist):
-        return np.exp(-gamma * dist / 1e3) if gamma != 0 else max_distance - dist
+    if gamma > 0:
+
+        def dist2weight(dist):
+            return np.exp(-gamma * dist / 1e3)
+
+    else:
+
+        def dist2weight(dist):
+            return max_distance - dist
 
     # Compute the weight as the distance inverse (the hungarian method maximise the sum of the weight)
-    weight = dist2weight(euclidian_distance)
+    weight = dist2weight(cross_euclidian_distance)
 
     # Set the cost of unmatch nodes to half the inverse of the maximum distance,
     #  so that nodes separated by more than max_distance are better left unmatched.
-    min_weight = dist2weight(max_matching_distance) / 2 if max_matching_distance is not None else 0
+    if density_sigma is None:
+        min_weight = dist2weight(max_matching_distance) / 2 if max_matching_distance is not None else 0
+        min_weight1 = np.repeat([min_weight], n1, axis=0)
+        min_weight2 = np.repeat([min_weight], n2, axis=0)
+    else:
+        if min_matching_distance is None:
+            min_matching_distance = np.clip(max_matching_distance / 20, 1)
+
+        # Compute node density as the sum of the gaussian kernel centered on each node
+        def influence(x):
+            return np.exp(-(x**2) / (2 * density_sigma**2))
+
+        self_euclidian_distance1 = np.linalg.norm(node1_yx[:, None] - node1_yx[None, :], axis=2)
+        self_euclidian_distance2 = np.linalg.norm(node2_yx[:, None] - node2_yx[None, :], axis=2)
+        self_density1 = np.clip(influence(self_euclidian_distance1).sum(axis=1) - 1, 0, 1)
+        self_density2 = np.clip(influence(self_euclidian_distance2).sum(axis=1) - 1, 0, 1)
+
+        cross_density = influence(cross_euclidian_distance)
+        cross_density1 = np.clip(cross_density.sum(axis=1), 0, 1)
+        cross_density2 = np.clip(cross_density.sum(axis=0), 0, 1)
+
+        density1 = (self_density1 + cross_density1) / 2
+        density2 = (self_density2 + cross_density2) / 2
+
+        # Compute a maximum matching distance per node based on the density of its closest neighbor in the other graph
+        closest_node1 = cross_euclidian_distance.argmin(axis=1)
+        closest_node2 = cross_euclidian_distance.argmin(axis=0)
+        factor1 = 1 - density2[closest_node1]
+        factor2 = 1 - density1[closest_node2]
+
+        max_matching_distance1 = np.clip(max_matching_distance * factor1, min_matching_distance, max_matching_distance)
+        max_matching_distance2 = np.clip(max_matching_distance * factor2, min_matching_distance, max_matching_distance)
+
+        # for i, (max_d, closest_node) in enumerate(zip(max_matching_distance1, closest_node1, strict=True)):
+        #     print(
+        #         f"[{str(i): >3}] : {max_d:.2f} ({str(closest_node): >3} -> {density2[closest_node]:.2f}: "
+        #         f"{cross_density2[closest_node]:.2f} & {self_density2[closest_node]:.2f})"
+        #     )
+
+        min_weight1 = dist2weight(max_matching_distance1) / 2
+        min_weight2 = dist2weight(max_matching_distance2) / 2
 
     # Compute the hungarian matching
     matched_nodes = hungarian(
-        weight[None, ...],
-        [n1],
-        [n2],
-        np.repeat([[min_weight]], n1, axis=1),
-        np.repeat([[min_weight]], n2, axis=1),
-    )[0]
+        weight,
+        n1,
+        n2,
+        min_weight1,
+        min_weight2,
+    )
     matched_nodes = np.where(matched_nodes)
 
     if return_distance:
-        return matched_nodes, euclidian_distance[matched_nodes]
+        return matched_nodes, cross_euclidian_distance[matched_nodes]
     return matched_nodes
 
 
@@ -153,6 +202,8 @@ def naive_edit_distance(
     graph1: VascularGraph,
     graph2: VascularGraph,
     max_matching_distance: float | None = None,
+    density_matching_sigma: float | None = None,
+    min_matching_distance: float | None = None,
     return_labels: bool = False,
 ):
     # Match nodes
@@ -160,7 +211,8 @@ def naive_edit_distance(
         graph1.nodes_yx_coord,
         graph2.nodes_yx_coord,
         max_matching_distance=max_matching_distance,
-        gamma=2,
+        density_sigma=density_matching_sigma,
+        min_matching_distance=min_matching_distance,
     )
     graph1.shuffle_nodes(node_match_id1)
     graph2.shuffle_nodes(node_match_id2)
