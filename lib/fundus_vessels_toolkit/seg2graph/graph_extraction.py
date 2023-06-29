@@ -175,7 +175,7 @@ def seg_to_branches_list(
         cycles = [
             _ for _ in nx.chordless_cycles(nx.from_numpy_array(nodes_adjacency_matrix), length_bound=4) if len(_) > 2
         ]
-        # - Select chord less cycles with small perimeter
+        # - Select chord whose maximum distance between two nodes is smaller than merge_small_cycles
         cycles_max_dist = [distance_matrix(nodes_coord[cycle]).max() for cycle in cycles]
         cycles = [
             cycle for cycle, max_dist in zip(cycles, cycles_max_dist, strict=True) if max_dist < merge_small_cycles

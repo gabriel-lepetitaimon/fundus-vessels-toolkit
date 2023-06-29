@@ -445,7 +445,9 @@ def reduce_clusters(clusters: List[Tuple[int, ...]]) -> List[set]:
     """
     clusters = [set(c) for c in clusters]
     for i, c in enumerate(clusters):
-        for j, c2 in enumerate(clusters[i + 1 :]):
+        for j, c2 in enumerate(clusters):
+            if i == j:
+                continue
             if c.intersection(c2):
                 c.update(c2)
                 del clusters[j]
