@@ -243,14 +243,18 @@ def naive_edit_distance(
 
     #  Remove branches that connect matched nodes
     edges = [backtrack_edges(*e, backtrack=backtrack1) for e in zip(*connected_unmatched_nodes1, strict=True)]
-    unique_branches1[np.concatenate(edges)] = 0
+    if len(edges) > 0:
+        unique_branches1[np.concatenate(edges)] = 0
     edges = [backtrack_edges(*e, backtrack=backtrack2) for e in zip(*connected_unmatched_nodes1, strict=True)]
-    unique_branches2[np.concatenate(edges)] = 0
+    if len(edges) > 0:
+        unique_branches2[np.concatenate(edges)] = 0
 
     edges = [backtrack_edges(*e, backtrack=backtrack1) for e in zip(*connected_unmatched_nodes2, strict=True)]
-    unique_branches1[np.concatenate(edges)] = 0
+    if len(edges) > 0:
+        unique_branches1[np.concatenate(edges)] = 0
     edges = [backtrack_edges(*e, backtrack=backtrack2) for e in zip(*connected_unmatched_nodes2, strict=True)]
-    unique_branches2[np.concatenate(edges)] = 0
+    if len(edges) > 0:
+        unique_branches2[np.concatenate(edges)] = 0
 
     n_diff1 = unique_branches1.sum()
     n_diff2 = unique_branches2.sum()
