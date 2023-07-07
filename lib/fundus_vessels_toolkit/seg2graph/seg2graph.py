@@ -1,9 +1,6 @@
 ########################################################################################################################
 #   *** VESSELS SKELETONIZATION AND GRAPH CREATION FROM SEGMENTATION ***
-#   This module provides functions to extract the vascular graph from a binary image of retinal vessels.
-#   Two implementation are provided: one using numpy array, scipy.ndimage and scikit-image,
-#   the other using pytorch and kornia.
-#
+#   This module provides a helper class to extract the vascular graph from a binary image of retinal vessels.
 #
 ########################################################################################################################
 from .graph_extraction import (
@@ -32,7 +29,7 @@ class Seg2Graph:
     ):
         """
         Args:
-            skeletonize_method: Method to use for skeletonization. (One of: 'medial_axis', 'zhang', 'lee'. Default: 'lee'.)
+            skeletonize_method: Method to use for skeletonization. One of: 'medial_axis', 'zhang', 'lee' (default).
             fix_hollow: If True, fill hollow cross pattern.
             max_spurs_length: Remove terminal branches whose length (number of pixel of the branch) is inferior to this.
                                 Default value is 1 because 1px branches should be removed as they will be ignored in the

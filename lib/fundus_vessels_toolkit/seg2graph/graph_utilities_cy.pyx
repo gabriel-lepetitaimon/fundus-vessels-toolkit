@@ -49,7 +49,6 @@ def label_skeleton(np.ndarray[UINT8, ndim=2, cast=True] skeleton):
         Branch labels map. Each branch is labeled with a unique positive integer. Background pixels are labeled 0.
     
     np.ndarray[INT32, ndim=2]
-
     """
     cdef:
         int H = skeleton.shape[0]
@@ -177,33 +176,40 @@ def label_skeleton(np.ndarray[UINT8, ndim=2, cast=True] skeleton):
         i_node += 1
 
     return branch_label, branch_adj_list, np_nodes_yx
-
-
         
 
 cdef int equivalence2lookup(cpplist[cpplist[int]]& equivalences, vector[int]& lookup):
     cdef: 
         int N = lookup.size() 
         cppstack[int] stack
-        int i, j, k, label
+        int node, current_node, neighbor, nb_label
         vector[cpplist[int]] adj_list = equivalence2adj_list(equivalences, N)
 
-    for i in range(N):
-        lookup[i] = 0
+    for node in range(N):
+        lookup[node] = 0
 
-    label = 0
-    for i in range(N):
-        if lookup[i] == 0:
-            stack.push(i)
-            while not stack.empty():
-                j = stack.top()
-                stack.pop()
-                lookup[j] = label
-                for k in adj_list[j]:
-                    if lookup[k] == 0:
-                        stack.push(k)
-            label += 1
-    return label
+    nb_label = 0
+    for current_node in range(N):
+        if lookup[current_node] != 0:
+            # If the node is already labeled, skip it
+            continue
+
+        # Initialize the stack with the current node
+        stack.push(current_node)
+
+        # Then perform depth first search
+        while not stack.empty():
+            # Pop the top node from the stack
+            current_node = stack.top()
+            stack.pop()
+
+            # Label the node and push its unlabeled neighbors to the stack
+            lookup[current_node] = nb_label
+            for neighbor in adj_list[current_node]:
+                if lookup[neighbor] == 0:
+                    stack.push(neighbor)
+        nb_label += 1
+    return nb_label
 
 
 def solve_clusters(list[tuple[int]] equivalences) -> list[tuple[int]]:

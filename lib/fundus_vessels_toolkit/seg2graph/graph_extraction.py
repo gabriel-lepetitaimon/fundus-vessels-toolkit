@@ -246,10 +246,10 @@ def parse_skeleton(skel: np.ndarray):
             f"{np.sum(invalid_branches)} branches are invalid (connecting less than 2 nodes).\n"
             f"Those branches will be removed from the graph. But this will probably cause invalid topology.\n"
             f"You should report this issue to the developer.",
-            stacklevel=2,
+            stacklevel=0,
         )
         branch_lookup = np.concatenate(([0], np.cumsum(~invalid_branches)))
-        branch_lookup[invalid_branches] = 0
+        branch_lookup[np.where(invalid_branches)[0] + 1] = 0
         labeled_branches = branch_lookup[labeled_branches]
         branch_adj_list = branch_adj_list[~invalid_branches, :]
 
