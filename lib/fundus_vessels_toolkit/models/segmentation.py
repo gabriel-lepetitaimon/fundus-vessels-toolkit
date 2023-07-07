@@ -19,7 +19,7 @@ def segment(x, model_name: SegmentModel = "resnet34", roi_mask="auto", device: t
         model = _last_model[1]
     else:
         model = segmentation_model(model_name).to(device=device)
-        _last_model = (model, model_name)
+        _last_model = (model_name, model)
 
     raw = x
 
