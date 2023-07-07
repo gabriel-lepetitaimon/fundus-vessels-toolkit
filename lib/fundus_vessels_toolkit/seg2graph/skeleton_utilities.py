@@ -19,13 +19,17 @@ def binary1d_hit_or_miss(samples, positive_patterns, negative_patterns=None):
     assert samples.dtype == bool, "samples must be of type bool"
     assert positive_patterns.dtype == bool, "positive_patterns must be of type bool"
     assert positive_patterns.ndim == 2 and samples.ndim == 2, "samples and positive_patterns must be 2D"
-    assert positive_patterns.shape[1] == samples.shape[1], "samples and positive_patterns must have the same number of columns " \
-                                                           f"positive_patterns.shape = {positive_patterns.shape}, samples.shape = {samples.shape}"
+    assert positive_patterns.shape[1] == samples.shape[1], (
+        "samples and positive_patterns must have the same number of columns "
+        f"positive_patterns.shape = {positive_patterns.shape}, samples.shape = {samples.shape}"
+    )
     if negative_patterns is None:
         negative_patterns = ~positive_patterns
     else:
         assert negative_patterns.dtype == bool, "negative_patterns must be of type bool"
-        assert negative_patterns.shape == positive_patterns.shape, "negative_patterns must have the same shape as positive_patterns"
+        assert (
+            negative_patterns.shape == positive_patterns.shape
+        ), "negative_patterns must have the same shape as positive_patterns"
 
     # Reshape patterns to (1, N, P)
     positive_patterns = np.expand_dims(positive_patterns.transpose(), axis=0)
@@ -45,49 +49,62 @@ _junctions_endpoints_masks_cache = None
 def compute_junction_endpoint_masks():
     global _junctions_endpoints_masks_cache
     if _junctions_endpoints_masks_cache is None:
+
         def create_line_junction_masks(n_lines: int | Tuple[int, ...] = (3, 4)):
             if isinstance(n_lines, int):
                 n_lines = (n_lines,)
             masks = []
             if 3 in n_lines:
+                # fmt: off
                 masks_3 = [
                     # Y vertical
                     [[1, 0, 1],
                      [0, 1, 0],
                      [2, 1, 2]],
+
                     [[1, 0, 1],
                      [2, 1, 2],
                      [0, 1, 0]],
+
                     # Y Diagonal
                     [[0, 1, 0],
                      [2, 1, 1],
                      [1, 2, 0]],
+
                     [[2, 1, 0],
                      [0, 1, 1],
                      [1, 0, 2]],
+
                     # T Vertical
                     [[2, 0, 2],
                      [1, 1, 1],
                      [0, 1, 0]],
+
                     # T Diagonal
                     [[1, 2, 0],
                      [0, 1, 2],
                      [1, 0, 1]]]
+                # fmt: on
+
                 masks_3 = np.asarray(masks_3)
                 masks_3 = np.concatenate([np.rot90(masks_3, k=k, axes=(1, 2)) for k in range(4)])
                 masks += [masks_3]
             if 4 in n_lines:
+                # fmt: off
                 masks_4 = np.asarray([
                     [[1, 0, 1],
                      [0, 1, 0],
                      [1, 0, 1]],
+
                     [[0, 1, 0],
                      [1, 1, 1],
                      [0, 1, 0]],
+
                     [[2, 2, 2],
                      [2, 1, 1],
                      [2, 1, 1]],
                 ])
+                # fmt: on
                 masks += [masks_4]
             masks = np.concatenate(masks)
             return masks == 1, masks == 0
@@ -95,16 +112,16 @@ def compute_junction_endpoint_masks():
         junction_3lines_masks = create_line_junction_masks(3)
         junction_4lines_masks = create_line_junction_masks(4)
 
-        hollow_cross_mask = np.asarray([[2, 1, 2],
-                                        [1, 0, 1],
-                                        [2, 1, 2]])
+        hollow_cross_mask = np.asarray([[2, 1, 2], [1, 0, 1], [2, 1, 2]])
         hollow_cross_mask = hollow_cross_mask == 1, hollow_cross_mask == 0
 
         def create_endpoint_masks():
+            # fmt: off
             mask = np.asarray([
                 [[2, 1, 2],
                  [0, 1, 0],
                  [0, 0, 0]],
+                 
                 [[0, 2, 1],
                  [0, 1, 2],
                  [0, 0, 0]],
@@ -114,18 +131,25 @@ def compute_junction_endpoint_masks():
                      [0, 1, 0],
                      [0, 0, 0]]
             ])
+            # fmt: on
             mask = np.concatenate([np.rot90(mask, k, axes=(1, 2)) for k in range(4)] + [solo_mask])
             return mask == 1, mask == 0
 
         endpoint_masks = create_endpoint_masks()
 
-        _junctions_endpoints_masks_cache = junction_3lines_masks, junction_4lines_masks, hollow_cross_mask, endpoint_masks
+        _junctions_endpoints_masks_cache = (
+            junction_3lines_masks,
+            junction_4lines_masks,
+            hollow_cross_mask,
+            endpoint_masks,
+        )
 
     return _junctions_endpoints_masks_cache
 
 
-def extract_patches(map: np.ndarray, mask: np.ndarray, patch_shape: Tuple[int, int], return_coordinates=False) \
-        -> np.ndarray | Tuple[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
+def extract_patches(
+    map: np.ndarray, mask: np.ndarray, patch_shape: Tuple[int, int], return_coordinates=False
+) -> np.ndarray | Tuple[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
     """
     Extract patches from a map with a mask.
 
@@ -141,12 +165,13 @@ def extract_patches(map: np.ndarray, mask: np.ndarray, patch_shape: Tuple[int, i
         If return_index is True, also return the index of the patches center as a tuple containing two 1d vector
         for the y and x coordinates.
     """
-    assert map.shape == mask.shape, f"map and mask must have the same shape " \
-                                    f"(map.shape={map.shape}, mask.shape={mask.shape})"
+    assert map.shape == mask.shape, (
+        f"map and mask must have the same shape " f"(map.shape={map.shape}, mask.shape={mask.shape})"
+    )
     assert mask.dtype == bool, f"mask must be of type bool, not {mask.dtype}"
 
     # Pad map
-    map = np.pad(map, tuple((p//2, p-p//2) for p in patch_shape), mode='constant', constant_values=0)
+    map = np.pad(map, tuple((p // 2, p - p // 2) for p in patch_shape), mode="constant", constant_values=0)
 
     # Compute the coordinates of the pixels inside the patches
     y, x = np.where(mask)
@@ -160,8 +185,9 @@ def extract_patches(map: np.ndarray, mask: np.ndarray, patch_shape: Tuple[int, i
         return map[masked_y, masked_x].reshape((-1, patch_shape[0], patch_shape[1]))
 
 
-def extract_unravelled_pattern(map: np.ndarray, where: np.ndarray | Tuple[np.ndarray, np.ndarray], pattern: np.ndarray,
-                               return_coordinates=False):
+def extract_unravelled_pattern(
+    map: np.ndarray, where: np.ndarray | Tuple[np.ndarray, np.ndarray], pattern: np.ndarray, return_coordinates=False
+):
     """
     Extract pattern from `map` centered on the pixels in `where`. The patterns are extracted as a 1D arrays.
     Similar to `extract_patches` but for sparse 2D patterns instead of full patches.
@@ -187,10 +213,12 @@ def extract_unravelled_pattern(map: np.ndarray, where: np.ndarray | Tuple[np.nda
     if where.shape == map.shape:
         assert where.dtype == bool, f"where must be of type bool, not {where.dtype}"
     else:
-        assert where.shape[0] == 2, f"Invalid value for where shape: {where.shape}.\n" \
-                                    f"where must either be a boolean mask of the same shape as map " \
-                                    f"or a tuple of 1D arrays providing the coordinates of the centers where " \
-                                    f"patterns will be extracted."
+        assert where.shape[0] == 2, (
+            f"Invalid value for where shape: {where.shape}.\n"
+            f"where must either be a boolean mask of the same shape as map "
+            f"or a tuple of 1D arrays providing the coordinates of the centers where "
+            f"patterns will be extracted."
+        )
         assert where.dtype == np.int64, f"where must be of type np.int64, not {where.dtype}"
     if where.shape == map.shape:
         y, x = np.where(where)
@@ -201,7 +229,7 @@ def extract_unravelled_pattern(map: np.ndarray, where: np.ndarray | Tuple[np.nda
     pattern_y, pattern_x = np.where(pattern)
 
     # Pad map
-    map = np.pad(map, tuple((p // 2, p - p // 2) for p in pattern.shape), mode='constant', constant_values=0)
+    map = np.pad(map, tuple((p // 2, p - p // 2) for p in pattern.shape), mode="constant", constant_values=0)
 
     # Compute the coordinates of the pixels to extract
     y_idxs = (pattern_y[np.newaxis, :] + y[:, np.newaxis]).flatten()
@@ -216,9 +244,13 @@ def extract_unravelled_pattern(map: np.ndarray, where: np.ndarray | Tuple[np.nda
         return map
 
 
-def fast_hit_or_miss(map: np.ndarray, mask: np.ndarray | Tuple[np.ndarray, Tuple[np.ndarray, np.ndarray]],
-                     positive_patterns: np.ndarray, negative_patterns: np.ndarray | None = None,
-                     aggregate_patterns='any') -> np.ndarray:
+def fast_hit_or_miss(
+    map: np.ndarray,
+    mask: np.ndarray | Tuple[np.ndarray, Tuple[np.ndarray, np.ndarray]],
+    positive_patterns: np.ndarray,
+    negative_patterns: np.ndarray | None = None,
+    aggregate_patterns="any",
+) -> np.ndarray:
     """
     Apply a hit or miss filter to a map but only for the pixel in mask.
 
@@ -245,26 +277,34 @@ def fast_hit_or_miss(map: np.ndarray, mask: np.ndarray | Tuple[np.ndarray, Tuple
     assert positive_patterns.dtype == bool, "positive_patterns must be of type bool"
     if positive_patterns.ndim == 2:
         positive_patterns = positive_patterns[np.newaxis, ...]
-    assert positive_patterns.ndim == 3, "positive_patterns must be of shape (p, h, w): " \
-                                        "where p is the number of patterns, h and w are the pattern height and width."
+    assert positive_patterns.ndim == 3, (
+        "positive_patterns must be of shape (p, h, w): "
+        "where p is the number of patterns, h and w are the pattern height and width."
+    )
     if negative_patterns is None:
         negative_patterns = ~positive_patterns
     else:
         if negative_patterns.ndim == 2:
             negative_patterns = negative_patterns[np.newaxis, ...]
         assert negative_patterns.dtype == bool, "negative_patterns must be of type bool"
-        assert positive_patterns.shape == negative_patterns.shape, "positive_patterns and negative_patterns must have the same shape"
+        assert (
+            positive_patterns.shape == negative_patterns.shape
+        ), "positive_patterns and negative_patterns must have the same shape"
 
     # Extract patches from the map
     pattern_shape = positive_patterns.shape[1:]
     if isinstance(mask, tuple):
         assert len(mask) == 2, "mask must be a tuple of length 2 containing the patches and their coordinates."
-        assert mask[0].ndim == 3 and mask[0].shape[1:] == positive_patterns.shape[1:], \
-            "mask[0] must be of shape (p, h, w): " \
+        assert mask[0].ndim == 3 and mask[0].shape[1:] == positive_patterns.shape[1:], (
+            "mask[0] must be of shape (p, h, w): "
             "where p is the number of patches, h and w are the pattern height and width."
-        assert isinstance(mask[1], tuple) and len(mask[1]) == 2 and all(c.shape == mask[0].shape[:1] for c in mask[1]),\
-            "mask[1] must be a tuple containing the patches centers as two ndarray (y, x) " \
+        )
+        assert (
+            isinstance(mask[1], tuple) and len(mask[1]) == 2 and all(c.shape == mask[0].shape[:1] for c in mask[1])
+        ), (
+            "mask[1] must be a tuple containing the patches centers as two ndarray (y, x) "
             "of shape (p,) where p is the number of patches."
+        )
         patches, centers_idx = mask
     else:
         patches, centers_idx = extract_patches(map, mask, pattern_shape, return_coordinates=True)
@@ -272,14 +312,15 @@ def fast_hit_or_miss(map: np.ndarray, mask: np.ndarray | Tuple[np.ndarray, Tuple
     # Apply hit-or-miss for all patterns
     positive_patterns = positive_patterns.reshape((positive_patterns.shape[0], -1))
     negative_patterns = negative_patterns.reshape((negative_patterns.shape[0], -1))
+
     patches = patches.reshape((patches.shape[0], -1))
 
     hit_patches = binary1d_hit_or_miss(patches, positive_patterns, negative_patterns)
 
     # Aggregate the response of hit-or-miss for each patterns
-    if aggregate_patterns == 'any':
+    if aggregate_patterns == "any":
         hit_patches = hit_patches.any(axis=1)
-    elif aggregate_patterns == 'sum':
+    elif aggregate_patterns == "sum":
         hit_patches = hit_patches.sum(axis=1)
     elif aggregate_patterns is None:
         centers_idx = np.repeat(centers_idx, hit_patches.shape[1], axis=1)
@@ -305,6 +346,7 @@ def remove_1px_endpoints(skel, endpoint_masks=None, sqr3=None):
     """
 
     import scipy.ndimage as scimage
+
     if endpoint_masks is None:
         endpoint_masks = compute_junction_endpoint_masks()[3]
     if sqr3 is None:
