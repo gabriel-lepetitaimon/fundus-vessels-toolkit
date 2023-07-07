@@ -36,6 +36,7 @@ class ClDice(TorchMetric):
 
         self.precision = None
         self.recall = None
+        self.cl_dice = None
 
     @property
     def max_struct_width(self):
@@ -57,17 +58,18 @@ class ClDice(TorchMetric):
         skel_pred: torch.Tensor = None,
         skel_target: torch.Tensor = None,
     ):
-        preds, target, skel_pred, skel_target = self._input_format(pred, target, skel_pred, skel_target)
-        self.correct_prediction += torch.Tensor(np.sum(skel_pred == target))
-        self.total_prediction += torch.Tensor(np.sum(skel_pred != 0))
-        self.correct_target += torch.Tensor(np.sum(skel_target == preds))
-        self.total_target += torch.Tensor(np.sum(skel_target != 0))
+        pred, target, skel_pred, skel_target = self._input_format(pred, target, skel_pred, skel_target)
+        self.correct_prediction += torch.tensor(np.sum((target != 0) & (skel_pred != 0)))
+        self.total_prediction += torch.tensor(np.sum(skel_pred != 0))
+        self.correct_target += torch.tensor(np.sum((pred != 0) & (skel_target != 0)))
+        self.total_target += torch.tensor(np.sum(skel_target != 0))
 
     def compute(self):
         eps = self.eps
         self.recall = self.correct_target / (self.total_target + eps)
         self.precision = self.correct_prediction / (self.total_prediction + eps)
-        return 2 * self.precision * self.recall / (self.precision + self.recall + eps)
+        self.cl_dice = 2 * self.precision * self.recall / (self.precision + self.recall + eps)
+        return self.cl_dice
 
 
 class MeanClDice(TorchMetric):
@@ -94,6 +96,8 @@ class MeanClDice(TorchMetric):
         self.add_state("sum_f1", default=torch.tensor(0), dist_reduce_fx="sum")
         self.add_state("n_samples", default=torch.tensor(0), dist_reduce_fx="sum")
 
+        self.cl_dice = None
+
     @property
     def max_struct_width(self):
         return self.seg2graph.max_spurs_length
@@ -117,17 +121,20 @@ class MeanClDice(TorchMetric):
         pred, target, skel_pred, skel_target = self._input_format(pred, target, skel_pred, skel_target)
         eps = self.eps
 
-        recall = np.sum(skel_pred == target, axis=(1, 2)) / (np.sum(skel_pred != 0, axis=(1, 2)) + eps)
-        precision = np.sum(skel_target == pred, axis=(1, 2)) / (np.sum(skel_target != 0, axis=(1, 2)) + eps)
-        self.sum_recall += torch.Tensor(recall.sum())
-        self.sum_precision += torch.Tensor(precision.sum())
-        self.sum_f1 += torch.Tensor((2 * precision * recall / (precision + recall + eps)).sum())
-        self.n_samples += torch.Tensor(len(pred))
+        recall = np.sum((skel_pred != 0) & (target != 0), axis=(1, 2)) / (np.sum(skel_pred != 0, axis=(1, 2)) + eps)
+        precision = np.sum((skel_target != 0) & (pred != 0), axis=(1, 2)) / (
+            np.sum(skel_target != 0, axis=(1, 2)) + eps
+        )
+        self.sum_recall += torch.tensor(recall.sum())
+        self.sum_precision += torch.tensor(precision.sum())
+        self.sum_f1 += torch.tensor((2 * precision * recall / (precision + recall + eps)).sum())
+        self.n_samples += torch.tensor(len(pred))
 
     def compute(self):
         self.recall = self.sum_recall / self.n_samples
         self.precision = self.sum_precision / self.n_samples
-        return self.sum_f1 / self.n_samples
+        self.cl_dice = self.sum_f1 / self.n_samples
+        return self.cl_dice
 
 
 class F1Topo(TorchMetric):
@@ -155,6 +162,7 @@ class F1Topo(TorchMetric):
 
         self.precision = None
         self.recall = None
+        self.f1_topo = None
 
     @property
     def max_struct_width(self):
@@ -180,24 +188,35 @@ class F1Topo(TorchMetric):
 
         v_preds = [self.seg2graph.skel2vgraph(_) for _ in skel_pred]
         v_targets = [self.seg2graph.skel2vgraph(_) for _ in skel_target]
+
         pred_diffs, target_diffs = zip(
-            *[naive_edit_distance(p, t, self.max_struct_width) for p, t in zip(v_preds, v_targets, strict=True)],
+            *[
+                naive_edit_distance(
+                    graph1=v_pred,
+                    graph2=v_target,
+                    max_matching_distance=self.max_struct_width * 7,
+                    min_matching_distance=self.max_struct_width / 2,
+                    density_matching_sigma=self.max_struct_width,
+                )
+                for v_pred, v_target in zip(v_preds, v_targets, strict=True)
+            ],
             strict=True,
         )
         pred_n = [p.branches_count for p in v_preds]
         target_n = [t.branches_count for t in v_targets]
 
-        self.correct_prediction += torch.Tensor(sum(n - d for n, d in zip(pred_n, pred_diffs, strict=True)))
-        self.total_prediction += torch.Tensor(sum(pred_n))
+        self.correct_prediction += torch.tensor(sum(n - d for n, d in zip(pred_n, pred_diffs, strict=True)))
+        self.total_prediction += torch.tensor(sum(pred_n))
 
-        self.correct_target += torch.Tensor(sum(n - d for n, d in zip(target_n, target_diffs, strict=True)))
-        self.total_target += torch.Tensor(sum(target_n))
+        self.correct_target += torch.tensor(sum(n - d for n, d in zip(target_n, target_diffs, strict=True)))
+        self.total_target += torch.tensor(sum(target_n))
 
     def compute(self):
         eps = self.eps
         self.recall = self.correct_target / (self.total_target + eps)
         self.precision = self.correct_prediction / (self.total_prediction + eps)
-        return 2 * self.precision * self.recall / (self.precision + self.recall + eps)
+        self.f1_topo = 2 * self.precision * self.recall / (self.precision + self.recall + eps)
+        return self.f1_topo
 
 
 class MeanF1Topo(TorchMetric):
@@ -225,6 +244,7 @@ class MeanF1Topo(TorchMetric):
 
         self.precision = None
         self.recall = None
+        self.f1_topo = None
 
     @property
     def max_struct_width(self):
@@ -260,15 +280,16 @@ class MeanF1Topo(TorchMetric):
 
         recall = sum((n - d) / (n + eps) for n, d in zip(pred_n, pred_diffs, strict=True))
         precision = sum((n - d) / (n + eps) for n, d in zip(target_n, target_diffs, strict=True))
-        self.sum_recall += torch.Tensor(recall.sum())
-        self.sum_precision += torch.Tensor(precision.sum())
-        self.sum_f1 += torch.Tensor((2 * precision * recall / (precision + recall + eps)).sum())
-        self.n_samples += torch.Tensor(len(pred))
+        self.sum_recall += torch.tensor(recall.sum())
+        self.sum_precision += torch.tensor(precision.sum())
+        self.sum_f1 += torch.tensor((2 * precision * recall / (precision + recall + eps)).sum())
+        self.n_samples += torch.tensor(len(pred))
 
     def compute(self):
         self.recall = self.sum_recall / self.n_samples
         self.precision = self.sum_precision / self.n_samples
-        return self.sum_f1 / self.n_samples
+        self.f1_topo = self.sum_f1 / self.n_samples
+        return self.f1_topo
 
 
 def _check_input_format(
@@ -288,30 +309,39 @@ def _check_input_format(
         pred.shape == target.shape
     ), f"preds and target must have the same shape, got {pred.shape} and {target.shape}."
 
-    pred = pred.detach().cpu().numpy()
-    target = target.detach().cpu().numpy()
+    if isinstance(pred, torch.Tensor):
+        pred = pred.detach().cpu().numpy()
+    if isinstance(target, torch.Tensor):
+        target = target.detach().cpu().numpy()
+
+    assert pred.dtype == bool, f"preds must be of type bool, got preds.dtype={pred.dtype}."
+    assert target.dtype == bool, f"target must be of type bool, got target.dtype={target.dtype}."
 
     if skel_pred is not None:
-        assert skel_pred.ndim == 3, f"skel_preds must be of size (B, H, W), got skel_preds.ndim={skel_pred.ndim}."
+        assert skel_pred.ndim == 3, f"skel_preds must be of size (B, H, W), got skel_preds.shape={skel_pred.shape}."
         assert (
             skel_pred.shape == pred.shape
         ), f"skel_preds and preds must have the same shape, got {skel_pred.shape} and {pred.shape}."
-        skel_pred = skel_pred.detach().cpu().numpy()
+        if isinstance(skel_pred, torch.Tensor):
+            skel_pred = skel_pred.detach().cpu().numpy()
     else:
         if seg2graph is None:
             seg2graph = RetinalVesselSeg2Graph()
-        skel_pred = np.concatenate([seg2graph.skeletonize(_) for _ in pred])
+        skel_pred = np.stack([seg2graph.skeletonize(_) for _ in pred], axis=0)
 
     if skel_target is not None:
-        assert skel_target.ndim == 3, f"skel_target must be of size (B, H, W), got skel_target.ndim={skel_target.ndim}."
+        assert (
+            skel_target.ndim == 3
+        ), f"skel_target must be of size (B, H, W), got skel_target.shape={skel_target.shape}."
         assert (
             skel_target.shape == target.shape
         ), f"skel_target and target must have the same shape, got {skel_target.shape} and {target.shape}."
-        skel_target = skel_target.detach().cpu().numpy()
+        if isinstance(skel_target, torch.Tensor):
+            skel_target = skel_target.detach().cpu().numpy()
     else:
         if seg2graph is None:
             seg2graph = RetinalVesselSeg2Graph()
-        skel_target = np.concatenate([seg2graph.skeletonize(_) for _ in target])
+        skel_target = np.stack([seg2graph.skeletonize(_) for _ in target], axis=0)
 
     return pred, target, skel_pred, skel_target
 
@@ -339,6 +369,9 @@ else:
         )
 
         def prepare_data(self, pred, target, mask=None):
+            if mask is not None:
+                pred = pred * mask
+                target = target * mask
             return pred, target
 
         def create(self):
@@ -378,6 +411,9 @@ else:
         )
 
         def prepare_data(self, pred, target, mask=None):
+            if mask is not None:
+                pred = pred * mask
+                target = target * mask
             return pred, target
 
         def create(self):
@@ -423,7 +459,10 @@ else:
 
         def prepare_data(self, pred, target, mask=None):
             if pred.ndim == 4:
-                pred = pred[:, 1]
+                pred = pred[:, 1] > 0.5
+            if mask is not None:
+                pred = pred * mask
+                target = target * mask
             return _check_input_format(pred, target, seg2graph=self.seg2graph)
 
         def create(self):
@@ -431,9 +470,15 @@ else:
             b = 1 - a
 
             if self.mean:
-                return MeanClDice() * a + MeanF1Topo(max_struct_width=self.max_struct_width) * b
+                metric = MeanClDice() * a + MeanF1Topo(max_struct_width=self.max_struct_width) * b
+                metric.cl_dice = metric.metric_a.metric_a
+                metric.f1_topo = metric.metric_b.metric_a
+                return metric
             else:
-                return ClDice() * a + F1Topo(max_struct_width=self.max_struct_width) * b
+                metric = ClDice() * a + F1Topo(max_struct_width=self.max_struct_width) * b
+                metric.cl_dice = metric.metric_a.metric_a
+                metric.f1_topo = metric.metric_b.metric_a
+                return metric
 
         def log(self, module: pl.LightningModule, name: str, metric: tm.Metric):
             clDice = metric.metric_a.metric_a
