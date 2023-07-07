@@ -1,22 +1,64 @@
+########################################################################################################################
+#   *** VESSELS SEGMENTATION ***
+#   This module provides function and pretrained models for vessel segmentation on fundus images.
+#
+########################################################################################################################
 __all__ = ["segmentation_model", "segment", "SegmentModel"]
 
 import warnings
-from typing import Literal
+from enum import Enum
+from typing import NamedTuple, Optional
 
 import torch
-from steered_cnn.utils.torch import crop_pad
 from torch.utils import model_zoo
+
+from steered_cnn.utils.torch import crop_pad
 
 from .utils import ensure_superior_multiple, img_to_torch
 
-SegmentModel = Literal["resnet34"]
-_last_model = (None, None)
+
+class SegmentModel(str, Enum):
+    """
+    The available pretrained models for vessel segmentation.
+    """
+
+    resnet34 = "resnet34"
 
 
-def segment(x, model_name: SegmentModel = "resnet34", roi_mask="auto", device: torch.device = "cuda"):
+class ModelCache(NamedTuple):
+    name: Optional[SegmentModel]
+    model: Optional[torch.nn.Module]
+
+
+_last_model: ModelCache = (None, None)
+
+
+def segment(x, model_name: SegmentModel = SegmentModel.resnet34, roi_mask="auto", device: torch.device = "cuda"):
+    """
+    Segments the vessels in a fundus image.
+
+    Parameters
+    ----------
+    x : numpy.ndarray
+        The fundus image to segment.
+
+    model_name : SegmentModel, optional
+        The model to use for segmentation. Defaults to SegmentModel.resnet34.
+
+    roi_mask : numpy.ndarray | torch.Tensor | str, optional
+        The region of interest mask. If "auto", the ROI mask is computed automatically.
+
+    device : torch.device, optional
+        The device to use for computation. Defaults to "cuda"..
+
+    Returns
+    -------
+    numpy.ndarray
+        The segmentation mask.
+    """
     global _last_model
-    if _last_model[0] == model_name:
-        model = _last_model[1]
+    if _last_model.name == model_name:
+        model = _last_model.model
     else:
         model = segmentation_model(model_name).to(device=device)
         _last_model = (model_name, model)
@@ -24,7 +66,7 @@ def segment(x, model_name: SegmentModel = "resnet34", roi_mask="auto", device: t
     raw = x
 
     match model_name:
-        case "resnet34":
+        case SegmentModel.resnet34:
             with torch.no_grad():
                 x = img_to_torch(x, device)
                 final_shape = x.shape
@@ -32,7 +74,8 @@ def segment(x, model_name: SegmentModel = "resnet34", roi_mask="auto", device: t
                 if not (1000 < final_shape[3] < 1500):
                     warnings.warn(
                         f"Image size {x.shape[-2:]} is not optimal for {model_name}.\n"
-                        f"Consider resizing the image to a size close to 1024x1024."
+                        f"Consider resizing the image to a size close to 1024x1024.",
+                        stacklevel=None,
                     )
 
                 padded_shape = [ensure_superior_multiple(s, 32) for s in final_shape]
@@ -51,9 +94,23 @@ def segment(x, model_name: SegmentModel = "resnet34", roi_mask="auto", device: t
     return y
 
 
-def segmentation_model(model_name: SegmentModel = "resnet34"):
+def segmentation_model(model_name: SegmentModel = SegmentModel.resnet34):
+    """
+    Returns a pretrained model for vessel segmentation on fundus images.
+
+    Parameters
+    ----------
+    model_name : SegmentModel, optional
+        The model to use for segmentation. Defaults to SegmentModel.resnet34.
+
+    Returns
+    -------
+    torch.nn.Module
+        The pretrained model.
+    """
+
     match model_name:
-        case "resnet34":
+        case SegmentModel.resnet34:
             import segmentation_models_pytorch as smp
 
             model = smp.Unet("resnet34", classes=2, activation="sigmoid")
