@@ -1,5 +1,6 @@
 # IDE
 .idea/
+.vscode/
 
 # Cache
 *.py[cod]
