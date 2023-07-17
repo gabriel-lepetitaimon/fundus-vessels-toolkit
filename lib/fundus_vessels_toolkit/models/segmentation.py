@@ -31,9 +31,6 @@ class ModelCache(NamedTuple):
     model: Optional[torch.nn.Module]
 
 
-_last_model: ModelCache = (None, None)
-
-
 def segment(x, model_name: SegmentModel = SegmentModel.resnet34, roi_mask="auto", device: torch.device = "cuda"):
     """
     Segments the vessels in a fundus image.
