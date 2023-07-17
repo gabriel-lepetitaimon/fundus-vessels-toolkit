@@ -71,7 +71,7 @@ def segment(x, model_name: SegmentModel = SegmentModel.resnet34, roi_mask="auto"
                     warnings.warn(
                         f"Image size {x.shape[-2:]} is not optimal for {model_name}.\n"
                         f"Consider resizing the image to a size close to 1024x1024.",
-                        stacklevel=None,
+                        stacklevel=2,
                     )
 
                 padded_shape = [ensure_superior_multiple(s, 32) for s in final_shape]
