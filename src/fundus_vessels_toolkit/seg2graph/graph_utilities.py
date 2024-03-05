@@ -2,6 +2,7 @@ import warnings
 from typing import Dict, List, Tuple
 
 import numpy as np
+import numpy.typing as npt
 
 
 def add_empty_to_lookup(lookup: np.ndarray) -> np.ndarray:
@@ -97,7 +98,7 @@ def branch_by_nodes_to_adjacency_list(branches_by_nodes: np.ndarray, sorted=Fals
     return np.stack([node1_ids, node2_ids], axis=1)
 
 
-def compute_is_endpoints(branches_by_nodes):
+def compute_is_endpoints(branches_by_nodes) -> npt.NDArray[np.bool_]:
     """
     Compute a boolean array indicating if each node is an endpoint (i.e. connected to only one branch).
     """
@@ -321,7 +322,7 @@ def merge_nodes_by_distance(
             branches_by_nodes, nodes_clusters, erase_branches=remove_branch
         )
 
-        nodes_coord = apply_node_lookup_on_coordinates(nodes_coord, node_lookup, nodes_weight=endpoints_nodes)
+        nodes_coord = apply_node_lookup_on_coordinates(nodes_coord, node_lookup, nodes_weight=~endpoints_nodes)
         branch_lookup = apply_lookup(branch_lookup, branch_lookup2)
         inverted_lookup = invert_lookup(node_lookup)
 

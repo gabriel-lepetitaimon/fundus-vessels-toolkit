@@ -32,19 +32,19 @@ class VascularGraph:
         return branch_by_nodes_to_adjacency_list(self._branch_by_node)
 
     def jppype_layer(self, edge_labels=False, node_labels=False, edge_map=True):
-        from jppype.layers_2d import LayerGraph
+        from jppype.layers import LayerGraph
 
-        l = LayerGraph(
+        layer = LayerGraph(
             self.node_adjacency_list(), self._nodes_yx_coord, self._branch_labels_map
         )
-        l.set_options(
+        layer.set_options(
             {
                 "edge_labels_visible": edge_labels,
                 "node_labels_visible": node_labels,
                 "edge_map_visible": edge_map,
             }
         )
-        return l
+        return layer
 
     @property
     def branch_by_node(self):

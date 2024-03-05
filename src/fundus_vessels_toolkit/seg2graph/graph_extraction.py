@@ -155,7 +155,7 @@ def seg_to_branches_list(
         # Merge nodes clusters smaller than nodes_merge_distance
         distances = [
             (~is_endpoint, junctions_merge_distance, True),  # distance only for junctions
-            (is_endpoint, terminations_merge_distance, False),  # distance only for terminations
+            (is_endpoint, terminations_merge_distance, True),  # distance only for terminations
             (None, nodes_merge_distance, False),
         ]  # distance for all nodes
         branches_by_nodes, branch_lookup2, nodes_coord = merge_nodes_by_distance(

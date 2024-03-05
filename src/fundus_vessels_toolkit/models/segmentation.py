@@ -7,7 +7,6 @@ __all__ = ["segmentation_model", "segment", "SegmentModel"]
 
 import warnings
 from enum import Enum
-from functools import lru_cache
 from typing import NamedTuple, Optional
 
 import torch
@@ -29,6 +28,9 @@ class SegmentModel(str, Enum):
 class ModelCache(NamedTuple):
     name: Optional[SegmentModel]
     model: Optional[torch.nn.Module]
+
+
+_last_model: ModelCache = ModelCache(None, None)
 
 
 def segment(x, model_name: SegmentModel = SegmentModel.resnet34, roi_mask="auto", device: torch.device = "cuda"):
@@ -54,7 +56,12 @@ def segment(x, model_name: SegmentModel = SegmentModel.resnet34, roi_mask="auto"
     numpy.ndarray
         The segmentation mask.
     """
-    model = segmentation_model(model_name).to(device=device)
+    global _last_model
+    if _last_model.name == model_name:
+        model = _last_model.model
+    else:
+        model = segmentation_model(model_name).to(device=device)
+        _last_model = ModelCache(model_name, model)
 
     raw = x
 
@@ -68,7 +75,7 @@ def segment(x, model_name: SegmentModel = SegmentModel.resnet34, roi_mask="auto"
                     warnings.warn(
                         f"Image size {x.shape[-2:]} is not optimal for {model_name}.\n"
                         f"Consider resizing the image to a size close to 1024x1024.",
-                        stacklevel=2,
+                        stacklevel=None,
                     )
 
                 padded_shape = [ensure_superior_multiple(s, 32) for s in final_shape]
@@ -87,7 +94,6 @@ def segment(x, model_name: SegmentModel = SegmentModel.resnet34, roi_mask="auto"
     return y
 
 
-@lru_cache(maxsize=1)
 def segmentation_model(model_name: SegmentModel = SegmentModel.resnet34):
     """
     Returns a pretrained model for vessel segmentation on fundus images.

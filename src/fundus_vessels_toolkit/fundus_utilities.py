@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def compute_ROI_mask(img: np.ndarray, median_blur_size: int | None = None, threshold: int = 5):
     """
     Compute the fundus region of interest by performing a threshold on blurred red channel.
@@ -13,10 +14,10 @@ def compute_ROI_mask(img: np.ndarray, median_blur_size: int | None = None, thres
         The mask of the Region of Interest.
         (numpy array: shape=(height, width), dtype=np.uint8)
     """
-    
+    import math
+
     import cv2
     from skimage import measure
-    import math
     
     if median_blur_size is None:
         median_blur_size = int(math.ceil(img.shape[1]/50))

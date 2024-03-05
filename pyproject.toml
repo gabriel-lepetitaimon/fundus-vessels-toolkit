@@ -37,7 +37,7 @@ requires = ["wheel", "setuptools", "Cython~=3.0.0b3", "numpy"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-package-dir = {"" = "lib"}
+package-dir = {"" = "src"}
 
 [tool.ruff]
 # Enable flake8-bugbear (`B`) rules.
