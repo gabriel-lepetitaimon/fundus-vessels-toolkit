@@ -16,3 +16,6 @@
 **/*.so
 **/*.dll
 /cython_debug/
+
+# Local files
+local_experiments/
