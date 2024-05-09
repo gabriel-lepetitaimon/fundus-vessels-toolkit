@@ -3,6 +3,8 @@
 #   This module provides a helper class to extract the vascular graph from a binary image of retinal vessels.
 #
 ########################################################################################################################
+import numpy as np
+
 from .graph_extraction import (
     NodeMergeDistanceParam,
     SimplifyTopology,
@@ -51,6 +53,7 @@ class Seg2Graph:
         self.nodes_merge_distance = nodes_merge_distance
         self.merge_small_cycles = merge_small_cycles
         self.simplify_topology = simplify_topology
+        self.node_simplification_criteria = None
 
     def __call__(self, vessel_map):
         self.seg2node_graph(vessel_map)
@@ -83,6 +86,7 @@ class Seg2Graph:
             nodes_merge_distance=self.nodes_merge_distance,
             merge_small_cycles=self.merge_small_cycles,
             simplify_topology=self.simplify_topology,
+            node_simplification_criteria=self.node_simplification_criteria,
         )
 
     def seg2adjacency(self, vessel_map, return_label=False):
@@ -95,7 +99,7 @@ class RetinalVesselSeg2Graph(Seg2Graph):
     Specialization of Seg2Graph for retinal vessels.
     """
 
-    def __init__(self, max_vessel_diameter=5):
+    def __init__(self, max_vessel_diameter=5, prevent_node_simplification_on_borders=35):
         super(RetinalVesselSeg2Graph, self).__init__(
             fix_hollow=True,
             skeletonize_method="lee",
@@ -103,6 +107,7 @@ class RetinalVesselSeg2Graph(Seg2Graph):
             simplify_topology="node",
         )
         self.max_vessel_diameter = max_vessel_diameter
+        self.prevent_node_simplification_on_borders = prevent_node_simplification_on_borders
 
     def __call__(self, vessel_map):
         from ..vgraph import VascularGraph
@@ -121,10 +126,31 @@ class RetinalVesselSeg2Graph(Seg2Graph):
         return self._max_vessel_diameter
 
     @max_vessel_diameter.setter
-    def max_vessel_diameter(self, value):
-        self._max_vessel_diameter = value
+    def max_vessel_diameter(self, diameter):
+        self._max_vessel_diameter = diameter
 
-        max_radius = value // 2 + 1
-        self.max_spurs_distance = value
-        self.nodes_merge_distance = dict(junction=max_radius, termination=value, node=max_radius - 1)
-        self.merge_small_cycles = value
+        max_radius = diameter // 2 + 1
+        self.max_spurs_distance = diameter
+        self.nodes_merge_distance = dict(junction=max_radius, termination=0, node=max_radius - 1)
+        self.merge_small_cycles = diameter
+
+    @property
+    def prevent_node_simplification_on_borders(self):
+        return self._node_simplification_criteria
+    
+    @prevent_node_simplification_on_borders.setter
+    def prevent_node_simplification_on_borders(self, prevent: bool | int):
+        if prevent:
+            if prevent is True:
+                prevent = 35
+            def criteria(node, node_y, node_x, skeleton, branches_by_nodes_adj):
+                h, w = skeleton.shape
+
+                return ((node_y-h/2)**2 + (node_x-w/2)**2 < (max(h,w)/2-prevent)**2) \
+                      & (node_y > prevent) & (node_y < h - prevent) \
+                      & (node_x > prevent) & (node_x < w - prevent) \
+                      & node
+            self.node_simplification_criteria = criteria
+        else:
+            self.node_simplification_criteria = None
+        self._prevent_node_simplification_on_borders = prevent

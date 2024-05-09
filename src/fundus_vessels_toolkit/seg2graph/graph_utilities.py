@@ -1,8 +1,9 @@
 import warnings
-from typing import Dict, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import numpy.typing as npt
+from jppype.utilities.geometric import Point, Rect
 
 
 def add_empty_to_lookup(lookup: np.ndarray) -> np.ndarray:
@@ -140,11 +141,44 @@ def distance_matrix(nodes_coord: np.ndarray):
     return np.linalg.norm(nodes_coord[:, None, :] - nodes_coord[None, :, :], axis=2)
 
 
-def fuse_nodes(branches_by_nodes, nodes_id, node_coord: Tuple[np.ndarray, np.ndarray] | None = None):
+def fuse_nodes(
+    branches_by_nodes: npt.NDArray[np.bool_],
+    nodes_id: npt.NDArray[np.int64],
+    node_coord: Tuple[np.ndarray, np.ndarray] | None = None,
+):
     """
     Fuse a node from the connectivity matrix of branches and nodes.
     The node is removed and the two branches connected to it are fused into one.
+
+    Parameters
+    ----------
+    branches_by_nodes:
+        A (N, M) boolean matrix where N is the number of branches and M the number of nodes.
+
+    nodes_id:
+        The index of the node to remove.
+
+    node_coord:
+        The coordinates of the nodes. This is not used by the function but remove the need to filter the nodes_coord
+        manually.
+
+    Returns
+    -------
+    branches_by_nodes:
+        A (N', M') boolean matrix where N' is the number of branches after merging.
+
+    branch_lookup:
+        A (N,) array containing the new branch labels.
+
+    nodes_mask:
+        A (M,) boolean array indicating the nodes that have been removed.
+
+    nodes_labels: (optional, if node_coord is not None)
+        A tuple (y, x, branch) of three 1D arrays of length M' containing the coordinates of the nodes and the label of
+        the branch they are connected to.
+
     """
+
     # Check parameters and compute the initial branch lookup
     branch_lookup, nodes_mask, nodes_id = _prepare_node_deletion(branches_by_nodes, nodes_id)
     nb_branches = len(branch_lookup)
@@ -184,6 +218,59 @@ def fuse_nodes(branches_by_nodes, nodes_id, node_coord: Tuple[np.ndarray, np.nda
         return branches_by_nodes, branch_lookup, nodes_mask, nodes_labels
     else:
         return branches_by_nodes, branch_lookup, nodes_mask
+
+
+def fuse_node_pairs(branches_by_nodes: npt.NDArray[np.bool_], pairs_node_id: npt.NDArray):
+    """
+    Fuse pairs of nodes, removing them from the connectivity matrix and merging their connected branches.
+    Each nodes must be connected to a single branch.
+
+    Parameters
+    ----------
+    branches_by_nodes : npt.NDArray[np.bool_]
+        The connectivity matrix as a (B, N) boolean matrix where B is the number of branches and N the number of nodes.
+    pairs_node_id : npt.NDArray
+        A (P, 2) array containing P pairs of nodes to fuse.
+
+    Returns
+    -------
+    branches_by_nodes : npt.NDArray[np.bool_]
+        The new connectivity matrix of shape (B-P, N-2P)
+    branch_lookup : npt.NDArray[np.int64], shape (B,)
+        The branch lookup table to propagate the merging to the branches labels.
+    merged_branche_id : npt.NDArray[np.int64], shape (P,)
+        For each node pair, the new label of their branches after the fuse.
+    """
+    assert pairs_node_id.ndim == 2 and pairs_node_id.shape[1] == 2, "pairs_node_id must be a 2D array of shape (N, 2)"
+    assert len(np.unique(pairs_node_id.flatten())) == pairs_node_id.size, "Each node must be unique in pairs_node_id"
+    assert np.all(
+        np.sum(branches_by_nodes[:, pairs_node_id.flatten()], axis=0) == 1
+    ), "Each node in pairs_node_id must be connected to a single branch"
+    nb_branches, N = branches_by_nodes.shape
+
+    # --- Compute the branches pairs to merge ---
+    pairs_branch_id = np.argmax(branches_by_nodes[:, pairs_node_id], axis=0)
+
+    # --- Remove the nodes to fuse ---
+    branches_by_nodes = np.delete(branches_by_nodes, pairs_node_id.flatten(), axis=1)
+
+    # --- Merge the branches ---
+    # Sort the pairs by the first node id
+    pairs_branch_id.sort(axis=1)
+    branch_target = pairs_branch_id[:, 0]
+    branch_to_delete = pairs_branch_id[:, 1]
+
+    # Merge the branches
+    branches_by_nodes[branch_target] += branches_by_nodes[branch_to_delete]
+    branches_by_nodes = np.delete(branches_by_nodes, branch_to_delete, axis=0)
+
+    # Create the branch_lookup
+    branch_lookup = np.arange(nb_branches, dtype=np.int64)
+    branch_lookup[branch_to_delete] = branch_target  # Redirect
+    branch_lookup_shift = np.cumsum(~index_to_mask(branch_to_delete, nb_branches)) - 1
+    branch_lookup = branch_lookup_shift[branch_lookup]
+
+    return branches_by_nodes, add_empty_to_lookup(branch_lookup), branch_lookup[branch_target]
 
 
 def _prepare_node_deletion(branches_by_nodes, nodes_id):
@@ -318,6 +405,9 @@ def merge_nodes_by_distance(
         ]
         endpoints_nodes = compute_is_endpoints(branches_by_nodes)
 
+        if remove_branch is None:
+            termination_branches = np.sum(branches_by_nodes[:, endpoints_nodes].astype(bool), axis=1) == 1
+            remove_branch = np.where(termination_branches)[0]
         branches_by_nodes, branch_lookup2, node_lookup = merge_nodes_clusters(
             branches_by_nodes, nodes_clusters, erase_branches=remove_branch
         )
@@ -333,7 +423,9 @@ def merge_nodes_by_distance(
     return branches_by_nodes, branch_lookup, nodes_coord
 
 
-def merge_nodes_clusters(branches_by_nodes: np.ndarray, nodes_clusters: List[set], erase_branches=True):
+def merge_nodes_clusters(
+    branches_by_nodes: np.ndarray, nodes_clusters: List[set], erase_branches: bool | List[int] = True
+):
     """
     Merge nodes according to a set of clusters. Return the resulting branch_by_node matrix and lookup tables for branch and  node labels.
 
@@ -343,6 +435,8 @@ def merge_nodes_clusters(branches_by_nodes: np.ndarray, nodes_clusters: List[set
                         The implementation assume that each nodes is only present in one cluster.
         erase_branches: If True, branches connecting two nodes of the same cluster will be deleted, otherwise they
                         will be relabeled as one of the branches incoming to the cluster.
+                        If list of int, the branches with the corresponding index will be erased,
+                        while the other will be relabeled.
 
     Returns:
         branches_by_node: A (N', M') boolean matrix where N' is the number of branches after merging.
@@ -354,37 +448,57 @@ def merge_nodes_clusters(branches_by_nodes: np.ndarray, nodes_clusters: List[set
     branches_lookup = np.arange(branches_by_nodes.shape[0] + 1, dtype=np.int64)
     node_to_remove = np.zeros(branches_by_nodes.shape[1], dtype=bool)
 
+    # 1. Process each cluster, removing and relabeling branches and nodes in the lookup tables
     for cluster in nodes_clusters:
         cluster = np.asarray(tuple(cluster), dtype=np.int64)
-        cluster.sort()
-        cluster_branches = np.where(np.sum(branches_by_nodes[:, cluster].astype(bool), axis=1) >= 2)[0]
-        cluster_branches.sort()
-        branches_to_remove[cluster_branches] = True
-        incoming_cluster_branches = np.where(np.sum(branches_by_nodes[:, cluster].astype(bool), axis=1) == 1)[0]
+        cluster.sort()  # Sort the cluster to only keep the node with the lowest id
 
-        if len(incoming_cluster_branches):
-            branches_lookup = apply_lookup(
-                branches_lookup, (cluster_branches + 1, branches_lookup[incoming_cluster_branches[0] + 1])
-            )
+        # 1.a Find the branches connected linking several nodes of the cluster (included in the cluster)...
+        cluster_branches = np.where(np.sum(branches_by_nodes[:, cluster].astype(bool), axis=1) >= 2)[0]
+        # cluster_branches.sort() # USELESS?
+        branches_to_remove[cluster_branches] = True  # ... and mark them for deletion
+
+        # 1.b Relabel the branches as backrgound
+
+        # 1.c If erase_branches is not False, attempt to relabel the branches as one of the incoming branches
+        if erase_branches is not True:
+            # Find the branches connected to only one node of the cluster
+            incoming_cluster_branches = np.where(np.sum(branches_by_nodes[:, cluster].astype(bool), axis=1) == 1)[0]
+            incoming_label = branches_lookup[incoming_cluster_branches[0] + 1]
+            if erase_branches is False or len(incoming_cluster_branches) == 0:
+                branches_new_labels = [incoming_label] * len(cluster_branches)
+            else:
+                branches_new_labels = [0 if b in erase_branches else incoming_label for b in cluster_branches]
+            branches_new_labels = np.array(branches_new_labels)
+            # If any, relabel the branches as one of the incoming branches
+            branches_lookup = apply_lookup(branches_lookup, (cluster_branches + 1, branches_new_labels))
         else:
             branches_lookup[cluster_branches + 1] = 0
-        node_lookup[cluster[1:]] = cluster[0]
-        node_to_remove[cluster[1:]] = True
 
+        # 1.c Merge the node of the cluster to the lowest node id...
+        node_lookup[cluster[1:]] = cluster[0]
+        node_to_remove[cluster[1:]] = True  # ... and mark them for deletion.
+
+    # 2. Remove the marked branches
     if branches_to_remove.any():
+        # 2.a Simplify the branches_by_nodes matrix by removing the rows associated with the marked branches
         branches_by_nodes = branches_by_nodes[~branches_to_remove, :]
-        if erase_branches:
-            branches_lookup[np.where(branches_to_remove)[0] + 1] = 0
+        # if erase_branches:
+        #     branches_lookup[np.where(branches_to_remove)[0] + 1] = 0
+        # 2.b Map the branches ids so they increase monotonously, skipping the gaps created by branches removals
         branches_lookup_shift = np.cumsum(np.concatenate(([True], ~branches_to_remove))) - 1
         branches_lookup = branches_lookup_shift[branches_lookup]
     else:
         branches_lookup = None
     nb_branches = branches_by_nodes.shape[0]
 
+    # 3. Merge the marked nodes
+    #   3.a Map the nodes ids so they increase monotonously, skipping the gaps created by nodes removals
     node_lookup_shift = np.cumsum(~node_to_remove) - 1
     nb_nodes = node_lookup_shift[-1] + 1
     node_lookup = node_lookup_shift[node_lookup]
 
+    #   3.b Merge the appropriate columns of the branches_by_nodes matrix by summation
     nodes_by_branches = np.zeros_like(branches_by_nodes, shape=(nb_nodes, nb_branches))
     np.add.at(nodes_by_branches, node_lookup, branches_by_nodes.T)
 
@@ -473,3 +587,70 @@ def perimeter_from_vertices(coord: np.ndarray, close_loop: bool = True) -> float
         next_coord = next_coord[:-1]
         coord = coord[:-1]
     return np.sum(np.linalg.norm(coord - next_coord, axis=1))
+
+
+def nodes_tangent(
+    nodes_coord: np.ndarray,
+    branches_label_map: np.ndarray,
+    branches_id: Iterable[int] = None,
+    *,
+    gaussian_offset: float = 7,
+    gaussian_std: float = 7,
+):
+    """
+    Compute the vector tangent to the skeleton at given nodes. The vector is directed as a continuation of te skeleton.
+
+    The computed vector is the symmetric of the barycenter of the surrounding skeleton points weighted by a gaussian
+    distribution on the distance to the considered node. Note that the center of the gaussian distribution is offset
+    from the considered node to account for skeleton artefact near the node.
+
+
+    Parameters
+    ----------
+    coord : np.ndarray, shape (N, 2)
+        The coordinates of the nodes to consider.
+    skeleton_map : np.ndarray, shape (H, W)
+        The skeleton map.
+    branch_id : Iterable[int], shape (N,)
+        For each node, the label of the branch it is connected to.
+        If 0, all the branches arround the node will be considered. (This may lead to indesirable results.)
+
+        .. warning::
+
+            The branch_id must follow the same indexing as the skeleton_map: especially the indexes must start at 1.
+
+    gaussian_offset : float, optional
+        The offset in pixel of the gaussian weighting the skeleton arround the node. Must be positive.
+        By default: 7.
+    std : float, optional
+        The standard deviation in pixel of the gaussian weighting the skeleton arround the node. Must be positive.
+        By default 7.
+
+    Returns
+    -------
+    np.ndarray, shape (N, 2)
+        The tangent vectors at the given nodes. The vectors are normalized to unit length.
+    """
+    assert len(nodes_coord) == len(branches_id), "coord and branch_id must have the same length"
+    assert nodes_coord.ndim == 2 and nodes_coord.shape[1] == 2, "coord must be a 2D array of shape (N, 2)"
+    N = len(nodes_coord)
+    assert branches_label_map.ndim == 2, "skeleton_map must be a 2D array"
+    assert branches_label_map.shape[0] > 0 and branches_label_map.shape[1] > 0, "skeleton_map must be non empty"
+    assert gaussian_offset > 0, "gaussian_offset must be positive"
+    assert gaussian_std > 0, "gaussian_std must be positive"
+
+    tangent_vectors = np.zeros((N, 2), dtype=np.float64)
+    for i, ((y, x), branch_id) in enumerate(zip(nodes_coord, branches_id, strict=True)):
+        pos = Point(y, x)
+        window_rect = Rect.from_center(pos, 2 * (2 * gaussian_std + gaussian_offset)).clip(branches_label_map.shape)
+        window = branches_label_map[window_rect.slice()]
+        pos = pos - window_rect.top_left
+
+        skel_points = np.where(window == branch_id if branch_id != 0 else window > 0)
+        skel_points = np.array(skel_points, dtype=np.float64).T
+        skel_points_d = pos.distance(skel_points)
+        skel_points_w = np.exp(-0.5 * (skel_points_d - gaussian_offset) ** 2 / gaussian_std**2)
+        barycenter = np.sum(skel_points * skel_points_w[:, None], axis=0) / np.sum(skel_points_w) - pos
+        tangent_vectors[i] = -barycenter / np.linalg.norm(barycenter)
+
+    return tangent_vectors

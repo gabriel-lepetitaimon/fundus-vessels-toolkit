@@ -1,8 +1,9 @@
 import warnings
-from typing import Literal, Mapping, TypeAlias, TypedDict
+from typing import Literal, Mapping, Optional, TypeAlias, TypedDict
 
 import networkx as nx
 import numpy as np
+import numpy.typing as npt
 
 from .graph_utilities import (
     apply_lookup,
@@ -27,6 +28,18 @@ class NodeMergeDistanceDict(TypedDict):
     node: float
 
 
+class NodeSimplificationCallBack:
+    def __call__(
+        self,
+        node_to_fuse: npt.NDArray[np.bool_],
+        node_y: npt.NDArray[np.float_],
+        node_x: npt.NDArray[np.float_],
+        skeleton: npt.NDArray[np.bool_],
+        branches_by_nodes: npt.NDArray[np.uint64],
+    ) -> npt.NDArray[np.bool_]:
+        pass
+
+
 NodeMergeDistanceParam: TypeAlias = bool | float | NodeMergeDistanceDict
 SimplifyTopology: TypeAlias = Literal["node", "branch", "both"] | None
 
@@ -38,6 +51,7 @@ def seg_to_branches_list(
     nodes_merge_distance: NodeMergeDistanceParam = True,
     merge_small_cycles: float = 0,
     simplify_topology: SimplifyTopology = "node",
+    node_simplification_criteria: Optional[NodeSimplificationCallBack] = None,
 ):
     """
     Extract the naive vasculature graph from a vessel map.
@@ -156,7 +170,7 @@ def seg_to_branches_list(
         distances = [
             (~is_endpoint, junctions_merge_distance, True),  # distance only for junctions
             (is_endpoint, terminations_merge_distance, True),  # distance only for terminations
-            (None, nodes_merge_distance, False),
+            (None, nodes_merge_distance, True),
         ]  # distance for all nodes
         branches_by_nodes, branch_lookup2, nodes_coord = merge_nodes_by_distance(
             branches_by_nodes, (node_y, node_x), distances
@@ -205,6 +219,10 @@ def seg_to_branches_list(
         # Fuse nodes that are connected to only 2 branches
         # - Identify nodes connected to only 2 branches
         nodes_to_fuse = node_rank(branches_by_nodes) == 2
+
+        if node_simplification_criteria is not None:
+            nodes_to_fuse = node_simplification_criteria(nodes_to_fuse, node_y, node_x, skel, branches_by_nodes)
+
         if np.any(nodes_to_fuse):
             # - Fuse nodes
             branches_by_nodes, branch_lookup2, nodes_mask, node_labels2 = fuse_nodes(
