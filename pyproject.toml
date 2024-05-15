@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-samples = ['jppype', 'jupyterlab']
+samples = ['jppype>=0.2.0a3']
 experimentations = ['nntemplate']
 
 [project.urls]
