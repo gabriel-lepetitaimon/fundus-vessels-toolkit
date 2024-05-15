@@ -100,7 +100,7 @@ class VascularGraph:
         return self._branch_by_node.shape[0]
 
     def shuffle_nodes(self, node_indexes):
-        node_indexes = np.asarray(node_indexes, dtype=np.int)
+        node_indexes = np.asarray(node_indexes, dtype=int)
         assert (
             node_indexes.ndim == 1 and node_indexes.shape[0] <= self.nodes_count
         ), f"node_indexes must be a 1D array of maximum size {self.nodes_count}"
@@ -161,7 +161,7 @@ class VascularGraph:
         nodes = self._nodes_yx_coord[list(nodes_idx)]
         return perimeter_from_vertices(nodes, close_loop=close_loop)
 
-    def terminations_nodes(self) -> npt.NDArray[np.int]:
+    def terminations_nodes(self) -> npt.NDArray[int]:
         from ..seg2graph.graph_utilities import compute_is_endpoints
 
         return np.where(compute_is_endpoints(self._branch_by_node))[0]
@@ -217,7 +217,7 @@ class VascularGraph:
             0 <= b < self.branches_count for b in branches_id
         ), f"Invalid branch index: must be in [0, {self.branches_count})."
 
-        branches_id = np.asarray(branches_id, dtype=np.int)
+        branches_id = np.asarray(branches_id, dtype=int)
 
         # Compute the nodes tangents
         node_yx = self.nodes_yx_coord[nodes]
