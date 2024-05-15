@@ -5,10 +5,14 @@
 ########################################################################################################################
 __all__ = ["segmentation_model", "segment", "SegmentModel"]
 
+import os
 import warnings
 from enum import Enum
+from pickle import UnpicklingError
 from typing import NamedTuple, Optional
+from urllib.error import HTTPError
 
+import segmentation_models_pytorch as smp
 import torch
 from torch.utils import model_zoo
 
@@ -111,17 +115,29 @@ def segmentation_model(model_name: SegmentModel = SegmentModel.resnet34):
 
     match model_name:
         case SegmentModel.resnet34:
-            import segmentation_models_pytorch as smp
-
             model = smp.Unet("resnet34", classes=2, activation="sigmoid")
-            url = "https://drive.google.com/uc?export=download&id=1IMW3m-tig0Hd0MW46Ula_K61N8I37nHS&confirm=t&uuid=45f08800-5c34-4dd4-98f7-6a9cc338d2e6"
+            url = "https://huggingface.co/gabriel-lepetitaimon/FundusVessel/resolve/main/Segmentation/resnet34.pt?download=true"
         case _:
-            raise ValueError(f"Unknown model: {model_name}.\n" f"Available models are: resnet34")
+            raise ValueError(
+                f"Unknown model: {model_name}.\n" f"Available models are: {', '.join(_.value for _ in SegmentModel)}."
+            )
 
     model_dir = torch.hub.get_dir() + "/checkpoints/fundus_vessels_toolkit/segmentation"
-    model.load_state_dict(
-        model_zoo.load_url(
+    try:
+        state_dict = model_zoo.load_url(
             url, map_location="cpu", file_name=model_name + ".pth", model_dir=model_dir, check_hash=True, progress=True
         )
-    )
+    except UnpicklingError:
+        os.remove(model_dir + "/" + model_name + ".pth")
+        raise RuntimeError(
+            "The requested model file is corrupted, it has been removed. Please retry.\n"
+            "If the problem persists, the url might have expire: contact the author."
+        ) from None
+    except HTTPError as e:
+        raise RuntimeError(
+            f"An error occurred while downloading the model: {e}\n"
+            "Please retry. If the problem persists contact the author."
+        ) from None
+
+    model.load_state_dict(state_dict)
     return model.eval()
