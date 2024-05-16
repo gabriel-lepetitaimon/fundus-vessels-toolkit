@@ -131,7 +131,7 @@ def segmentation_model(model_name: SegmentModel = SegmentModel.resnet34):
         os.remove(model_dir + "/" + model_name + ".pth")
         raise RuntimeError(
             "The requested model file is corrupted, it has been removed. Please retry.\n"
-            "If the problem persists, the url might have expire: contact the author."
+            "If the problem persists contact the author: the url might be invalid."
         ) from None
     except HTTPError as e:
         raise RuntimeError(
