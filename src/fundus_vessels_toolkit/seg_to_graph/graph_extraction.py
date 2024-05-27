@@ -5,13 +5,11 @@ import networkx as nx
 import numpy as np
 import numpy.typing as npt
 
-from .graph_utilities import (
-    apply_lookup,
-    apply_node_lookup_on_coordinates,
+from ..utils.geometric import distance_matrix
+from ..utils.graph.branch_by_nodes import (
     branch_by_nodes_to_adjacency_list,
     compute_is_endpoints,
     delete_nodes,
-    distance_matrix,
     fuse_nodes,
     merge_equivalent_branches,
     merge_nodes_by_distance,
@@ -19,7 +17,8 @@ from .graph_utilities import (
     node_rank,
     reduce_clusters,
 )
-from .graph_utilities_cy import label_skeleton
+from ..utils.graph.graph_cy import label_skeleton
+from ..utils.lookup_array import apply_lookup, apply_lookup_on_coordinates
 
 
 class NodeMergeDistanceDict(TypedDict):
@@ -98,7 +97,7 @@ def seg_to_branches_list(
     if vessel_map.dtype != np.int8:
         from .skeletonization import skeletonize
 
-        skel = skeletonize(vessel_map, fix_hollow=True, max_spurs_length=10, return_distance=False)
+        skel = skeletonize(vessel_map, fix_hollow=True, max_spurs_length=1, return_distance=False)
     else:
         skel = vessel_map
 
@@ -201,7 +200,7 @@ def seg_to_branches_list(
             branches_by_nodes, cycles, erase_branches=True
         )
         # - Apply the lookup tables on nodes and branches
-        node_y, node_x = apply_node_lookup_on_coordinates((node_y, node_x), nodes_mask)
+        node_y, node_x = apply_lookup_on_coordinates((node_y, node_x), nodes_mask)
         branch_lookup = apply_lookup(branch_lookup, branch_lookup_2, node_labels[2])
 
     if merge_small_cycles > 0 or simplify_topology in ("branch", "both"):
@@ -347,9 +346,9 @@ def parse_skeleton(skel: np.ndarray):
 #         node_shift = np.cumsum(node_mask) - 1
 #         node_lookup = node_shift[node_lookup]
 
-#         # Remove the merged nodess
+#         # Remove the merged nodes
 #         branches_by_nodes = branches_by_nodes[:, node_mask]
-#         node_y, node_x = apply_node_lookup_on_coordinates((node_y, node_x), node_lookup)
+#         node_y, node_x = apply_lookup_on_coordinates((node_y, node_x), node_lookup)
 
 #     invalid_branches = np.sum(branches_by_nodes, axis=1) != 2
 #     if np.any(invalid_branches):
@@ -361,26 +360,3 @@ def parse_skeleton(skel: np.ndarray):
 #         branches_by_nodes = branches_by_nodes[~invalid_branches, :]
 
 #     return branches_by_nodes, labeled_branches, (node_y, node_x), nb_junctions
-
-
-def branches_by_nodes_to_edge_list(branches_by_nodes):
-    assert branches_by_nodes.ndim == 2, "branches_by_nodes must be a 2D array"
-    assert np.all(np.sum(branches_by_nodes, axis=1) == 2), "Each branch must connect exactly 2 nodes"
-
-    n1 = np.argmax(branches_by_nodes, axis=1)
-    n2 = np.argmax(branches_by_nodes[:, ::-1], axis=1)
-    return np.stack((n1, n2), axis=1)
-
-
-def branches_by_nodes_to_node_graph(branches_by_nodes, node_pos=None):
-    branches = np.arange(branches_by_nodes.shape[0]) + 1
-    branches_by_nodes = branches_by_nodes.astype(bool)
-    node_adjacency = branches_by_nodes.T @ (branches_by_nodes * branches[:, None])
-    graph = nx.from_numpy_array((node_adjacency > 0) & (~np.eye(branches_by_nodes.shape[1], dtype=bool)))
-    if node_pos is not None:
-        node_y, node_x = node_pos
-        nx.set_node_attributes(graph, node_y, "y")
-        nx.set_node_attributes(graph, node_x, "x")
-    for edge in graph.edges():
-        graph.edges[edge]["branch"] = node_adjacency[edge[0], edge[1]] - 1
-    return graph

@@ -5,16 +5,16 @@
 ########################################################################################################################
 import numpy as np
 
+from ..utils.graph.branch_by_nodes import branches_by_nodes_to_node_graph
 from .graph_extraction import (
     NodeMergeDistanceParam,
     SimplifyTopology,
-    branches_by_nodes_to_node_graph,
     seg_to_branches_list,
 )
 from .skeletonization import SkeletonizeMethod, skeletonize
 
 
-class Seg2Graph:
+class SegToGraph:
     """
     Utility class to extract the graph of the skeleton from a binary image.
     """
@@ -94,13 +94,13 @@ class Seg2Graph:
         return self.skel2adjacency(skel, return_label=return_label)
 
 
-class RetinalVesselSeg2Graph(Seg2Graph):
+class RetinalVesselSegToGraph(SegToGraph):
     """
     Specialization of Seg2Graph for retinal vessels.
     """
 
     def __init__(self, max_vessel_diameter=5, prevent_node_simplification_on_borders=35):
-        super(RetinalVesselSeg2Graph, self).__init__(
+        super(RetinalVesselSegToGraph, self).__init__(
             fix_hollow=True,
             skeletonize_method="lee",
             max_spurs_length=1,
@@ -137,19 +137,25 @@ class RetinalVesselSeg2Graph(Seg2Graph):
     @property
     def prevent_node_simplification_on_borders(self):
         return self._node_simplification_criteria
-    
+
     @prevent_node_simplification_on_borders.setter
     def prevent_node_simplification_on_borders(self, prevent: bool | int):
         if prevent:
             if prevent is True:
                 prevent = 35
+
             def criteria(node, node_y, node_x, skeleton, branches_by_nodes_adj):
                 h, w = skeleton.shape
 
-                return ((node_y-h/2)**2 + (node_x-w/2)**2 < (max(h,w)/2-prevent)**2) \
-                      & (node_y > prevent) & (node_y < h - prevent) \
-                      & (node_x > prevent) & (node_x < w - prevent) \
-                      & node
+                return (
+                    ((node_y - h / 2) ** 2 + (node_x - w / 2) ** 2 < (max(h, w) / 2 - prevent) ** 2)
+                    & (node_y > prevent)
+                    & (node_y < h - prevent)
+                    & (node_x > prevent)
+                    & (node_x < w - prevent)
+                    & node
+                )
+
             self.node_simplification_criteria = criteria
         else:
             self.node_simplification_criteria = None

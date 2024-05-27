@@ -5,8 +5,12 @@ import scipy.ndimage as scimage
 from skimage.morphology import medial_axis, remove_small_objects
 from skimage.morphology import skeletonize as skimage_skeletonize
 
-from .graph_utilities_cy import label_skeleton
-from .skeleton_utilities import compute_junction_endpoint_masks, extract_patches, fast_hit_or_miss, remove_1px_endpoints
+from ..utils.binary_mask import extract_patches, fast_hit_or_miss
+from ..utils.graph.graph_cy import label_skeleton
+from ..utils.skeleton import (
+    compute_junction_endpoint_masks,
+    remove_1px_endpoints,
+)
 
 SkeletonizeMethod: TypeAlias = Literal["medial_axis", "zhang", "lee"]
 
@@ -48,7 +52,10 @@ def skeletonize(
     # === Compute the medial axis ===
     # with LogTimer("Compute skeleton"):
     if skeletonize_method == "medial_axis":
-        bin_skel, skel_dist = medial_axis(vessel_map, return_distance=return_distance, random_state=0)
+        if return_distance:
+            bin_skel, skel_dist = medial_axis(vessel_map, return_distance=True, random_state=0)
+        else:
+            bin_skel = medial_axis(vessel_map, return_distance=False, random_state=0)
     else:
         bin_skel = skimage_skeletonize(vessel_map, method=skeletonize_method) > 0
         skel_dist = scimage.distance_transform_edt(bin_skel) if return_distance else None
@@ -71,13 +78,17 @@ def skeletonize(
         skel = skel.clip(0) + junction_hollow_cross
 
         # log.print('Hollow cross quick fix, starting post fix')
-        for y, x in zip(*np.where(junction_hollow_cross)):
+        for y, x in zip(*np.where(junction_hollow_cross), strict=True):
             neighborhood = skel[y - 1 : y + 2, x - 1 : x + 2]
             if np.sum(neighborhood) == 1:
                 skel[y, x] = 0
-            if any(scimage.binary_hit_or_miss(neighborhood, *m)[1, 1] for m in zip(*junction_4lines_masks)):
+            if any(
+                scimage.binary_hit_or_miss(neighborhood, *m)[1, 1] for m in zip(*junction_4lines_masks, strict=True)
+            ):
                 skel[y, x] = 3
-            elif any(scimage.binary_hit_or_miss(neighborhood, *m)[1, 1] for m in zip(*junction_3lines_masks)):
+            elif any(
+                scimage.binary_hit_or_miss(neighborhood, *m)[1, 1] for m in zip(*junction_3lines_masks, strict=True)
+            ):
                 skel[y, x] = 2
             else:
                 skel[y, x] = 1

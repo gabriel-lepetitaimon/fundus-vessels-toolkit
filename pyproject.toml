@@ -19,10 +19,16 @@ dependencies = [
     'networkx>=3.1',
     
     'torch>=2.0.0',
-    'segmentation-models-pytorch'
+    'segmentation-models-pytorch',
 ]
 
 [project.optional-dependencies]
+dev = [
+    'sphinx',           
+    'sphinx-rtd-theme', # Read the docs theme
+    'nbsphinx',         # To include notebook in doc
+	'ipython'           # (also required to parse notebook)
+]
 samples = ['jppype>=0.2.0a3']
 experimentations = ['nntemplate']
 

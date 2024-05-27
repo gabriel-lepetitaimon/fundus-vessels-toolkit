@@ -1,13 +1,15 @@
+from typing import Tuple
+
 import numpy as np
 
-from .vascular_graph import VascularGraph
+from ..vascular_graph import VascularGraph
 
 
 def simple_graph_matching(
     node1_yx: tuple[np.ndarray, np.ndarray],
     node2_yx: tuple[np.ndarray, np.ndarray],
     max_matching_distance: float | None = None,
-    min_matching_distance: float | None = None,
+    min_distance: float | None = None,
     density_sigma: float | None = None,
     gamma: float = 0,
     return_distance: bool = False,
@@ -28,9 +30,10 @@ def simple_graph_matching(
                     of the first graph.
         node2_yx: same format as node1_yx but for the second graph.
         max_matching_distance: maximum distance between two nodes to be considered as a match.
-        return_distance: if True, return the distance between each matched nodes.
+        min_distance: set a lower bound to the distance between two nodes to prevent immediate match of superposed nodes.
         gamma: parameter to exponentially increase the penalty of large distance.
             If 0 (default), the algorithm simply minimize the sum of the distance between matched nodes.
+        return_distance: if True, return the distance between each matched nodes.
     Returns:
         A tuple (node1_matched, node2_matched), where node1_matched and node2_matched are vectors of the same length.
           Every (node1_matched[i], node2_matched[i]) encode a match, node1_matched being the index of a node from the
@@ -73,8 +76,8 @@ def simple_graph_matching(
         min_weight1 = np.repeat([min_weight], n1, axis=0)
         min_weight2 = np.repeat([min_weight], n2, axis=0)
     else:
-        if min_matching_distance is None:
-            min_matching_distance = np.clip(max_matching_distance / 20, 1)
+        if min_distance is None:
+            min_distance = np.clip(max_matching_distance / 20, 1)
 
         # Compute node density as the sum of the gaussian kernel centered on each node
         def influence(x):
@@ -98,8 +101,8 @@ def simple_graph_matching(
         factor1 = 1 - density2[closest_node1]
         factor2 = 1 - density1[closest_node2]
 
-        max_matching_distance1 = np.clip(max_matching_distance * factor1, min_matching_distance, max_matching_distance)
-        max_matching_distance2 = np.clip(max_matching_distance * factor2, min_matching_distance, max_matching_distance)
+        max_matching_distance1 = np.clip(max_matching_distance * factor1, min_distance, max_matching_distance)
+        max_matching_distance2 = np.clip(max_matching_distance * factor2, min_distance, max_matching_distance)
 
         # for i, (max_d, closest_node) in enumerate(zip(max_matching_distance1, closest_node1, strict=True)):
         #     print(
@@ -125,7 +128,34 @@ def simple_graph_matching(
     return matched_nodes
 
 
-def shortest_unmatched_path(adj_list1, adj_list2, matched_nodes: int):
+def shortest_unmatched_path(
+    adj_list1: np.ndarray, adj_list2: np.ndarray, matched_nodes: int
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Compute the shortest path connecting unmatched nodes to matched nodes, without using matched nodes.
+    This function perform the same operation individually on the two graphs.
+
+    Parameters
+    ----------
+    adj_list1 :
+        The adjacency list of the first graph of shape(E1, 2) and maximum value N1.
+
+        The adjacency list is a 2D array of shape (E1, 2) where N is the number of edges in the graph. Each row contains the index of the two nodes connected by the edge.
+
+    adj_list2 :
+        The adjacency list of the second graph of shape (E2, 2) and maximum value N2.
+
+    matched_nodes : int
+        The number of matched nodes between the two graphs. ``matched_nodes`` must be lower to N1 and N2.
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+
+        - A distance matrix of shape ``(matched_nodes, N1)`` with the distance between matched nodes and each node of graph 1. (If no path exists between the two nodes, the matrix contains -1.)
+        - A distance matrix of shape ``(matched_nodes, N2)`` with the distance between matched nodes and each node of graph 2. (If no path exists between the two nodes, the matrix contains -1.)
+        - A backtrack matrix of shape ``(matched_nodes, N1, 2)`` with the index of the edge and the index of the next node on the path from the node N1 to the primary node N. If no path exists between the two nodes, the matrix contains (-1, -1).
+        - A backtrack matrix of shape ``(matched_nodes, N2, 2)`` with the index of the edge and the index of the next node on the path from the node N2 to the primary node N. If no path exists between the two nodes, the matrix contains (-1, -1).
+    """
     from .edit_distance_cy import shortest_secondary_path as cython_shortest_path
 
     primary_nodes = np.arange(matched_nodes)
@@ -139,7 +169,27 @@ def shortest_unmatched_path(adj_list1, adj_list2, matched_nodes: int):
     return dist1, dist2, backtrack1, backtrack2
 
 
-def backtrack_edges(from_node, to_primary_node, backtrack):
+def backtrack_edges(from_node: int, to_primary_node: int, backtrack: np.ndarray) -> list[int]:
+    """Compute the list of edges between two nodes based on the backtrack matrix.
+
+    Parameters
+    ----------
+    from_node :
+        Index of the starting node.
+
+    to_primary_node :
+        Index of the ending node. The ending node must be a primary node, ie its index must be lower than backtrack.shape[0].
+
+    backtrack :
+        The backtrack matrix as returned by shortest_unmatched_path. The matrix must be of shape (N, m, 2) with N<m where N is the number of primary (or matched) nodes and m the total number of nodes in the graph.
+        For each pair (N, m) the matrix contains the index of the edge and the index of the next node on the path from the node m to the primary node N. If no path exists between the two nodes, the matrix contains (-1, -1).
+
+
+    Returns
+    -------
+    list[int]
+        The list of edges between the two nodes. If no path exists between the two nodes, returns an empty list.
+    """
     edges = []
     backtrack = backtrack[to_primary_node]
     node = from_node
@@ -203,16 +253,46 @@ def naive_edit_distance(
     graph2: VascularGraph,
     max_matching_distance: float | None = None,
     density_matching_sigma: float | None = None,
-    min_matching_distance: float | None = None,
+    min_distance: float | None = None,
     return_labels: bool = False,
-):
+) -> tuple[int, int] | tuple[int, int, tuple[int, np.ndarray, np.ndarray]]:
+    """Compute the naive edit distance between two graphs. The two graphs must be geometrically similar as the node will first be paired based on their euclidian distance.
+
+    Parameters
+    ----------
+    graph1 :
+        The first graph to compare.
+
+    graph2 :
+        The second graph to compare.
+
+    max_matching_distance : float | None, optional
+        The maximum distance between two nodes to be considered as a match.
+        By default: None.
+
+    density_matching_sigma : float | None, optional
+        The standard deviation of the gaussian kernel used to compute the node density used to reduce the maximum matching distance for cluttered nodes.
+
+    min_distance : float | None, optional
+        Set a lower bound to the distance between two nodes to prevent immediate match of superposed nodes.
+
+    return_labels : bool, optional
+        If True, return the labels of the edges of the two graphs.
+        By default: False.
+
+    Returns
+    -------
+    tuple[int, int] | tuple[int, int, tuple[int, np.ndarray, np.ndarray]]
+        The number of not-matched edges in each graph. If return_labels is True, also returns the a tuple with the number of matched edges and two 1D binary arrays which indicate for each edge of graph 1 and 2 if it is matched (0) or not-matched (1).
+
+    """
     # Match nodes
     node_match_id1, node_match_id2 = simple_graph_matching(
         graph1.nodes_yx_coord,
         graph2.nodes_yx_coord,
         max_matching_distance=max_matching_distance,
         density_sigma=density_matching_sigma,
-        min_matching_distance=min_matching_distance,
+        min_distance=min_distance,
     )
     graph1.shuffle_nodes(node_match_id1)
     graph2.shuffle_nodes(node_match_id2)

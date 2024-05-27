@@ -18,7 +18,8 @@ from torch.utils import model_zoo
 
 from steered_cnn.utils.torch import crop_pad
 
-from .utils import ensure_superior_multiple, img_to_torch
+from ..utils.math import ensure_superior_multiple
+from ..utils.torch import img_to_torch
 
 
 class SegmentModel(str, Enum):
@@ -37,7 +38,9 @@ class ModelCache(NamedTuple):
 _last_model: ModelCache = ModelCache(None, None)
 
 
-def segment(x, model_name: SegmentModel = SegmentModel.resnet34, roi_mask="auto", device: torch.device = "cuda"):
+def segment_vessels(
+    x, model_name: SegmentModel = SegmentModel.resnet34, roi_mask="auto", device: torch.device = "cuda"
+):
     """
     Segments the vessels in a fundus image.
 
@@ -89,7 +92,7 @@ def segment(x, model_name: SegmentModel = SegmentModel.resnet34, roi_mask="auto"
                 y = y.cpu().numpy()
 
     if roi_mask == "auto":
-        from ..fundus_utilities import compute_ROI_mask
+        from ..utils.fundus import compute_ROI_mask
 
         roi_mask = compute_ROI_mask(raw)
     if roi_mask is not None:

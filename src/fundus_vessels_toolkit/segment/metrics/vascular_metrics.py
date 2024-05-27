@@ -6,8 +6,8 @@ import torch
 import torchmetrics as tm
 from torchmetrics import Metric as TorchMetric
 
-from ..seg2graph import RetinalVesselSeg2Graph
-from ..vgraph.matching import naive_edit_distance
+from ...seg_to_graph import RetinalVesselSegToGraph
+from ...vgraph.matching import naive_edit_distance
 
 
 class ClDice(TorchMetric):
@@ -25,7 +25,7 @@ class ClDice(TorchMetric):
                                skeletonization) and will be removed from the skeleton.
         """
         super().__init__()
-        self.seg2graph = RetinalVesselSeg2Graph()
+        self.seg2graph = RetinalVesselSegToGraph()
         self.seg2graph.max_spurs_length = max_struct_width
         self.eps = 1e-6
 
@@ -87,7 +87,7 @@ class MeanClDice(TorchMetric):
                                skeletonization) and will be removed from the skeleton.
         """
         super().__init__()
-        self.seg2graph = RetinalVesselSeg2Graph()
+        self.seg2graph = RetinalVesselSegToGraph()
         self.seg2graph.max_spurs_length = max_struct_width
         self.eps = 1e-6
 
@@ -152,7 +152,7 @@ class F1Topo(TorchMetric):
                                skeletonization) and will be removed from the skeleton.
         """
         super().__init__()
-        self.seg2graph = RetinalVesselSeg2Graph(max_struct_width)
+        self.seg2graph = RetinalVesselSegToGraph(max_struct_width)
         self.eps = 1e-6
 
         self.add_state("correct_prediction", default=torch.tensor(0), dist_reduce_fx="sum")
@@ -195,7 +195,7 @@ class F1Topo(TorchMetric):
                     graph1=v_pred,
                     graph2=v_target,
                     max_matching_distance=self.max_struct_width * 7,
-                    min_matching_distance=self.max_struct_width / 2,
+                    min_distance=self.max_struct_width / 2,
                     density_matching_sigma=self.max_struct_width,
                 )
                 for v_pred, v_target in zip(v_preds, v_targets, strict=True)
@@ -234,7 +234,7 @@ class MeanF1Topo(TorchMetric):
                                skeletonization) and will be removed from the skeleton.
         """
         super().__init__()
-        self.seg2graph = RetinalVesselSeg2Graph(max_struct_width)
+        self.seg2graph = RetinalVesselSegToGraph(max_struct_width)
         self.eps = 1e-6
 
         self.add_state("sum_precision", default=torch.tensor(0), dist_reduce_fx="sum")
@@ -297,7 +297,7 @@ def _check_input_format(
     target: torch.Tensor,
     skel_pred: torch.Tensor = None,
     skel_target: torch.Tensor = None,
-    seg2graph: RetinalVesselSeg2Graph = None,
+    seg2graph: RetinalVesselSegToGraph = None,
 ):
     if pred.ndim == 4:
         pred = pred.squeeze(1)
@@ -326,7 +326,7 @@ def _check_input_format(
             skel_pred = skel_pred.detach().cpu().numpy()
     else:
         if seg2graph is None:
-            seg2graph = RetinalVesselSeg2Graph()
+            seg2graph = RetinalVesselSegToGraph()
         skel_pred = np.stack([seg2graph.skeletonize(_) for _ in pred], axis=0)
 
     if skel_target is not None:
@@ -340,7 +340,7 @@ def _check_input_format(
             skel_target = skel_target.detach().cpu().numpy()
     else:
         if seg2graph is None:
-            seg2graph = RetinalVesselSeg2Graph()
+            seg2graph = RetinalVesselSegToGraph()
         skel_target = np.stack([seg2graph.skeletonize(_) for _ in target], axis=0)
 
     return pred, target, skel_pred, skel_target
@@ -455,7 +455,7 @@ else:
 
         def __init__(self, data=None, parent=None):
             super(CfgSumClDiceF1Topo, self).__init__(data=None, parent=parent)
-            self.seg2graph = RetinalVesselSeg2Graph(self.max_struct_width)
+            self.seg2graph = RetinalVesselSegToGraph(self.max_struct_width)
 
         def prepare_data(self, pred, target, mask=None):
             if pred.ndim == 4:

@@ -1,77 +1,13 @@
 import warnings
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Iterable, List, Tuple
 
+import networkx as nx
 import numpy as np
 import numpy.typing as npt
-from jppype.utilities.geometric import Point, Rect
 
-
-def add_empty_to_lookup(lookup: np.ndarray) -> np.ndarray:
-    """
-    Add an empty entry to a lookup table.
-    """
-    return np.concatenate([[0], lookup + 1], dtype=lookup.dtype)
-
-
-def apply_lookup(
-    array: np.ndarray | None,
-    mapping: Dict[int, int] | Tuple[np.ndarray, np.ndarray] | np.array | None,
-    apply_inplace_on: np.ndarray | None = None,
-) -> np.ndarray:
-    lookup = mapping
-    if mapping is None:
-        return array
-    if not isinstance(mapping, np.ndarray):
-        lookup = np.arange(len(array), dtype=np.int64)
-        if isinstance(mapping, dict):
-            mapping = tuple(zip(*mapping.items(), strict=True))
-        search = mapping[0]
-        replace = mapping[1]
-        if not isinstance(replace, np.ndarray):
-            replace = [replace] * len(search)
-        for s, r in zip(search, replace, strict=False):
-            lookup[lookup == s] = r
-
-    if apply_inplace_on is not None:
-        apply_inplace_on[:] = lookup[apply_inplace_on]
-
-    return lookup if array is None else lookup[array]
-
-
-def apply_node_lookup_on_coordinates(
-    nodes_coord, nodes_lookup: np.ndarray | None, nodes_weight: np.ndarray | None = None
-):
-    """
-    Apply a lookup table on a set of coordinates to merge specific nodes and return their barycenter.
-
-    Args:
-        nodes_coord: A tuple (y, x) of two 1D arrays of the same length N containing the nodes coordinates.
-        nodes_lookup: A 1D array of length N containing a lookup table of points index. Nodes with the same
-                          index in this table will be merged.
-
-    Returns:
-        A tuple (y, x) of two 1D arrays of length M (max(junction_lookup) + 1) containing the merged coordinates.
-
-    """
-    if nodes_lookup is None:
-        return nodes_coord
-    if nodes_weight is None or nodes_weight.sum() == 0:
-        nodes_weight = np.ones_like(nodes_lookup)
-    nodes_weight = nodes_weight + 1e-8
-
-    assert len(nodes_coord) == 2, f"nodes_coord must be a tuple of two 1D arrays. Got {len(nodes_coord)} elements."
-    assert len(nodes_coord[0]) == len(nodes_coord[1]) == len(nodes_lookup) == len(nodes_weight), (
-        f"nodes_coord, nodes_lookup and nodes_weight must have the same length. Got {len(nodes_coord[0])}, "
-        f"{len(nodes_lookup)} and {len(nodes_weight)} respectively."
-    )
-
-    jy, jx = nodes_coord
-    nodes_coord = np.zeros((np.max(nodes_lookup) + 1, 2), dtype=np.float64)
-    nodes_total_weight = np.zeros((np.max(nodes_lookup) + 1,), dtype=np.float64)
-    np.add.at(nodes_coord, nodes_lookup, np.asarray((jy, jx)).T * nodes_weight[:, None])
-    np.add.at(nodes_total_weight, nodes_lookup, nodes_weight)
-    nodes_coord = nodes_coord / nodes_total_weight[:, None]
-    return nodes_coord.T
+from ..binary_mask import index_to_mask
+from ..geometric import Point, Rect
+from ..lookup_array import add_empty_to_lookup, apply_lookup, apply_lookup_on_coordinates, invert_lookup
 
 
 def branch_by_nodes_to_adjacency_list(branches_by_nodes: np.ndarray, sorted=False) -> np.ndarray:
@@ -99,6 +35,29 @@ def branch_by_nodes_to_adjacency_list(branches_by_nodes: np.ndarray, sorted=Fals
     return np.stack([node1_ids, node2_ids], axis=1)
 
 
+def branches_by_nodes_to_edge_list(branches_by_nodes):
+    assert branches_by_nodes.ndim == 2, "branches_by_nodes must be a 2D array"
+    assert np.all(np.sum(branches_by_nodes, axis=1) == 2), "Each branch must connect exactly 2 nodes"
+
+    n1 = np.argmax(branches_by_nodes, axis=1)
+    n2 = np.argmax(branches_by_nodes[:, ::-1], axis=1)
+    return np.stack((n1, n2), axis=1)
+
+
+def branches_by_nodes_to_node_graph(branches_by_nodes, node_pos=None):
+    branches = np.arange(branches_by_nodes.shape[0]) + 1
+    branches_by_nodes = branches_by_nodes.astype(bool)
+    node_adjacency = branches_by_nodes.T @ (branches_by_nodes * branches[:, None])
+    graph = nx.from_numpy_array((node_adjacency > 0) & (~np.eye(branches_by_nodes.shape[1], dtype=bool)))
+    if node_pos is not None:
+        node_y, node_x = node_pos
+        nx.set_node_attributes(graph, node_y, "y")
+        nx.set_node_attributes(graph, node_x, "x")
+    for edge in graph.edges():
+        graph.edges[edge]["branch"] = node_adjacency[edge[0], edge[1]] - 1
+    return graph
+
+
 def compute_is_endpoints(branches_by_nodes) -> npt.NDArray[np.bool_]:
     """
     Compute a boolean array indicating if each node is an endpoint (i.e. connected to only one branch).
@@ -124,21 +83,6 @@ def delete_nodes(branches_by_nodes, nodes_id):
     branch_shift_lookup = np.cumsum(np.concatenate([[True], ~deleted_branches])) - 1
 
     return branches_by_nodes, branch_shift_lookup[branch_lookup], nodes_mask
-
-
-def distance_matrix(nodes_coord: np.ndarray):
-    """
-    Compute the distance matrix between a set of points.
-
-    Parameters
-    ----------
-    nodes_coord: A 2D array of shape (nb_nodes, 2) containing the coordinates of the nodes.
-
-    Returns
-    -------
-    A 2D array of shape (nb_nodes, nb_nodes) containing the distance between each pair of nodes.
-    """
-    return np.linalg.norm(nodes_coord[:, None, :] - nodes_coord[None, :, :], axis=2)
 
 
 def fuse_nodes(
@@ -293,26 +237,6 @@ def _prepare_node_deletion(branches_by_nodes, nodes_id):
     return np.arange(nb_branches, dtype=np.int64), nodes_mask, nodes_id
 
 
-def index_to_mask(index, length, invert=False):
-    """
-    Convert a list of indices to a boolean mask.
-    """
-    if not isinstance(length, int):
-        length = len(length)
-    mask = np.zeros(length, dtype=bool) if not invert else np.ones(length, dtype=bool)
-    mask[index] = not invert
-    return mask
-
-
-def invert_lookup(lookup):
-    """
-    Invert a lookup array. The lookup array must be a 1D array of integers. The output array is a 1D array of length
-    max(lookup) + 1. The output array[i] contains the list of indices of lookup where lookup[index] == i.
-    """
-    splits = np.split(np.argsort(np.argsort(lookup)), np.cumsum(np.unique(lookup, return_counts=True)[1]))[:-1]
-    return np.array([np.array(s[0], dtype=np.int64) for s in splits])
-
-
 def merge_equivalent_branches(
     branches_by_nodes: np.ndarray,
     max_nodes_distance: int | None = None,
@@ -412,7 +336,7 @@ def merge_nodes_by_distance(
             branches_by_nodes, nodes_clusters, erase_branches=remove_branch
         )
 
-        nodes_coord = apply_node_lookup_on_coordinates(nodes_coord, node_lookup, nodes_weight=~endpoints_nodes)
+        nodes_coord = apply_lookup_on_coordinates(nodes_coord, node_lookup, weight=~endpoints_nodes)
         branch_lookup = apply_lookup(branch_lookup, branch_lookup2)
         inverted_lookup = invert_lookup(node_lookup)
 
@@ -429,19 +353,28 @@ def merge_nodes_clusters(
     """
     Merge nodes according to a set of clusters. Return the resulting branch_by_node matrix and lookup tables for branch and  node labels.
 
-    Args:
-        branches_by_nodes: A (N, M) boolean matrix where N is the number of branches and M the number of nodes.
-        nodes_clusters: A list of sets of nodes to merge.
-                        The implementation assume that each nodes is only present in one cluster.
-        erase_branches: If True, branches connecting two nodes of the same cluster will be deleted, otherwise they
-                        will be relabeled as one of the branches incoming to the cluster.
-                        If list of int, the branches with the corresponding index will be erased,
-                        while the other will be relabeled.
+    Parameters:
+    ----------
+
+    branches_by_nodes:
+        A boolean matrix of shape (N, M) where N is the number of branches and M the number of nodes.
+
+    nodes_clusters:
+        A list of sets of nodes to merge.
+
+        .. warning::
+            The implementation assume that each nodes is only present in one cluster.
+
+    erase_branches:
+
+        - If True, branches connecting two nodes of the same cluster will be deleted, otherwise they will be relabeled as one of the branches incoming to the cluster.
+        - If list of int, the branches with the corresponding index will be erased, while the other will be relabeled.
 
     Returns:
-        branches_by_node: A (N', M') boolean matrix where N' is the number of branches after merging.
-        branch_lookup: A (N,) array mapping the new branch labels.
-        node_lookup: A (M,) array mapping the new node labels.
+    --------
+        - branches_by_node: A (N', M') boolean matrix where N' is the number of branches after merging.
+        - branch_lookup: A (N,) array mapping the new branch labels.
+        - node_lookup: A (M,) array mapping the new node labels.
     """
     node_lookup = np.arange(branches_by_nodes.shape[1], dtype=np.int64)
     branches_to_remove = np.zeros(branches_by_nodes.shape[0], dtype=bool)
@@ -513,7 +446,7 @@ def node_rank(branches_by_nodes):
 
 
 def adjacency_list_connected_components(
-    pairwise_connection: List[Tuple[int, int]] | Tuple[np.ndarray, np.ndarray]
+    pairwise_connection: List[Tuple[int, int]] | Tuple[np.ndarray, np.ndarray],
 ) -> List[set]:
     """
     Generate a list of clusters from a list of pairwise connections.

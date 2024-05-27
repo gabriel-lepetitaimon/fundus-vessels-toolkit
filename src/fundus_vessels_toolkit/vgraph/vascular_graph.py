@@ -4,7 +4,9 @@ from typing import Iterable, Optional
 
 import numpy as np
 import numpy.typing as npt
-from jppype.utilities.geometric import Point, Rect
+
+from ..utils.geometric import Point, Rect
+from ..utils.graph.branch_by_nodes import branch_by_nodes_to_adjacency_list
 
 
 class VascularGraph:
@@ -54,8 +56,6 @@ class VascularGraph:
         return self._branch_by_node.T.dot(self._branch_by_node)
 
     def node_adjacency_list(self):
-        from ..seg2graph.graph_utilities import branch_by_nodes_to_adjacency_list
-
         return branch_by_nodes_to_adjacency_list(self._branch_by_node)
 
     def jppype_layer(self, edge_labels=False, node_labels=False, edge_map=True):
@@ -129,7 +129,7 @@ class VascularGraph:
         VascularGraph
             self
         """
-        from ..seg2graph.graph_utilities import fuse_node_pairs, index_to_mask
+        from ..seg_to_graph.graph_utilities import fuse_node_pairs, index_to_mask
 
         branch_by_node, branch_lookup, branch_id = fuse_node_pairs(self._branch_by_node, node_pairs)
 
@@ -156,13 +156,13 @@ class VascularGraph:
             return VascularGraph(branch_by_node, branch_labels_map, nodes_yx_coord)
 
     def nodes_distance(self, *nodes_idx, close_loop=False):
-        from ..seg2graph.graph_utilities import perimeter_from_vertices
+        from ..seg_to_graph.graph_utilities import perimeter_from_vertices
 
         nodes = self._nodes_yx_coord[list(nodes_idx)]
         return perimeter_from_vertices(nodes, close_loop=close_loop)
 
     def terminations_nodes(self) -> npt.NDArray[int]:
-        from ..seg2graph.graph_utilities import compute_is_endpoints
+        from ..seg_to_graph.graph_utilities import compute_is_endpoints
 
         return np.where(compute_is_endpoints(self._branch_by_node))[0]
 
@@ -195,7 +195,7 @@ class VascularGraph:
         npt.NDArray[np.float], shape (N, 2)
             The tangent vectors at the given nodes. The vectors are normalized to unit length.
         """
-        from ..seg2graph.graph_utilities import nodes_tangent
+        from ..seg_to_graph.graph_utilities import nodes_tangent
 
         assert all(0 <= n < self.nodes_count for n in nodes), f"Invalid node index: must be in [0, {self.nodes_count})."
 
