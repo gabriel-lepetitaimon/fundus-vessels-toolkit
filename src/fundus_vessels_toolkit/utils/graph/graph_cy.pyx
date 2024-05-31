@@ -78,7 +78,7 @@ def label_skeleton(np.ndarray[UINT8, ndim=2, cast=True] skeleton):
         for x in range(W):
             skel = skeleton[y, x]
             if skel:
-                if skel != 2:
+                if skel != 1:
                     # If current pixel is a node (junction or endpoint), ensure it's labeled
                     if branch_label[y, x] == 0:
                         i_node += 1
@@ -95,7 +95,7 @@ def label_skeleton(np.ndarray[UINT8, ndim=2, cast=True] skeleton):
                 neighbors = get_neighbors(y, x, H, W)
                 for n in neighbors:
                     n_skel = skeleton[n.y, n.x]
-                    if n_skel > 0 and n_skel != 2 :
+                    if n_skel > 1:
                         # If a node is found add it to the list of neighbors nodes.
                         neighbor_nodes.push_back(n)
                         # and ensure it's properly labeled (to remember the connection to the current branch)
@@ -112,7 +112,7 @@ def label_skeleton(np.ndarray[UINT8, ndim=2, cast=True] skeleton):
                 # ... then search for neighbor branches ...
                 for n in neighbors:
                     n_skel = skeleton[n.y, n.x]
-                    if n_skel == 2:
+                    if n_skel == 1:
                         # If a branch is found...
                         n_branch_label = branch_label[n.y, n.x]
                         if n_branch_label > 0:

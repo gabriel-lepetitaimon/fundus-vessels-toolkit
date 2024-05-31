@@ -17,8 +17,8 @@ from ..utils.graph.branch_by_nodes import (
     node_rank,
     reduce_clusters,
 )
-from ..utils.graph.graph_cy import label_skeleton
 from ..utils.lookup_array import apply_lookup, apply_lookup_on_coordinates
+from ..vgraph import Graph
 
 
 class NodeMergeDistanceDict(TypedDict):
@@ -43,15 +43,14 @@ NodeMergeDistanceParam: TypeAlias = bool | float | NodeMergeDistanceDict
 SimplifyTopology: TypeAlias = Literal["node", "branch", "both"] | None
 
 
-def seg_to_branches_list(
-    vessel_map: np.ndarray,
-    return_label=False,
+def simplify_graph(
+    vessel_graph: Graph,
     max_spurs_distance: float = 0,
     nodes_merge_distance: NodeMergeDistanceParam = True,
     merge_small_cycles: float = 0,
     simplify_topology: SimplifyTopology = "node",
     node_simplification_criteria: Optional[NodeSimplificationCallBack] = None,
-):
+) -> Graph:
     """
     Extract the naive vasculature graph from a vessel map.
     If return label is True, the label map of branches and nodes are also computed and returned.
@@ -64,15 +63,27 @@ def seg_to_branches_list(
 
     Parameters
     ----------
-        vessel_map: The vessel map. Shape: (H, W) where H and W are the map height and width.
-        return_label: If True, return the label map of branches and nodes.
-        max_spurs_distance: If larger than 0, spurs (terminal branches) with a length smaller than this value are removed (disabled by default).
-        nodes_merge_distance: If larger than 0, nodes separated by less than this distance are merged (5√2/2 by default).
-        merge_small_cycles: If larger than 0, cycles whose nodes are closer than this value from each other are merged (disabled by default).
-                            Note: to limit computation time, only cycles with less than 5 nodes are considered.
-        simplify_topology: If 'node', the graph is simplified by fusing nodes with degree 2 (connected to exactly 2 branches).
-            If 'branch', the graph is simplified by merging equivalent branches (branches connecting the same junctions).
-            If 'both', both simplifications are applied.
+        vessel_graph:
+            The graph of the vasculature extracted from the vessel map.
+
+        return_label:
+            If True, return the label map of branches and nodes.
+
+        max_spurs_distance:
+            If larger than 0, spurs (terminal branches) with a length smaller than this value are removed (disabled by default).
+        nodes_merge_distance:
+            If larger than 0, nodes separated by less than this distance are merged (5√2/2 by default).
+
+        merge_small_cycles:
+            If larger than 0, cycles whose nodes are closer than this value from each other are merged (disabled by default).
+
+            .. note::
+                to limit computation time, only cycles with less than 5 nodes are considered.
+
+        simplify_topology:
+            - If ``'node'``, the graph is simplified by fusing nodes with degree 2 (connected to exactly 2 branches).
+            If ``'branch'``, the graph is simplified by merging equivalent branches (branches connecting the same junctions).
+            If ``'both'``, both simplifications are applied.
 
     Returns
     -------
@@ -84,25 +95,12 @@ def seg_to_branches_list(
             (where each branch of the skeleton is labeled by a unique integer corresponding to its index in the adjacency matrix)
         and the coordinates of the nodes as a tuple of (y, x) where y and x are vectors of length nNode.
 
-    Examples
-    --------
-        >>> from skimage.io import imread
-        >>> from fundus_vessels_toolkit.seg2graph import seg_to_branches_list, branches_by_nodes_to_edge_list
-        >>> vessel_img = imread('vessel_map.png')
-        >>> vessel_map = vessel_img.mean(axis=-1) > 125
-        >>> branches_by_nodes, branch_label, (node_y, node_x) = seg_to_branches_list(vessel_map, return_label=True)
-        >>> edges_list = branches_by_nodes_to_edge_list(branches_by_nodes)
+    """  # noqa: E501
+    branches_by_nodes = vessel_graph.branch_by_node
+    labeled_branches = vessel_graph.branch_labels_map
+    node_yx = vessel_graph.nodes_yx_coord
+    node_y, node_x = node_yx.T
 
-    """
-    if vessel_map.dtype != np.int8:
-        from .skeletonization import skeletonize
-
-        skel = skeletonize(vessel_map, fix_hollow=True, max_spurs_length=1, return_distance=False)
-    else:
-        skel = vessel_map
-
-    # branches_by_nodes, labeled_branches, (node_y, node_x), nb_junctions = extract_branches_by_nodes_matrix(skel)
-    branches_by_nodes, labeled_branches, (node_y, node_x) = parse_skeleton(skel)
     is_endpoint = compute_is_endpoints(branches_by_nodes)
 
     branch_lookup = None
@@ -209,7 +207,10 @@ def seg_to_branches_list(
         max_nodes_distance = merge_small_cycles if simplify_topology not in ("branch", "both") else None
         # - Merge equivalent branches
         branches_by_nodes, branch_lookup_2 = merge_equivalent_branches(
-            branches_by_nodes, max_nodes_distance=max_nodes_distance, nodes_coordinates=(node_y, node_x)
+            branches_by_nodes,
+            max_nodes_distance=max_nodes_distance,
+            nodes_coordinates=(node_y, node_x),
+            remove_labels=True,
         )
         # - Apply the lookup tables on branches
         branch_lookup = apply_lookup(branch_lookup, branch_lookup_2, node_labels[2])
@@ -220,7 +221,9 @@ def seg_to_branches_list(
         nodes_to_fuse = node_rank(branches_by_nodes) == 2
 
         if node_simplification_criteria is not None:
-            nodes_to_fuse = node_simplification_criteria(nodes_to_fuse, node_y, node_x, skel, branches_by_nodes)
+            nodes_to_fuse = node_simplification_criteria(
+                nodes_to_fuse, node_y, node_x, labeled_branches > 0, branches_by_nodes
+            )
 
         if np.any(nodes_to_fuse):
             # - Fuse nodes
@@ -240,123 +243,9 @@ def seg_to_branches_list(
             branch_lookup = apply_lookup(branch_lookup, branch_lookup2, node_labels[2])
             node_y, node_x = node_y[nodes_mask], node_x[nodes_mask]
 
-    if return_label:
-        if branch_lookup is not None:
-            # Update branch labels
-            labeled_branches = branch_lookup[labeled_branches]
-        labeled_branches[node_labels[0].astype(np.int64), node_labels[1].astype(np.int64)] = node_labels[2]
-        return branches_by_nodes, labeled_branches, (node_y, node_x)
-    else:
-        return branches_by_nodes
-
-
-def parse_skeleton(skel: np.ndarray):
-    """
-    Parse a skeleton image into a graph representation.
-    """
-    labeled_branches, branch_adj_list, node_yx = label_skeleton(skel)
-    labeled_branches = labeled_branches.clip(0).astype(np.uint32)
-
-    invalid_branches = np.any(branch_adj_list == -1, axis=1)
-    if np.any(invalid_branches):
-        warnings.warn(
-            f"{np.sum(invalid_branches)} branches are invalid (connecting less than 2 nodes).\n"
-            f"Those branches will be removed from the graph. But this will probably cause invalid topology.\n"
-            f"You should report this issue to the developer.",
-            stacklevel=0,
-        )
-        branch_lookup = np.concatenate(([0], np.cumsum(~invalid_branches)))
-        branch_lookup[np.where(invalid_branches)[0] + 1] = 0
+    if branch_lookup is not None:
+        # Update branch labels
         labeled_branches = branch_lookup[labeled_branches]
-        branch_adj_list = branch_adj_list[~invalid_branches, :]
+    labeled_branches[node_labels[0].astype(np.int64), node_labels[1].astype(np.int64)] = node_labels[2]
 
-    n_branch = branch_adj_list.shape[0]
-    n_node = node_yx.shape[0]
-    branch_by_node = np.zeros((n_branch, n_node), dtype=bool)
-    branch_by_node[np.arange(n_branch)[:, None], branch_adj_list] = True
-
-    return branch_by_node, labeled_branches, tuple(node_yx.T)
-
-
-# TODO: remove this function when fast_extract_branches_by_nodes_matrix is stable
-# def extract_branches_by_nodes_matrix(skel: np.ndarray):
-#
-#     bin_skel = skel > 0
-#     junctions_map = skel >= 3
-#     end_points_map = skel == 1
-#     nodes_map = junctions_map | end_points_map
-#     sqr3 = np.ones((3, 3), dtype=bool)
-
-#     # Label branches
-#     skel_no_nodes = bin_skel & ~scimage.binary_dilation(nodes_map, sqr3)
-#     labeled_branches, nb_branches = label(skel_no_nodes, return_num=True)
-#     labeled_branches = fast_expand_branch_labels(labeled_branches, bin_skel,
-#                                                  junctions_map, end_points_map)
-#     # labeled_branches = expand_labels(labeled_branches, 2) * (bin_skel & ~nodes_map)
-
-#     # Label nodes
-#     jy, jx = np.where(junctions_map)
-#     ey, ex = np.where(end_points_map)
-#     node_y = np.concatenate((jy, ey))
-#     node_x = np.concatenate((jx, ex))
-#     nb_junctions = len(jy)
-
-#     labels_nodes = np.zeros_like(labeled_branches)
-#     labels_nodes[node_y, node_x] = np.arange(1, len(node_y) + 1)
-
-#     # Identify branches connected to each junction
-#     ring_pattern = np.asarray([[1, 1, 1],
-#                                [1, 0, 1],
-#                                [1, 1, 1]], dtype=bool)
-#     nodes_ring = extract_unravelled_pattern(labeled_branches - labels_nodes,
-#                                             (node_y, node_x), ring_pattern, return_coordinates=False)
-#     branch_neighbors = np.maximum(nodes_ring, 0)
-#     nodes_neighbors = np.maximum(-nodes_ring, 0)
-
-#     # Build the matrix of connections from branches to nodes
-#     nb_nodes = len(node_y)
-#     branches_by_nodes = np.zeros((nb_branches + 1, nb_nodes), dtype=bool)
-#     branches_by_nodes[branch_neighbors.flatten(), np.repeat(np.arange(nb_nodes), ring_pattern.sum())] = 1
-#     branches_by_nodes = branches_by_nodes[1:, :]
-
-#     # Merge adjacent nodes to prevent invalid branches (branches connecting more than 2 nodes)
-#     pair_adjacent_nodes = np.where(nodes_neighbors)
-#     pair_adjacent_nodes = np.stack((pair_adjacent_nodes[0],
-#                                     nodes_neighbors[pair_adjacent_nodes[0], pair_adjacent_nodes[1]] - 1), axis=1)
-#     pair_adjacent_nodes.sort(axis=1)
-#     pair_adjacent_nodes = np.unique(pair_adjacent_nodes, axis=0)
-
-#     if len(pair_adjacent_nodes):
-#         nb_nodes = len(node_y)
-#         node_lookup = np.arange(nb_nodes)
-#         node_mask = np.ones(nb_nodes, dtype=bool)
-#         for cluster in solve_clusters(pair_adjacent_nodes):
-#             if len(cluster) > 1:
-#                 # Convert the cluster index tso the new nodes index (to account for the previously merged nodes).
-#                 cluster = np.asarray(list(cluster), dtype=np.int64)
-
-#                 # Redirect branches to the first node of the cluster
-#                 branches_by_nodes[:, cluster[0]] = np.any(branches_by_nodes[:, cluster], axis=1)
-
-#                 # Mark the nodes to be merged into the first node of the cluster
-#                 node_mask[cluster[1:]] = False
-#                 node_lookup[cluster[1:]] = cluster[0]
-
-#         # Compute the node index shift due to nodes deletion
-#         node_shift = np.cumsum(node_mask) - 1
-#         node_lookup = node_shift[node_lookup]
-
-#         # Remove the merged nodes
-#         branches_by_nodes = branches_by_nodes[:, node_mask]
-#         node_y, node_x = apply_lookup_on_coordinates((node_y, node_x), node_lookup)
-
-#     invalid_branches = np.sum(branches_by_nodes, axis=1) != 2
-#     if np.any(invalid_branches):
-#         warnings.warn(f'{np.sum(invalid_branches)} branches are invalid (connecting more or less than 2 nodes).\n'
-#                       f'Those branches will be removed the graph. But this will probably cause invalid topology.\n'
-#                       f'You should report this issue to the developer.')
-#         branch_lookup = np.concatenate(([0], np.cumsum(~invalid_branches)))
-#         labeled_branches = branch_lookup[labeled_branches]
-#         branches_by_nodes = branches_by_nodes[~invalid_branches, :]
-
-#     return branches_by_nodes, labeled_branches, (node_y, node_x), nb_junctions
+    return Graph(branches_by_nodes, labeled_branches, np.stack((node_y, node_x), axis=-1))

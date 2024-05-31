@@ -1,1 +1,1 @@
-from .vascular_graph import VascularGraph
+from .graph import Graph

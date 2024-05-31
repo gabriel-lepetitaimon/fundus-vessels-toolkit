@@ -9,7 +9,7 @@ from ..utils.geometric import Point, Rect
 from ..utils.graph.branch_by_nodes import branch_by_nodes_to_adjacency_list
 
 
-class VascularGraph:
+class Graph:
     def __init__(
         self,
         branch_by_node: np.ndarray,
@@ -43,7 +43,7 @@ class VascularGraph:
         self._branch_labels_map = branch_labels_map
 
     def copy(self):
-        return VascularGraph(self._branch_by_node.copy(), self._branch_labels_map.copy(), self._nodes_yx_coord.copy())
+        return Graph(self._branch_by_node.copy(), self._branch_labels_map.copy(), self._nodes_yx_coord.copy())
 
     @property
     def skeleton(self):
@@ -112,7 +112,7 @@ class VascularGraph:
         self._nodes_yx_coord = self._nodes_yx_coord[node_indexes]
         return self
 
-    def bridge_nodes(self, node_pairs: npt.NDArray, draw_link=True, inplace=False) -> VascularGraph:
+    def bridge_nodes(self, node_pairs: npt.NDArray, draw_link=True, inplace=False) -> Graph:
         """Fuse pairs of termination nodes by linking them together.
 
         The nodes are removed from the graph and their corresponding branches are merged.
@@ -153,7 +153,7 @@ class VascularGraph:
             self._nodes_yx_coord = nodes_yx_coord
             return self
         else:
-            return VascularGraph(branch_by_node, branch_labels_map, nodes_yx_coord)
+            return Graph(branch_by_node, branch_labels_map, nodes_yx_coord)
 
     def nodes_distance(self, *nodes_idx, close_loop=False):
         from ..seg_to_graph.graph_utilities import perimeter_from_vertices

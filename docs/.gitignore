@@ -1,0 +1,6 @@
+# sphinx build folder
+build
+
+# Translations
+*.pot
+*.mo

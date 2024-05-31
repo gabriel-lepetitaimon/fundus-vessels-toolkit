@@ -15,7 +15,7 @@ def simple_graph_matching(
     return_distance: bool = False,
 ):
     """
-    Match nodes from two graphs based on the euclidian distance between nodes.
+    Match nodes from two graphs based on the euclidean distance between nodes.
 
     Each node from the first graph is matched to the closest node from the second graph, if their distance is below
       max_matching_distance. When multiple nodes from both graph are near each other, minimize the sum of the distance
@@ -52,9 +52,9 @@ def simple_graph_matching(
     n1 = len(node1_yx)
     n2 = len(node2_yx)
 
-    # Compute the euclidian distance between each node
-    cross_euclidian_distance = np.linalg.norm(node1_yx[:, None] - node2_yx[None, :], axis=2)
-    max_distance = cross_euclidian_distance.max()
+    # Compute the euclidean distance between each node
+    cross_euclidean_distance = np.linalg.norm(node1_yx[:, None] - node2_yx[None, :], axis=2)
+    max_distance = cross_euclidean_distance.max()
 
     if gamma > 0:
 
@@ -66,10 +66,10 @@ def simple_graph_matching(
         def dist2weight(dist):
             return max_distance - dist
 
-    # Compute the weight as the distance inverse (the hungarian method maximise the sum of the weight)
-    weight = dist2weight(cross_euclidian_distance)
+    # Compute the weight as the distance inverse (the Hungarian method maximise the sum of the weight)
+    weight = dist2weight(cross_euclidean_distance)
 
-    # Set the cost of unmatch nodes to half the inverse of the maximum distance,
+    # Set the cost of not matched nodes to half the inverse of the maximum distance,
     #  so that nodes separated by more than max_distance are better left unmatched.
     if density_sigma is None:
         min_weight = dist2weight(max_matching_distance) / 2 if max_matching_distance is not None else 0
@@ -79,16 +79,16 @@ def simple_graph_matching(
         if min_distance is None:
             min_distance = np.clip(max_matching_distance / 20, 1)
 
-        # Compute node density as the sum of the gaussian kernel centered on each node
+        # Compute node density as the sum of the Gaussian kernel centered on each node
         def influence(x):
             return np.exp(-(x**2) / (2 * density_sigma**2))
 
-        self_euclidian_distance1 = np.linalg.norm(node1_yx[:, None] - node1_yx[None, :], axis=2)
-        self_euclidian_distance2 = np.linalg.norm(node2_yx[:, None] - node2_yx[None, :], axis=2)
-        self_density1 = np.clip(influence(self_euclidian_distance1).sum(axis=1) - 1, 0, 1)
-        self_density2 = np.clip(influence(self_euclidian_distance2).sum(axis=1) - 1, 0, 1)
+        self_euclidean_distance1 = np.linalg.norm(node1_yx[:, None] - node1_yx[None, :], axis=2)
+        self_euclidean_distance2 = np.linalg.norm(node2_yx[:, None] - node2_yx[None, :], axis=2)
+        self_density1 = np.clip(influence(self_euclidean_distance1).sum(axis=1) - 1, 0, 1)
+        self_density2 = np.clip(influence(self_euclidean_distance2).sum(axis=1) - 1, 0, 1)
 
-        cross_density = influence(cross_euclidian_distance)
+        cross_density = influence(cross_euclidean_distance)
         cross_density1 = np.clip(cross_density.sum(axis=1), 0, 1)
         cross_density2 = np.clip(cross_density.sum(axis=0), 0, 1)
 
@@ -96,8 +96,8 @@ def simple_graph_matching(
         density2 = (self_density2 + cross_density2) / 2
 
         # Compute a maximum matching distance per node based on the density of its closest neighbor in the other graph
-        closest_node1 = cross_euclidian_distance.argmin(axis=1)
-        closest_node2 = cross_euclidian_distance.argmin(axis=0)
+        closest_node1 = cross_euclidean_distance.argmin(axis=1)
+        closest_node2 = cross_euclidean_distance.argmin(axis=0)
         factor1 = 1 - density2[closest_node1]
         factor2 = 1 - density1[closest_node2]
 
@@ -113,7 +113,7 @@ def simple_graph_matching(
         min_weight1 = dist2weight(max_matching_distance1) / 2
         min_weight2 = dist2weight(max_matching_distance2) / 2
 
-    # Compute the hungarian matching
+    # Compute the Hungarian matching
     matched_nodes = hungarian(
         weight,
         n1,
@@ -124,7 +124,7 @@ def simple_graph_matching(
     matched_nodes = np.where(matched_nodes)
 
     if return_distance:
-        return matched_nodes, cross_euclidian_distance[matched_nodes]
+        return matched_nodes, cross_euclidean_distance[matched_nodes]
     return matched_nodes
 
 
@@ -155,7 +155,7 @@ def shortest_unmatched_path(
         - A distance matrix of shape ``(matched_nodes, N2)`` with the distance between matched nodes and each node of graph 2. (If no path exists between the two nodes, the matrix contains -1.)
         - A backtrack matrix of shape ``(matched_nodes, N1, 2)`` with the index of the edge and the index of the next node on the path from the node N1 to the primary node N. If no path exists between the two nodes, the matrix contains (-1, -1).
         - A backtrack matrix of shape ``(matched_nodes, N2, 2)`` with the index of the edge and the index of the next node on the path from the node N2 to the primary node N. If no path exists between the two nodes, the matrix contains (-1, -1).
-    """
+    """  # noqa: E501
     from .edit_distance_cy import shortest_secondary_path as cython_shortest_path
 
     primary_nodes = np.arange(matched_nodes)
@@ -189,7 +189,7 @@ def backtrack_edges(from_node: int, to_primary_node: int, backtrack: np.ndarray)
     -------
     list[int]
         The list of edges between the two nodes. If no path exists between the two nodes, returns an empty list.
-    """
+    """  # noqa: E501
     edges = []
     backtrack = backtrack[to_primary_node]
     node = from_node
@@ -205,15 +205,15 @@ def backtrack_edges(from_node: int, to_primary_node: int, backtrack: np.ndarray)
     return edges
 
 
-def label_edge_diff(vgraph_pred, vgraph_true, nmatch):
+def label_edge_diff(graph_pred, graph_true, n_match):
     dist_pred, dist_true, backtrack_pred, backtrack_true = shortest_unmatched_path(
-        vgraph_pred.node_adjacency_list(), vgraph_true.node_adjacency_list(), nmatch
+        graph_pred.node_adjacency_list(), graph_true.node_adjacency_list(), n_match
     )
     edge_id_pred = backtrack_pred[..., 0]
     edge_id_true = backtrack_true[..., 0]
 
-    prim_adj_true = dist_true[:, :nmatch]
-    prim_adj_pred = dist_pred[:, :nmatch]
+    prim_adj_true = dist_true[:, :n_match]
+    prim_adj_pred = dist_pred[:, :n_match]
 
     valid_edges = np.where((prim_adj_true == 1) & (prim_adj_pred == 1))
     fused_edges = np.where((prim_adj_true > 1) & (prim_adj_pred == 1))
@@ -221,7 +221,7 @@ def label_edge_diff(vgraph_pred, vgraph_true, nmatch):
 
     # Assign labels to prediction graph edges
     #  - False positive (default)
-    pred_edge_labels = np.zeros((vgraph_pred.branches_count), dtype=np.int8)
+    pred_edge_labels = np.zeros((graph_pred.branches_count), dtype=np.int8)
     #  - True positive
     pred_edge_labels[edge_id_pred[valid_edges]] = 1
     #  - Split edges (single branch in true, multiple branch in pred)
@@ -234,7 +234,7 @@ def label_edge_diff(vgraph_pred, vgraph_true, nmatch):
 
     # Assign labels to true graph edges
     #  - False negative (default)
-    true_edge_labels = np.zeros((vgraph_true.branches_count), dtype=np.int8)
+    true_edge_labels = np.zeros((graph_true.branches_count), dtype=np.int8)
     #  - True positive
     true_edge_labels[edge_id_true[valid_edges]] = 1
     #  - Fused edges (multiple branch in true, single branch in pred)
@@ -256,7 +256,7 @@ def naive_edit_distance(
     min_distance: float | None = None,
     return_labels: bool = False,
 ) -> tuple[int, int] | tuple[int, int, tuple[int, np.ndarray, np.ndarray]]:
-    """Compute the naive edit distance between two graphs. The two graphs must be geometrically similar as the node will first be paired based on their euclidian distance.
+    """Compute the naive edit distance between two graphs. The two graphs must be geometrically similar as the node will first be paired based on their euclidean distance.
 
     Parameters
     ----------
@@ -271,7 +271,7 @@ def naive_edit_distance(
         By default: None.
 
     density_matching_sigma : float | None, optional
-        The standard deviation of the gaussian kernel used to compute the node density used to reduce the maximum matching distance for cluttered nodes.
+        The standard deviation of the Gaussian kernel used to compute the node density used to reduce the maximum matching distance for cluttered nodes.
 
     min_distance : float | None, optional
         Set a lower bound to the distance between two nodes to prevent immediate match of superposed nodes.
@@ -285,7 +285,7 @@ def naive_edit_distance(
     tuple[int, int] | tuple[int, int, tuple[int, np.ndarray, np.ndarray]]
         The number of not-matched edges in each graph. If return_labels is True, also returns the a tuple with the number of matched edges and two 1D binary arrays which indicate for each edge of graph 1 and 2 if it is matched (0) or not-matched (1).
 
-    """
+    """  # noqa: E501
     # Match nodes
     node_match_id1, node_match_id2 = simple_graph_matching(
         graph1.nodes_yx_coord,

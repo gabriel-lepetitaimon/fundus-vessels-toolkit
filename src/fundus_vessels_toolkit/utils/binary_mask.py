@@ -60,18 +60,18 @@ def fast_hit_or_miss(
         map: The map to apply the filter to. Shape: (H, W) where H and W are the map height and width.
         mask : The mask to apply to the map. Shape: (H, W) where H and W are the map height and width.
                When applying this method several times with different patterns but on the same mask, it is recommended
-                to precompute the patches and pass it to this parameter instead of the map. In this case, mask must be
+                to pre-compute the patches and pass it to this parameter instead of the map. In this case, mask must be
                 a tuple (patches, (y, x)) where patches is the matrix of extracted patches with shape (p, h, w) and
                 (y, x) are the coordinates of the patches center in the original map and are of shape (p,), where p is
                 the number of patches, and h and w are the pattern height and width.
-               One can use extract_patches(map, mask, pattern_shape, return_coordinates=True) to precompute the patches.
+               One can use extract_patches(map, mask, pattern_shape, return_coordinates=True) to pre-compute the patches.
         positive_patterns : The positive pattern to apply. Shape: (p, h, w) where p is the number of patterns, h and w are the pattern height and width.
         negative_patterns : The negative pattern to apply. Shape: (p, h, w) where p is the number of patterns, h and w are the pattern height and width.
         aggregate_patterns : The aggregation method to use. Can be 'any', 'sum' or None.
 
     Returns:
         The result of the hit-or-miss. Shape: (H, W)
-    """
+    """  # noqa: E501
     assert positive_patterns.dtype == bool, "positive_patterns must be of type bool"
     if positive_patterns.ndim == 2:
         positive_patterns = positive_patterns[np.newaxis, ...]
@@ -222,7 +222,7 @@ def extract_unravelled_pattern(
     where = np.asarray(where)
 
     assert map.ndim == 2, f"map must be 2D, not {map.ndim}D"
-    assert where.ndim == 2, f"where arreay must be 2D, not {where.ndim}D"
+    assert where.ndim == 2, f"where array must be 2D, not {where.ndim}D"
     if where.shape == map.shape:
         assert where.dtype == bool, f"where must be of type bool, not {where.dtype}"
     else:
@@ -245,11 +245,11 @@ def extract_unravelled_pattern(
     map = np.pad(map, tuple((p // 2, p - p // 2) for p in pattern.shape), mode="constant", constant_values=0)
 
     # Compute the coordinates of the pixels to extract
-    y_idxs = (pattern_y[np.newaxis, :] + y[:, np.newaxis]).flatten()
-    x_idxs = (pattern_x[np.newaxis, :] + x[:, np.newaxis]).flatten()
+    y_ids = (pattern_y[np.newaxis, :] + y[:, np.newaxis]).flatten()
+    x_ids = (pattern_x[np.newaxis, :] + x[:, np.newaxis]).flatten()
 
     # Extract and reshape to (N, pattern_size)
-    map = map[y_idxs, x_idxs].reshape((-1, pattern.sum()))
+    map = map[y_ids, x_ids].reshape((-1, pattern.sum()))
 
     if return_coordinates:
         return map, (y, x)
