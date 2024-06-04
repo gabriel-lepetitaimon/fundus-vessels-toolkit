@@ -147,7 +147,7 @@ def detect_skeleton_nodes_legacy(
     from skimage.morphology import remove_small_objects
 
     from ..utils.binary_mask import extract_patches, fast_hit_or_miss
-    from ..utils.skeleton import (
+    from ..utils.skeleton_legacy import (
         compute_junction_endpoint_masks,
         remove_1px_endpoints,
     )

@@ -157,40 +157,87 @@ inline bool is_node(int pixelRole){
  *     - The coordinates of neighbor nodes.
  *     - The coordinates of neighbor branches.
 */
-std::pair<std::vector<PointWithID>, std::vector<PointWithID>> track_next_neighbors(
+std::pair<std::vector<Point>, std::vector<PointWithID>> get_node_neighbors(
     Tensor2DAccessor<int> skeleton,  
     Point current,
-    int ignore_neighbor=-1,
-    bool ignore_branches_close_to_node=false
+    Point shape
 ){
-    std::vector<PointWithID> nodes;
+    std::vector<Point> nodes;
     std::vector<PointWithID> branches;
-    std::array<int, 8> neighbors;
-    for (const PointWithID& n : NEIGHBORHOOD){
-        neighbors[n.id] = skeleton[current.y + n.y][current.x + n.x];
-    }
+    std::array<bool, 8> is_node = {false, false, false, false, false, false, false, false};
 
-    for (const PointWithID& n : NEIGHBORHOOD){       
-        if (n.id == ignore_neighbor)
+    for(auto it=CLOSE_NEIGHBORHOOD.begin(), end=CLOSE_NEIGHBORHOOD.begin()+4; it!=end; ++it){
+        const Point n = *it + current;
+        int n_id = it->id;
+
+        if(!n.is_inside(shape))
             continue;
 
-        const int ny = current.y + n.y, nx = current.x + n.x, n_id = n.id;
-        int pixelRole = neighbors[n.id];
+        int pixelRole = skeleton[n.y][n.x];
         if (pixelRole == PixelRole::BACKGROUND)
             continue;
         else if(pixelRole == PixelRole::BRANCH_ROLE){
-            if(ignore_branches_close_to_node){
-                const int next_n_id = n_id < 7 ? n_id+1 : 0;
-                const int prev_n_id = n_id > 0 ? n_id-1 : 7;
-                if (is_node(neighbors[next_n_id]) || is_node(neighbors[prev_n_id]))
-                    continue;
-            }
-            branches.push_back({ny, nx, n.id});
+            branches.push_back({n.y, n.x, n_id});
+        } else {
+            nodes.push_back({n.y, n.x});
+            is_node[n_id] = true;
+        }
+    }
+
+    for(auto it=CLOSE_NEIGHBORHOOD.begin()+4, end=CLOSE_NEIGHBORHOOD.end(); it!=end; ++it){
+        const Point n = *it + current;
+        int n_id = it->id;
+
+        if(!n.is_inside(shape) || is_node[prev_neighbor_id(n_id)] || is_node[next_neighbor_id(n_id)])
+            continue;
+
+        int pixelRole = skeleton[n.y][n.x];
+        if (pixelRole == PixelRole::BACKGROUND)
+            continue;
+        else if(pixelRole == PixelRole::BRANCH_ROLE){
+            branches.push_back({n.y, n.x, n_id});
         } else
-            nodes.push_back({ny, nx, n.id});
+            nodes.push_back({n.y, n.x});
     }
     return {nodes, branches};
 }
+
+/**
+ * @brief Track the next neighbors of a pixel in a skeleton.
+ * 
+ * @param skeleton 2d image representing the skeleton with identified junctions and branches.
+ * @param current Coordinates of the pixel.
+ * @param ignore_neighbor Id of the neighbor to ignore.
+ * @param ignore_branches_close_to_node If true, ignore branches close to a node.
+ * @return std::pair<std::vector<PointWithID>, std::vector<PointWithID>> 
+ *     - The coordinates of neighbor nodes.
+ *     - The coordinates of neighbor branches.
+*/
+std::pair<PointWithID, int> track_branch_neighbors(
+    Tensor2DAccessor<int> skeleton,
+    PointWithID current,
+    Point shape
+){
+    PointWithID nextBranchPoint = {0, 0, -1};
+    for (const int& n_id : TRACK_NEXT_NEIGHBORS[current.id]){
+        const Point n = NEIGHBORHOOD[n_id] + current;
+        if(!n.is_inside(shape))
+            continue;
+
+        int pixelRole = skeleton[n.y][n.x];
+        if (pixelRole == PixelRole::NODE){
+            return {{n.y, n.x, n_id}, pixelRole};
+        } else if (nextBranchPoint.id == -1 && pixelRole == PixelRole::BRANCH_ROLE){
+            nextBranchPoint = {n.y, n.x, n_id};
+        }
+    }
+    if (nextBranchPoint.id == -1){
+        return {nextBranchPoint, PixelRole::BACKGROUND};
+    } else {
+        return {nextBranchPoint, PixelRole::BRANCH_ROLE};
+    }
+}
+
 
 /**
  * @brief Parse a skeleton image into a graph of branches and nodes.
@@ -203,7 +250,7 @@ std::pair<std::vector<PointWithID>, std::vector<PointWithID>> track_next_neighbo
  *     - The edge list. Each edge is composed of the id of the two nodes and the id of the branch connecting them.
 */
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, int> parse_skeleton(torch::Tensor skeleton) {
-    int H = skeleton.size(0), W = skeleton.size(1);
+    Point shape = {(int)skeleton.size(0), (int)skeleton.size(1)};
     auto skel_acc = skeleton.accessor<int, 2>();
 
     torch::Tensor labeled_skeleton = torch::zeros_like(skeleton, torch::kInt);
@@ -214,8 +261,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, int> parse_skeleton(torc
 
     // -- Search junctions and endpoints --
     #pragma omp parallel for collapse(2) reduction(merge: nodes)
-    for (int y = 1; y < H-1; y++) {
-        for (int x = 1; x < W-1; x++) {
+    for (int y = 1; y < shape.y-1; y++) {
+        for (int x = 1; x < shape.x-1; x++) {
             const int pixelRole = skel_acc[y][x];
             if(pixelRole != PixelRole::NODE)
                 continue;
@@ -252,20 +299,20 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, int> parse_skeleton(torc
         nodes_coord_acc[node.id-1][0] = node.y;
         nodes_coord_acc[node.id-1][1] = node.x;
 
-        // -- Track next nodes and branches --
-        auto[next_nodes, next_branches] = track_next_neighbors(skel_acc, {node.y, node.x});
+        // -- Find next nodes and branches --
+        auto [next_nodes, next_branches] = get_node_neighbors(skel_acc, {node.y, node.x}, shape);
         
         // Remember connection with nodes next to the current node
         #ifdef DEBUG
         std::cout << "\tNeighbor nodes: " << next_nodes.size() << std::endl;
         #endif
-        for (const PointWithID& n : next_nodes){
+        for (const Point& n : next_nodes){
             int neighbor_node_id = -label_acc[n.y][n.x];
             if (node.id < neighbor_node_id){
                 edge_list.push_back({node.id, neighbor_node_id, 0});
             }
             #ifdef DEBUG
-            std::cout << "\t\t Node "<< neighbor_node_id << "(" << n.y << ", " << n.x << ")" << std::endl;
+            std::cout << "\t\t Node "<< neighbor_node_id << n << std::endl;
             #endif
         }
 
@@ -283,62 +330,44 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, int> parse_skeleton(torc
                 const int branch_id = nBranches;
 
                 PointWithID tracker = n;
-                std::vector<PointWithID> tracked_next_nodes, tracked_next_branches;
+                int tracker_role = PixelRole::BRANCH_ROLE;
                 
                 #ifdef DEBUG
                 std::cout << branch_id << " ==" << std::endl << "\t\t\t";
                 #endif
-                while(label_acc[tracker.y][tracker.x]==0){
-                    #ifdef DEBUG
-                    std::cout << "(" << tracker.y << ", " << tracker.x << ") -> ";
-                    #endif
-                    
+                while(label_acc[tracker.y][tracker.x]==0){                    
                     // Label the branch
                     label_acc[tracker.y][tracker.x] = branch_id;
 
-                    // Track next nodes and branches
-                    std::tie(tracked_next_nodes, tracked_next_branches) = 
-                        track_next_neighbors(skel_acc, {tracker.y, tracker.x}, opposite_neighbor_id(tracker.id), true);
+                    #ifdef DEBUG
+                    std::cout << tracker.point() << " -> ";
+                    #endif
 
-                    if(tracked_next_nodes.size()==0 && tracked_next_branches.size() >= 0)
-                        tracker = tracked_next_branches[0];  
-                    else
+                    // Track next nodes and branches
+                    std::tie(tracker, tracker_role) = track_branch_neighbors(skel_acc, tracker, shape);
+
+                    if(tracker_role!=PixelRole::BRANCH_ROLE)
                         break; // If node is found stop the tracking
                 }
                 #ifdef DEBUG
                 std::cout << std::endl;
                 #endif
                 
-                if (tracked_next_nodes.size() == 1){
+                if (tracker_role==PixelRole::NODE){
                     // Save connectivity
-                    const auto& other_node = tracked_next_nodes[0];
-                    const int other_node_id = -label_acc[other_node.y][other_node.x];
+                    const int other_node_id = -label_acc[tracker.y][tracker.x];
                     if(node.id < other_node_id)
                         edge_list.push_back({node.id, other_node_id, branch_id});
                     else
                         edge_list.push_back({other_node_id, node.id, branch_id});
                     #ifdef DEBUG
-                    std::cout << "\t\t\t -> Node " << other_node_id<< " (" << other_node.y << ", " << other_node.x << ")" << std::endl;
+                    std::cout << "\t\t\t -> Node " << other_node_id<< " " << tracker.point() << std::endl;
                     #endif
                     
                 } else {
                     // Todo: Handle invalid skeleton
                     #ifdef DEBUG
-                    if(tracked_next_nodes.size() > 1){
-                        std::cout << "\t\t!! Nodes found: ";
-                        for (const Neighbor& n : tracked_next_nodes){
-                            std::cout << "(" << n.y << ", " << n.x << ") ";
-                        }
-                        std::cout << " !!" << std::endl;
-                    } else if (tracked_next_branches.size() > 1){
-                        std::cout << "\t\t!! Multiple branches candidates: ";
-                        for (const Neighbor& n : tracked_next_branches){
-                            std::cout << "(" << n.y << ", " << n.x << ") ";
-                        }
-                        std::cout << "!!" << std::endl;
-                    } else if (label_acc[tracker.y][tracker.x] > 0) {
-                        std::cout << "\t\t!! Branch (" << tracker.y << ", " << tracker.x << ") already tracked: " << label_acc[tracker.y][tracker.x] << " !!" << std::endl;
-                    }
+                    std::cout << "\t\t!! No terminaisons found !! ";
                     #endif
                 }
 
