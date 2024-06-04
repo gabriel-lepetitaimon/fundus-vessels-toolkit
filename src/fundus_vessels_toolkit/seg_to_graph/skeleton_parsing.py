@@ -6,7 +6,7 @@ import torch
 
 from ..utils.cpp_extensions.skeleton_parsing_cpp import detect_skeleton_nodes as detect_skeleton_nodes_cpp
 from ..utils.cpp_extensions.skeleton_parsing_cpp import parse_skeleton as parse_skeleton_cpp
-from ..utils.graph.branch_by_nodes import adjacency_list_to_branch_by_nodes
+from ..utils.graph.branch_by_nodes import branch_list_to_branches_by_nodes
 
 
 def parse_skeleton(skeleton_map: np.ndarray | torch.Tensor) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -20,10 +20,10 @@ def parse_skeleton(skeleton_map: np.ndarray | torch.Tensor) -> Tuple[np.ndarray,
 
     Returns
     -------
+    branch list : np.ndarray
+        Array of shape [B, 2] Adjacency list of the skeleton graph.
     branch labels : np.ndarray
         Label of each branch in the skeleton.
-    adjacency list : np.ndarray
-        Array of shape [E, 2] Adjacency list of the skeleton graph.
     node coordinates : np.ndarray
         Array of shape [N, 2]: the (y, x) positions of the nodes in the skeleton.
     """
@@ -33,11 +33,9 @@ def parse_skeleton(skeleton_map: np.ndarray | torch.Tensor) -> Tuple[np.ndarray,
         skeleton_map = detect_skeleton_nodes(skeleton_map)
 
     out = parse_skeleton_cpp(skeleton_map.cpu().int())
-    branch_labels, adj_list, nodes_coordinates = tuple(_.numpy() for _ in out[:3])
+    branch_labels, branch_list, nodes_coordinates = tuple(_.numpy() for _ in out[:3])
 
-    branch_by_node = adjacency_list_to_branch_by_nodes(adj_list, n_branches=out[3], branch_labels=branch_labels)
-
-    return branch_by_node, branch_labels, nodes_coordinates
+    return branch_list, branch_labels, nodes_coordinates
 
 
 def detect_skeleton_nodes(
@@ -95,11 +93,11 @@ def parse_skeleton_legacy(skeleton_map: np.ndarray) -> Tuple[np.ndarray, np.ndar
 
     Returns
     -------
+    branch list : np.ndarray
+        Array of shape [B, 2] Adjacency list of the skeleton graph.
+
     branch labels : np.ndarray
         Label of each branch in the skeleton.
-
-    adjacency list : np.ndarray
-        Array of shape [E, 2] Adjacency list of the skeleton graph.
 
     node coordinates : np.ndarray
         Array of shape [N, 2]: the (y, x) positions of the nodes in the skeleton.
@@ -109,10 +107,9 @@ def parse_skeleton_legacy(skeleton_map: np.ndarray) -> Tuple[np.ndarray, np.ndar
     if skeleton_map.dtype == bool:
         skeleton_map = detect_skeleton_nodes_legacy(skeleton_map)
 
-    branch_labels, adj_list, node_yx = label_skeleton(skeleton_map)
-    branch_by_node = adjacency_list_to_branch_by_nodes(adj_list, branch_labels=branch_labels)
+    branch_labels, branch_list, node_yx = label_skeleton(skeleton_map)
 
-    return branch_by_node, branch_labels, node_yx
+    return branch_list, branch_labels, node_yx
 
 
 def detect_skeleton_nodes_legacy(

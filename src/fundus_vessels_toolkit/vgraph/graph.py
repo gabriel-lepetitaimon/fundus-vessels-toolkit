@@ -6,25 +6,29 @@ import numpy as np
 import numpy.typing as npt
 
 from ..utils.geometric import Point, Rect
-from ..utils.graph.branch_by_nodes import branch_by_nodes_to_adjacency_list
+from ..utils.graph.branch_by_nodes import (
+    branch_list_to_branches_by_nodes,
+    branches_by_nodes_to_branch_list,
+)
+from ..utils.graph.measures import nodes_tangent, perimeter_from_vertices
 
 
 class Graph:
     def __init__(
         self,
-        branch_by_node: np.ndarray,
+        branch_list: np.ndarray,
         branch_labels_map: np.ndarray,
         nodes_yx_coord: np.ndarray,
     ):
         assert (
-            branch_by_node.ndim == 2
-        ), "branch_by_node must be a 2D array of shape (B, N) where B is the number of branches and N the number of nodes"
-        B, N = branch_by_node.shape
+            branch_list.ndim == 2 and branch_list.shape[1] == 2
+        ), "branch_list must be a 2D array of shape (B, 2) where B is the number of branches"
+        B = branch_list.shape[0]
         assert branch_labels_map.ndim == 2, (
             "branch_labels_map must be a 2D array of shape (H, W) where H and W are the image height and width."
             f"Got {branch_labels_map.shape}"
         )
-        assert branch_labels_map.max() == B, (
+        assert branch_labels_map.max() <= B, (
             "branch_labels_map must have a maximum value equal to the number of branches."
             f"Got {branch_labels_map.max()} instead of {B}"
         )
@@ -33,55 +37,35 @@ class Graph:
             nodes_yx_coord = np.asarray(nodes_yx_coord)
             if nodes_yx_coord.shape[0] == 2 and nodes_yx_coord.shape[1] != 2:
                 nodes_yx_coord = nodes_yx_coord.T
-        assert nodes_yx_coord.shape == (N, 2), (
-            f"nodes_yx_coord must be a 2D array of shape (N, 2) where N is the number of node: {N} ."
-            f" Got shape={nodes_yx_coord.shape}."
+
+        assert nodes_yx_coord.ndim == 2 and nodes_yx_coord.shape[1] == 2, (
+            f"nodes_yx_coord must be a 2D array of shape (N, 2)." f" Got shape={nodes_yx_coord.shape}."
+        )
+        N = nodes_yx_coord.shape[0]
+
+        assert branch_list.max() < N, (
+            "The maximum value in branch_list must be lower than the number of nodes."
+            f" Got {branch_list.max()} instead of {N}"
         )
 
-        self._branch_by_node = branch_by_node
+        self._branch_list = branch_list
         self._nodes_yx_coord = nodes_yx_coord
-        self._branch_labels_map = branch_labels_map
+        self._branch_labels_map = branch_labels_map.clip(0)
+
+    @classmethod
+    def from_branch_by_nodes(cls, branch_by_nodes: np.ndarray, branch_labels: np.ndarray, nodes_yx_coord: np.ndarray):
+        branch_list = branches_by_nodes_to_branch_list(branch_by_nodes)
+        return cls(branch_list, branch_labels, nodes_yx_coord)
 
     def copy(self):
-        return Graph(self._branch_by_node.copy(), self._branch_labels_map.copy(), self._nodes_yx_coord.copy())
+        return Graph(self._branch_list.copy(), self._branch_labels_map.copy(), self._nodes_yx_coord.copy())
 
+    ####################################################################################################################
+    #  === PROPERTIES ===
+    ####################################################################################################################
     @property
-    def skeleton(self):
-        return self._branch_labels_map > 0
-
-    def branch_adjacency_matrix(self):
-        return self._branch_by_node.dot(self._branch_by_node.T)
-
-    def node_adjacency_matrix(self):
-        return self._branch_by_node.T.dot(self._branch_by_node)
-
-    def node_adjacency_list(self):
-        return branch_by_nodes_to_adjacency_list(self._branch_by_node)
-
-    def jppype_layer(self, edge_labels=False, node_labels=False, edge_map=True):
-        from jppype.layers import LayerGraph
-
-        layer = LayerGraph(self.node_adjacency_list(), self._nodes_yx_coord, self._branch_labels_map)
-        layer.set_options(
-            {
-                "edge_labels_visible": edge_labels,
-                "node_labels_visible": node_labels,
-                "edge_map_visible": edge_map,
-            }
-        )
-        return layer
-
-    def jppype_quiver_termination_tangents(self, std=7, offset=7, arrow_length=20):
-        from jppype.layers import LayerQuiver
-
-        terminations = self.terminations_nodes()
-        yx = self.nodes_yx_coord[terminations]
-        uv = self.nodes_tangent(terminations, gaussian_std=std, gaussian_offset=offset) * arrow_length
-        return LayerQuiver(yx, uv, Rect.from_size(self._branch_labels_map.shape))
-
-    @property
-    def branch_by_node(self):
-        return self._branch_by_node
+    def branch_list(self):
+        return self._branch_list
 
     @property
     def nodes_yx_coord(self):
@@ -93,78 +77,43 @@ class Graph:
 
     @property
     def nodes_count(self):
-        return self._branch_by_node.shape[1]
+        return self._nodes_yx_coord.shape[0]
 
     @property
     def branches_count(self):
-        return self._branch_by_node.shape[0]
+        return self._branch_list.shape[0]
 
-    def shuffle_nodes(self, node_indexes):
-        node_indexes = np.asarray(node_indexes, dtype=int)
-        assert (
-            node_indexes.ndim == 1 and node_indexes.shape[0] <= self.nodes_count
-        ), f"node_indexes must be a 1D array of maximum size {self.nodes_count}"
+    @property
+    def skeleton(self):
+        return self._branch_labels_map > 0
 
-        if node_indexes.shape[0] < self._branch_by_node.shape[1]:
-            node_indexes = np.concatenate((node_indexes, np.setdiff1d(np.arange(self.nodes_count), node_indexes)))
+    #  --- Secondary Properties ---
+    def branch_adjacency_matrix(self):
+        return self._branch_list.dot(self._branch_list.T)
 
-        self._branch_by_node = self._branch_by_node[:, node_indexes]
-        self._nodes_yx_coord = self._nodes_yx_coord[node_indexes]
-        return self
+    def node_adjacency_matrix(self):
+        return self._branch_list.T.dot(self._branch_list)
 
-    def bridge_nodes(self, node_pairs: npt.NDArray, draw_link=True, inplace=False) -> Graph:
-        """Fuse pairs of termination nodes by linking them together.
+    def branches_by_nodes(self):
+        return branch_list_to_branches_by_nodes(
+            self._branch_list, n_branches=self.branches_count, n_nodes=self.nodes_count
+        )
 
-        The nodes are removed from the graph and their corresponding branches are merged.
+    def terminations_nodes(self) -> npt.NDArray[np.int_]:
+        nodes_id, nodes_count = np.unique(self._branch_list, return_counts=True)
+        return nodes_id[nodes_count == 1]
 
-        Parameters
-        ----------
-        node_pairs : npt.NDArray
-            Array of shape (P, 2) containing P pairs of indexes of the nodes to link.
-        draw_link : bool, optional
-            If True, the link between the nodes is drawn as a straight line, by default True
-
-        Returns
-        -------
-        VascularGraph
-            self
-        """
-        from ..seg_to_graph.graph_utilities import fuse_node_pairs, index_to_mask
-
-        branch_by_node, branch_lookup, branch_id = fuse_node_pairs(self._branch_by_node, node_pairs)
-
-        # Apply branch merging to the branch labels map
-        branch_labels_map = branch_lookup[self._branch_labels_map]
-        if draw_link:
-            from skimage.draw import line
-
-            for (n1, n2), b in zip(node_pairs, branch_id, strict=True):
-                n1 = Point(*self._nodes_yx_coord[n1]).to_int()
-                n2 = Point(*self._nodes_yx_coord[n2]).to_int()
-                rr, cc = line(*n1, *n2)
-                branch_labels_map[rr, cc] = b + 1
-
-        # Remove the fused nodes from the nodes coordinates
-        nodes_yx_coord = self._nodes_yx_coord[index_to_mask(node_pairs.flatten(), self.nodes_count, invert=True)]
-
-        if inplace:
-            self._branch_by_node = branch_by_node
-            self._branch_labels_map = branch_labels_map
-            self._nodes_yx_coord = nodes_yx_coord
-            return self
-        else:
-            return Graph(branch_by_node, branch_labels_map, nodes_yx_coord)
-
+    ####################################################################################################################
+    #  === COMPUTABLE GRAPH ATTRIBUTES ===
+    ####################################################################################################################
     def nodes_distance(self, *nodes_idx, close_loop=False):
-        from ..seg_to_graph.graph_utilities import perimeter_from_vertices
-
-        nodes = self._nodes_yx_coord[list(nodes_idx)]
+        nodes = self._nodes_yx_coord[np.asarray(nodes_idx)]
         return perimeter_from_vertices(nodes, close_loop=close_loop)
 
-    def terminations_nodes(self) -> npt.NDArray[int]:
-        from ..seg_to_graph.graph_utilities import compute_is_endpoints
-
-        return np.where(compute_is_endpoints(self._branch_by_node))[0]
+    def incident_branches(self, node_idx):
+        if isinstance(node_idx, int):
+            node_idx = [node_idx]
+        return np.where(np.any(np.isin(self._branch_list, node_idx), axis=1))[0]
 
     def nodes_tangent(
         self,
@@ -195,8 +144,6 @@ class Graph:
         npt.NDArray[np.float], shape (N, 2)
             The tangent vectors at the given nodes. The vectors are normalized to unit length.
         """
-        from ..seg_to_graph.graph_utilities import nodes_tangent
-
         assert all(0 <= n < self.nodes_count for n in nodes), f"Invalid node index: must be in [0, {self.nodes_count})."
 
         # Automatically infer branches_id if not provided
@@ -207,7 +154,7 @@ class Graph:
         if any(b is None for b in branches_id):
             for i, (n, b) in enumerate(zip(nodes, branches_id, strict=True)):
                 if b is None:
-                    incident_branches = np.argwhere(self._branch_by_node[:, n]).flatten()
+                    incident_branches = self.incident_branches(n)
                     assert len(incident_branches) == 1, (
                         f"Impossible to infer the branch id for node {n}. This node has {len(incident_branches)} "
                         "incident branches instead of 1. Please provide the branch id manually."
@@ -228,3 +175,87 @@ class Graph:
             gaussian_offset=gaussian_offset,
             gaussian_std=gaussian_std,
         )
+
+    ####################################################################################################################
+    #  === GRAPH MANIPULATION ===
+    ####################################################################################################################
+    def shuffle_nodes(self, node_indexes):
+        node_indexes = np.asarray(node_indexes, dtype=int)
+        assert (
+            node_indexes.ndim == 1 and node_indexes.shape[0] <= self.nodes_count
+        ), f"node_indexes must be a 1D array of maximum size {self.nodes_count}"
+
+        if node_indexes.shape[0] < self.nodes_count:
+            node_indexes = np.concatenate((node_indexes, np.setdiff1d(np.arange(self.nodes_count), node_indexes)))
+
+        self._branch_list = node_indexes[self._branch_list]
+        self._nodes_yx_coord = self._nodes_yx_coord[node_indexes]
+        return self
+
+    def bridge_nodes(self, node_pairs: npt.NDArray, draw_link=True, inplace=False) -> Graph:
+        """Fuse pairs of termination nodes by linking them together.
+
+        The nodes are removed from the graph and their corresponding branches are merged.
+
+        Parameters
+        ----------
+        node_pairs : npt.NDArray
+            Array of shape (P, 2) containing P pairs of indexes of the nodes to link.
+        draw_link : bool, optional
+            If True, the link between the nodes is drawn as a straight line, by default True
+
+        Returns
+        -------
+        VascularGraph
+            self
+        """
+        from ..utils.graph.branch_by_nodes import fuse_node_pairs, index_to_mask
+
+        branches_by_nodes, branch_lookup, branch_id = fuse_node_pairs(self.branches_by_nodes(), node_pairs)
+
+        # Apply branch merging to the branch labels map
+        branch_labels_map = branch_lookup[self._branch_labels_map]
+        if draw_link:
+            from skimage.draw import line
+
+            for (n1, n2), b in zip(node_pairs, branch_id, strict=True):
+                n1 = Point(*self._nodes_yx_coord[n1]).to_int()
+                n2 = Point(*self._nodes_yx_coord[n2]).to_int()
+                rr, cc = line(*n1, *n2)
+                branch_labels_map[rr, cc] = b + 1
+
+        # Remove the fused nodes from the nodes coordinates
+        nodes_yx_coord = self._nodes_yx_coord[index_to_mask(node_pairs.flatten(), self.nodes_count, invert=True)]
+        branch_list = branches_by_nodes_to_branch_list(branches_by_nodes)
+
+        if inplace:
+            self._branch_list = branch_list
+            self._branch_labels_map = branch_labels_map
+            self._nodes_yx_coord = nodes_yx_coord
+            return self
+        else:
+            return Graph(branch_list, branch_labels_map, nodes_yx_coord)
+
+    ####################################################################################################################
+    #  === VISUALISATION UTILITIES ===
+    ####################################################################################################################
+    def jppype_layer(self, edge_labels=False, node_labels=False, edge_map=True):
+        from jppype.layers import LayerGraph
+
+        layer = LayerGraph(self.branch_list, self._nodes_yx_coord, self._branch_labels_map)
+        layer.set_options(
+            {
+                "edge_labels_visible": edge_labels,
+                "node_labels_visible": node_labels,
+                "edge_map_visible": edge_map,
+            }
+        )
+        return layer
+
+    def jppype_quiver_termination_tangents(self, std=7, offset=7, arrow_length=20):
+        from jppype.layers import LayerQuiver
+
+        terminations = self.terminations_nodes()
+        yx = self.nodes_yx_coord[terminations]
+        uv = self.nodes_tangent(terminations, gaussian_std=std, gaussian_offset=offset) * arrow_length
+        return LayerQuiver(yx, uv, Rect.from_size(self._branch_labels_map.shape))

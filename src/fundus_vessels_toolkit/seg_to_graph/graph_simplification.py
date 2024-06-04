@@ -7,7 +7,7 @@ import numpy.typing as npt
 
 from ..utils.geometric import distance_matrix
 from ..utils.graph.branch_by_nodes import (
-    branch_by_nodes_to_adjacency_list,
+    branches_by_nodes_to_branch_list,
     compute_is_endpoints,
     delete_nodes,
     fuse_nodes,
@@ -96,7 +96,7 @@ def simplify_graph(
         and the coordinates of the nodes as a tuple of (y, x) where y and x are vectors of length nNode.
 
     """  # noqa: E501
-    branches_by_nodes = vessel_graph.branch_by_node
+    branches_by_nodes = vessel_graph.branches_by_nodes()
     labeled_branches = vessel_graph.branch_labels_map
     node_yx = vessel_graph.nodes_yx_coord
     node_y, node_x = node_yx.T
@@ -112,7 +112,7 @@ def simplify_graph(
         spurs_branches = np.any(branches_by_nodes[:, is_endpoint], axis=1)
         # - Extract the two nodes (the first is probably a junction, the second is necessarily an endpoint) connected
         #    by each terminal branch
-        spurs_junction, spurs_endpoint = branch_by_nodes_to_adjacency_list(branches_by_nodes[spurs_branches]).T
+        spurs_junction, spurs_endpoint = branches_by_nodes_to_branch_list(branches_by_nodes[spurs_branches]).T
         # - Discard branches whose first node is not a junction (branches connecting 2 endpoints)
         single_branches = is_endpoint[spurs_junction]
         spurs_junction = spurs_junction[~single_branches]
@@ -248,4 +248,4 @@ def simplify_graph(
         labeled_branches = branch_lookup[labeled_branches]
     labeled_branches[node_labels[0].astype(np.int64), node_labels[1].astype(np.int64)] = node_labels[2]
 
-    return Graph(branches_by_nodes, labeled_branches, np.stack((node_y, node_x), axis=-1))
+    return Graph.from_branch_by_nodes(branches_by_nodes, labeled_branches, np.stack((node_y, node_x), axis=-1))

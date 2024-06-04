@@ -74,12 +74,12 @@ class SegToGraph:
             if isinstance(skeleton_mask, np.ndarray):
                 skeleton_mask = torch.from_numpy(skeleton_mask)
 
-        branch_by_node, branch_labels, nodes_yx = parse_skeleton(
+        branch_list, branch_labels, nodes_yx = parse_skeleton(
             detect_skeleton_nodes(
                 skeleton_mask, fix_hollow=self.fix_hollow, remove_endpoint_branches=self.remove_endpoint_branches
             )
         )
-        return Graph(branch_by_node, branch_labels, nodes_yx)
+        return Graph(branch_list, branch_labels, nodes_yx)
 
     def simplify_graph(self, graph: Graph):
         return simplify_graph(
