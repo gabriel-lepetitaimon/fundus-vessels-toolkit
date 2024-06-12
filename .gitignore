@@ -2,6 +2,7 @@
 .idea/
 .vscode/
 .conda/
+.clang-format
 
 # Cache
 *.py[cod]

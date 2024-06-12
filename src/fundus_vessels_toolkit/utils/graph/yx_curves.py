@@ -1,8 +1,9 @@
 import numpy as np
 import torch
 
-from .cpp_extensions.geometric_parsing_cpp import track_branches as track_branches_cpp
-from .math import gaussian, gaussian_filter1d
+from ..cpp_extensions.graph_geometry_cpp import fast_curve_tangent as fast_curve_tangent_cpp
+from ..cpp_extensions.graph_geometry_cpp import track_branches as track_branches_cpp
+from ..math import gaussian, gaussian_filter1d
 
 
 def track_branches(edge_labels_map, nodes_yx, edge_list) -> list[list[int]]:
@@ -82,7 +83,26 @@ def compute_tangent(curve_yx, point_id=None, std=2):
     return dyx if point_id is None else dyx[point_id]
 
 
-def compute_inflections_points(yx, diff_offset=3, dtheta_std=10, theta_std=2, sampling=1, true_inflections=False):
+def fast_curve_tangent(curve_yx, point_id=None, std=2):
+    if isinstance(curve_yx, np.ndarray):
+        curve_yx = torch.from_numpy(curve_yx)
+    curve_yx = curve_yx.int()
+
+    if isinstance(point_id, int):
+        point_id = torch.Tensor([point_id]).int()
+    elif isinstance(point_id, np.ndarray):
+        point_id = torch.from_numpy(point_id).int()
+    elif point_id is None:
+        point_id = torch.Tensor([]).int()
+    else:
+        point_id = torch.as_tensor(point_id).int()
+
+    out = fast_curve_tangent_cpp(curve_yx, std, point_id)
+
+    return out.numpy() if isinstance(curve_yx, torch.Tensor) else out
+
+
+def compute_inflections_points(yx, dtheta_std=3, theta_std=2, angle_threshold=1.5, sampling=1):
     from scipy.signal import medfilt
 
     if len(yx) < 5:
@@ -91,28 +111,20 @@ def compute_inflections_points(yx, diff_offset=3, dtheta_std=10, theta_std=2, sa
     if sampling > 1:
         yx = yx[::sampling]
 
-    dyx = yx[diff_offset:] - yx[:-diff_offset]
-    theta = np.arctan2(dyx[:, 0], dyx[:, 1])
-    dtheta = np.diff(theta) * 4 / np.pi
-    dtheta = (dtheta + 4) % 8 - 4
+    dyx_smooth = fast_curve_tangent(yx, std=theta_std)
+    theta = np.arctan2(dyx_smooth[:, 0], dyx_smooth[:, 1]) * 180 / np.pi
+    dtheta0 = (np.diff(theta) + 180) % 360 - 180
+    dtheta = dtheta0
 
     dtheta = gaussian_filter1d(dtheta, dtheta_std)
 
-    if true_inflections:
-        inflections = []
-        for i in range(1, len(dtheta)):
-            if np.sign(dtheta[i]) != np.sign(dtheta[i - 1]):
-                inflections.append(i)
-
-        return yx[np.array(inflections).astype(int) + 1]
-
-    avg_dtheta = np.digitize(dtheta, [-0.01, 0.01]) - 1
-    dtheta = medfilt(avg_dtheta, 5)
-    v = avg_dtheta[0]
+    quant_dtheta = np.digitize(dtheta, [-angle_threshold, angle_threshold]) - 1
+    quant_dtheta = medfilt(quant_dtheta, 5)
+    v = quant_dtheta[0]
     points = {0: v}
-    for i in range(1, len(avg_dtheta)):
-        if avg_dtheta[i] != v:
-            v = avg_dtheta[i]
+    for i in range(1, len(quant_dtheta)):
+        if quant_dtheta[i] != v:
+            v = quant_dtheta[i]
             points[i] = v
     values = list(points.values())
     bins = list(points.keys()) + [len(yx)]
@@ -124,4 +136,4 @@ def compute_inflections_points(yx, diff_offset=3, dtheta_std=10, theta_std=2, sa
             inflections.append(bins_center[i])
     inflections = np.array(inflections).astype(int)
 
-    return inflections + 1
+    return inflections

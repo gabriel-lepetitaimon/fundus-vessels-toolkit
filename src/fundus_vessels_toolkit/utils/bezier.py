@@ -5,7 +5,7 @@ from typing import NamedTuple, Tuple
 import numpy as np
 
 from .geometric import Point
-from .yx_curves import compute_tangent
+from .graph.yx_curves import compute_tangent, fast_curve_tangent
 
 
 class BezierSpline:
@@ -26,7 +26,7 @@ class BezierSpline:
             inflexions = list(split_on)
             split_on = "manual"
 
-        tangents = compute_tangent(yx_points, [0] + inflexions + [len(yx_points) - 1], std=tangent_std)
+        tangents = fast_curve_tangent(yx_points, [0] + inflexions + [len(yx_points) - 1], std=tangent_std)
         if split_on is None:
             curves = fitCubic(yx_points, tangents[0], tangents[-1], max_error)
         else:
@@ -34,7 +34,11 @@ class BezierSpline:
             points = [0] + inflexions + [len(yx_points) - 1]
             for id_p0, id_p1, t0, t1 in zip(points[:-1], points[1:], tangents[:-1], tangents[1:], strict=True):
                 curves += fitCubic(yx_points[id_p0 : id_p1 + 1], t0, -t1, max_error, split_on_failed=False)
-        return cls([BezierCubic.from_numpy(curve) for curve in curves])
+        return cls([BezierCubic.from_array(curve) for curve in curves])
+
+    @classmethod
+    def from_array(cls, curves: np.array) -> BezierSpline:
+        return cls([BezierCubic.from_array(curve) for curve in curves])
 
     def intermediate_points(self, return_tangent=False) -> np.array | Tuple[np.array, np.array]:
         points = []
@@ -59,7 +63,7 @@ class BezierCubic(NamedTuple):
     p1: Point
 
     @classmethod
-    def from_numpy(cls, curve: np.array) -> BezierCubic:
+    def from_array(cls, curve: np.array) -> BezierCubic:
         return cls(Point(*curve[0]), Point(*curve[1]), Point(*curve[2]), Point(*curve[3]))
 
     def to_path(self) -> str:
@@ -123,7 +127,7 @@ def generateBezier(points, parameters, leftTangent, rightTangent):
     C = np.zeros((2, 2))
     X = np.zeros(2)
 
-    for i, (point, u) in enumerate(zip(points, parameters)):
+    for i, (point, u) in enumerate(zip(points, parameters, strict=True)):
         C[0][0] += np.dot(A[i][0], A[i][0])
         C[0][1] += np.dot(A[i][0], A[i][1])
         C[1][0] += np.dot(A[i][0], A[i][1])

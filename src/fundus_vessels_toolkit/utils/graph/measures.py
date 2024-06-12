@@ -1,8 +1,71 @@
 from typing import Iterable
 
 import numpy as np
+import torch
 
+from ..cpp_extensions.graph_geometry_cpp import extract_branches_geometry as extract_branches_geometry_cpp
+from ..cpp_extensions.graph_geometry_cpp import fast_branch_boundaries as fast_branch_boundaries_cpp
 from ..geometric import Point, Rect
+from ..torch import torch_cast
+
+
+@torch_cast
+def extract_branch_geometry(
+    branch_labels: torch.Tensor,
+    node_yx: torch.Tensor,
+    branch_list: torch.Tensor,
+    segmentation: torch.Tensor,
+    clean_terminations: int = 20,
+    return_labels: bool = False,
+) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor], torch.Tensor]:
+    """Extract the geometry of each branch in the graph.
+
+
+
+    Parameters
+    ----------
+    branch_labels :
+        A 2D tensor of shape (H, W) containing the skeleton where each branch has a unique label.
+
+    node_yx :
+        A 2D tensor of shape (N, 2) containing the coordinates (y, x) of the nodes.
+
+    branch_list :
+        A 2D tensor of shape (B, 2) containing for each branch, the indexes of the two nodes it connects.
+
+    segmentation : torch.Tensor
+        A 2D tensor of shape (H, W) containing the segmentation of the image.
+
+    clean_terminations : int, optional
+        The maximum number of pixels removable at branch termination. By default 20.
+
+    return_labels : bool, optional
+
+    Returns
+    -------
+    tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]
+    This method returns a tuple containing three lists of length B which contains, for each branch:
+    - a 2D tensor of shape (n, 2) containing the coordinates of the branch points (where n is the branch length).
+    - a 2D tensor of shape (n, 2) containing the tangent vectors at each branch point.
+    - a 2D tensor of shape (n,) containing the branch width at each branch point.
+
+    If return_labels is True, the output will also contain:
+        - a 2D tensor of shape (H,W) containing the branch labels after terminations cleaning.
+
+    """
+    options = dict(clean_terminations=float(clean_terminations), bspline_max_error=4)
+
+    branch_labels = branch_labels.int()
+    assert branch_labels.ndim == 2, "branch_labels must be a 2D tensor"
+
+    assert node_yx.ndim == 2 and node_yx.shape[1] == 2, "node_yx must be a 2D tensor of shape (N, 2)"
+    node_yx = node_yx.int()
+
+    assert branch_list.ndim == 2 and branch_list.shape[1] == 2, "branch_list must be a 2D tensor of shape (E, 2)"
+    branch_list = branch_list.int()
+
+    out = extract_branches_geometry_cpp(branch_labels, node_yx, branch_list, segmentation, options)
+    return tuple(out) + (branch_labels,) if return_labels else tuple(out)
 
 
 def perimeter_from_vertices(coord: np.ndarray, close_loop: bool = True) -> float:
@@ -89,3 +152,18 @@ def nodes_tangent(
         tangent_vectors[i] = -barycenter / np.linalg.norm(barycenter)
 
     return tangent_vectors
+
+
+@torch_cast
+def branch_boundaries(curve_yx, segmentation, point_id=None):
+    curve_yx = curve_yx.int()
+    segmentation = segmentation.bool()
+    if isinstance(point_id, int):
+        point_id = torch.Tensor([point_id])
+    elif point_id is None:
+        point_id = torch.Tensor([])
+    else:
+        point_id = torch.as_tensor(point_id)
+    point_id = point_id.int()
+
+    return fast_branch_boundaries_cpp(curve_yx, segmentation, point_id)

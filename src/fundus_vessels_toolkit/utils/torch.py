@@ -21,29 +21,62 @@ def img_to_torch(x, device="cuda"):
     return x.float().to(device=device)
 
 
-def torch_apply(func, *args, device="cuda", **kwargs):
+def recursive_numpy2torch(x, device=None):
+    if isinstance(x, torch.Tensor):
+        return x.to(device) if device is not None else x
+    if isinstance(x, np.ndarray):
+        x = torch.from_numpy(x)
+        return x.to(device) if device is not None else x
+    if isinstance(x, dict):
+        return {k: recursive_numpy2torch(v, device) for k, v in x.items()}
+    if isinstance(x, list):
+        return [recursive_numpy2torch(v, device) for v in x]
+    if isinstance(x, tuple):
+        return tuple([recursive_numpy2torch(v, device) for v in x])
+    return x
+
+
+def recursive_torch2numpy(x):
+    if isinstance(x, torch.Tensor):
+        r = x.cpu().numpy()
+        return r
+    if isinstance(x, dict):
+        return {k: recursive_torch2numpy(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [recursive_torch2numpy(v) for v in x]
+    if isinstance(x, tuple):
+        return tuple(recursive_torch2numpy(v) for v in x)
+    return x
+
+
+def torch_apply(func, *args, device=None, **kwargs):
     from_numpy = None
-    for i, arg in enumerate(args):
+    new_args = []
+    for arg in args:
         if from_numpy is None:
             if isinstance(arg, torch.Tensor):
                 from_numpy = False
             if isinstance(arg, np.ndarray):
                 from_numpy = True
-        if isinstance(arg, torch.Tensor):
-            args[i] = arg.to(device=device)
-        if isinstance(arg, np.ndarray):
-            args[i] = torch.from_numpy(arg).to(device=device)
+        new_args.append(recursive_numpy2torch(arg, device))
     for key, value in kwargs.items():
         if from_numpy is None:
-            if isinstance(arg, torch.Tensor):
+            if isinstance(value, torch.Tensor):
                 from_numpy = False
-            if isinstance(arg, np.ndarray):
+            if isinstance(value, np.ndarray):
                 from_numpy = True
-        if isinstance(value, torch.Tensor):
-            kwargs[key] = value.to(device=device)
-        if isinstance(value, np.ndarray):
-            kwargs[key] = torch.from_numpy(value).to(device=device)
+        kwargs[key] = recursive_numpy2torch(value, device)
 
-    r = func(*args**kwargs)
-    if from_numpy:
-        return r.cpu().numpy()
+    r = func(*new_args, **kwargs)
+
+    return recursive_torch2numpy(r) if from_numpy else r
+
+
+def torch_cast(f):
+    def wrapper(*args, **kwargs):
+        return torch_apply(f, *args, **kwargs)
+
+    wrapper.__name__ = f.__name__
+    wrapper.__doc__ = f.__doc__
+
+    return wrapper

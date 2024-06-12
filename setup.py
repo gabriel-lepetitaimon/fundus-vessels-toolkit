@@ -53,21 +53,36 @@ def get_torch_extensions():
 
     if "backend: OpenMP" in info and "OpenMP not found" not in info:
         extra_compile_args["cxx"] += ["-DAT_PARALLEL_OPENMP"]
+        extra_compile_args["cxx"] += ["-Wno-dangling-reference"]  # Remove dangling reference warning from torch
         extra_compile_args["cxx"] += ["-fopenmp"]
         extra_link_args += ["-lgomp"]
     else:
         print("Compiling without OpenMP...")
 
     CPP_FOLDER = Path("src/fundus_vessels_toolkit/utils/cpp_extensions")
+    COMMON_CPP = ["src/fundus_vessels_toolkit/utils/cpp_extensions/common.cpp"]
 
     return [
         cpp_extension.CppExtension(
             f"fundus_vessels_toolkit.utils.cpp_extensions.{src.stem}_cpp",
-            sources=[str(src)],
+            sources=[str(src)] + COMMON_CPP,
             extra_compile_args=extra_compile_args["cxx"],
             extra_link_args=extra_link_args,
         )
-        for src in CPP_FOLDER.rglob("*.cpp")
+        for src in CPP_FOLDER.glob("*.cpp")
+        if src.stem != "common"
+    ] + [
+        cpp_extension.CppExtension(
+            f"fundus_vessels_toolkit.utils.cpp_extensions.{src_folder.stem}_cpp",
+            sources=[
+                str(src.absolute()) for src in sum([list(src_folder.rglob(f"*.{ext}")) for ext in ["cpp", "c"]], [])
+            ]
+            + COMMON_CPP,
+            extra_compile_args=extra_compile_args["cxx"],
+            extra_link_args=extra_link_args,
+        )
+        for src_folder in CPP_FOLDER.iterdir()
+        if src_folder.is_dir()
     ]
 
 
