@@ -5,21 +5,51 @@ import torch
 
 from ..cpp_extensions.graph_geometry_cpp import extract_branches_geometry as extract_branches_geometry_cpp
 from ..cpp_extensions.graph_geometry_cpp import fast_branch_boundaries as fast_branch_boundaries_cpp
+from ..cpp_extensions.graph_geometry_cpp import fast_curve_tangent as fast_curve_tangent_cpp
+from ..cpp_extensions.graph_geometry_cpp import track_branches as track_branches_cpp
 from ..geometric import Point, Rect
 from ..torch import torch_cast
+
+
+@torch_cast
+def track_branches(edge_labels_map, nodes_yx, edge_list) -> list[list[int]]:
+    """Track branches from a skeleton map.
+
+    Parameters
+    ----------
+    edge_labels_map :
+        A 2D image of the skeleton where each edge is labeled with a unique integer.
+
+    nodes_yx :
+        Array of shape (N,2) providing the coordinates of the skeleton nodes.
+
+    edge_list :
+        Array of shape (E,2) providing the list of edges in the skeleton as a pair of node indices.
+
+
+    Returns
+    -------
+    list[np.array]
+        A list of list of integers, each list represents a branch and contains the edge labels of the branch.
+
+    """
+    edge_labels_map = edge_labels_map.int()
+    nodes_yx = nodes_yx.int()
+    edge_list = edge_list.int()
+
+    return track_branches_cpp(edge_labels_map, nodes_yx, edge_list)
 
 
 @torch_cast
 def extract_branch_geometry(
     branch_labels: torch.Tensor,
     node_yx: torch.Tensor,
-    branch_list: torch.Tensor,
+    edge_list: torch.Tensor,
     segmentation: torch.Tensor,
     clean_terminations: int = 20,
     return_labels: bool = False,
 ) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor], torch.Tensor]:
-    """Extract the geometry of each branch in the graph.
-
+    """Track branches from a labels map and extract their geometry.
 
 
     Parameters
@@ -47,7 +77,7 @@ def extract_branch_geometry(
     This method returns a tuple containing three lists of length B which contains, for each branch:
     - a 2D tensor of shape (n, 2) containing the coordinates of the branch points (where n is the branch length).
     - a 2D tensor of shape (n, 2) containing the tangent vectors at each branch point.
-    - a 2D tensor of shape (n,) containing the branch width at each branch point.
+    - a 2D tensor of shape (n,) containing the branch width (or calibre) at each branch point.
 
     If return_labels is True, the output will also contain:
         - a 2D tensor of shape (H,W) containing the branch labels after terminations cleaning.
@@ -61,11 +91,59 @@ def extract_branch_geometry(
     assert node_yx.ndim == 2 and node_yx.shape[1] == 2, "node_yx must be a 2D tensor of shape (N, 2)"
     node_yx = node_yx.int()
 
-    assert branch_list.ndim == 2 and branch_list.shape[1] == 2, "branch_list must be a 2D tensor of shape (E, 2)"
-    branch_list = branch_list.int()
+    assert edge_list.ndim == 2 and edge_list.shape[1] == 2, "branch_list must be a 2D tensor of shape (E, 2)"
+    edge_list = edge_list.int()
 
-    out = extract_branches_geometry_cpp(branch_labels, node_yx, branch_list, segmentation, options)
+    out = extract_branches_geometry_cpp(branch_labels, node_yx, edge_list, segmentation, options)
     return tuple(out) + (branch_labels,) if return_labels else tuple(out)
+
+
+@torch_cast
+def curve_tangent(curve_yx, std=3, eval_for=None):
+    """Compute the local tangents of a curve.`
+
+    The tangent at each point is computed by averaging the vectors starting from the current node and pointing to the next node in the curve, with those starting from the previous nodes and pointing to the current node. The vectors are weighted by a gaussian distribution centered on the current node.
+
+    Parameters
+    ----------
+    curve_yx :
+        A 2D tensor of shape ``(L, 2)`` containing the coordinates of the curve points.
+    std : int, optional
+        The standard deviation of the gaussian weighting the curve points. By default 3.
+    eval_for : int or list[int], optional
+        The indexes of the points for which the tangent must be computed. By default None.
+
+    Returns
+    -------
+    torch.Tensor
+        A 2D tensor of shape ``(L', 2)`` containing the tangent vectors at each curve point.
+        If eval_for is None, ``L' = L``, otherwise ``L' = len(eval_for)``.
+    """  # noqa: E501
+    curve_yx = curve_yx.int()
+    eval_for = _check_eval_for_point(eval_for)
+    return fast_curve_tangent_cpp(curve_yx, std, eval_for)
+
+
+@torch_cast
+def branch_boundaries(curve_yx, segmentation, eval_for=None):
+    curve_yx = curve_yx.int()
+    segmentation = segmentation.bool()
+    eval_for = _check_eval_for_point(eval_for)
+    return fast_branch_boundaries_cpp(curve_yx, segmentation, eval_for)
+
+
+def _check_eval_for_point(eval_for):
+    if isinstance(eval_for, int):
+        eval_for = torch.Tensor([eval_for])
+    elif eval_for is None:
+        eval_for = torch.Tensor([])
+    else:
+        eval_for = torch.as_tensor(eval_for)
+    return eval_for.int()
+
+
+########################################################################################################################
+#   LEGACY IMPLEMENTATION
 
 
 def perimeter_from_vertices(coord: np.ndarray, close_loop: bool = True) -> float:
@@ -154,16 +232,40 @@ def nodes_tangent(
     return tangent_vectors
 
 
-@torch_cast
-def branch_boundaries(curve_yx, segmentation, point_id=None):
-    curve_yx = curve_yx.int()
-    segmentation = segmentation.bool()
-    if isinstance(point_id, int):
-        point_id = torch.Tensor([point_id])
-    elif point_id is None:
-        point_id = torch.Tensor([])
-    else:
-        point_id = torch.as_tensor(point_id)
-    point_id = point_id.int()
+def compute_inflections_points(yx, dtheta_std=3, theta_std=2, angle_threshold=1.5, sampling=1):
+    from scipy.signal import medfilt
 
-    return fast_branch_boundaries_cpp(curve_yx, segmentation, point_id)
+    from ..math import gaussian_filter1d
+
+    if len(yx) < 5:
+        return np.array([])
+
+    if sampling > 1:
+        yx = yx[::sampling]
+
+    dyx_smooth = curve_tangent(yx, std=theta_std)
+    theta = np.arctan2(dyx_smooth[:, 0], dyx_smooth[:, 1]) * 180 / np.pi
+    dtheta0 = (np.diff(theta) + 180) % 360 - 180
+    dtheta = dtheta0
+
+    dtheta = gaussian_filter1d(dtheta, dtheta_std)
+
+    quant_dtheta = np.digitize(dtheta, [-angle_threshold, angle_threshold]) - 1
+    quant_dtheta = medfilt(quant_dtheta, 5)
+    v = quant_dtheta[0]
+    points = {0: v}
+    for i in range(1, len(quant_dtheta)):
+        if quant_dtheta[i] != v:
+            v = quant_dtheta[i]
+            points[i] = v
+    values = list(points.values())
+    bins = list(points.keys()) + [len(yx)]
+    bins_center = [(bins[i] + bins[i + 1]) / 2 for i in range(len(bins) - 1)]
+    inflections = []
+
+    for i in range(1, len(values) - 1):
+        if values[i] == 0:
+            inflections.append(bins_center[i])
+    inflections = np.array(inflections).astype(int)
+
+    return inflections

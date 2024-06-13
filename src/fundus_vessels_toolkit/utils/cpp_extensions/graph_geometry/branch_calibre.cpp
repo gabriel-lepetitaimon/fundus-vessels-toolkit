@@ -78,7 +78,7 @@ std::vector<float> fast_branch_calibre(const CurveYX &curveYX, const Tensor2DAcc
         float dist = distance(boundL, boundR);
 
         // If the skeleton is diagonal, we take into account the neighbors pixels to compensate for the discretization
-
+        /*
         float tx = tangents[pointI].x, ty = tangents[pointI].y;
         if (tx != 0 && abs(ty / tx) < 2 && abs(ty / tx) > 0.5) {
             IntPoint l1(boundL.y - sign(tx), boundL.x), l2(boundL.y, boundL.x + sign(ty));
@@ -88,7 +88,7 @@ std::vector<float> fast_branch_calibre(const CurveYX &curveYX, const Tensor2DAcc
             if (r1.is_inside(segShape) && segmentation[r1.y][r1.x]) dist += DIAGONAL_COMPENSATION;
             if (r2.is_inside(segShape) && segmentation[r2.y][r2.x]) dist += DIAGONAL_COMPENSATION;
         }
-
+        */
         widths[pointI] = dist;
     }
 

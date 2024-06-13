@@ -16,21 +16,21 @@ from ..utils.graph.measures import nodes_tangent, perimeter_from_vertices
 class Graph:
     def __init__(
         self,
-        branch_list: np.ndarray,
-        branch_labels_map: np.ndarray,
+        branches_list: np.ndarray,
+        branches_labels_map: np.ndarray,
         nodes_yx_coord: np.ndarray,
     ):
         assert (
-            branch_list.ndim == 2 and branch_list.shape[1] == 2
+            branches_list.ndim == 2 and branches_list.shape[1] == 2
         ), "branch_list must be a 2D array of shape (B, 2) where B is the number of branches"
-        B = branch_list.shape[0]
-        assert branch_labels_map.ndim == 2, (
+        B = branches_list.shape[0]
+        assert branches_labels_map.ndim == 2, (
             "branch_labels_map must be a 2D array of shape (H, W) where H and W are the image height and width."
-            f"Got {branch_labels_map.shape}"
+            f"Got {branches_labels_map.shape}"
         )
-        assert branch_labels_map.max() <= B, (
+        assert branches_labels_map.max() <= B, (
             "branch_labels_map must have a maximum value equal to the number of branches."
-            f"Got {branch_labels_map.max()} instead of {B}"
+            f"Got {branches_labels_map.max()} instead of {B}"
         )
 
         if isinstance(nodes_yx_coord, tuple):
@@ -43,14 +43,14 @@ class Graph:
         )
         N = nodes_yx_coord.shape[0]
 
-        assert branch_list.max() < N, (
+        assert branches_list.max() < N, (
             "The maximum value in branch_list must be lower than the number of nodes."
-            f" Got {branch_list.max()} instead of {N}"
+            f" Got {branches_list.max()} instead of {N}"
         )
 
-        self._branch_list = branch_list
+        self._branch_list = branches_list
         self._nodes_yx_coord = nodes_yx_coord
-        self._branch_labels_map = branch_labels_map.clip(0)
+        self._branch_labels_map = branches_labels_map.clip(0)
 
     @classmethod
     def from_branch_by_nodes(cls, branch_by_nodes: np.ndarray, branch_labels: np.ndarray, nodes_yx_coord: np.ndarray):
@@ -259,3 +259,31 @@ class Graph:
         yx = self.nodes_yx_coord[terminations]
         uv = self.nodes_tangent(terminations, gaussian_std=std, gaussian_offset=offset) * arrow_length
         return LayerQuiver(yx, uv, Rect.from_size(self._branch_labels_map.shape))
+
+    def branch_normals_map(self, segmentation, only_terminations=False):
+        import cv2
+
+        from ..utils.graph.measures import branch_boundaries, track_branches
+
+        def eval_point(curve):
+            return [0, len(curve) - 1] if only_terminations else np.arange(len(curve), step=4)
+
+        out_map = np.zeros_like(segmentation, dtype=np.uint8)
+
+        yx_curves = track_branches(self.branch_labels_map, self.nodes_yx_coord, self.branch_list)
+        boundaries = [branch_boundaries(curve, segmentation, eval_point(curve)) for curve in yx_curves]
+
+        for i, (curve, boundaries) in enumerate(zip(yx_curves, boundaries, strict=True)):
+            curve = curve[eval_point(curve)]
+            for (y, x), ((byL, bxL), (byR, bxR)) in zip(curve, boundaries, strict=True):
+                dL = np.linalg.norm([x - bxL, y - byL])
+                dR = np.linalg.norm([x - bxR, y - byR])
+                if not only_terminations and abs(dL - dR) > 1.5:
+                    continue
+                if byL != y or bxL != x:
+                    cv2.line(out_map, (x, y), (bxL, byL), i + 1, 1)
+                if byR != y or bxR != x:
+                    cv2.line(out_map, (x, y), (bxR, byR), i + 1, 1)
+                out_map[y, x] = 0
+
+        return out_map

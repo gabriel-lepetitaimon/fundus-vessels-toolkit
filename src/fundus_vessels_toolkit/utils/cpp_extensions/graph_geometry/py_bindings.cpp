@@ -57,7 +57,7 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry(torch::Tensor 
             auto &branchYX = branchesYX[i];
             auto [startI, endI] = branches_terminations[i];
 
-            if (startI < endI) {
+            if (startI < endI - 3) {
                 // Remove the invalid pixels from the branch labels, the branchYX and the tangents
                 for (auto p = branchYX.begin() + endI; p != branchYX.end(); p++) labels_acc[p->y][p->x] = 0;
                 branchYX.erase(branchYX.begin() + endI, branchYX.end());
@@ -65,7 +65,7 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry(torch::Tensor 
                 for (auto p = branchYX.begin(); p != branchYX.begin() + startI; p++) labels_acc[p->y][p->x] = 0;
                 branchYX.erase(branchYX.begin(), branchYX.begin() + startI);
             } else {
-                // If the valid section of the branch is empty, remove the branch.
+                // If the valid section of the branch is 3 px or less, remove the branch.
                 for (auto p : branchYX) labels_acc[p.y][p.x] = 0;
                 branchYX.clear();
             }

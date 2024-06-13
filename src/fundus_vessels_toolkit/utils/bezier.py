@@ -1,11 +1,11 @@
 from __future__ import annotations, print_function
 
-from typing import NamedTuple, Tuple
+from typing import List, NamedTuple, Tuple
 
 import numpy as np
 
 from .geometric import Point
-from .graph.yx_curves import compute_tangent, fast_curve_tangent
+from .graph.measures import curve_tangent
 
 
 class BezierSpline:
@@ -26,7 +26,7 @@ class BezierSpline:
             inflexions = list(split_on)
             split_on = "manual"
 
-        tangents = fast_curve_tangent(yx_points, [0] + inflexions + [len(yx_points) - 1], std=tangent_std)
+        tangents = curve_tangent(yx_points, [0] + inflexions + [len(yx_points) - 1], std=tangent_std)
         if split_on is None:
             curves = fitCubic(yx_points, tangents[0], tangents[-1], max_error)
         else:
