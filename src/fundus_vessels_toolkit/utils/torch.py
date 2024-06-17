@@ -72,7 +72,7 @@ def torch_apply(func, *args, device=None, **kwargs):
     return recursive_torch2numpy(r) if from_numpy else r
 
 
-def torch_cast(f):
+def autocast_torch(f):
     def wrapper(*args, **kwargs):
         return torch_apply(f, *args, **kwargs)
 

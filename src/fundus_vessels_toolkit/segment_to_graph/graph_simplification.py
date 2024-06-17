@@ -1,4 +1,3 @@
-import warnings
 from typing import Literal, Mapping, Optional, TypeAlias, TypedDict
 
 import networkx as nx
@@ -18,7 +17,7 @@ from ..utils.graph.branch_by_nodes import (
     reduce_clusters,
 )
 from ..utils.lookup_array import apply_lookup, apply_lookup_on_coordinates
-from ..vgraph import Graph
+from ..vascular_graph import VGraph
 
 
 class NodeMergeDistanceDict(TypedDict):
@@ -44,13 +43,13 @@ SimplifyTopology: TypeAlias = Literal["node", "branch", "both"] | None
 
 
 def simplify_graph(
-    vessel_graph: Graph,
+    vessel_graph: VGraph,
     max_spurs_distance: float = 0,
     nodes_merge_distance: NodeMergeDistanceParam = True,
     merge_small_cycles: float = 0,
     simplify_topology: SimplifyTopology = "node",
     node_simplification_criteria: Optional[NodeSimplificationCallBack] = None,
-) -> Graph:
+) -> VGraph:
     """
     Extract the naive vasculature graph from a vessel map.
     If return label is True, the label map of branches and nodes are also computed and returned.
@@ -248,4 +247,4 @@ def simplify_graph(
         labeled_branches = branch_lookup[labeled_branches]
     labeled_branches[node_labels[0].astype(np.int64), node_labels[1].astype(np.int64)] = node_labels[2]
 
-    return Graph.from_branch_by_nodes(branches_by_nodes, labeled_branches, np.stack((node_y, node_x), axis=-1))
+    return VGraph.from_branch_by_nodes(branches_by_nodes, labeled_branches, np.stack((node_y, node_x), axis=-1))

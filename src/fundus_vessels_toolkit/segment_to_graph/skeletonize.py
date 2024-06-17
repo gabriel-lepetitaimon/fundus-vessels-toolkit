@@ -1,5 +1,6 @@
 from enum import Enum
 
+import numpy as np
 import numpy.typing as npt
 from skimage.morphology import medial_axis
 from skimage.morphology import skeletonize as skimage_skeletonize
@@ -11,7 +12,7 @@ class SkeletonizeMethod(str, Enum):
     LEE = "lee"
 
 
-def skeletonize(vessel_map: npt.NDArray[bool], method: SkeletonizeMethod = "lee") -> npt.NDArray[bool]:
+def skeletonize(vessel_map: npt.NDArray[np.bool_], method: SkeletonizeMethod = "lee") -> npt.NDArray[np.bool_]:
     """
     Args:
         vessel_map: Binary image containing the vessels.

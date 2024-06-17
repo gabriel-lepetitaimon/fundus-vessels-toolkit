@@ -23,6 +23,11 @@ std::tuple<int, float> findClosestPixel(const CurveYX &curve, const Point &p, in
 /**************************************************************************************
  *              === BRANCH_CURVES.CPP ===
  **************************************************************************************/
+Point curve_tangent(const CurveYX &curveYX, std::size_t i, const std::function<float(float)> &weighting,
+                    const bool forward = true, const bool backward = true, std::size_t stride = 1);
+std::vector<Point> curve_tangent(const CurveYX &curveYX, const std::vector<float> &kernelStd,
+                                 const std::vector<int> &evaluateAtID = {});
+
 static const std::vector<float> TANGENT_HALF_GAUSS = gaussianHalfKernel1D(3, 10);
 Point fast_curve_tangent(const CurveYX &curveYX, std::size_t i,
                          const std::vector<float> &GaussKernel = TANGENT_HALF_GAUSS, const bool forward = true,

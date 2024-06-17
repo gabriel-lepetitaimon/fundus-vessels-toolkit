@@ -6,9 +6,10 @@ import torch
 
 from ..utils.cpp_extensions.skeleton_parsing_cpp import detect_skeleton_nodes as detect_skeleton_nodes_cpp
 from ..utils.cpp_extensions.skeleton_parsing_cpp import parse_skeleton as parse_skeleton_cpp
-from ..utils.graph.branch_by_nodes import branch_list_to_branches_by_nodes
+from ..utils.torch import autocast_torch
 
 
+@autocast_torch
 def parse_skeleton(skeleton_map: np.ndarray | torch.Tensor) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Label the skeleton map with the junctions and endpoints.
@@ -38,13 +39,16 @@ def parse_skeleton(skeleton_map: np.ndarray | torch.Tensor) -> Tuple[np.ndarray,
     return branch_list, branch_labels, nodes_coordinates
 
 
+@autocast_torch
 def detect_skeleton_nodes(
     skeleton_map: np.ndarray | torch.Tensor,
     fix_hollow=True,
     remove_endpoint_branches=True,
 ):
     """
-    Parse a skeleton mask to detect junctions and endpoints and remove small branches.
+    Parse a skeleton mask to detect junctions and endpoints.
+
+    This function may optionally fix hollow cross patterns and remove terminal branches that are made of only an endpoint.
 
     Parameters
     ----------
@@ -52,14 +56,14 @@ def detect_skeleton_nodes(
         Binary image of the vessel skeleton.
 
     fix_hollow:
-        If True (by default), hollow cross pattern are filled and replaced by a 4-branches junction.
+        If True (by default), hollow cross pattern are filled and considered as a 4-branches junction.
 
     remove_endpoint_branches:
         If True (by default), remove terminal branches that are made of only an endpoint.
 
     Returns
     -------
-        The skeletonized image where each pixel is described by an integer value as:
+        The skeletonize image where each pixel is described by an integer value as:
             - 0: background
             - 1: Vessel branch
             - 2: Vessel endpoint or junction
@@ -101,7 +105,7 @@ def parse_skeleton_legacy(skeleton_map: np.ndarray) -> Tuple[np.ndarray, np.ndar
 
     node coordinates : np.ndarray
         Array of shape [N, 2]: the (y, x) positions of the nodes in the skeleton.
-    """
+    """  # noqa: E501
     from ..utils.graph.graph_cy import label_skeleton
 
     if skeleton_map.dtype == bool:
@@ -140,7 +144,7 @@ def detect_skeleton_nodes_legacy(
             - 0: background
             - 1: Vessel branch
             - 2: Vessel endpoint or junction
-    """
+    """  # noqa: E501
     from skimage.morphology import remove_small_objects
 
     from ..utils.binary_mask import extract_patches, fast_hit_or_miss

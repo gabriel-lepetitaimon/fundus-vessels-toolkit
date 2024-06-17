@@ -6,8 +6,8 @@ import torch
 import torchmetrics as tm
 from torchmetrics import Metric as TorchMetric
 
-from ...seg_to_graph import RetinalVesselSegToGraph
-from ...vgraph.matching import naive_edit_distance
+from ...segment_to_graph import RetinalVesselSegToGraph
+from ...vascular_graph.matching import naive_edit_distance
 
 
 class ClDice(TorchMetric):

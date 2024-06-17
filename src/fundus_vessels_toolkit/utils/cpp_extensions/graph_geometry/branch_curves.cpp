@@ -9,6 +9,94 @@
  * and its neighbors weighted by a gaussian kernel.
  *
  * @param curveYX A list of points defining the curve.
+ * @param weighting A function that takes the distance between two points and returns a weight. This function must be
+ * decreasing and positive.
+ * @param evaluateAtID A list of indexes where the tangent should be evaluated.
+ * If empty, the tangent is evaluated at each point.
+ */
+Point curve_tangent(const CurveYX& curveYX, std::size_t i, const std::function<float(float)>& weighting,
+                    const bool forward, const bool backward, std::size_t stride) {
+    const std::size_t curveSize = curveYX.size();
+    auto const& p0 = curveYX[i];
+    Point tangent, dv;
+    float sumWeights = 0, w = 0;
+    std::size_t j = stride;
+
+    if (backward && i >= stride) {
+        do {
+            std::size_t idx = i - j;
+            auto const& p = curveYX[idx];
+            w = weighting(distance(p0, p));
+            dv += p * w;
+            sumWeights += w;
+            j += stride;
+        } while (w >= 0.1 && j <= i);
+        if (sumWeights != 0) tangent = curveYX[i] - dv / sumWeights;
+    }
+
+    if (forward && i < curveSize - stride) {
+        j = stride;
+        sumWeights = 0;
+        dv = {0, 0};
+        do {
+            std::size_t idx = i + j;
+            auto const& p = curveYX[idx];
+            w = weighting(distance(p0, p));
+            dv += p * w;
+            sumWeights += w;
+            j += stride;
+        } while (w >= 0.1 && j <= curveSize - i);
+        if (sumWeights != 0) tangent += dv / sumWeights - curveYX[i];
+    }
+
+    return tangent.normalize();
+}
+
+/**
+ * @brief Evaluate the tangent of a curve.
+ *
+ * This method compute the tangent of a curve defined by a list of points.
+ * The tangent is computed by averaging the vectors between the current point
+ * and its neighbors weighted by a gaussian kernel.
+ *
+ * @param curveYX A list of points defining the curve.
+ * @param kernelStd The standard deviation of the gaussian kernel for each point.
+ *  This parameter must be of the same size as the curve if evaluateAtID is empty,
+ *  or of the same size as evaluateAtID otherwise.
+ * @param evaluateAtID A list of indexes where the tangent should be evaluated.
+ * If empty, the tangent is evaluated at each point.
+ */
+std::vector<Point> curve_tangent(const CurveYX& curveYX, const std::vector<float>& kernelStd,
+                                 const std::vector<int>& evaluateAtID) {
+    const std::size_t curveSize = curveYX.size();
+    bool evaluateAll = evaluateAtID.size() == 0;
+    const std::size_t tangentSize = evaluateAll ? curveSize : evaluateAtID.size();
+
+    std::map<int, std::vector<float>> kernelMap;
+
+    std::vector<Point> tangents(tangentSize, {0, 0});
+    // Compute the tangent at each point
+    for (std::size_t pointI = 0; pointI < tangentSize; pointI++) {
+        const std::size_t i = evaluateAll ? pointI : evaluateAtID[pointI];
+        if (i < 0 || i >= curveSize) continue;
+
+        const float std = std::max(kernelStd[pointI], 3.0f);
+        tangents[pointI] = curve_tangent(
+            curveYX, i, [std](float d) { return std::exp(-d * d / (2 * std * std)); }, true, true,
+            std::max(1, (int)floor(std / 3)));
+    }
+
+    return tangents;
+}
+
+/**
+ * @brief Evaluate the tangent of a curve.
+ *
+ * This method compute the tangent of a curve defined by a list of points.
+ * The tangent is computed by averaging the vectors between the current point
+ * and its neighbors weighted by a gaussian kernel.
+ *
+ * @param curveYX A list of points defining the curve.
  * @param gaussStd The standard deviation of the gaussian kernel.
  * @param evaluateAtID A list of indexes where the tangent should be evaluated.
  * If empty, the tangent is evaluated at each point.

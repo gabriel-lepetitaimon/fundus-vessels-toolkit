@@ -82,9 +82,19 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry(torch::Tensor 
     std::vector<torch::Tensor> branchesCalibre;
     if (options.count("compute_calibre") ? options["compute_calibre"] : true) {
         branchesCalibre.resize(branchesYX.size());
+        bool refine_tangent = options.count("adaptative_tangent") ? options["adaptative_tangent"] : true;
+
 #pragma omp parallel for
-        for (int i = 0; i < (int)branchesYX.size(); i++)
-            branchesCalibre[i] = vector_to_tensor(fast_branch_calibre(branchesYX[i], seg_acc, branchesTangents[i]));
+        for (int i = 0; i < (int)branchesYX.size(); i++) {
+            const auto &branch = branchesYX[i];
+            const auto &calibre = fast_branch_calibre(branch, seg_acc, branchesTangents[i]);
+            if (refine_tangent) {
+                const auto &refinedTangent = curve_tangent(branch, calibre);
+                branchesTangents[i] = refinedTangent;
+                branchesCalibre[i] = vector_to_tensor(fast_branch_calibre(branch, seg_acc, refinedTangent));
+            } else
+                branchesCalibre[i] = vector_to_tensor(calibre);
+        }
     }
 
     // --- BSpline Regression ---

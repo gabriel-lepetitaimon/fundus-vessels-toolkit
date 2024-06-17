@@ -3,9 +3,9 @@ __all__ = ["SegToGraph", "FundusVesselSegToGraph"]
 import numpy as np
 import torch
 
-from ..seg_to_graph.graph_simplification import NodeMergeDistanceParam, SimplifyTopology, simplify_graph
-from ..seg_to_graph.skeletonize import SkeletonizeMethod
-from ..vgraph import Graph
+from ..segment_to_graph.graph_simplification import NodeMergeDistanceParam, SimplifyTopology, simplify_graph
+from ..segment_to_graph.skeletonize import SkeletonizeMethod
+from ..vascular_graph import VGraph
 
 
 class SegToGraph:
@@ -59,17 +59,17 @@ class SegToGraph:
 
     # --- Intermediate steps ---
     def skeletonize(self, vessel_map):
-        from ..seg_to_graph.skeletonize import skeletonize
+        from ..segment_to_graph.skeletonize import skeletonize
 
         return skeletonize(vessel_map, method=self.skeletonize_method)
 
     def parse_skeleton_to_graph(self, skeleton_mask: np.ndarray) -> np.ndarray:
         if self.legacy:
-            from ..seg_to_graph.skeleton_parsing import detect_skeleton_nodes_legacy as detect_skeleton_nodes
-            from ..seg_to_graph.skeleton_parsing import parse_skeleton_legacy as parse_skeleton
+            from ..segment_to_graph.skeleton_parsing import detect_skeleton_nodes_legacy as detect_skeleton_nodes
+            from ..segment_to_graph.skeleton_parsing import parse_skeleton_legacy as parse_skeleton
 
         else:
-            from ..seg_to_graph.skeleton_parsing import detect_skeleton_nodes, parse_skeleton
+            from ..segment_to_graph.skeleton_parsing import detect_skeleton_nodes, parse_skeleton
 
             if isinstance(skeleton_mask, np.ndarray):
                 skeleton_mask = torch.from_numpy(skeleton_mask)
@@ -79,9 +79,9 @@ class SegToGraph:
                 skeleton_mask, fix_hollow=self.fix_hollow, remove_endpoint_branches=self.remove_endpoint_branches
             )
         )
-        return Graph(branch_list, branch_labels, nodes_yx)
+        return VGraph(branch_list, branch_labels, nodes_yx)
 
-    def simplify_graph(self, graph: Graph):
+    def simplify_graph(self, graph: VGraph):
         return simplify_graph(
             graph,
             max_spurs_distance=self.max_spurs_distance,

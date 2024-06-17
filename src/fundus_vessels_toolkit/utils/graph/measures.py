@@ -8,10 +8,10 @@ from ..cpp_extensions.graph_geometry_cpp import fast_branch_boundaries as fast_b
 from ..cpp_extensions.graph_geometry_cpp import fast_curve_tangent as fast_curve_tangent_cpp
 from ..cpp_extensions.graph_geometry_cpp import track_branches as track_branches_cpp
 from ..geometric import Point, Rect
-from ..torch import torch_cast
+from ..torch import autocast_torch
 
 
-@torch_cast
+@autocast_torch
 def track_branches(edge_labels_map, nodes_yx, edge_list) -> list[list[int]]:
     """Track branches from a skeleton map.
 
@@ -40,7 +40,7 @@ def track_branches(edge_labels_map, nodes_yx, edge_list) -> list[list[int]]:
     return track_branches_cpp(edge_labels_map, nodes_yx, edge_list)
 
 
-@torch_cast
+@autocast_torch
 def extract_branch_geometry(
     branch_labels: torch.Tensor,
     node_yx: torch.Tensor,
@@ -48,6 +48,7 @@ def extract_branch_geometry(
     segmentation: torch.Tensor,
     clean_terminations: int = 20,
     return_labels: bool = False,
+    adaptative_tangent: bool = True,
 ) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor], torch.Tensor]:
     """Track branches from a labels map and extract their geometry.
 
@@ -83,7 +84,9 @@ def extract_branch_geometry(
         - a 2D tensor of shape (H,W) containing the branch labels after terminations cleaning.
 
     """
-    options = dict(clean_terminations=float(clean_terminations), bspline_max_error=4)
+    options = dict(
+        clean_terminations=float(clean_terminations), bspline_max_error=4, adaptative_tangent=adaptative_tangent
+    )
 
     branch_labels = branch_labels.int()
     assert branch_labels.ndim == 2, "branch_labels must be a 2D tensor"
@@ -98,7 +101,7 @@ def extract_branch_geometry(
     return tuple(out) + (branch_labels,) if return_labels else tuple(out)
 
 
-@torch_cast
+@autocast_torch
 def curve_tangent(curve_yx, std=3, eval_for=None):
     """Compute the local tangents of a curve.`
 
@@ -124,7 +127,7 @@ def curve_tangent(curve_yx, std=3, eval_for=None):
     return fast_curve_tangent_cpp(curve_yx, std, eval_for)
 
 
-@torch_cast
+@autocast_torch
 def branch_boundaries(curve_yx, segmentation, eval_for=None):
     curve_yx = curve_yx.int()
     segmentation = segmentation.bool()

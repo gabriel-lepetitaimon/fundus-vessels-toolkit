@@ -1,7 +1,5 @@
 import numpy as np
 
-from ...seg_to_graph.graph_extraction import branches_by_nodes_to_node_graph
-
 
 def vascular_graph_edit_distance(branch_to_node1, node1_yx, branch_to_node2, node2_yx):
     ny1, nx1 = node1_yx
@@ -29,8 +27,5 @@ def vascular_graph_edit_distance(branch_to_node1, node1_yx, branch_to_node2, nod
 
     node_to_branch1 = branch_to_node1.T[lookup_n1_idx]
     node_to_branch2 = branch_to_node2.T[lookup_n2_idx]
-
-    g1 = branches_by_nodes_to_node_graph(node_to_branch1.T)
-    g2 = branches_by_nodes_to_node_graph(node_to_branch2.T)
 
     return 0

@@ -2,7 +2,7 @@ from typing import Tuple
 
 import numpy as np
 
-from ..vascular_graph import VascularGraph
+from ..vtree import VascularGraph
 
 
 def simple_graph_matching(

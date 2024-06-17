@@ -70,7 +70,7 @@ std::vector<float> fast_branch_calibre(const CurveYX &curveYX, const Tensor2DAcc
 
     IntPoint segShape(segmentation.sizes()[0], segmentation.sizes()[1]);
 
-    const float DIAGONAL_COMPENSATION = SQRT2 / 6;
+    // const float DIAGONAL_COMPENSATION = SQRT2 / 6;
     for (std::size_t pointI = 0; pointI < outSize; pointI++) {
         IntPoint boundL(boundaries[pointI][0]);
         IntPoint boundR(boundaries[pointI][1]);
