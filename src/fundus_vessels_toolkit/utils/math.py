@@ -128,7 +128,7 @@ def quantified_local_minimum(x, dthreshold=None):
 
     dx = np.diff(x)
     if dthreshold is None:
-        dthreshold = np.percentile(np.abs(dx), 15)
+        dthreshold = np.percentile(np.abs(dx), 10)
     dx_quant = np.digitize(dx, [-dthreshold, dthreshold]) - 1
     dx_quant = medfilt(dx_quant * 1, 5)
 

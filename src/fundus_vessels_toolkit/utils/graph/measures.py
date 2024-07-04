@@ -48,28 +48,25 @@ def extract_branch_geometry(
     branch_curves: List[torch.Tensor],
     segmentation: torch.Tensor,
     adaptative_tangent: bool = True,
+    bspline_max_error: float = 10,
+    bspline_dK_threshold: float = 0.15,
 ) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor], torch.Tensor]:
     """Track branches from a labels map and extract their geometry.
 
 
     Parameters
     ----------
-    branch_labels :
-        A 2D tensor of shape (H, W) containing the skeleton where each branch has a unique label.
-
-    node_yx :
-        A 2D tensor of shape (N, 2) containing the coordinates (y, x) of the nodes.
-
-    branch_list :
-        A 2D tensor of shape (B, 2) containing for each branch, the indexes of the two nodes it connects.
+    branch_curves :
+        A list of 2D tensors of shape (n, 2) containing the coordinates of the branch points.
 
     segmentation : torch.Tensor
         A 2D tensor of shape (H, W) containing the segmentation of the image.
 
-    clean_terminations : int, optional
-        The maximum number of pixels removable at branch termination. By default 20.
+    adaptative_tangent : bool, optional
+        If True, the standard deviation of the gaussian weighting the curve points is set to the vessel calibre.
 
-    return_labels : bool, optional
+    bspline_max_error : float, optional
+        The maximum error allowed for the bspline interpolation. By default 10.
 
     Returns
     -------
@@ -84,8 +81,9 @@ def extract_branch_geometry(
 
     """
     options = dict(
-        bspline_max_error=4,
+        bspline_max_error=bspline_max_error,
         adaptative_tangent=adaptative_tangent,
+        bspline_dK_threshold=bspline_dK_threshold,
     )
     branch_curves = [curve.cpu().int() for curve in branch_curves]
 

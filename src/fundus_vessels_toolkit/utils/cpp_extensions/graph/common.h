@@ -90,6 +90,7 @@ struct Point {
     double dot(const Point& p) const;
     double squaredNorm() const;
     double norm() const;
+    Point positiveCoordinates() const;
     double angle() const;
     double angle(const Point& p) const;
 
@@ -118,6 +119,7 @@ struct Point {
 
 using CurveYX = std::vector<IntPoint>;
 using Vector = Point;
+using PointList = std::vector<Point>;
 
 struct PointWithID : IntPoint {
     int id;
@@ -159,16 +161,21 @@ std::vector<float> movingAvg(const std::vector<float>& x, const std::vector<floa
 template <typename T>
 std::vector<T> medianFilter(const std::vector<T>& x, int halfSize = 1) {
     std::vector<T> y;
-    y.reserve(x.size() - 2 * halfSize);
-
+    y.reserve(x.size());
+    for (auto it = x.begin(); it != x.begin() + halfSize; it++) {
+        auto sortedX = std::vector<T>(x.begin(), it + halfSize + 1);
+        std::sort(sortedX.begin(), sortedX.end());
+        y.push_back(sortedX[sortedX.size() / 2]);
+    }
     for (int i = halfSize; i < (int)(x.size() - halfSize); i++) {
-        std::map<T, int> count;
-        for (int j = -halfSize; j <= halfSize; j++) count[x[i + j]]++;
-        T median;
-        for (auto [value, c] : count) {
-            if (c > count[median]) median = value;
-        }
-        y.push_back(median);
+        auto sortedX = std::vector<T>(x.begin() + i - halfSize, x.begin() + i + halfSize + 1);
+        std::sort(sortedX.begin(), sortedX.end());
+        y.push_back(sortedX[halfSize]);
+    }
+    for (auto it = x.end() - halfSize; it != x.end(); it++) {
+        auto sortedX = std::vector<T>(it - halfSize, x.end());
+        std::sort(sortedX.begin(), sortedX.end());
+        y.push_back(sortedX[sortedX.size() / 2]);
     }
     return y;
 }
@@ -185,6 +192,32 @@ std::vector<double> linspace(double start, double end, u_int n, bool endpoint = 
 inline double linspace(int i, double start, double end, int n, bool endpoint = true) {
     double step = (end - start) / (endpoint ? (n - 1) : n);
     return start + i * step;
+}
+
+std::vector<int> quantize_triband(const std::vector<float>& x, float low, float high, std::size_t medianHalfSize = 3);
+
+template <typename T>
+T percentile(const std::vector<T>& x, float p) {
+    assertm(p >= 0 && p <= 100, "Percentile must be between 0 and 100.");
+    std::vector<T> sorted_x = x;
+    std::sort(sorted_x.begin(), sorted_x.end());
+    return sorted_x[(int)round(p / 100 * (sorted_x.size() - 1))];
+}
+
+template <typename T>
+std::vector<T> diff(const std::vector<T>& x) {
+    std::vector<T> y;
+    y.reserve(x.size() - 1);
+    for (std::size_t i = 1; i < x.size(); i++) y.push_back(x[i] - x[i - 1]);
+    return y;
+}
+
+template <typename T>
+std::vector<T> abs(const std::vector<T>& x) {
+    std::vector<T> y;
+    y.reserve(x.size());
+    for (const auto& xi : x) y.push_back(std::abs(xi));
+    return y;
 }
 
 static const float SQRT2 = sqrt(2);
@@ -238,21 +271,23 @@ std::vector<torch::Tensor> vectors_to_tensors(const std::vector<std::vector<T>>&
 CurveYX tensor_to_curve(const torch::Tensor& tensor);
 std::vector<CurveYX> tensors_to_curves(const std::vector<torch::Tensor>& tensors);
 std::vector<IntPair> tensor_to_vectorIntPair(const torch::Tensor& tensor);
+PointList tensor_to_pointList(const torch::Tensor& tensor);
 
-/*******************************************************************************************************************
- *             === NEIGHBORS ===
- *******************************************************************************************************************/
-/**
- * @brief Structure representing neighborhood coordinates: (y, x) and the id of the neighbor.
- *
- * The id of the neighbor is in the following order:
- *    0 1 2
- *    7 . 3
- *    6 5 4
- *
- */
-static const std::array<PointWithID, 8> NEIGHBORHOOD = {
-    {{-1, -1, 0}, {-1, 0, 1}, {-1, 1, 2}, {0, 1, 3}, {1, 1, 4}, {1, 0, 5}, {1, -1, 6}, {0, -1, 7}}};
+    /*******************************************************************************************************************
+     *             === NEIGHBORS ===
+     *******************************************************************************************************************/
+    /**
+     * @brief Structure representing neighborhood coordinates: (y, x) and the id of the neighbor.
+     *
+     * The id of the neighbor is in the following order:
+     *    0 1 2
+     *    7 . 3
+     *    6 5 4
+     *
+     */
+    static const std::array<PointWithID, 8> NEIGHBORHOOD = {
+        {{-1, -1, 0}, {-1, 0, 1}, {-1, 1, 2}, {0, 1, 3}, {1, 1, 4}, {1, 0, 5}, {1, -1, 6}, {0, -1, 7}}
+    };
 
 /**
  * @brief Structure representing neighborhood coordinates: (y, x) and the id of the neighbor. The close neighbors

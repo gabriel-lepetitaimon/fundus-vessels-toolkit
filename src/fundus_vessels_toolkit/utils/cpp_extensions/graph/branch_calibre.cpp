@@ -79,7 +79,10 @@ float fast_branch_calibre(const CurveYX &curveYX, std::size_t i, const Tensor2DA
         if (r2.is_inside(segShape) && segmentation[r2.y][r2.x]) dist += DIAGONAL_COMPENSATION;
     }
     */
-    return dist;
+
+    Point pixelDiagonal = tangent.positiveCoordinates();
+    pixelDiagonal = pixelDiagonal / std::max(tangent.x, tangent.y);
+    return dist + pixelDiagonal.norm();
 }
 
 /**

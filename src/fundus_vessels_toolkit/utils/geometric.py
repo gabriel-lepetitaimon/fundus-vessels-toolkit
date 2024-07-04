@@ -396,6 +396,9 @@ class Point(NamedTuple):
             return [self.distance(p) for p in other]
         return ((self.y - other.y) ** 2 + (self.x - other.x) ** 2) ** 0.5
 
+    def is_nan(self) -> bool:
+        return np.isnan(self.y) or np.isnan(self.x)
+
 
 def distance_matrix(points_coord: np.ndarray):
     """

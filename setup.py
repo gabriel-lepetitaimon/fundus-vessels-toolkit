@@ -18,7 +18,7 @@ def get_torch_extensions():
         extra_link_args = ["-s"]
 
     info = parallel_info()
-    if "backend: OpenMP" in info and "OpenMP not found" not in info:
+    if not DEBUG and "backend: OpenMP" in info and "OpenMP not found" not in info:
         extra_compile_args["cxx"] += ["-DAT_PARALLEL_OPENMP"]
         extra_compile_args["cxx"] += ["-fopenmp"]
         extra_link_args += ["-lgomp"]

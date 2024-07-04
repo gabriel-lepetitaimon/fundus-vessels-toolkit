@@ -169,6 +169,22 @@ torch::Tensor fast_branch_calibre_torch(const torch::Tensor &curveYX, const torc
     return widths_tensor.clone();
 }
 
+torch::Tensor curve_curvature(const torch::Tensor &curveYX, const torch::Tensor &tangents) {
+    const CurveYX &curve = tensor_to_curve(curveYX);
+    const PointList &tangents_vec = tensor_to_pointList(tangents);
+    auto const &contiguousCurvesStartEnd = splitInContiguousCurves(curve);
+
+    torch::Tensor curvatures_tensor = torch::empty({(long)curve.size()}, torch::kFloat);
+
+    for (auto const &[start, end] : contiguousCurvesStartEnd) {
+        auto const &curvatures = tangents_to_curvature(tangents_vec, TANGENT_SMOOTHING_KERNEL, start, end);
+
+        for (std::size_t i = start; i < end; i++) curvatures_tensor[i] = curvatures[i - start];
+    }
+
+    return curvatures_tensor;
+}
+
 /**************************************************************************************
  *             === PYBIND11 BINDINGS ===
  **************************************************************************************/
@@ -181,7 +197,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "Extract geometry information from a vessel graph.");
     m.def("track_branches", &track_branches_to_torch, "Track the orientation of branches in a vessel graph.");
     m.def("fast_curve_tangent", &fast_curve_tangent_torch, "Evaluate the tangent of a curve.");
-    m.def("fast_branch_boundaries", &fast_branch_boundaries_torch, "Evaluate the width of a branch.");
+    m.def("fast_branch_boundaries", &fast_branch_boundaries_torch, "Evaluate the boundaries of a branch.");
+    m.def("fast_branch_calibre", &fast_branch_calibre_torch, "Evaluate the width of a branch.");
+    m.def("curve_curvature", &curve_curvature, "Evaluate the curvature of a curve.");
 
     // === Skeleton.h ===
     m.def("detect_skeleton_nodes", &detect_skeleton_nodes, "Detect junctions and endpoints in a skeleton.");

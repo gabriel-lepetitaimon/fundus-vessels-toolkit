@@ -184,75 +184,78 @@ std::vector<Point> fast_curve_tangent(const CurveYX& curveYX, const std::vector<
  *
  * @return A list of indexes where the curve has an inflection point.
  */
-std::vector<std::size_t> curve_inflections_points(const std::vector<Point>& tangents,
-                                                  const std::vector<float>& dthetaSmoothHalfKernel,
-                                                  double angle_threshold, std::size_t start, std::size_t end) {
-    const std::size_t curveSize = tangents.size();
-    if (curveSize < 7) return {};
-    if (end == 0) end = curveSize - 1;
+std::vector<std::size_t> curve_inflections_points(const std::vector<Point>& tangents, const float dK_threshold,
+                                                  const std::vector<float>& tangentSmoothKernel, std::size_t start,
+                                                  std::size_t end) {
+    if (end == 0) end = tangents.size() - 1;
+    const std::size_t curveSize = end - start - 2;  // -2 because we need 2 points to compute the second derivative dK
 
-    std::vector<std::size_t> inflections;
+    // Check if enough points to compute the inflection points (median filtering size of quantize_triband() is 5)
+    if (curveSize < 5) return {};
 
-    std::vector<float> theta;
-    std::size_t size = end - start;
-    theta.reserve(size);
-    for (std::size_t i = start; i < size + start; i++) theta.push_back((float)tangents[i].angle());
+    // --- Compute curvature K ---
+    auto const& K = tangents_to_curvature(tangents, tangentSmoothKernel, start, end);
 
-    for (auto itTheta = theta.begin(); itTheta != theta.end() - 1; itTheta++) *itTheta = *(itTheta + 1) - *itTheta;
-    theta.pop_back();
+    // --- Compute derivative of curvature dK ---
+    auto const& dK = diff(K);
 
-    const std::vector<float>& dtheta_smooth = movingAvg(theta, dthetaSmoothHalfKernel);
+    // --- Find local minimum of dK ---
+    const float threshold = percentile(abs(dK), dK_threshold * 100);
+    auto const& K_quant = quantize_triband(dK, -threshold, threshold);
 
-    for (auto itDTheta = dtheta_smooth.begin(); itDTheta != dtheta_smooth.end(); itDTheta++) {
-        const std::size_t i = itDTheta - dtheta_smooth.begin();
-        if (*itDTheta > angle_threshold)
-            theta[i] = 1;
-        else if (*itDTheta < -angle_threshold)
-            theta[i] = -1;
-        else
-            theta[i] = 0;
-    }
-
-    int HALF_MED_FILTER = 2;
-    const std::vector<float>& dtheta_med = medianFilter(theta, HALF_MED_FILTER);
-
-    const auto UNKOWN_START = std::size_t(-1);
-    std::size_t inflectionStart = UNKOWN_START;
-    for (auto med = dtheta_med.begin(); med != dtheta_med.end(); med++) {
-        std::size_t i = med - dtheta_med.begin();
-        if (*med == 0 && *(med + 1) != 0) {
-            inflectionStart = i;
-        } else if (*med != 0 && *(med + 1) == 0) {
-            if (inflectionStart != UNKOWN_START) {
-                inflections.push_back((inflectionStart + i) / 2 + start);
-                inflectionStart = UNKOWN_START;
+    std::list<SizePair> minimum_intervals;
+    // Search for the first decreasing point
+    std::size_t i = 0;
+    while (i < curveSize && K_quant[i] != -1) i++;
+    // Search for the minimum intervals
+    for (; i < curveSize - 1; i++) {
+        if (K_quant[i + 1] != -1) {
+            std::size_t j;
+            for (j = i + 1; j < curveSize; j++) {
+                if (K_quant[j] == 1)
+                    break;
+                else if (K_quant[j] == -1)
+                    i = j;
             }
+            minimum_intervals.push_back({i, j});
+
+            // Search for the next decreasing point
+            while (j < curveSize && K_quant[j] != -1) j++;
+            i = j;
         }
     }
-
+    // Take the center of the intervals
+    std::vector<std::size_t> inflections;
+    inflections.reserve(minimum_intervals.size());
+    for (auto const& interval : minimum_intervals) inflections.push_back((interval[0] + interval[1] + 1) / 2);
     return inflections;
 }
 
-BSpline bspline_regression(const CurveYX& curve, const CurveTangents& tangents, double bspline_max_error,
-                           const std::vector<float>& inflection_halfKernel, double inflection_max_angle,
-                           std::size_t start, std::size_t end) {
-    if (curve.size() < 2) return {};
-    if (end == 0) end = curve.size();
+Point smooth_tangents(const CurveTangents& tangents, std::size_t i, const std::vector<float> weight,
+                      std::size_t curveStart, std::size_t curveEnd) {
+    if (curveEnd == 0) curveEnd = tangents.size();
+    const std::size_t K = weight.size();
 
-    // const std::vector<std::size_t>& inflections =
-    //    curve_inflections_points(tangents, inflection_halfKernel, inflection_max_angle, start, end);
+    Point t = tangents[i] * weight[0];
+    for (std::size_t j = 1; j < K && i >= j + curveStart; j++) t += tangents[i - j] * weight[j];
+    for (std::size_t j = 1; j < K && i + j < curveEnd; j++) t += tangents[i + j] * weight[j];
 
-    BSpline bspline;
-    // bspline.reserve(inflections.size() + 1);
+    return t.normalize();
+}
 
-    std::size_t first = start, last = 0;
-    /*for (std::size_t j = 0; j < inflections.size(); j++) {
-        last = inflections[j];
-        bspline.push_back(std::get<0>(fit_bezier(curve, tangents, bspline_max_error, first, last)));
-        first = inflections[j];
-    }*/
-    last = end - 1;
-    bspline.push_back(std::get<0>(fit_bezier(curve, tangents, bspline_max_error, first, last)));
+std::vector<float> tangents_to_curvature(const CurveTangents& tangents, const std::vector<float> weight,
+                                         std::size_t start, std::size_t end) {
+    if (end == 0) end = tangents.size();
+    const std::size_t outSize = end - start - 1;
+    std::vector<float> curvatures;
+    curvatures.reserve(outSize);
 
-    return bspline;
+    Point lastT = smooth_tangents(tangents, start, weight, start, end);
+    for (std::size_t i = 0; i < outSize; i++) {
+        auto const& t = smooth_tangents(tangents, i + start + 1, weight, start, end);
+        curvatures.push_back((t - lastT).norm());
+        lastT = t;
+    }
+
+    return curvatures;
 }

@@ -45,13 +45,19 @@ std::vector<Point> fast_curve_tangent(const CurveYX &curveYX,
                                       const std::vector<float> &GaussKernel = TANGENT_HALF_GAUSS,
                                       const std::vector<int> &evaluateAtID = {});
 
-BSpline bspline_regression(const CurveYX &curve, const CurveTangents &tangents, double bspline_max_error,
-                           const std::vector<float> &inflection_halfKernel = GAUSSIAN_HALF_STD3,
-                           double inflection_max_angle = 1.5, std::size_t start = 0, std::size_t end = 0);
+static const std::vector<float> TANGENT_SMOOTHING_KERNEL = gaussianHalfKernel1D(5, 15);
+std::vector<std::size_t> curve_inflections_points(
+    const std::vector<Point> &tangents, const float dK_threshold,
+    const std::vector<float> &tangentSmoothKernel = TANGENT_SMOOTHING_KERNEL, std::size_t start = 0,
+    std::size_t end = 0);
 
-std::vector<std::size_t> curve_inflections_points(const std::vector<Point> &tangents,
-                                                  const std::vector<float> &dthetaSmoothHalfKernel,
-                                                  double angle_threshold, std::size_t start, std::size_t end);
+Point smooth_tangents(const CurveTangents &tangents, std::size_t i,
+                      const std::vector<float> weight = TANGENT_SMOOTHING_KERNEL, std::size_t start = 0,
+                      std::size_t end = 0);
+
+std::vector<float> tangents_to_curvature(const CurveTangents &tangents,
+                                         const std::vector<float> weight = TANGENT_SMOOTHING_KERNEL,
+                                         std::size_t start = 0, std::size_t end = 0);
 
 /**************************************************************************************
  *              === BRANCH_TRACKING.CPP ===
@@ -98,5 +104,12 @@ float largest_near_calibre(const Edge &edge, const GraphAdjList &adjacency, cons
 std::tuple<std::vector<CurveTangents>, std::vector<std::vector<float>>, std::vector<BSpline>> extract_branches_geometry(
     std::vector<CurveYX> branch_curves, const Tensor2DAccessor<bool> &segmentation,
     std::map<std::string, double> options = {}, bool assume_contiguous = false);
+
+BSpline bspline_regression(const CurveYX &curve, const CurveTangents &tangents, double bspline_max_error,
+                           const float dK_threshold = 0.15, std::size_t start = 0, std::size_t end = 0);
+
+BSpline iterative_fit_bspline(const CurveYX &d, const std::vector<Point> &tangents, const BezierCurve &bezier,
+                              const std::vector<double> &u, const std::vector<std::size_t> &splitCandidates,
+                              double error, std::size_t first, std::size_t last);
 
 #endif  // BRANCH_TRACKING_H

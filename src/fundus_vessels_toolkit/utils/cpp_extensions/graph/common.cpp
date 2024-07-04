@@ -114,6 +114,14 @@ std::vector<IntPair> tensor_to_vectorIntPair(const torch::Tensor& tensor) {
     return vec;
 }
 
+PointList tensor_to_pointList(const torch::Tensor& tensor) {
+    auto accessor = tensor.accessor<int, 2>();
+    PointList curve;
+    curve.reserve(tensor.size(0));
+    for (int i = 0; i < tensor.size(0); i++) curve.push_back({accessor[i][0], accessor[i][1]});
+    return curve;
+}
+
 // === IntPoint ===
 IntPoint::IntPoint(int y, int x) : y(y), x(x) {}
 IntPoint::IntPoint(IntPair yx) : y(yx[0]), x(yx[1]) {}
@@ -184,6 +192,7 @@ Point Point::normalize() const {
 
 double Point::dot(const Point& p) const { return y * p.y + x * p.x; }
 double Point::squaredNorm() const { return y * y + x * x; }
+Point Point::positiveCoordinates() const { return Point(std::abs(y), std::abs(x)); }
 double Point::norm() const { return sqrt(y * y + x * x); }
 double Point::angle() const { return atan2(y, x); }
 double Point::angle(const Point& p) const { return acos(dot(p) / (norm() * p.norm())); }
@@ -315,6 +324,21 @@ std::vector<double> linspace(double start, double end, u_int n, bool endpoint) {
     double step = (end - start) / (endpoint ? (n - 1) : n);
     for (u_int i = 0; i < n; i++) vec.push_back(start + i * step);
     return vec;
+}
+
+std::vector<int> quantize_triband(const std::vector<float>& x, float low, float high, std::size_t medianHalfSize) {
+    std::vector<int> y;
+    y.reserve(x.size());
+    for (const auto& v : x) {
+        if (v < low)
+            y.push_back(-1);
+        else if (v > high)
+            y.push_back(1);
+        else
+            y.push_back(0);
+    }
+    if (medianHalfSize == 0 or y.size() < medianHalfSize * 2) return y;
+    return medianFilter(y, medianHalfSize);
 }
 
 // === Graph ===

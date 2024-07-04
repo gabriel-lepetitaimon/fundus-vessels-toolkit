@@ -3,16 +3,16 @@ from __future__ import annotations
 from copy import copy, deepcopy
 from typing import Dict, Generator, Iterable, List, Optional, Tuple, TypeAlias
 
-from fundus_vessels_toolkit.utils.lookup_array import invert_lookup
 import numpy as np
 import numpy.typing as npt
 
+from fundus_vessels_toolkit.utils.lookup_array import invert_lookup
 from fundus_vessels_toolkit.utils.math import np_find_sorted
 
 from ..utils.geometric import Point, Rect
-from .vbranch_geo_attr import VBranchCurveAttr, VBranchGeoAttr
+from .vbranch_geo_attr import VBranchCurveAttr, VBranchGeoAttr, VGeoAttr
 
-BranchesAttributes: TypeAlias = Dict[str, List[Optional[np.ndarray | VBranchGeoAttr]]]
+BranchesAttributes: TypeAlias = Dict[VGeoAttr, List[Optional[VBranchGeoAttr]]]
 
 
 class VGeometricData:
@@ -23,7 +23,7 @@ class VGeometricData:
         nodes_coord: npt.NDArray[np.uint32],
         branches_curve: List[npt.NDArray[np.uint32]],
         domain: Rect,
-        branches_attr: Optional[BranchesAttributes] = None,
+        branches_attr: Optional[Dict[VGeoAttr | str, List[Optional[np.ndarray | VBranchGeoAttr]]]] = None,
         nodes_id: Optional[npt.NDArray[np.uint32]] = None,
         branches_id: Optional[npt.NDArray[np.uint32]] = None,
     ):
@@ -88,22 +88,33 @@ class VGeometricData:
 
         # Check and define branches curves attributes
         if branches_attr is None or not len(branches_attr):
-            self._branches_attrs = {}
+            self._branches_attrs: BranchesAttributes = {}
         else:
+            self._branches_attrs: BranchesAttributes = {}
             for attr_name, attr in branches_attr.items():
+                attr_type = None
                 for branch_id, attr_data in enumerate(attr):
                     if isinstance(attr_data, np.ndarray):
                         attr_data = VBranchCurveAttr(attr_data)
+                        attr[branch_id] = attr_data
                     elif not isinstance(attr_data, VBranchGeoAttr):
                         raise ValueError(
                             f"Invalid type for attribute {attr_name} of branch {branch_id}. "
                             f"Expected np.ndarray or VBranchGeoAttr, got {type(attr_data)}."
                         )
+                    elif attr_type is not None and not isinstance(attr_data, attr_type):
+                        raise ValueError(
+                            f"Inconsistent type for attribute {attr_name} of branch {branch_id}: {type(attr_data)}. "
+                            f"Previous branches were of type: {attr_type}."
+                        )
+                    else:
+                        attr_type = type(attr_data)
                     is_invalid = attr_data.is_invalid(self._branch_ctx(branch_id))
                     if is_invalid:
                         raise ValueError(f"Invalid attribute {attr_name} of branch {branch_id}.\n{is_invalid}.")
-
-            self._branches_attrs: Dict[str, List[VBranchGeoAttr]] = branches_attr
+                if not isinstance(attr_name, VGeoAttr):
+                    attr_name = VGeoAttr.from_str(attr_name, attr_type)
+                self._branches_attrs[attr_name] = attr
 
         # Ensure that the nodes and branches are sorted by their index in the graph
         self._sort_internal_nodes_index()
@@ -254,7 +265,7 @@ class VGeometricData:
         if isinstance(id, np.ndarray):
             internal_id = self._graph_to_internal_branches_index(id, graph_index=graph_indexing, check_valid=False)
             if is_single:
-                return self._branches_curve[internal_id[0]]
+                return self._branches_curve[internal_id[0]] if internal_id[0] > 0 else None
             return [self._branches_curve[i] if i > 0 else None for i in internal_id]
 
         else:
@@ -316,25 +327,6 @@ class VGeometricData:
                 chord.append(np.linalg.norm(curve[-1] - curve[0]))
         return chord[0] if is_single else np.asarray(chord, dtype=np.float32)
 
-    def attr_of_branch(self, branch_id: int) -> Dict[str, VBranchGeoAttr]:
-        """Return the attributes of a branch.
-
-        Parameters
-        ----------
-        branch_id : int
-            The id of the branch.
-
-        Returns
-        -------
-        Dict[str, VBranchGeoAttr]
-            The attributes of the branch. The keys are the attribute names and the values are the attribute values.
-        """
-        return {
-            attr_name: attr_data[branch_id]
-            for attr_name, attr_data in self._branches_attrs.items()
-            if attr_data[branch_id] is not None
-        }
-
     def distance_to_branch(
         self, point: Point, branch_id: Optional[int] = None, return_closest_point=False
     ) -> float | Tuple[float, Point]:
@@ -374,6 +366,171 @@ class VGeometricData:
         distances = np.linalg.norm(point - curve, axis=1)
         min_i = np.argmin(distances)
         return distances[min_i], curve[min_i] if return_closest_point else distances[min_i]
+
+    ####################################################################################################################
+    #  === BRANCH GEOMETRIC ATTRIBUTES ===
+    ####################################################################################################################
+    def attr_by_branch(self, branch_id: int, version=None) -> Dict[str, VBranchGeoAttr]:
+        """Return the attributes of a branch.
+
+        Parameters
+        ----------
+        branch_id : int
+            The id of the branch.
+
+        Returns
+        -------
+        Dict[str, VBranchGeoAttr]
+            The attributes of the branch. The keys are the attribute names and the values are the attribute values.
+        """
+        all_versions = {
+            attr: attr_data[branch_id]
+            for attr, attr_data in self._branches_attrs.items()
+            if attr_data[branch_id] is not None
+        }
+        if version is None:
+            return {str(attr): attr_data for attr, attr_data in all_versions.items()}
+        return {attr.name: attr_data for attr, attr_data in all_versions.items() if attr.version == version}
+
+    def attr_by_types(self, attr_type: type, version=None) -> Dict[str, VBranchGeoAttr]:
+        """Return the attributes of a branch.
+
+        Parameters
+        ----------
+        branch_id : int
+            The id of the branch.
+
+        Returns
+        -------
+        Dict[str, VBranchGeoAttr]
+            The attributes of the branch. The keys are the attribute names and the values are the attribute values.
+        """
+        return {
+            str(attr): attr_data for attr, attr_data in self._branches_attrs.items() if isinstance(attr_data, attr_type)
+        }
+
+    def branches_attr(
+        self,
+        attr_name: str,
+        branch_id: Optional[int | npt.NDArray[np.int32]] = None,
+        *,
+        version: Optional[str] = None,
+        graph_indexing=True,
+    ) -> VBranchGeoAttr | List[VBranchGeoAttr]:
+        """Return the attribute of a branch.
+
+        Parameters
+        ----------
+        branch_id : int
+            The id of the branch.
+
+        attr_name : str
+            The name of the attribute.
+
+        Returns
+        -------
+        VBranchGeoAttr
+            The attribute of the branch.
+        """
+        attr = self._fetch_attr(attr_name, version)
+        if branch_id is None:
+            return attr
+
+        is_single = np.isscalar(branch_id)
+        if is_single:
+            branch_id = np.asarray([branch_id])
+
+        if isinstance(branch_id, np.ndarray):
+            internal_id = self._graph_to_internal_branches_index(
+                branch_id, graph_index=graph_indexing, check_valid=False
+            )
+            if is_single:
+                return attr[internal_id[0]] if internal_id[0] > 0 else None
+            return [attr[i] if i > 0 else None for i in internal_id]
+        else:
+            raise TypeError(f"Invalid type: {type(branch_id)} for branches index.")
+
+    def set_branches_attr(
+        self,
+        attr_name: str,
+        attr_data: VBranchGeoAttr | np.ndarray | List[VBranchGeoAttr | np.ndarray],
+        branch_id: Optional[int | npt.NDArray[np.int32]] = None,
+        *,
+        version: Optional[str] = "",
+        graph_indexing=True,
+        no_check=False,
+    ) -> None:
+        """Set a geometric attribute of one or more branch.
+
+        Parameters
+        ----------
+        attr_name : str
+            The name of the attribute
+        attr_data : VBranchGeoAttr | np.ndarray | List[Optional[VBranchGeoAttr | np.ndarray]]
+            The attribute data to set. If a list is provided, the length should be the same as the number of branches.
+        branch_id : Optional[int  |  npt.NDArray[np.int32]], optional
+            The id of the branch(es), by default None
+        version : Optional[str], optional
+            The version of the attribute, by default ''
+        graph_indexing : bool, optional
+            Whether the branch_id is indexed according to the graph (True) or to the internal representation (False), by default True.
+        no_check : bool, optional
+            If True, do not check the validity of the attribute data, by default False
+
+        """  # noqa: E501
+        # === Check Arguments ===
+        # Check: branch_id
+        if isinstance(branch_id, int):
+            branch_id = [branch_id]
+        if branch_id is None:
+            branch_id = np.arange(self.branches_count)
+        else:
+            branch_id = self._graph_to_internal_branches_index(branch_id, graph_indexing=graph_indexing)
+
+        # Check: attr_data
+        if isinstance(attr_data, (np.ndarray, VBranchGeoAttr)):
+            assert len(branch_id) == 1, "Invalid number of branches for attribute data."
+            attr_data = [attr_data]
+        else:
+            assert len(attr_data) == len(branch_id), "Invalid number of branches for attribute data."
+
+        attr_type = None
+        for i, data in enumerate(attr_data):
+            if not isinstance(data, np.ndarray):
+                data = VBranchCurveAttr(data)
+            if attr_type is not None:
+                assert isinstance(data, attr_type), (
+                    f"Inconsistent type for attribute {attr_name} of branch {branch_id[i]}: {type(data)}. "
+                    f"Previous branches were of type: {attr_type}."
+                )
+            elif isinstance(data, VBranchGeoAttr):
+                attr_type = type(data)
+            else:
+                raise ValueError(f"Invalid type for attribute data: {type(data)}.")
+            if not no_check:
+                is_invalid = data.is_invalid(self._branch_ctx(branch_id[i]))
+                if is_invalid:
+                    raise ValueError(f"Invalid attribute {attr_name} of branch {branch_id[i]}.\n{is_invalid}.")
+
+        # === Set Attribute ===
+        attr = self._fetch_attr(attr_name, version, attr_type, emplace=True)
+        for i, data in zip(branch_id, attr_data):
+            attr[i] = data
+
+    def _fetch_attr(
+        self, attr_name: str, version: Optional[str] = None, attr_type: type = VBranchGeoAttr, *, emplace=False
+    ) -> List[Optional[VBranchGeoAttr]]:
+        """Fetch the attribute data of a branch."""
+        if emplace:
+            # TODO: if the type is not correct, raise an error
+            return self._branches_attrs.getdefault(
+                VGeoAttr.from_str(attr_name, attr_type), [None] * self.branches_count
+            )
+        else:
+            # TODO: if the type is not correct, raise an error
+            attr = self._branches_attrs.get(VGeoAttr.from_str(attr_name, attr_type), None)
+            if attr is None:
+                raise KeyError(f"Attribute {attr_name} not found.")
 
     ####################################################################################################################
     #  === GRAPH MANIPULATION ===

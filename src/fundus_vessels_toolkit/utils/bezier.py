@@ -8,22 +8,22 @@ from .geometric import Point
 from .graph.measures import curve_tangent
 
 
-class BezierSpline:
+class BSpline:
     def __init__(self, curves: List[BezierCubic]):
         self.curves = curves
 
     def __repr__(self) -> str:
-        return f"BezierSpline({repr(self.curves)})"
+        return f"BSpline({repr(self.curves)})"
 
     def __str__(self) -> str:
-        descr = f"BezierSpline({len(self.curves)} curves):\n\t"
+        descr = f"BSpline({len(self.curves)} curves):\n\t"
         return descr + "\n\t".join(str(curve) for curve in self.curves)
 
     def to_path(self) -> str:
         return "\n".join(curve.to_path() for curve in self.curves)
 
     @classmethod
-    def fit(cls, yx_points: np.array, max_error: float, split_on=None, tangent_std=2) -> BezierSpline:
+    def fit(cls, yx_points: np.array, max_error: float, split_on=None, tangent_std=2) -> BSpline:
         if len(yx_points) < 4:
             return cls([BezierCubic(*[Point(*yx_points[i]) for i in (0, -1, 0, -1)])])
 
@@ -44,7 +44,7 @@ class BezierSpline:
         return cls([BezierCubic.from_array(curve) for curve in curves])
 
     @classmethod
-    def from_array(cls, curves: np.array) -> BezierSpline:
+    def from_array(cls, curves: np.array) -> BSpline:
         return cls([BezierCubic.from_array(curve) for curve in curves])
 
     def intermediate_points(self, return_tangent=False) -> np.array | Tuple[np.array, np.array]:
@@ -61,6 +61,12 @@ class BezierSpline:
         else:
             points.append(self.curves[-1].p1)
         return np.array(points)
+
+    def flip(self) -> BSpline:
+        return BSpline([curve.flip() for curve in reversed(self.curves)])
+
+    def __add__(self, other: BSpline) -> BSpline:
+        return BSpline(self.curves + other.curves)
 
     def __len__(self) -> int:
         return len(self.curves)
@@ -83,6 +89,8 @@ class BezierCubic(NamedTuple):
         return cls(Point(*curve[0]), Point(*curve[1]), Point(*curve[2]), Point(*curve[3]))
 
     def to_path(self) -> str:
+        if self.p0.is_nan() or self.c0.is_nan() or self.c1.is_nan() or self.p1.is_nan():
+            return ""
         return f"M {self.p0.x},{self.p0.y} C {self.c0.x},{self.c0.y} {self.c1.x},{self.c1.y} {self.p1.x},{self.p1.y}"
 
     def to_array(self) -> np.array:
@@ -104,6 +112,9 @@ class BezierCubic(NamedTuple):
     def evaluate_tangent(self, t: float, normalized=False):
         tangent = qprime(self.to_array(), t)
         return tangent / np.linalg.norm(tangent, axis=1)[:, None] if normalized else tangent
+
+    def flip(self) -> BezierCubic:
+        return BezierCubic(self.p1, 2 * self.p1 - self.c1, 2 * self.p0 - self.c0, self.p0)
 
 
 # Fit one (ore more) Bezier curves to a set of points

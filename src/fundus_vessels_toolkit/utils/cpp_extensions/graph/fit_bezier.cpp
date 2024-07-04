@@ -11,36 +11,12 @@ from "Graphics Gems", Academic Press, 1990
  *  	Fit a Bezier curve to a (sub)set of digitized points
  *
  * CurveYX d : Array of digitized points
- * int first, last : Indices of first and last (included!) pts in region
- * Vector t0, t1 : Unit tangent vectors at endpoints
- * double error : User-defined error squared
- */
-BSpline fit_bspline(const CurveYX& d, const std::vector<Point>& tangent, double error, int first, int last) {
-    auto [bezCurve, maxError, maxErrorPoint] = fit_bezier(d, tangent, error, first, last);
-
-    if (maxError < error) {
-        /*  If error is acceptable, return this curve */
-        return {bezCurve};
-    } else {
-        /* Fitting failed -- split at max error point and fit recursively */
-        auto bspline0 = fit_bspline(d, tangent, error, first, maxErrorPoint);
-        auto const& bspline1 = fit_bspline(d, tangent, error, maxErrorPoint, last);
-        bspline0.insert(bspline0.end(), bspline1.begin(), bspline1.end());
-        return bspline0;
-    }
-}
-
-/*
- *  FitCubic :
- *  	Fit a Bezier curve to a (sub)set of digitized points
- *
- * CurveYX d : Array of digitized points
  * int first, last : Indices of first and last  (included!) pts in region
  * Vector t0, t1 : Unit tangent vectors at endpoints
  * double error : User-defined error squared
  */
-std::tuple<BezierCurve, double, int> fit_bezier(const CurveYX& d, const std::vector<Point>& tangent, double error,
-                                                std::size_t first, std::size_t last) {
+std::tuple<BezierCurve, double, std::vector<double>> fit_bezier(const CurveYX& d, const std::vector<Point>& tangent,
+                                                                double error, std::size_t first, std::size_t last) {
     BezierCurve bezCurve;          /*Control points of fitted Bezier curve*/
     const int MAX_ITERATIONS = 20; /*  Max times to try iterating  */
 
@@ -58,7 +34,7 @@ std::tuple<BezierCurve, double, int> fit_bezier(const CurveYX& d, const std::vec
         bezCurve[3] = d[last];
         bezCurve[1] = d[first] + t0 * dist;
         bezCurve[2] = d[last] + t1 * dist;
-        return {bezCurve, 0, -1};
+        return {bezCurve, 0, {(double)first, (double)last}};
     }
 
     /*  Parameterize points, and attempt to fit curve */
@@ -77,7 +53,7 @@ std::tuple<BezierCurve, double, int> fit_bezier(const CurveYX& d, const std::vec
             if (maxError < error) break;
         }
     }
-    return {bezCurve, maxError, splitPoint};
+    return {bezCurve, maxError, u};
 }
 
 /*
@@ -151,6 +127,25 @@ BezierCurve bezier_regression(const CurveYX& d, std::size_t first, std::size_t l
         bezCurve[2] = bezCurve[3] + t1 * alpha_r;
         return bezCurve;
     }
+}
+
+PointList evaluate_bezier(const BezierCurve& bezCurve, const std::vector<double>& u) {
+    PointList curve;
+    curve.reserve(u.size());
+    for (int i = 0; i < (int)u.size(); i++) curve.push_back(BezierPolynomialTriangle(bezCurve, u[i]));
+    return curve;
+}
+
+PointList evaluate_bezier_tangent(const BezierCurve& bezCurve, const std::vector<double>& u) {
+    PointList curve;
+    curve.reserve(u.size());
+
+    // Precompute the tangent control polynomial
+    std::array<Point, 3> Q;
+    for (int i = 0; i <= 2; i++) Q[i] = (bezCurve[i + 1] - bezCurve[i]) * 3.0;
+
+    for (int i = 0; i < (int)u.size(); i++) curve.push_back(BezierPolynomialTriangle(Q, u[i]));
+    return curve;
 }
 
 /*
@@ -292,7 +287,7 @@ std::tuple<double, std::size_t> computeMaxError(const CurveYX& d, std::size_t fi
     std::size_t splitPoint = (last - first + 1) / 2;
     maxDist = 0.0;
     for (std::size_t i = first + 1; i < last; i++) {
-        P = BezierII(std::vector<Point>(bezCurve.begin(), bezCurve.end()), u[i - first]);
+        P = BezierPolynomialTriangle(bezCurve, u[i - first]);
         v = P - d[i];
         dist = v.squaredNorm();
         if (dist >= maxDist) {
