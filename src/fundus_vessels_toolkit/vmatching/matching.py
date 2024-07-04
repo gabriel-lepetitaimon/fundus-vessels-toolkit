@@ -2,12 +2,12 @@ from typing import Tuple
 
 import numpy as np
 
-from ..vtree import VascularGraph
+from ..vascular_data_objects import VGraph
 
 
-def simple_graph_matching(
-    node1_yx: tuple[np.ndarray, np.ndarray],
-    node2_yx: tuple[np.ndarray, np.ndarray],
+def euclidien_node_matching(
+    node1_yx: np.ndarray,
+    node2_yx: np.ndarray,
     max_matching_distance: float | None = None,
     min_distance: float | None = None,
     density_sigma: float | None = None,
@@ -45,10 +45,6 @@ def simple_graph_matching(
     """
     from pygmtools.linear_solvers import hungarian
 
-    if isinstance(node1_yx, tuple) and len(node1_yx) == 2:
-        node1_yx = np.stack(node1_yx, axis=1)
-    if isinstance(node2_yx, tuple) and len(node2_yx) == 2:
-        node2_yx = np.stack(node2_yx, axis=1)
     n1 = len(node1_yx)
     n2 = len(node2_yx)
 
@@ -249,8 +245,8 @@ def label_edge_diff(graph_pred, graph_true, n_match):
 
 
 def naive_edit_distance(
-    graph1: VascularGraph,
-    graph2: VascularGraph,
+    graph1: VGraph,
+    graph2: VGraph,
     max_matching_distance: float | None = None,
     density_matching_sigma: float | None = None,
     min_distance: float | None = None,
@@ -287,21 +283,19 @@ def naive_edit_distance(
 
     """  # noqa: E501
     # Match nodes
-    node_match_id1, node_match_id2 = simple_graph_matching(
-        graph1.nodes_yx_coord,
-        graph2.nodes_yx_coord,
+    node_match_id1, node_match_id2 = euclidien_node_matching(
+        graph1.nodes_coord(),
+        graph2.nodes_coord(),
         max_matching_distance=max_matching_distance,
         density_sigma=density_matching_sigma,
         min_distance=min_distance,
     )
-    graph1.shuffle_nodes(node_match_id1)
-    graph2.shuffle_nodes(node_match_id2)
+    graph1.reindex_nodes(node_match_id1, inverse_lookup=True)
+    graph2.reindex_nodes(node_match_id2, inverse_lookup=True)
     nb_match = len(node_match_id1)
 
     # Match edges
-    dist1, dist2, backtrack1, backtrack2 = shortest_unmatched_path(
-        graph1.node_adjacency_list(), graph2.node_adjacency_list(), nb_match
-    )
+    dist1, dist2, backtrack1, backtrack2 = shortest_unmatched_path(graph1.branch_list, graph2.branch_list, nb_match)
 
     branches_id1 = backtrack1[..., 0]
     branches_id2 = backtrack2[..., 0]

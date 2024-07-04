@@ -1,17 +1,93 @@
-from typing import Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import scipy.ndimage as scimage
 import torch
 
-from ..utils.cpp_extensions.skeleton_parsing_cpp import detect_skeleton_nodes as detect_skeleton_nodes_cpp
-from ..utils.cpp_extensions.skeleton_parsing_cpp import parse_skeleton as parse_skeleton_cpp
+from ..utils.cpp_extensions.graph_cpp import detect_skeleton_nodes as detect_skeleton_nodes_cpp
+from ..utils.cpp_extensions.graph_cpp import parse_skeleton as parse_skeleton_cpp
+from ..utils.cpp_extensions.graph_cpp import parse_skeleton_with_cleanup as parse_skeleton_with_cleanup_cpp
+from ..utils.geometric import Point
 from ..utils.torch import autocast_torch
+from ..vascular_data_objects import VGeometricData, VGraph
+
+
+def skeleton_to_vgraph(
+    skeleton_map: torch.Tensor | np.ndarray,
+    segmentation_map: Optional[torch.Tensor | np.ndarray] = None,
+    fix_hollow=True,
+    clean_branches_extremities=20,
+    max_spurs_length=0,
+    max_spurs_calibre_factor=1,
+) -> VGraph:
+    """
+    Parse a skeleton image into a graph of branches and nodes.
+
+    Parameters
+    ----------
+    skeleton_map : np.ndarray | torch.Tensor
+        Binary image of the vessel skeleton.
+
+    segmentation_map : np.ndarray | torch.Tensor
+        Segmentation map of the image. If provided, the function will remove small branches and clean the terminations.
+
+    fix_hollow:
+        If True (by default), hollow cross pattern are filled and considered as a 4-branches junction.
+
+    clean_branches_extremities:
+        If > 0, clean the skeleton extremities of each branches.
+        This step ensure that the branch skeleton actually starts where the branch emerge from the junction/bifurcation and not at the center of the junction/bifurcation. Skeleton inside the junction/bifurcation is often not relevant and may affect the accuracy of tangent and calibre estimation.
+
+        The value of ``clean_branches_extremities`` is the maximum number of pixel that can be removed through this process.
+
+    max_spurs_length:
+        If > 0, remove spurs (short terminal branches) that are shorter than this value in pixel.
+
+    max_spurs_calibre_factor:
+        If > 0, remove spurs (short terminal branches) that are shorter than ``max_spurs_calibre_factor`` times the calibre of the largest branch adjacent to the spurs.
+
+    Returns
+    -------
+    A :class:`VGraph` object containing the graph of the skeleton.
+    """  # noqa: E501
+    if isinstance(skeleton_map, np.ndarray):
+        skeleton_map = torch.from_numpy(skeleton_map)
+    skeleton_map = skeleton_map.cpu().bool()
+    if segmentation_map is not None:
+        if isinstance(segmentation_map, np.ndarray):
+            segmentation_map = torch.from_numpy(segmentation_map)
+        segmentation_map = segmentation_map.cpu().bool()
+
+    remove_endpoint_branches = max_spurs_length > 0 or max_spurs_calibre_factor > 0
+    skeleton_map = detect_skeleton_nodes(
+        skeleton_map, fix_hollow=fix_hollow, remove_endpoint_branches=remove_endpoint_branches
+    )
+
+    labels, branch_list, nodes_yx, branches_curve = parse_skeleton(
+        skeleton_map,
+        segmentation_map=segmentation_map,
+        clean_branches_extremities=clean_branches_extremities,
+        max_spurs_length=max_spurs_length,
+        max_spurs_calibre_factor=max_spurs_calibre_factor,
+    )
+    geo_data = VGeometricData(
+        nodes_coord=nodes_yx.numpy(),
+        branches_curve=[_.numpy() for _ in branches_curve],
+        domain=labels.shape,
+    )
+
+    return VGraph(branch_list.numpy(), geo_data)
 
 
 @autocast_torch
-def parse_skeleton(skeleton_map: np.ndarray | torch.Tensor) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
+def parse_skeleton(
+    skeleton_map: torch.Tensor,
+    segmentation_map: torch.Tensor = None,
+    clean_branches_extremities=0,
+    max_spurs_length=0,
+    max_spurs_calibre_factor=1,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """# noqa: E501
     Label the skeleton map with the junctions and endpoints.
 
     Parameters
@@ -21,22 +97,34 @@ def parse_skeleton(skeleton_map: np.ndarray | torch.Tensor) -> Tuple[np.ndarray,
 
     Returns
     -------
+    labels map : np.ndarray
+        The skeletonized image where each pixel is described by an integer value as:
+            - 0: background
+            - > 0: Vessel branch (the branch ID is the pixel value -1)
+            - < 0: Vessel endpoint or junction (the node ID is the absolute pixel value -1)
     branch list : np.ndarray
         Array of shape [B, 2] Adjacency list of the skeleton graph.
-    branch labels : np.ndarray
-        Label of each branch in the skeleton.
     node coordinates : np.ndarray
         Array of shape [N, 2]: the (y, x) positions of the nodes in the skeleton.
+    branches coordinates : list[np.ndarray]
+        List of B arrays of shape [l, 2] containing the (y, x) positions of the consecutive pixels in the branch l.
     """
-    if isinstance(skeleton_map, np.ndarray):
-        skeleton_map = torch.from_numpy(skeleton_map)
+    skeleton_map = skeleton_map.cpu()
     if skeleton_map.dtype == torch.bool:
         skeleton_map = detect_skeleton_nodes(skeleton_map)
+    skeleton_map = skeleton_map.int()
 
-    out = parse_skeleton_cpp(skeleton_map.cpu().int())
-    branch_labels, branch_list, nodes_coordinates = tuple(_.numpy() for _ in out[:3])
-
-    return branch_list, branch_labels, nodes_coordinates
+    if segmentation_map is not None:
+        segmentation_map = segmentation_map.cpu().bool()
+        opts = dict(
+            clean_terminations=clean_branches_extremities,
+            max_spurs_length=max_spurs_length,
+            max_spurs_calibre_ratio=max_spurs_calibre_factor,
+        )
+        out = parse_skeleton_with_cleanup_cpp(skeleton_map, segmentation_map, opts)
+    else:
+        out = parse_skeleton_cpp(skeleton_map)
+    return (skeleton_map,) + out
 
 
 @autocast_torch

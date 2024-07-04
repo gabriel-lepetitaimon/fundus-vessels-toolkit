@@ -303,6 +303,9 @@ class Point(NamedTuple):
     y: float
     x: float
 
+    def __str__(self) -> str:
+        return f"({self.y:.1f}, {self.x:.1f})"
+
     def xy(self) -> tuple[float, float]:
         return self.x, self.y
 

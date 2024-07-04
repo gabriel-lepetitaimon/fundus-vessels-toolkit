@@ -1,12 +1,15 @@
-from typing import Iterable
+from typing import Iterable, List
 
 import numpy as np
 import torch
 
-from ..cpp_extensions.graph_geometry_cpp import extract_branches_geometry as extract_branches_geometry_cpp
-from ..cpp_extensions.graph_geometry_cpp import fast_branch_boundaries as fast_branch_boundaries_cpp
-from ..cpp_extensions.graph_geometry_cpp import fast_curve_tangent as fast_curve_tangent_cpp
-from ..cpp_extensions.graph_geometry_cpp import track_branches as track_branches_cpp
+from ..cpp_extensions.graph_cpp import extract_branches_geometry as extract_branches_geometry_cpp
+from ..cpp_extensions.graph_cpp import (
+    extract_branches_geometry_from_skeleton as extract_branches_geometry_from_skeleton_cpp,
+)
+from ..cpp_extensions.graph_cpp import fast_branch_boundaries as fast_branch_boundaries_cpp
+from ..cpp_extensions.graph_cpp import fast_curve_tangent as fast_curve_tangent_cpp
+from ..cpp_extensions.graph_cpp import track_branches as track_branches_cpp
 from ..geometric import Point, Rect
 from ..torch import autocast_torch
 
@@ -42,6 +45,55 @@ def track_branches(edge_labels_map, nodes_yx, edge_list) -> list[list[int]]:
 
 @autocast_torch
 def extract_branch_geometry(
+    branch_curves: List[torch.Tensor],
+    segmentation: torch.Tensor,
+    adaptative_tangent: bool = True,
+) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor], torch.Tensor]:
+    """Track branches from a labels map and extract their geometry.
+
+
+    Parameters
+    ----------
+    branch_labels :
+        A 2D tensor of shape (H, W) containing the skeleton where each branch has a unique label.
+
+    node_yx :
+        A 2D tensor of shape (N, 2) containing the coordinates (y, x) of the nodes.
+
+    branch_list :
+        A 2D tensor of shape (B, 2) containing for each branch, the indexes of the two nodes it connects.
+
+    segmentation : torch.Tensor
+        A 2D tensor of shape (H, W) containing the segmentation of the image.
+
+    clean_terminations : int, optional
+        The maximum number of pixels removable at branch termination. By default 20.
+
+    return_labels : bool, optional
+
+    Returns
+    -------
+    tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]
+    This method returns a tuple containing three lists of length B which contains, for each branch:
+    - a 2D tensor of shape (n, 2) containing the coordinates of the branch points (where n is the branch length).
+    - a 2D tensor of shape (n, 2) containing the tangent vectors at each branch point.
+    - a 2D tensor of shape (n,) containing the branch width (or calibre) at each branch point.
+
+    If return_labels is True, the output will also contain:
+        - a 2D tensor of shape (H,W) containing the branch labels after terminations cleaning.
+
+    """
+    options = dict(
+        bspline_max_error=4,
+        adaptative_tangent=adaptative_tangent,
+    )
+    branch_curves = [curve.cpu().int() for curve in branch_curves]
+
+    return extract_branches_geometry_cpp(branch_curves, segmentation, options)
+
+
+@autocast_torch
+def extract_branch_geometry_from_skeleton(
     branch_labels: torch.Tensor,
     node_yx: torch.Tensor,
     edge_list: torch.Tensor,
@@ -97,7 +149,7 @@ def extract_branch_geometry(
     assert edge_list.ndim == 2 and edge_list.shape[1] == 2, "branch_list must be a 2D tensor of shape (E, 2)"
     edge_list = edge_list.int()
 
-    out = extract_branches_geometry_cpp(branch_labels, node_yx, edge_list, segmentation, options)
+    out = extract_branches_geometry_from_skeleton_cpp(branch_labels, node_yx, edge_list, segmentation, options)
     return tuple(out) + (branch_labels,) if return_labels else tuple(out)
 
 

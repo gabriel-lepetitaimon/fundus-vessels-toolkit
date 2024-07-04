@@ -20,12 +20,12 @@
             "/home/gaby/.conda/envs/nnet/lib/python3.10/site-packages/numpy/core/include"
         ],
         "language": "c++",
-        "name": "fundus_vessels_toolkit.vgraph.matching.edit_distance_cy",
+        "name": "fundus_vessels_toolkit.vascular_graph.matching.edit_distance_cy",
         "sources": [
-            "src/fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx"
+            "src/fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx"
         ]
     },
-    "module_name": "fundus_vessels_toolkit.vgraph.matching.edit_distance_cy"
+    "module_name": "fundus_vessels_toolkit.vascular_graph.matching.edit_distance_cy"
 }
 END: Cython Metadata */
 
@@ -1109,8 +1109,8 @@ static CYTHON_INLINE float __PYX_NAN() {
     #define __PYX_EXTERN_C extern "C++"
 #endif
 
-#define __PYX_HAVE__fundus_vessels_toolkit__vgraph__matching__edit_distance_cy
-#define __PYX_HAVE_API__fundus_vessels_toolkit__vgraph__matching__edit_distance_cy
+#define __PYX_HAVE__fundus_vessels_toolkit__vascular_graph__matching__edit_distance_cy
+#define __PYX_HAVE_API__fundus_vessels_toolkit__vascular_graph__matching__edit_distance_cy
 /* Early includes */
 #include <string.h>
 #include <stdio.h>
@@ -1412,7 +1412,7 @@ static const char *__pyx_filename;
 /* #### Code section: filename_table ### */
 
 static const char *__pyx_f[] = {
-  "src/fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx",
+  "src/fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx",
   "__init__.cython-30.pxd",
   "type.pxd",
 };
@@ -1643,14 +1643,14 @@ typedef npy_double __pyx_t_5numpy_double_t;
  */
 typedef npy_longdouble __pyx_t_5numpy_longdouble_t;
 
-/* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":15
+/* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":15
  * 
  * DTYPE = int
  * ctypedef np.int_t DTYPE_t             # <<<<<<<<<<<<<<
  * 
  * 
  */
-typedef __pyx_t_5numpy_int_t __pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t;
+typedef __pyx_t_5numpy_int_t __pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t;
 /* #### Code section: complex_type_declarations ### */
 /* Declarations.proto */
 #if CYTHON_CCOMPLEX && (1) && (!0 || __cplusplus)
@@ -1715,29 +1715,29 @@ typedef npy_clongdouble __pyx_t_5numpy_clongdouble_t;
  * cdef inline object PyArray_MultiIterNew1(a):
  */
 typedef npy_cdouble __pyx_t_5numpy_complex_t;
-struct __pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_NodeID;
-struct __pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_EdgeNode;
+struct __pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_NodeID;
+struct __pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_EdgeNode;
 
-/* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":18
+/* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":18
  * 
  * 
  * cdef struct NodeID:             # <<<<<<<<<<<<<<
  *     int id
  *     bool isPrimary
  */
-struct __pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_NodeID {
+struct __pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_NodeID {
   int id;
   bool isPrimary;
 };
 
-/* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":22
+/* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":22
  *     bool isPrimary
  * 
  * cdef struct EdgeNode:             # <<<<<<<<<<<<<<
  *     int edge
  *     int node
  */
-struct __pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_EdgeNode {
+struct __pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_EdgeNode {
   int edge;
   int node;
 };
@@ -2559,15 +2559,15 @@ static CYTHON_INLINE int __pyx_f_5numpy_import_array(void); /*proto*/
 
 /* Module declarations from "libcpp.list" */
 
-/* Module declarations from "fundus_vessels_toolkit.vgraph.matching.edit_distance_cy" */
+/* Module declarations from "fundus_vessels_toolkit.vascular_graph.matching.edit_distance_cy" */
 /* #### Code section: typeinfo ### */
-static __Pyx_TypeInfo __Pyx_TypeInfo_nn___pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t = { "DTYPE_t", NULL, sizeof(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t), { 0 }, 0, __PYX_IS_UNSIGNED(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t) ? 'U' : 'I', __PYX_IS_UNSIGNED(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t), 0 };
+static __Pyx_TypeInfo __Pyx_TypeInfo_nn___pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t = { "DTYPE_t", NULL, sizeof(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t), { 0 }, 0, __PYX_IS_UNSIGNED(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t) ? 'U' : 'I', __PYX_IS_UNSIGNED(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t), 0 };
 /* #### Code section: before_global_var ### */
-#define __Pyx_MODULE_NAME "fundus_vessels_toolkit.vgraph.matching.edit_distance_cy"
-extern int __pyx_module_is_main_fundus_vessels_toolkit__vgraph__matching__edit_distance_cy;
-int __pyx_module_is_main_fundus_vessels_toolkit__vgraph__matching__edit_distance_cy = 0;
+#define __Pyx_MODULE_NAME "fundus_vessels_toolkit.vascular_graph.matching.edit_distance_cy"
+extern int __pyx_module_is_main_fundus_vessels_toolkit__vascular_graph__matching__edit_distance_cy;
+int __pyx_module_is_main_fundus_vessels_toolkit__vascular_graph__matching__edit_distance_cy = 0;
 
-/* Implementation of "fundus_vessels_toolkit.vgraph.matching.edit_distance_cy" */
+/* Implementation of "fundus_vessels_toolkit.vascular_graph.matching.edit_distance_cy" */
 /* #### Code section: global_var ### */
 static PyObject *__pyx_builtin_AssertionError;
 static PyObject *__pyx_builtin_range;
@@ -2624,12 +2624,12 @@ static const char __pyx_k_asyncio_coroutines[] = "asyncio.coroutines";
 static const char __pyx_k_cline_in_traceback[] = "cline_in_traceback";
 static const char __pyx_k_backtrack_edge_node[] = "backtrack_edge_node";
 static const char __pyx_k_shortest_secondary_path[] = "shortest_secondary_path";
+static const char __pyx_k_fundus_vessels_toolkit_vascular[] = "fundus_vessels_toolkit.vascular_graph.matching.edit_distance_cy";
 static const char __pyx_k_numpy_core_multiarray_failed_to[] = "numpy.core.multiarray failed to import";
-static const char __pyx_k_fundus_vessels_toolkit_vgraph_ma[] = "fundus_vessels_toolkit.vgraph.matching.edit_distance_cy";
 static const char __pyx_k_numpy_core_umath_failed_to_impor[] = "numpy.core.umath failed to import";
-static const char __pyx_k_src_fundus_vessels_toolkit_vgrap[] = "src/fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx";
+static const char __pyx_k_src_fundus_vessels_toolkit_vascu[] = "src/fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx";
 /* #### Code section: decls ### */
-static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_shortest_secondary_path(CYTHON_UNUSED PyObject *__pyx_self, PyArrayObject *__pyx_v_adjacency_list, PyArrayObject *__pyx_v_primary_nodes, PyArrayObject *__pyx_v_secondary_nodes); /* proto */
+static PyObject *__pyx_pf_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_shortest_secondary_path(CYTHON_UNUSED PyObject *__pyx_self, PyArrayObject *__pyx_v_adjacency_list, PyArrayObject *__pyx_v_primary_nodes, PyArrayObject *__pyx_v_secondary_nodes); /* proto */
 /* #### Code section: late_includes ### */
 /* #### Code section: module_state ### */
 typedef struct {
@@ -2719,7 +2719,7 @@ typedef struct {
   PyObject *__pyx_n_s_edge_id;
   PyObject *__pyx_n_s_empty;
   PyObject *__pyx_n_s_fill;
-  PyObject *__pyx_n_s_fundus_vessels_toolkit_vgraph_ma;
+  PyObject *__pyx_n_s_fundus_vessels_toolkit_vascular;
   PyObject *__pyx_n_s_id;
   PyObject *__pyx_n_s_import;
   PyObject *__pyx_n_s_initializing;
@@ -2753,7 +2753,7 @@ typedef struct {
   PyObject *__pyx_n_s_secondary_nodes;
   PyObject *__pyx_n_s_shortest_secondary_path;
   PyObject *__pyx_n_s_spec;
-  PyObject *__pyx_kp_s_src_fundus_vessels_toolkit_vgrap;
+  PyObject *__pyx_kp_s_src_fundus_vessels_toolkit_vascu;
   PyObject *__pyx_n_s_test;
   PyObject *__pyx_n_s_to_visit;
   PyObject *__pyx_int_2;
@@ -2838,7 +2838,7 @@ static int __pyx_m_clear(PyObject *m) {
   Py_CLEAR(clear_module_state->__pyx_n_s_edge_id);
   Py_CLEAR(clear_module_state->__pyx_n_s_empty);
   Py_CLEAR(clear_module_state->__pyx_n_s_fill);
-  Py_CLEAR(clear_module_state->__pyx_n_s_fundus_vessels_toolkit_vgraph_ma);
+  Py_CLEAR(clear_module_state->__pyx_n_s_fundus_vessels_toolkit_vascular);
   Py_CLEAR(clear_module_state->__pyx_n_s_id);
   Py_CLEAR(clear_module_state->__pyx_n_s_import);
   Py_CLEAR(clear_module_state->__pyx_n_s_initializing);
@@ -2872,7 +2872,7 @@ static int __pyx_m_clear(PyObject *m) {
   Py_CLEAR(clear_module_state->__pyx_n_s_secondary_nodes);
   Py_CLEAR(clear_module_state->__pyx_n_s_shortest_secondary_path);
   Py_CLEAR(clear_module_state->__pyx_n_s_spec);
-  Py_CLEAR(clear_module_state->__pyx_kp_s_src_fundus_vessels_toolkit_vgrap);
+  Py_CLEAR(clear_module_state->__pyx_kp_s_src_fundus_vessels_toolkit_vascu);
   Py_CLEAR(clear_module_state->__pyx_n_s_test);
   Py_CLEAR(clear_module_state->__pyx_n_s_to_visit);
   Py_CLEAR(clear_module_state->__pyx_int_2);
@@ -2935,7 +2935,7 @@ static int __pyx_m_traverse(PyObject *m, visitproc visit, void *arg) {
   Py_VISIT(traverse_module_state->__pyx_n_s_edge_id);
   Py_VISIT(traverse_module_state->__pyx_n_s_empty);
   Py_VISIT(traverse_module_state->__pyx_n_s_fill);
-  Py_VISIT(traverse_module_state->__pyx_n_s_fundus_vessels_toolkit_vgraph_ma);
+  Py_VISIT(traverse_module_state->__pyx_n_s_fundus_vessels_toolkit_vascular);
   Py_VISIT(traverse_module_state->__pyx_n_s_id);
   Py_VISIT(traverse_module_state->__pyx_n_s_import);
   Py_VISIT(traverse_module_state->__pyx_n_s_initializing);
@@ -2969,7 +2969,7 @@ static int __pyx_m_traverse(PyObject *m, visitproc visit, void *arg) {
   Py_VISIT(traverse_module_state->__pyx_n_s_secondary_nodes);
   Py_VISIT(traverse_module_state->__pyx_n_s_shortest_secondary_path);
   Py_VISIT(traverse_module_state->__pyx_n_s_spec);
-  Py_VISIT(traverse_module_state->__pyx_kp_s_src_fundus_vessels_toolkit_vgrap);
+  Py_VISIT(traverse_module_state->__pyx_kp_s_src_fundus_vessels_toolkit_vascu);
   Py_VISIT(traverse_module_state->__pyx_n_s_test);
   Py_VISIT(traverse_module_state->__pyx_n_s_to_visit);
   Py_VISIT(traverse_module_state->__pyx_int_2);
@@ -3068,7 +3068,7 @@ static int __pyx_m_traverse(PyObject *m, visitproc visit, void *arg) {
 #define __pyx_n_s_edge_id __pyx_mstate_global->__pyx_n_s_edge_id
 #define __pyx_n_s_empty __pyx_mstate_global->__pyx_n_s_empty
 #define __pyx_n_s_fill __pyx_mstate_global->__pyx_n_s_fill
-#define __pyx_n_s_fundus_vessels_toolkit_vgraph_ma __pyx_mstate_global->__pyx_n_s_fundus_vessels_toolkit_vgraph_ma
+#define __pyx_n_s_fundus_vessels_toolkit_vascular __pyx_mstate_global->__pyx_n_s_fundus_vessels_toolkit_vascular
 #define __pyx_n_s_id __pyx_mstate_global->__pyx_n_s_id
 #define __pyx_n_s_import __pyx_mstate_global->__pyx_n_s_import
 #define __pyx_n_s_initializing __pyx_mstate_global->__pyx_n_s_initializing
@@ -3102,7 +3102,7 @@ static int __pyx_m_traverse(PyObject *m, visitproc visit, void *arg) {
 #define __pyx_n_s_secondary_nodes __pyx_mstate_global->__pyx_n_s_secondary_nodes
 #define __pyx_n_s_shortest_secondary_path __pyx_mstate_global->__pyx_n_s_shortest_secondary_path
 #define __pyx_n_s_spec __pyx_mstate_global->__pyx_n_s_spec
-#define __pyx_kp_s_src_fundus_vessels_toolkit_vgrap __pyx_mstate_global->__pyx_kp_s_src_fundus_vessels_toolkit_vgrap
+#define __pyx_kp_s_src_fundus_vessels_toolkit_vascu __pyx_mstate_global->__pyx_kp_s_src_fundus_vessels_toolkit_vascu
 #define __pyx_n_s_test __pyx_mstate_global->__pyx_n_s_test
 #define __pyx_n_s_to_visit __pyx_mstate_global->__pyx_n_s_to_visit
 #define __pyx_int_2 __pyx_mstate_global->__pyx_int_2
@@ -4376,7 +4376,7 @@ static CYTHON_INLINE NPY_DATETIMEUNIT __pyx_f_5numpy_get_datetime64_unit(PyObjec
   return __pyx_r;
 }
 
-/* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":26
+/* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":26
  *     int node
  * 
  * @cython.boundscheck(False) # turn off bounds-checking for entire function             # <<<<<<<<<<<<<<
@@ -4385,15 +4385,15 @@ static CYTHON_INLINE NPY_DATETIMEUNIT __pyx_f_5numpy_get_datetime64_unit(PyObjec
  */
 
 /* Python wrapper */
-static PyObject *__pyx_pw_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_1shortest_secondary_path(PyObject *__pyx_self, 
+static PyObject *__pyx_pw_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_1shortest_secondary_path(PyObject *__pyx_self, 
 #if CYTHON_METH_FASTCALL
 PyObject *const *__pyx_args, Py_ssize_t __pyx_nargs, PyObject *__pyx_kwds
 #else
 PyObject *__pyx_args, PyObject *__pyx_kwds
 #endif
 ); /*proto*/
-static PyMethodDef __pyx_mdef_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_1shortest_secondary_path = {"shortest_secondary_path", (PyCFunction)(void*)(__Pyx_PyCFunction_FastCallWithKeywords)__pyx_pw_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_1shortest_secondary_path, __Pyx_METH_FASTCALL|METH_KEYWORDS, 0};
-static PyObject *__pyx_pw_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_1shortest_secondary_path(PyObject *__pyx_self, 
+static PyMethodDef __pyx_mdef_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_1shortest_secondary_path = {"shortest_secondary_path", (PyCFunction)(void*)(__Pyx_PyCFunction_FastCallWithKeywords)__pyx_pw_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_1shortest_secondary_path, __Pyx_METH_FASTCALL|METH_KEYWORDS, 0};
+static PyObject *__pyx_pw_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_1shortest_secondary_path(PyObject *__pyx_self, 
 #if CYTHON_METH_FASTCALL
 PyObject *const *__pyx_args, Py_ssize_t __pyx_nargs, PyObject *__pyx_kwds
 #else
@@ -4468,14 +4468,14 @@ PyObject *__pyx_args, PyObject *__pyx_kwds
   __pyx_L5_argtuple_error:;
   __Pyx_RaiseArgtupleInvalid("shortest_secondary_path", 1, 3, 3, __pyx_nargs); __PYX_ERR(0, 26, __pyx_L3_error)
   __pyx_L3_error:;
-  __Pyx_AddTraceback("fundus_vessels_toolkit.vgraph.matching.edit_distance_cy.shortest_secondary_path", __pyx_clineno, __pyx_lineno, __pyx_filename);
+  __Pyx_AddTraceback("fundus_vessels_toolkit.vascular_graph.matching.edit_distance_cy.shortest_secondary_path", __pyx_clineno, __pyx_lineno, __pyx_filename);
   __Pyx_RefNannyFinishContext();
   return NULL;
   __pyx_L4_argument_unpacking_done:;
   if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_adjacency_list), __pyx_ptype_5numpy_ndarray, 1, "adjacency_list", 0))) __PYX_ERR(0, 28, __pyx_L1_error)
   if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_primary_nodes), __pyx_ptype_5numpy_ndarray, 1, "primary_nodes", 0))) __PYX_ERR(0, 29, __pyx_L1_error)
   if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_secondary_nodes), __pyx_ptype_5numpy_ndarray, 1, "secondary_nodes", 0))) __PYX_ERR(0, 29, __pyx_L1_error)
-  __pyx_r = __pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_shortest_secondary_path(__pyx_self, __pyx_v_adjacency_list, __pyx_v_primary_nodes, __pyx_v_secondary_nodes);
+  __pyx_r = __pyx_pf_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_shortest_secondary_path(__pyx_self, __pyx_v_adjacency_list, __pyx_v_primary_nodes, __pyx_v_secondary_nodes);
 
   /* function exit code */
   goto __pyx_L0;
@@ -4486,7 +4486,7 @@ PyObject *__pyx_args, PyObject *__pyx_kwds
   return __pyx_r;
 }
 
-static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_shortest_secondary_path(CYTHON_UNUSED PyObject *__pyx_self, PyArrayObject *__pyx_v_adjacency_list, PyArrayObject *__pyx_v_primary_nodes, PyArrayObject *__pyx_v_secondary_nodes) {
+static PyObject *__pyx_pf_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_shortest_secondary_path(CYTHON_UNUSED PyObject *__pyx_self, PyArrayObject *__pyx_v_adjacency_list, PyArrayObject *__pyx_v_primary_nodes, PyArrayObject *__pyx_v_secondary_nodes) {
   int __pyx_v_n_primary;
   int __pyx_v_n_secondary;
   int __pyx_v_n_nodes;
@@ -4498,17 +4498,17 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   int __pyx_v_n2;
   int __pyx_v_d;
   int __pyx_v_p;
-  struct __pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_NodeID __pyx_v_nid1;
-  struct __pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_NodeID __pyx_v_nid2;
+  struct __pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_NodeID __pyx_v_nid1;
+  struct __pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_NodeID __pyx_v_nid2;
   int __pyx_v_now;
   int __pyx_v_next;
-  std::vector<struct __pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_NodeID>  __pyx_v_node_lookup;
-  std::vector<std::list<struct __pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_EdgeNode> >  __pyx_v_adj;
+  std::vector<struct __pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_NodeID>  __pyx_v_node_lookup;
+  std::vector<std::list<struct __pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_EdgeNode> >  __pyx_v_adj;
   int __pyx_v_primary_id;
   int __pyx_v_secondary_id;
   int __pyx_v_edge_id;
   int __pyx_v_p_primary_id;
-  std::list<struct __pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_EdgeNode> ::value_type __pyx_v_connected;
+  std::list<struct __pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_EdgeNode> ::value_type __pyx_v_connected;
   std::list<int> ::value_type __pyx_v_n;
   __Pyx_LocalBuf_ND __pyx_pybuffernd_adjacency_list;
   __Pyx_Buffer __pyx_pybuffer_adjacency_list;
@@ -4533,17 +4533,17 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   PyArrayObject *__pyx_t_9 = NULL;
   PyArrayObject *__pyx_t_10 = NULL;
   std::vector<std::list<int> >  __pyx_t_11;
-  std::vector<struct __pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_NodeID>  __pyx_t_12;
-  std::vector<std::list<struct __pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_EdgeNode> >  __pyx_t_13;
+  std::vector<struct __pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_NodeID>  __pyx_t_12;
+  std::vector<std::list<struct __pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_EdgeNode> >  __pyx_t_13;
   int __pyx_t_14;
   int __pyx_t_15;
   Py_ssize_t __pyx_t_16;
-  struct __pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_NodeID __pyx_t_17;
+  struct __pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_NodeID __pyx_t_17;
   Py_ssize_t __pyx_t_18;
-  struct __pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_EdgeNode __pyx_t_19;
+  struct __pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_EdgeNode __pyx_t_19;
   Py_ssize_t __pyx_t_20;
-  std::list<struct __pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_EdgeNode> ::iterator __pyx_t_21;
-  std::list<struct __pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_EdgeNode>  *__pyx_t_22;
+  std::list<struct __pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_EdgeNode> ::iterator __pyx_t_21;
+  std::list<struct __pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_EdgeNode>  *__pyx_t_22;
   int __pyx_t_23;
   std::list<int> ::iterator __pyx_t_24;
   std::list<int>  *__pyx_t_25;
@@ -4573,21 +4573,21 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   __pyx_pybuffernd_secondary_nodes.rcbuffer = &__pyx_pybuffer_secondary_nodes;
   {
     __Pyx_BufFmt_StackElem __pyx_stack[1];
-    if (unlikely(__Pyx_GetBufferAndValidate(&__pyx_pybuffernd_adjacency_list.rcbuffer->pybuffer, (PyObject*)__pyx_v_adjacency_list, &__Pyx_TypeInfo_nn___pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t, PyBUF_FORMAT| PyBUF_STRIDES, 2, 0, __pyx_stack) == -1)) __PYX_ERR(0, 26, __pyx_L1_error)
+    if (unlikely(__Pyx_GetBufferAndValidate(&__pyx_pybuffernd_adjacency_list.rcbuffer->pybuffer, (PyObject*)__pyx_v_adjacency_list, &__Pyx_TypeInfo_nn___pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t, PyBUF_FORMAT| PyBUF_STRIDES, 2, 0, __pyx_stack) == -1)) __PYX_ERR(0, 26, __pyx_L1_error)
   }
   __pyx_pybuffernd_adjacency_list.diminfo[0].strides = __pyx_pybuffernd_adjacency_list.rcbuffer->pybuffer.strides[0]; __pyx_pybuffernd_adjacency_list.diminfo[0].shape = __pyx_pybuffernd_adjacency_list.rcbuffer->pybuffer.shape[0]; __pyx_pybuffernd_adjacency_list.diminfo[1].strides = __pyx_pybuffernd_adjacency_list.rcbuffer->pybuffer.strides[1]; __pyx_pybuffernd_adjacency_list.diminfo[1].shape = __pyx_pybuffernd_adjacency_list.rcbuffer->pybuffer.shape[1];
   {
     __Pyx_BufFmt_StackElem __pyx_stack[1];
-    if (unlikely(__Pyx_GetBufferAndValidate(&__pyx_pybuffernd_primary_nodes.rcbuffer->pybuffer, (PyObject*)__pyx_v_primary_nodes, &__Pyx_TypeInfo_nn___pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t, PyBUF_FORMAT| PyBUF_STRIDES, 1, 0, __pyx_stack) == -1)) __PYX_ERR(0, 26, __pyx_L1_error)
+    if (unlikely(__Pyx_GetBufferAndValidate(&__pyx_pybuffernd_primary_nodes.rcbuffer->pybuffer, (PyObject*)__pyx_v_primary_nodes, &__Pyx_TypeInfo_nn___pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t, PyBUF_FORMAT| PyBUF_STRIDES, 1, 0, __pyx_stack) == -1)) __PYX_ERR(0, 26, __pyx_L1_error)
   }
   __pyx_pybuffernd_primary_nodes.diminfo[0].strides = __pyx_pybuffernd_primary_nodes.rcbuffer->pybuffer.strides[0]; __pyx_pybuffernd_primary_nodes.diminfo[0].shape = __pyx_pybuffernd_primary_nodes.rcbuffer->pybuffer.shape[0];
   {
     __Pyx_BufFmt_StackElem __pyx_stack[1];
-    if (unlikely(__Pyx_GetBufferAndValidate(&__pyx_pybuffernd_secondary_nodes.rcbuffer->pybuffer, (PyObject*)__pyx_v_secondary_nodes, &__Pyx_TypeInfo_nn___pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t, PyBUF_FORMAT| PyBUF_STRIDES, 1, 0, __pyx_stack) == -1)) __PYX_ERR(0, 26, __pyx_L1_error)
+    if (unlikely(__Pyx_GetBufferAndValidate(&__pyx_pybuffernd_secondary_nodes.rcbuffer->pybuffer, (PyObject*)__pyx_v_secondary_nodes, &__Pyx_TypeInfo_nn___pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t, PyBUF_FORMAT| PyBUF_STRIDES, 1, 0, __pyx_stack) == -1)) __PYX_ERR(0, 26, __pyx_L1_error)
   }
   __pyx_pybuffernd_secondary_nodes.diminfo[0].strides = __pyx_pybuffernd_secondary_nodes.rcbuffer->pybuffer.strides[0]; __pyx_pybuffernd_secondary_nodes.diminfo[0].shape = __pyx_pybuffernd_secondary_nodes.rcbuffer->pybuffer.shape[0];
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":30
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":30
  * def shortest_secondary_path(np.ndarray[DTYPE_t, ndim=2] adjacency_list,
  *                             np.ndarray[DTYPE_t, ndim=1] primary_nodes, np.ndarray[DTYPE_t, ndim=1] secondary_nodes):
  *     assert adjacency_list.ndim == 2 and adjacency_list.shape[1] == 2             # <<<<<<<<<<<<<<
@@ -4616,7 +4616,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   if ((1)); else __PYX_ERR(0, 30, __pyx_L1_error)
   #endif
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":33
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":33
  * 
  *     # Instanciate length variables
  *     cdef int n_primary = primary_nodes.shape[0]             # <<<<<<<<<<<<<<
@@ -4626,7 +4626,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   __pyx_t_4 = __pyx_f_5numpy_7ndarray_5shape_shape(((PyArrayObject *)__pyx_v_primary_nodes)); if (unlikely(PyErr_Occurred())) __PYX_ERR(0, 33, __pyx_L1_error)
   __pyx_v_n_primary = (__pyx_t_4[0]);
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":34
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":34
  *     # Instanciate length variables
  *     cdef int n_primary = primary_nodes.shape[0]
  *     cdef int n_secondary = secondary_nodes.shape[0]             # <<<<<<<<<<<<<<
@@ -4636,7 +4636,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   __pyx_t_4 = __pyx_f_5numpy_7ndarray_5shape_shape(((PyArrayObject *)__pyx_v_secondary_nodes)); if (unlikely(PyErr_Occurred())) __PYX_ERR(0, 34, __pyx_L1_error)
   __pyx_v_n_secondary = (__pyx_t_4[0]);
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":35
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":35
  *     cdef int n_primary = primary_nodes.shape[0]
  *     cdef int n_secondary = secondary_nodes.shape[0]
  *     cdef int n_nodes = n_primary + n_secondary             # <<<<<<<<<<<<<<
@@ -4645,7 +4645,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
   __pyx_v_n_nodes = (__pyx_v_n_primary + __pyx_v_n_secondary);
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":36
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":36
  *     cdef int n_secondary = secondary_nodes.shape[0]
  *     cdef int n_nodes = n_primary + n_secondary
  *     cdef int n_edges = adjacency_list.shape[0]             # <<<<<<<<<<<<<<
@@ -4655,7 +4655,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   __pyx_t_4 = __pyx_f_5numpy_7ndarray_5shape_shape(((PyArrayObject *)__pyx_v_adjacency_list)); if (unlikely(PyErr_Occurred())) __PYX_ERR(0, 36, __pyx_L1_error)
   __pyx_v_n_edges = (__pyx_t_4[0]);
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":39
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":39
  * 
  *     # Allocate distance output matrix
  *     cdef np.ndarray[DTYPE_t, ndim=2] dist = np.empty((n_primary, n_nodes), dtype=DTYPE)             # <<<<<<<<<<<<<<
@@ -4699,7 +4699,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   __pyx_t_9 = ((PyArrayObject *)__pyx_t_5);
   {
     __Pyx_BufFmt_StackElem __pyx_stack[1];
-    if (unlikely(__Pyx_GetBufferAndValidate(&__pyx_pybuffernd_dist.rcbuffer->pybuffer, (PyObject*)__pyx_t_9, &__Pyx_TypeInfo_nn___pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t, PyBUF_FORMAT| PyBUF_STRIDES| PyBUF_WRITABLE, 2, 0, __pyx_stack) == -1)) {
+    if (unlikely(__Pyx_GetBufferAndValidate(&__pyx_pybuffernd_dist.rcbuffer->pybuffer, (PyObject*)__pyx_t_9, &__Pyx_TypeInfo_nn___pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t, PyBUF_FORMAT| PyBUF_STRIDES| PyBUF_WRITABLE, 2, 0, __pyx_stack) == -1)) {
       __pyx_v_dist = ((PyArrayObject *)Py_None); __Pyx_INCREF(Py_None); __pyx_pybuffernd_dist.rcbuffer->pybuffer.buf = NULL;
       __PYX_ERR(0, 39, __pyx_L1_error)
     } else {__pyx_pybuffernd_dist.diminfo[0].strides = __pyx_pybuffernd_dist.rcbuffer->pybuffer.strides[0]; __pyx_pybuffernd_dist.diminfo[0].shape = __pyx_pybuffernd_dist.rcbuffer->pybuffer.shape[0]; __pyx_pybuffernd_dist.diminfo[1].strides = __pyx_pybuffernd_dist.rcbuffer->pybuffer.strides[1]; __pyx_pybuffernd_dist.diminfo[1].shape = __pyx_pybuffernd_dist.rcbuffer->pybuffer.shape[1];
@@ -4709,7 +4709,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   __pyx_v_dist = ((PyArrayObject *)__pyx_t_5);
   __pyx_t_5 = 0;
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":40
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":40
  *     # Allocate distance output matrix
  *     cdef np.ndarray[DTYPE_t, ndim=2] dist = np.empty((n_primary, n_nodes), dtype=DTYPE)
  *     cdef np.ndarray[DTYPE_t, ndim=3] backtrack_edge_node = np.empty((n_primary, n_nodes, 2), dtype=DTYPE)             # <<<<<<<<<<<<<<
@@ -4756,7 +4756,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   __pyx_t_10 = ((PyArrayObject *)__pyx_t_5);
   {
     __Pyx_BufFmt_StackElem __pyx_stack[1];
-    if (unlikely(__Pyx_GetBufferAndValidate(&__pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer, (PyObject*)__pyx_t_10, &__Pyx_TypeInfo_nn___pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t, PyBUF_FORMAT| PyBUF_STRIDES| PyBUF_WRITABLE, 3, 0, __pyx_stack) == -1)) {
+    if (unlikely(__Pyx_GetBufferAndValidate(&__pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer, (PyObject*)__pyx_t_10, &__Pyx_TypeInfo_nn___pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t, PyBUF_FORMAT| PyBUF_STRIDES| PyBUF_WRITABLE, 3, 0, __pyx_stack) == -1)) {
       __pyx_v_backtrack_edge_node = ((PyArrayObject *)Py_None); __Pyx_INCREF(Py_None); __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.buf = NULL;
       __PYX_ERR(0, 40, __pyx_L1_error)
     } else {__pyx_pybuffernd_backtrack_edge_node.diminfo[0].strides = __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.strides[0]; __pyx_pybuffernd_backtrack_edge_node.diminfo[0].shape = __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.shape[0]; __pyx_pybuffernd_backtrack_edge_node.diminfo[1].strides = __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.strides[1]; __pyx_pybuffernd_backtrack_edge_node.diminfo[1].shape = __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.shape[1]; __pyx_pybuffernd_backtrack_edge_node.diminfo[2].strides = __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.strides[2]; __pyx_pybuffernd_backtrack_edge_node.diminfo[2].shape = __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.shape[2];
@@ -4766,7 +4766,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   __pyx_v_backtrack_edge_node = ((PyArrayObject *)__pyx_t_5);
   __pyx_t_5 = 0;
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":43
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":43
  * 
  *     # Allocate to_visit array
  *     cdef vector[cpplist[int]] to_visit = vector[cpplist[int]](2)             # <<<<<<<<<<<<<<
@@ -4781,7 +4781,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   }
   __pyx_v_to_visit = __PYX_STD_MOVE_IF_SUPPORTED(__pyx_t_11);
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":51
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":51
  * 
  *     # Allocate node_lookup
  *     cdef vector[NodeID] node_lookup = vector[NodeID](n_nodes)             # <<<<<<<<<<<<<<
@@ -4789,14 +4789,14 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  *     # Allocate bidirectional adjacency list
  */
   try {
-    __pyx_t_12 = std::vector<struct __pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_NodeID> (__pyx_v_n_nodes);
+    __pyx_t_12 = std::vector<struct __pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_NodeID> (__pyx_v_n_nodes);
   } catch(...) {
     __Pyx_CppExn2PyErr();
     __PYX_ERR(0, 51, __pyx_L1_error)
   }
   __pyx_v_node_lookup = __PYX_STD_MOVE_IF_SUPPORTED(__pyx_t_12);
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":54
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":54
  * 
  *     # Allocate bidirectional adjacency list
  *     cdef vector[cpplist[EdgeNode]] adj = vector[cpplist[EdgeNode]](n_nodes)             # <<<<<<<<<<<<<<
@@ -4804,14 +4804,14 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  *     # --------------------
  */
   try {
-    __pyx_t_13 = std::vector<std::list<struct __pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_EdgeNode> > (__pyx_v_n_nodes);
+    __pyx_t_13 = std::vector<std::list<struct __pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_EdgeNode> > (__pyx_v_n_nodes);
   } catch(...) {
     __Pyx_CppExn2PyErr();
     __PYX_ERR(0, 54, __pyx_L1_error)
   }
   __pyx_v_adj = __PYX_STD_MOVE_IF_SUPPORTED(__pyx_t_13);
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":59
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":59
  *     # Initialize lookup table
  *     ###  print("Initialize lookup table")
  *     for primary_id in range(n_primary):             # <<<<<<<<<<<<<<
@@ -4823,7 +4823,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   for (__pyx_t_15 = 0; __pyx_t_15 < __pyx_t_14; __pyx_t_15+=1) {
     __pyx_v_primary_id = __pyx_t_15;
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":60
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":60
  *     ###  print("Initialize lookup table")
  *     for primary_id in range(n_primary):
  *         p = primary_nodes[primary_id]             # <<<<<<<<<<<<<<
@@ -4831,9 +4831,9 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  *     for secondary_id in range(n_secondary):
  */
     __pyx_t_16 = __pyx_v_primary_id;
-    __pyx_v_p = (*__Pyx_BufPtrStrided1d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_primary_nodes.rcbuffer->pybuffer.buf, __pyx_t_16, __pyx_pybuffernd_primary_nodes.diminfo[0].strides));
+    __pyx_v_p = (*__Pyx_BufPtrStrided1d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_primary_nodes.rcbuffer->pybuffer.buf, __pyx_t_16, __pyx_pybuffernd_primary_nodes.diminfo[0].strides));
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":61
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":61
  *     for primary_id in range(n_primary):
  *         p = primary_nodes[primary_id]
  *         node_lookup[p] = NodeID(primary_id, True)             # <<<<<<<<<<<<<<
@@ -4845,7 +4845,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
     (__pyx_v_node_lookup[__pyx_v_p]) = __pyx_t_17;
   }
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":62
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":62
  *         p = primary_nodes[primary_id]
  *         node_lookup[p] = NodeID(primary_id, True)
  *     for secondary_id in range(n_secondary):             # <<<<<<<<<<<<<<
@@ -4857,7 +4857,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   for (__pyx_t_15 = 0; __pyx_t_15 < __pyx_t_14; __pyx_t_15+=1) {
     __pyx_v_secondary_id = __pyx_t_15;
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":63
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":63
  *         node_lookup[p] = NodeID(primary_id, True)
  *     for secondary_id in range(n_secondary):
  *         p = secondary_nodes[secondary_id]             # <<<<<<<<<<<<<<
@@ -4865,9 +4865,9 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  * 
  */
     __pyx_t_16 = __pyx_v_secondary_id;
-    __pyx_v_p = (*__Pyx_BufPtrStrided1d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_secondary_nodes.rcbuffer->pybuffer.buf, __pyx_t_16, __pyx_pybuffernd_secondary_nodes.diminfo[0].strides));
+    __pyx_v_p = (*__Pyx_BufPtrStrided1d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_secondary_nodes.rcbuffer->pybuffer.buf, __pyx_t_16, __pyx_pybuffernd_secondary_nodes.diminfo[0].strides));
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":64
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":64
  *     for secondary_id in range(n_secondary):
  *         p = secondary_nodes[secondary_id]
  *         node_lookup[p] = NodeID(secondary_id, False)             # <<<<<<<<<<<<<<
@@ -4879,7 +4879,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
     (__pyx_v_node_lookup[__pyx_v_p]) = __pyx_t_17;
   }
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":68
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":68
  *     # Initiliaze distance matrix
  *     ###  print("Initialize distance matrix")
  *     dist.fill(-1)             # <<<<<<<<<<<<<<
@@ -4910,7 +4910,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   }
   __Pyx_DECREF(__pyx_t_5); __pyx_t_5 = 0;
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":69
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":69
  *     ###  print("Initialize distance matrix")
  *     dist.fill(-1)
  *     for primary_id in range(n_primary):             # <<<<<<<<<<<<<<
@@ -4922,7 +4922,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   for (__pyx_t_15 = 0; __pyx_t_15 < __pyx_t_14; __pyx_t_15+=1) {
     __pyx_v_primary_id = __pyx_t_15;
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":70
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":70
  *     dist.fill(-1)
  *     for primary_id in range(n_primary):
  *         p = primary_nodes[primary_id]             # <<<<<<<<<<<<<<
@@ -4930,9 +4930,9 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  * 
  */
     __pyx_t_16 = __pyx_v_primary_id;
-    __pyx_v_p = (*__Pyx_BufPtrStrided1d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_primary_nodes.rcbuffer->pybuffer.buf, __pyx_t_16, __pyx_pybuffernd_primary_nodes.diminfo[0].strides));
+    __pyx_v_p = (*__Pyx_BufPtrStrided1d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_primary_nodes.rcbuffer->pybuffer.buf, __pyx_t_16, __pyx_pybuffernd_primary_nodes.diminfo[0].strides));
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":71
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":71
  *     for primary_id in range(n_primary):
  *         p = primary_nodes[primary_id]
  *         dist[primary_id, p] = 0             # <<<<<<<<<<<<<<
@@ -4941,10 +4941,10 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
     __pyx_t_16 = __pyx_v_primary_id;
     __pyx_t_18 = __pyx_v_p;
-    *__Pyx_BufPtrStrided2d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_dist.rcbuffer->pybuffer.buf, __pyx_t_16, __pyx_pybuffernd_dist.diminfo[0].strides, __pyx_t_18, __pyx_pybuffernd_dist.diminfo[1].strides) = 0;
+    *__Pyx_BufPtrStrided2d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_dist.rcbuffer->pybuffer.buf, __pyx_t_16, __pyx_pybuffernd_dist.diminfo[0].strides, __pyx_t_18, __pyx_pybuffernd_dist.diminfo[1].strides) = 0;
   }
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":75
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":75
  *     # Initialize backtrack node matrix
  *     ###  print("Initialize backtrack node matrix")
  *     backtrack_edge_node.fill(-1)             # <<<<<<<<<<<<<<
@@ -4975,7 +4975,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   }
   __Pyx_DECREF(__pyx_t_5); __pyx_t_5 = 0;
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":79
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":79
  *     # Initialize adjacency list
  *     ###  print("Populate adjacency list")
  *     for edge_id in range(n_edges):             # <<<<<<<<<<<<<<
@@ -4987,7 +4987,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   for (__pyx_t_15 = 0; __pyx_t_15 < __pyx_t_14; __pyx_t_15+=1) {
     __pyx_v_edge_id = __pyx_t_15;
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":80
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":80
  *     ###  print("Populate adjacency list")
  *     for edge_id in range(n_edges):
  *         n1 = adjacency_list[edge_id, 0]             # <<<<<<<<<<<<<<
@@ -4996,9 +4996,9 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
     __pyx_t_18 = __pyx_v_edge_id;
     __pyx_t_16 = 0;
-    __pyx_v_n1 = (*__Pyx_BufPtrStrided2d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_adjacency_list.rcbuffer->pybuffer.buf, __pyx_t_18, __pyx_pybuffernd_adjacency_list.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_adjacency_list.diminfo[1].strides));
+    __pyx_v_n1 = (*__Pyx_BufPtrStrided2d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_adjacency_list.rcbuffer->pybuffer.buf, __pyx_t_18, __pyx_pybuffernd_adjacency_list.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_adjacency_list.diminfo[1].strides));
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":81
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":81
  *     for edge_id in range(n_edges):
  *         n1 = adjacency_list[edge_id, 0]
  *         n2 = adjacency_list[edge_id, 1]             # <<<<<<<<<<<<<<
@@ -5007,9 +5007,9 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
     __pyx_t_16 = __pyx_v_edge_id;
     __pyx_t_18 = 1;
-    __pyx_v_n2 = (*__Pyx_BufPtrStrided2d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_adjacency_list.rcbuffer->pybuffer.buf, __pyx_t_16, __pyx_pybuffernd_adjacency_list.diminfo[0].strides, __pyx_t_18, __pyx_pybuffernd_adjacency_list.diminfo[1].strides));
+    __pyx_v_n2 = (*__Pyx_BufPtrStrided2d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_adjacency_list.rcbuffer->pybuffer.buf, __pyx_t_16, __pyx_pybuffernd_adjacency_list.diminfo[0].strides, __pyx_t_18, __pyx_pybuffernd_adjacency_list.diminfo[1].strides));
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":82
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":82
  *         n1 = adjacency_list[edge_id, 0]
  *         n2 = adjacency_list[edge_id, 1]
  *         nid1 = node_lookup[n1]             # <<<<<<<<<<<<<<
@@ -5018,7 +5018,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
     __pyx_v_nid1 = (__pyx_v_node_lookup[__pyx_v_n1]);
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":83
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":83
  *         n2 = adjacency_list[edge_id, 1]
  *         nid1 = node_lookup[n1]
  *         nid2 = node_lookup[n2]             # <<<<<<<<<<<<<<
@@ -5027,7 +5027,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
     __pyx_v_nid2 = (__pyx_v_node_lookup[__pyx_v_n2]);
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":85
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":85
  *         nid2 = node_lookup[n2]
  * 
  *         adj[n1].push_back(EdgeNode(edge_id, n2))             # <<<<<<<<<<<<<<
@@ -5043,7 +5043,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
       __PYX_ERR(0, 85, __pyx_L1_error)
     }
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":86
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":86
  * 
  *         adj[n1].push_back(EdgeNode(edge_id, n2))
  *         adj[n2].push_back(EdgeNode(edge_id, n1))             # <<<<<<<<<<<<<<
@@ -5059,7 +5059,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
       __PYX_ERR(0, 86, __pyx_L1_error)
     }
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":88
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":88
  *         adj[n2].push_back(EdgeNode(edge_id, n1))
  * 
  *         if nid1.isPrimary and nid2.isPrimary:             # <<<<<<<<<<<<<<
@@ -5077,7 +5077,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
     __pyx_L14_bool_binop_done:;
     if (__pyx_t_1) {
 
-      /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":89
+      /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":89
  * 
  *         if nid1.isPrimary and nid2.isPrimary:
  *             dist[nid1.id, n2] = 1             # <<<<<<<<<<<<<<
@@ -5086,9 +5086,9 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
       __pyx_t_18 = __pyx_v_nid1.id;
       __pyx_t_16 = __pyx_v_n2;
-      *__Pyx_BufPtrStrided2d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_dist.rcbuffer->pybuffer.buf, __pyx_t_18, __pyx_pybuffernd_dist.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_dist.diminfo[1].strides) = 1;
+      *__Pyx_BufPtrStrided2d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_dist.rcbuffer->pybuffer.buf, __pyx_t_18, __pyx_pybuffernd_dist.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_dist.diminfo[1].strides) = 1;
 
-      /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":90
+      /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":90
  *         if nid1.isPrimary and nid2.isPrimary:
  *             dist[nid1.id, n2] = 1
  *             dist[nid2.id, n1] = 1             # <<<<<<<<<<<<<<
@@ -5097,9 +5097,9 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
       __pyx_t_16 = __pyx_v_nid2.id;
       __pyx_t_18 = __pyx_v_n1;
-      *__Pyx_BufPtrStrided2d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_dist.rcbuffer->pybuffer.buf, __pyx_t_16, __pyx_pybuffernd_dist.diminfo[0].strides, __pyx_t_18, __pyx_pybuffernd_dist.diminfo[1].strides) = 1;
+      *__Pyx_BufPtrStrided2d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_dist.rcbuffer->pybuffer.buf, __pyx_t_16, __pyx_pybuffernd_dist.diminfo[0].strides, __pyx_t_18, __pyx_pybuffernd_dist.diminfo[1].strides) = 1;
 
-      /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":92
+      /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":92
  *             dist[nid2.id, n1] = 1
  *             # Update backtrack edge and nodes
  *             backtrack_edge_node[nid1.id, n2, 0] = edge_id             # <<<<<<<<<<<<<<
@@ -5109,9 +5109,9 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
       __pyx_t_18 = __pyx_v_nid1.id;
       __pyx_t_16 = __pyx_v_n2;
       __pyx_t_20 = 0;
-      *__Pyx_BufPtrStrided3d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.buf, __pyx_t_18, __pyx_pybuffernd_backtrack_edge_node.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_backtrack_edge_node.diminfo[1].strides, __pyx_t_20, __pyx_pybuffernd_backtrack_edge_node.diminfo[2].strides) = __pyx_v_edge_id;
+      *__Pyx_BufPtrStrided3d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.buf, __pyx_t_18, __pyx_pybuffernd_backtrack_edge_node.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_backtrack_edge_node.diminfo[1].strides, __pyx_t_20, __pyx_pybuffernd_backtrack_edge_node.diminfo[2].strides) = __pyx_v_edge_id;
 
-      /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":93
+      /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":93
  *             # Update backtrack edge and nodes
  *             backtrack_edge_node[nid1.id, n2, 0] = edge_id
  *             backtrack_edge_node[nid1.id, n2, 1] = n1             # <<<<<<<<<<<<<<
@@ -5121,9 +5121,9 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
       __pyx_t_20 = __pyx_v_nid1.id;
       __pyx_t_16 = __pyx_v_n2;
       __pyx_t_18 = 1;
-      *__Pyx_BufPtrStrided3d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.buf, __pyx_t_20, __pyx_pybuffernd_backtrack_edge_node.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_backtrack_edge_node.diminfo[1].strides, __pyx_t_18, __pyx_pybuffernd_backtrack_edge_node.diminfo[2].strides) = __pyx_v_n1;
+      *__Pyx_BufPtrStrided3d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.buf, __pyx_t_20, __pyx_pybuffernd_backtrack_edge_node.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_backtrack_edge_node.diminfo[1].strides, __pyx_t_18, __pyx_pybuffernd_backtrack_edge_node.diminfo[2].strides) = __pyx_v_n1;
 
-      /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":95
+      /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":95
  *             backtrack_edge_node[nid1.id, n2, 1] = n1
  * 
  *             backtrack_edge_node[nid2.id, n1, 0] = n2             # <<<<<<<<<<<<<<
@@ -5133,9 +5133,9 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
       __pyx_t_18 = __pyx_v_nid2.id;
       __pyx_t_16 = __pyx_v_n1;
       __pyx_t_20 = 0;
-      *__Pyx_BufPtrStrided3d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.buf, __pyx_t_18, __pyx_pybuffernd_backtrack_edge_node.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_backtrack_edge_node.diminfo[1].strides, __pyx_t_20, __pyx_pybuffernd_backtrack_edge_node.diminfo[2].strides) = __pyx_v_n2;
+      *__Pyx_BufPtrStrided3d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.buf, __pyx_t_18, __pyx_pybuffernd_backtrack_edge_node.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_backtrack_edge_node.diminfo[1].strides, __pyx_t_20, __pyx_pybuffernd_backtrack_edge_node.diminfo[2].strides) = __pyx_v_n2;
 
-      /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":96
+      /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":96
  * 
  *             backtrack_edge_node[nid2.id, n1, 0] = n2
  *             backtrack_edge_node[nid2.id, n1, 1] = n2             # <<<<<<<<<<<<<<
@@ -5145,9 +5145,9 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
       __pyx_t_20 = __pyx_v_nid2.id;
       __pyx_t_16 = __pyx_v_n1;
       __pyx_t_18 = 1;
-      *__Pyx_BufPtrStrided3d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.buf, __pyx_t_20, __pyx_pybuffernd_backtrack_edge_node.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_backtrack_edge_node.diminfo[1].strides, __pyx_t_18, __pyx_pybuffernd_backtrack_edge_node.diminfo[2].strides) = __pyx_v_n2;
+      *__Pyx_BufPtrStrided3d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.buf, __pyx_t_20, __pyx_pybuffernd_backtrack_edge_node.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_backtrack_edge_node.diminfo[1].strides, __pyx_t_18, __pyx_pybuffernd_backtrack_edge_node.diminfo[2].strides) = __pyx_v_n2;
 
-      /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":88
+      /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":88
  *         adj[n2].push_back(EdgeNode(edge_id, n1))
  * 
  *         if nid1.isPrimary and nid2.isPrimary:             # <<<<<<<<<<<<<<
@@ -5157,7 +5157,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
     }
   }
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":100
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":100
  *     # Compute distance from primary nodes to all other nodes
  *     ###  print("Compute distance from primary nodes to all other nodes")
  *     for p_primary_id in range(n_primary):             # <<<<<<<<<<<<<<
@@ -5169,7 +5169,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   for (__pyx_t_15 = 0; __pyx_t_15 < __pyx_t_14; __pyx_t_15+=1) {
     __pyx_v_p_primary_id = __pyx_t_15;
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":101
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":101
  *     ###  print("Compute distance from primary nodes to all other nodes")
  *     for p_primary_id in range(n_primary):
  *         now = 0             # <<<<<<<<<<<<<<
@@ -5178,7 +5178,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
     __pyx_v_now = 0;
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":102
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":102
  *     for p_primary_id in range(n_primary):
  *         now = 0
  *         next = 1-now             # <<<<<<<<<<<<<<
@@ -5187,7 +5187,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
     __pyx_v_next = (1 - __pyx_v_now);
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":104
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":104
  *         next = 1-now
  * 
  *         p = primary_nodes[p_primary_id]             # <<<<<<<<<<<<<<
@@ -5195,9 +5195,9 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  *         for connected in adj[p]:
  */
     __pyx_t_18 = __pyx_v_p_primary_id;
-    __pyx_v_p = (*__Pyx_BufPtrStrided1d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_primary_nodes.rcbuffer->pybuffer.buf, __pyx_t_18, __pyx_pybuffernd_primary_nodes.diminfo[0].strides));
+    __pyx_v_p = (*__Pyx_BufPtrStrided1d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_primary_nodes.rcbuffer->pybuffer.buf, __pyx_t_18, __pyx_pybuffernd_primary_nodes.diminfo[0].strides));
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":105
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":105
  * 
  *         p = primary_nodes[p_primary_id]
  *         to_visit[now].clear()             # <<<<<<<<<<<<<<
@@ -5206,7 +5206,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
     (__pyx_v_to_visit[__pyx_v_now]).clear();
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":106
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":106
  *         p = primary_nodes[p_primary_id]
  *         to_visit[now].clear()
  *         for connected in adj[p]:             # <<<<<<<<<<<<<<
@@ -5221,7 +5221,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
       ++__pyx_t_21;
       __pyx_v_connected = __pyx_t_19;
 
-      /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":107
+      /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":107
  *         to_visit[now].clear()
  *         for connected in adj[p]:
  *             to_visit[now].push_back(connected.node)             # <<<<<<<<<<<<<<
@@ -5235,7 +5235,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
         __PYX_ERR(0, 107, __pyx_L1_error)
       }
 
-      /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":108
+      /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":108
  *         for connected in adj[p]:
  *             to_visit[now].push_back(connected.node)
  *             backtrack_edge_node[p_primary_id, connected.node, 0] = connected.edge             # <<<<<<<<<<<<<<
@@ -5246,9 +5246,9 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
       __pyx_t_18 = __pyx_v_p_primary_id;
       __pyx_t_16 = __pyx_v_connected.node;
       __pyx_t_20 = 0;
-      *__Pyx_BufPtrStrided3d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.buf, __pyx_t_18, __pyx_pybuffernd_backtrack_edge_node.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_backtrack_edge_node.diminfo[1].strides, __pyx_t_20, __pyx_pybuffernd_backtrack_edge_node.diminfo[2].strides) = __pyx_t_23;
+      *__Pyx_BufPtrStrided3d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.buf, __pyx_t_18, __pyx_pybuffernd_backtrack_edge_node.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_backtrack_edge_node.diminfo[1].strides, __pyx_t_20, __pyx_pybuffernd_backtrack_edge_node.diminfo[2].strides) = __pyx_t_23;
 
-      /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":109
+      /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":109
  *             to_visit[now].push_back(connected.node)
  *             backtrack_edge_node[p_primary_id, connected.node, 0] = connected.edge
  *             backtrack_edge_node[p_primary_id, connected.node, 1] = p             # <<<<<<<<<<<<<<
@@ -5258,9 +5258,9 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
       __pyx_t_20 = __pyx_v_p_primary_id;
       __pyx_t_16 = __pyx_v_connected.node;
       __pyx_t_18 = 1;
-      *__Pyx_BufPtrStrided3d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.buf, __pyx_t_20, __pyx_pybuffernd_backtrack_edge_node.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_backtrack_edge_node.diminfo[1].strides, __pyx_t_18, __pyx_pybuffernd_backtrack_edge_node.diminfo[2].strides) = __pyx_v_p;
+      *__Pyx_BufPtrStrided3d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.buf, __pyx_t_20, __pyx_pybuffernd_backtrack_edge_node.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_backtrack_edge_node.diminfo[1].strides, __pyx_t_18, __pyx_pybuffernd_backtrack_edge_node.diminfo[2].strides) = __pyx_v_p;
 
-      /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":106
+      /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":106
  *         p = primary_nodes[p_primary_id]
  *         to_visit[now].clear()
  *         for connected in adj[p]:             # <<<<<<<<<<<<<<
@@ -5269,7 +5269,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
     }
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":110
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":110
  *             backtrack_edge_node[p_primary_id, connected.node, 0] = connected.edge
  *             backtrack_edge_node[p_primary_id, connected.node, 1] = p
  *         d = 1             # <<<<<<<<<<<<<<
@@ -5278,7 +5278,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
     __pyx_v_d = 1;
 
-    /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":116
+    /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":116
  *         ###  print(f'dist: {dist[node_lookup[p][1]]}')
  * 
  *         while not to_visit[now].empty():             # <<<<<<<<<<<<<<
@@ -5289,7 +5289,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
       __pyx_t_1 = (!(__pyx_v_to_visit[__pyx_v_now]).empty());
       if (!__pyx_t_1) break;
 
-      /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":118
+      /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":118
  *         while not to_visit[now].empty():
  *             # Clear next to_visit
  *             to_visit[next].clear()             # <<<<<<<<<<<<<<
@@ -5298,7 +5298,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
       (__pyx_v_to_visit[__pyx_v_next]).clear();
 
-      /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":123
+      /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":123
  * 
  *             # Iterate over nodes to_visit
  *             for n in to_visit[now]:             # <<<<<<<<<<<<<<
@@ -5313,7 +5313,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
         ++__pyx_t_24;
         __pyx_v_n = __pyx_t_23;
 
-        /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":125
+        /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":125
  *             for n in to_visit[now]:
  *                 # Update distance
  *                 dist[p_primary_id, n] = d             # <<<<<<<<<<<<<<
@@ -5322,9 +5322,9 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
         __pyx_t_18 = __pyx_v_p_primary_id;
         __pyx_t_16 = __pyx_v_n;
-        *__Pyx_BufPtrStrided2d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_dist.rcbuffer->pybuffer.buf, __pyx_t_18, __pyx_pybuffernd_dist.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_dist.diminfo[1].strides) = __pyx_v_d;
+        *__Pyx_BufPtrStrided2d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_dist.rcbuffer->pybuffer.buf, __pyx_t_18, __pyx_pybuffernd_dist.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_dist.diminfo[1].strides) = __pyx_v_d;
 
-        /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":128
+        /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":128
  * 
  *                 # If n is a primary node, don't follow edges
  *                 if node_lookup[n].isPrimary:             # <<<<<<<<<<<<<<
@@ -5334,7 +5334,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
         __pyx_t_1 = ((__pyx_v_node_lookup[__pyx_v_n]).isPrimary != 0);
         if (__pyx_t_1) {
 
-          /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":130
+          /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":130
  *                 if node_lookup[n].isPrimary:
  *                     ###  print(f'   {n} -> ... skipped')
  *                     continue             # <<<<<<<<<<<<<<
@@ -5343,7 +5343,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
           goto __pyx_L23_continue;
 
-          /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":128
+          /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":128
  * 
  *                 # If n is a primary node, don't follow edges
  *                 if node_lookup[n].isPrimary:             # <<<<<<<<<<<<<<
@@ -5352,7 +5352,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
         }
 
-        /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":133
+        /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":133
  * 
  *                 # Otherwise Follow edges of node n
  *                 for connected in adj[n]:             # <<<<<<<<<<<<<<
@@ -5367,7 +5367,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
           ++__pyx_t_21;
           __pyx_v_connected = __pyx_t_19;
 
-          /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":135
+          /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":135
  *                 for connected in adj[n]:
  *                     # Skip if already visited or if m is p
  *                     if dist[p_primary_id, connected.node] >= 0:             # <<<<<<<<<<<<<<
@@ -5376,10 +5376,10 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
           __pyx_t_16 = __pyx_v_p_primary_id;
           __pyx_t_18 = __pyx_v_connected.node;
-          __pyx_t_1 = ((*__Pyx_BufPtrStrided2d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_dist.rcbuffer->pybuffer.buf, __pyx_t_16, __pyx_pybuffernd_dist.diminfo[0].strides, __pyx_t_18, __pyx_pybuffernd_dist.diminfo[1].strides)) >= 0);
+          __pyx_t_1 = ((*__Pyx_BufPtrStrided2d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_dist.rcbuffer->pybuffer.buf, __pyx_t_16, __pyx_pybuffernd_dist.diminfo[0].strides, __pyx_t_18, __pyx_pybuffernd_dist.diminfo[1].strides)) >= 0);
           if (__pyx_t_1) {
 
-            /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":137
+            /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":137
  *                     if dist[p_primary_id, connected.node] >= 0:
  *                         ###  print(f'   {n} -> {m} skipped')
  *                         continue             # <<<<<<<<<<<<<<
@@ -5388,7 +5388,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
             goto __pyx_L26_continue;
 
-            /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":135
+            /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":135
  *                 for connected in adj[n]:
  *                     # Skip if already visited or if m is p
  *                     if dist[p_primary_id, connected.node] >= 0:             # <<<<<<<<<<<<<<
@@ -5397,7 +5397,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
           }
 
-          /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":139
+          /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":139
  *                         continue
  *                     # Update backtrack node
  *                     backtrack_edge_node[p_primary_id, connected.node, 0] = connected.edge   # edge             # <<<<<<<<<<<<<<
@@ -5408,9 +5408,9 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
           __pyx_t_18 = __pyx_v_p_primary_id;
           __pyx_t_16 = __pyx_v_connected.node;
           __pyx_t_20 = 0;
-          *__Pyx_BufPtrStrided3d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.buf, __pyx_t_18, __pyx_pybuffernd_backtrack_edge_node.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_backtrack_edge_node.diminfo[1].strides, __pyx_t_20, __pyx_pybuffernd_backtrack_edge_node.diminfo[2].strides) = __pyx_t_23;
+          *__Pyx_BufPtrStrided3d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.buf, __pyx_t_18, __pyx_pybuffernd_backtrack_edge_node.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_backtrack_edge_node.diminfo[1].strides, __pyx_t_20, __pyx_pybuffernd_backtrack_edge_node.diminfo[2].strides) = __pyx_t_23;
 
-          /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":140
+          /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":140
  *                     # Update backtrack node
  *                     backtrack_edge_node[p_primary_id, connected.node, 0] = connected.edge   # edge
  *                     backtrack_edge_node[p_primary_id, connected.node, 1] = n                # node             # <<<<<<<<<<<<<<
@@ -5420,9 +5420,9 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
           __pyx_t_20 = __pyx_v_p_primary_id;
           __pyx_t_16 = __pyx_v_connected.node;
           __pyx_t_18 = 1;
-          *__Pyx_BufPtrStrided3d(__pyx_t_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.buf, __pyx_t_20, __pyx_pybuffernd_backtrack_edge_node.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_backtrack_edge_node.diminfo[1].strides, __pyx_t_18, __pyx_pybuffernd_backtrack_edge_node.diminfo[2].strides) = __pyx_v_n;
+          *__Pyx_BufPtrStrided3d(__pyx_t_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_DTYPE_t *, __pyx_pybuffernd_backtrack_edge_node.rcbuffer->pybuffer.buf, __pyx_t_20, __pyx_pybuffernd_backtrack_edge_node.diminfo[0].strides, __pyx_t_16, __pyx_pybuffernd_backtrack_edge_node.diminfo[1].strides, __pyx_t_18, __pyx_pybuffernd_backtrack_edge_node.diminfo[2].strides) = __pyx_v_n;
 
-          /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":143
+          /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":143
  *                     ###  print(f'   {n} -> {m}')
  *                     # Add m to next to_visit
  *                     to_visit[next].push_back(connected.node)             # <<<<<<<<<<<<<<
@@ -5436,7 +5436,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
             __PYX_ERR(0, 143, __pyx_L1_error)
           }
 
-          /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":133
+          /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":133
  * 
  *                 # Otherwise Follow edges of node n
  *                 for connected in adj[n]:             # <<<<<<<<<<<<<<
@@ -5446,7 +5446,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
           __pyx_L26_continue:;
         }
 
-        /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":123
+        /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":123
  * 
  *             # Iterate over nodes to_visit
  *             for n in to_visit[now]:             # <<<<<<<<<<<<<<
@@ -5456,7 +5456,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
         __pyx_L23_continue:;
       }
 
-      /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":146
+      /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":146
  * 
  *             # Switch to_visit and next to_visit
  *             now = next             # <<<<<<<<<<<<<<
@@ -5465,7 +5465,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
       __pyx_v_now = __pyx_v_next;
 
-      /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":147
+      /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":147
  *             # Switch to_visit and next to_visit
  *             now = next
  *             next = 1-now             # <<<<<<<<<<<<<<
@@ -5474,7 +5474,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
  */
       __pyx_v_next = (1 - __pyx_v_now);
 
-      /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":150
+      /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":150
  * 
  *             # Increment distance
  *             d += 1             # <<<<<<<<<<<<<<
@@ -5485,7 +5485,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
     }
   }
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":152
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":152
  *             d += 1
  * 
  *     return dist, backtrack_edge_node             # <<<<<<<<<<<<<<
@@ -5503,7 +5503,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
   __pyx_t_5 = 0;
   goto __pyx_L0;
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":26
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":26
  *     int node
  * 
  * @cython.boundscheck(False) # turn off bounds-checking for entire function             # <<<<<<<<<<<<<<
@@ -5527,7 +5527,7 @@ static PyObject *__pyx_pf_22fundus_vessels_toolkit_6vgraph_8matching_16edit_dist
     __Pyx_SafeReleaseBuffer(&__pyx_pybuffernd_primary_nodes.rcbuffer->pybuffer);
     __Pyx_SafeReleaseBuffer(&__pyx_pybuffernd_secondary_nodes.rcbuffer->pybuffer);
   __Pyx_ErrRestore(__pyx_type, __pyx_value, __pyx_tb);}
-  __Pyx_AddTraceback("fundus_vessels_toolkit.vgraph.matching.edit_distance_cy.shortest_secondary_path", __pyx_clineno, __pyx_lineno, __pyx_filename);
+  __Pyx_AddTraceback("fundus_vessels_toolkit.vascular_graph.matching.edit_distance_cy.shortest_secondary_path", __pyx_clineno, __pyx_lineno, __pyx_filename);
   __pyx_r = NULL;
   goto __pyx_L2;
   __pyx_L0:;
@@ -5578,7 +5578,7 @@ static int __Pyx_CreateStringTabAndInitStrings(void) {
     {&__pyx_n_s_edge_id, __pyx_k_edge_id, sizeof(__pyx_k_edge_id), 0, 0, 1, 1},
     {&__pyx_n_s_empty, __pyx_k_empty, sizeof(__pyx_k_empty), 0, 0, 1, 1},
     {&__pyx_n_s_fill, __pyx_k_fill, sizeof(__pyx_k_fill), 0, 0, 1, 1},
-    {&__pyx_n_s_fundus_vessels_toolkit_vgraph_ma, __pyx_k_fundus_vessels_toolkit_vgraph_ma, sizeof(__pyx_k_fundus_vessels_toolkit_vgraph_ma), 0, 0, 1, 1},
+    {&__pyx_n_s_fundus_vessels_toolkit_vascular, __pyx_k_fundus_vessels_toolkit_vascular, sizeof(__pyx_k_fundus_vessels_toolkit_vascular), 0, 0, 1, 1},
     {&__pyx_n_s_id, __pyx_k_id, sizeof(__pyx_k_id), 0, 0, 1, 1},
     {&__pyx_n_s_import, __pyx_k_import, sizeof(__pyx_k_import), 0, 0, 1, 1},
     {&__pyx_n_s_initializing, __pyx_k_initializing, sizeof(__pyx_k_initializing), 0, 0, 1, 1},
@@ -5612,7 +5612,7 @@ static int __Pyx_CreateStringTabAndInitStrings(void) {
     {&__pyx_n_s_secondary_nodes, __pyx_k_secondary_nodes, sizeof(__pyx_k_secondary_nodes), 0, 0, 1, 1},
     {&__pyx_n_s_shortest_secondary_path, __pyx_k_shortest_secondary_path, sizeof(__pyx_k_shortest_secondary_path), 0, 0, 1, 1},
     {&__pyx_n_s_spec, __pyx_k_spec, sizeof(__pyx_k_spec), 0, 0, 1, 1},
-    {&__pyx_kp_s_src_fundus_vessels_toolkit_vgrap, __pyx_k_src_fundus_vessels_toolkit_vgrap, sizeof(__pyx_k_src_fundus_vessels_toolkit_vgrap), 0, 0, 1, 0},
+    {&__pyx_kp_s_src_fundus_vessels_toolkit_vascu, __pyx_k_src_fundus_vessels_toolkit_vascu, sizeof(__pyx_k_src_fundus_vessels_toolkit_vascu), 0, 0, 1, 0},
     {&__pyx_n_s_test, __pyx_k_test, sizeof(__pyx_k_test), 0, 0, 1, 1},
     {&__pyx_n_s_to_visit, __pyx_k_to_visit, sizeof(__pyx_k_to_visit), 0, 0, 1, 1},
     {0, 0, 0, 0, 0, 0, 0}
@@ -5656,7 +5656,7 @@ static CYTHON_SMALL_CODE int __Pyx_InitCachedConstants(void) {
   __Pyx_GOTREF(__pyx_tuple__2);
   __Pyx_GIVEREF(__pyx_tuple__2);
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":26
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":26
  *     int node
  * 
  * @cython.boundscheck(False) # turn off bounds-checking for entire function             # <<<<<<<<<<<<<<
@@ -5666,7 +5666,7 @@ static CYTHON_SMALL_CODE int __Pyx_InitCachedConstants(void) {
   __pyx_tuple__4 = PyTuple_Pack(26, __pyx_n_s_adjacency_list, __pyx_n_s_primary_nodes, __pyx_n_s_secondary_nodes, __pyx_n_s_n_primary, __pyx_n_s_n_secondary, __pyx_n_s_n_nodes, __pyx_n_s_n_edges, __pyx_n_s_dist, __pyx_n_s_backtrack_edge_node, __pyx_n_s_to_visit, __pyx_n_s_n1, __pyx_n_s_n2, __pyx_n_s_d, __pyx_n_s_p, __pyx_n_s_nid1, __pyx_n_s_nid2, __pyx_n_s_now, __pyx_n_s_next, __pyx_n_s_node_lookup, __pyx_n_s_adj, __pyx_n_s_primary_id, __pyx_n_s_secondary_id, __pyx_n_s_edge_id, __pyx_n_s_p_primary_id, __pyx_n_s_connected, __pyx_n_s_n); if (unlikely(!__pyx_tuple__4)) __PYX_ERR(0, 26, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_tuple__4);
   __Pyx_GIVEREF(__pyx_tuple__4);
-  __pyx_codeobj__5 = (PyObject*)__Pyx_PyCode_New(3, 0, 0, 26, 0, CO_OPTIMIZED|CO_NEWLOCALS, __pyx_empty_bytes, __pyx_empty_tuple, __pyx_empty_tuple, __pyx_tuple__4, __pyx_empty_tuple, __pyx_empty_tuple, __pyx_kp_s_src_fundus_vessels_toolkit_vgrap, __pyx_n_s_shortest_secondary_path, 26, __pyx_empty_bytes); if (unlikely(!__pyx_codeobj__5)) __PYX_ERR(0, 26, __pyx_L1_error)
+  __pyx_codeobj__5 = (PyObject*)__Pyx_PyCode_New(3, 0, 0, 26, 0, CO_OPTIMIZED|CO_NEWLOCALS, __pyx_empty_bytes, __pyx_empty_tuple, __pyx_empty_tuple, __pyx_tuple__4, __pyx_empty_tuple, __pyx_empty_tuple, __pyx_kp_s_src_fundus_vessels_toolkit_vascu, __pyx_n_s_shortest_secondary_path, 26, __pyx_empty_bytes); if (unlikely(!__pyx_codeobj__5)) __PYX_ERR(0, 26, __pyx_L1_error)
   __Pyx_RefNannyFinishContext();
   return 0;
   __pyx_L1_error:;
@@ -6052,14 +6052,14 @@ if (!__Pyx_RefNanny) {
   #if PY_MAJOR_VERSION < 3 && (__PYX_DEFAULT_STRING_ENCODING_IS_ASCII || __PYX_DEFAULT_STRING_ENCODING_IS_DEFAULT)
   if (__Pyx_init_sys_getdefaultencoding_params() < 0) __PYX_ERR(0, 1, __pyx_L1_error)
   #endif
-  if (__pyx_module_is_main_fundus_vessels_toolkit__vgraph__matching__edit_distance_cy) {
+  if (__pyx_module_is_main_fundus_vessels_toolkit__vascular_graph__matching__edit_distance_cy) {
     if (PyObject_SetAttr(__pyx_m, __pyx_n_s_name, __pyx_n_s_main) < 0) __PYX_ERR(0, 1, __pyx_L1_error)
   }
   #if PY_MAJOR_VERSION >= 3
   {
     PyObject *modules = PyImport_GetModuleDict(); if (unlikely(!modules)) __PYX_ERR(0, 1, __pyx_L1_error)
-    if (!PyDict_GetItemString(modules, "fundus_vessels_toolkit.vgraph.matching.edit_distance_cy")) {
-      if (unlikely((PyDict_SetItemString(modules, "fundus_vessels_toolkit.vgraph.matching.edit_distance_cy", __pyx_m) < 0))) __PYX_ERR(0, 1, __pyx_L1_error)
+    if (!PyDict_GetItemString(modules, "fundus_vessels_toolkit.vascular_graph.matching.edit_distance_cy")) {
+      if (unlikely((PyDict_SetItemString(modules, "fundus_vessels_toolkit.vascular_graph.matching.edit_distance_cy", __pyx_m) < 0))) __PYX_ERR(0, 1, __pyx_L1_error)
     }
   }
   #endif
@@ -6080,7 +6080,7 @@ if (!__Pyx_RefNanny) {
   if (__Pyx_patch_abc() < 0) __PYX_ERR(0, 1, __pyx_L1_error)
   #endif
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":4
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":4
  * 
  * cimport cython
  * import numpy as np             # <<<<<<<<<<<<<<
@@ -6092,7 +6092,7 @@ if (!__Pyx_RefNanny) {
   if (PyDict_SetItem(__pyx_d, __pyx_n_s_np, __pyx_t_2) < 0) __PYX_ERR(0, 4, __pyx_L1_error)
   __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":6
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":6
  * import numpy as np
  * cimport numpy as np
  * np.import_array()             # <<<<<<<<<<<<<<
@@ -6101,7 +6101,7 @@ if (!__Pyx_RefNanny) {
  */
   __pyx_t_3 = __pyx_f_5numpy_import_array(); if (unlikely(__pyx_t_3 == ((int)-1))) __PYX_ERR(0, 6, __pyx_L1_error)
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":14
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":14
  * 
  * 
  * DTYPE = int             # <<<<<<<<<<<<<<
@@ -6110,19 +6110,19 @@ if (!__Pyx_RefNanny) {
  */
   if (PyDict_SetItem(__pyx_d, __pyx_n_s_DTYPE, ((PyObject *)(&PyInt_Type))) < 0) __PYX_ERR(0, 14, __pyx_L1_error)
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":26
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":26
  *     int node
  * 
  * @cython.boundscheck(False) # turn off bounds-checking for entire function             # <<<<<<<<<<<<<<
  * @cython.wraparound(False)  # turn off negative index wrapping for entire function
  * def shortest_secondary_path(np.ndarray[DTYPE_t, ndim=2] adjacency_list,
  */
-  __pyx_t_2 = __Pyx_CyFunction_New(&__pyx_mdef_22fundus_vessels_toolkit_6vgraph_8matching_16edit_distance_cy_1shortest_secondary_path, 0, __pyx_n_s_shortest_secondary_path, NULL, __pyx_n_s_fundus_vessels_toolkit_vgraph_ma, __pyx_d, ((PyObject *)__pyx_codeobj__5)); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 26, __pyx_L1_error)
+  __pyx_t_2 = __Pyx_CyFunction_New(&__pyx_mdef_22fundus_vessels_toolkit_14vascular_graph_8matching_16edit_distance_cy_1shortest_secondary_path, 0, __pyx_n_s_shortest_secondary_path, NULL, __pyx_n_s_fundus_vessels_toolkit_vascular, __pyx_d, ((PyObject *)__pyx_codeobj__5)); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 26, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_2);
   if (PyDict_SetItem(__pyx_d, __pyx_n_s_shortest_secondary_path, __pyx_t_2) < 0) __PYX_ERR(0, 26, __pyx_L1_error)
   __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
 
-  /* "fundus_vessels_toolkit/vgraph/matching/edit_distance_cy.pyx":1
+  /* "fundus_vessels_toolkit/vascular_graph/matching/edit_distance_cy.pyx":1
  * #distutils: language=c++             # <<<<<<<<<<<<<<
  * 
  * cimport cython
@@ -6139,7 +6139,7 @@ if (!__Pyx_RefNanny) {
   __Pyx_XDECREF(__pyx_t_2);
   if (__pyx_m) {
     if (__pyx_d && stringtab_initialized) {
-      __Pyx_AddTraceback("init fundus_vessels_toolkit.vgraph.matching.edit_distance_cy", __pyx_clineno, __pyx_lineno, __pyx_filename);
+      __Pyx_AddTraceback("init fundus_vessels_toolkit.vascular_graph.matching.edit_distance_cy", __pyx_clineno, __pyx_lineno, __pyx_filename);
     }
     #if !CYTHON_USE_MODULE_STATE
     Py_CLEAR(__pyx_m);
@@ -6153,7 +6153,7 @@ if (!__Pyx_RefNanny) {
     }
     #endif
   } else if (!PyErr_Occurred()) {
-    PyErr_SetString(PyExc_ImportError, "init fundus_vessels_toolkit.vgraph.matching.edit_distance_cy");
+    PyErr_SetString(PyExc_ImportError, "init fundus_vessels_toolkit.vascular_graph.matching.edit_distance_cy");
   }
   __pyx_L0:;
   __Pyx_RefNannyFinishContext();

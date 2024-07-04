@@ -11,7 +11,7 @@ from "Graphics Gems", Academic Press, 1990
  *  	Fit a Bezier curve to a (sub)set of digitized points
  *
  * CurveYX d : Array of digitized points
- * int first, last : Indices of first and last pts in region
+ * int first, last : Indices of first and last (included!) pts in region
  * Vector t0, t1 : Unit tangent vectors at endpoints
  * double error : User-defined error squared
  */
@@ -35,18 +35,18 @@ BSpline fit_bspline(const CurveYX& d, const std::vector<Point>& tangent, double 
  *  	Fit a Bezier curve to a (sub)set of digitized points
  *
  * CurveYX d : Array of digitized points
- * int first, last : Indices of first and last pts in region
+ * int first, last : Indices of first and last  (included!) pts in region
  * Vector t0, t1 : Unit tangent vectors at endpoints
  * double error : User-defined error squared
  */
 std::tuple<BezierCurve, double, int> fit_bezier(const CurveYX& d, const std::vector<Point>& tangent, double error,
-                                                int first, int last) {
+                                                std::size_t first, std::size_t last) {
     BezierCurve bezCurve;          /*Control points of fitted Bezier curve*/
     const int MAX_ITERATIONS = 20; /*  Max times to try iterating  */
 
     double iterationError = error * 4.0; /* fixed issue 23 */
-    if (last < 0) last += (int)d.size();
-    int nPts = last - first + 1;
+    if (last == 0) last = d.size() - 1;
+    std::size_t nPts = last - first + 1;
 
     Vector t0 = tangent[first], t1 = -tangent[last];
 
@@ -89,7 +89,7 @@ std::tuple<BezierCurve, double, int> fit_bezier(const CurveYX& d, const std::vec
  * double *uPrime : Parameter values for region
  * Vector2 tHat1, tHat2 : Unit tangents at endpoints
  */
-BezierCurve bezier_regression(const CurveYX& d, int first, int last, const std::vector<double>& uPrime,
+BezierCurve bezier_regression(const CurveYX& d, std::size_t first, std::size_t last, const std::vector<double>& uPrime,
                               const Vector& t0, const Vector& t1) {
     int nPts = last - first + 1;
 
@@ -161,7 +161,7 @@ BezierCurve bezier_regression(const CurveYX& d, int first, int last, const std::
  * Point2 *d : Array of digitized points
  * int first, last : Indices defining region
  */
-std::vector<double> chordLengthParameterize(const CurveYX& d, int first, int last) {
+std::vector<double> chordLengthParameterize(const CurveYX& d, std::size_t first, std::size_t last) {
     int nPts = last - first + 1;
     std::vector<double> u(nPts, 0); /*  Parameterization		*/
 
@@ -184,7 +184,8 @@ std::vector<double> chordLengthParameterize(const CurveYX& d, int first, int las
  * double *u : Current parameter values
  * BezierCurve bezCurve : Current fitted curve
  */
-void reparameterize(std::vector<double>& u, const BezierCurve& bezCurve, const CurveYX& d, int first, int last) {
+void reparameterize(std::vector<double>& u, const BezierCurve& bezCurve, const CurveYX& d, std::size_t first,
+                    std::size_t last) {
     int nPts = (int)u.size();
     for (int i = 0; i < nPts; i++) u[i] = findNewtonRaphsonRoot(bezCurve, d[linspace_int(i, first, last, nPts)], u[i]);
 }
@@ -281,17 +282,16 @@ double B3(double u) { return u * u * u; }
  * double *u : Parameterization of points
  * int *splitPoint : Point of maximum error
  */
-std::tuple<double, int> computeMaxError(const CurveYX& d, int first, int last, const BezierCurve& bezCurve,
-                                        const std::vector<double>& u) {
-    int i;
+std::tuple<double, std::size_t> computeMaxError(const CurveYX& d, std::size_t first, std::size_t last,
+                                                const BezierCurve& bezCurve, const std::vector<double>& u) {
     double maxDist; /*  Maximum error		*/
     double dist;    /*  Current error		*/
     Point P;        /*  Point on curve		*/
     Vector v;       /*  Vector from point to curve	*/
 
-    int splitPoint = (last - first + 1) / 2;
+    std::size_t splitPoint = (last - first + 1) / 2;
     maxDist = 0.0;
-    for (i = first + 1; i < last; i++) {
+    for (std::size_t i = first + 1; i < last; i++) {
         P = BezierII(std::vector<Point>(bezCurve.begin(), bezCurve.end()), u[i - first]);
         v = P - d[i];
         dist = v.squaredNorm();
@@ -301,4 +301,23 @@ std::tuple<double, int> computeMaxError(const CurveYX& d, int first, int last, c
         }
     }
     return {maxDist, splitPoint};
+}
+
+torch::Tensor bspline_to_tensor(const BSpline& bspline) {
+    torch::Tensor spline_t = torch::zeros({(long)bspline.size(), 4, 2}, torch::kFloat);
+    auto spline_acc = spline_t.accessor<float, 3>();
+    for (int i = 0; i < (int)bspline.size(); i++) {
+        for (int j = 0; j < 4; j++) {
+            spline_acc[i][j][0] = bspline[i][j].y;
+            spline_acc[i][j][1] = bspline[i][j].x;
+        }
+    }
+    return spline_t;
+}
+
+std::vector<torch::Tensor> bsplines_to_tensor(const std::vector<BSpline>& bsplines) {
+    std::vector<torch::Tensor> tensors;
+    tensors.reserve(bsplines.size());
+    for (const auto& bspline : bsplines) tensors.push_back(bspline_to_tensor(bspline));
+    return tensors;
 }

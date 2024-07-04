@@ -1,4 +1,4 @@
-#include "common.h"
+#include "skeleton.h"
 
 /********************************************************************************************
  *                                 DETECT SKELETON NODES                                    *
@@ -63,8 +63,7 @@ SkeletonRank detect_skeleton_rank(const bool pixelValue, const uint8_t neighbors
  * skeleton is set to 2.
  *
  */
-torch::Tensor detect_skeleton_nodes(torch::Tensor skeleton, bool fix_hollow = true,
-                                    bool remove_single_endpoints = true) {
+torch::Tensor detect_skeleton_nodes(torch::Tensor skeleton, bool fix_hollow, bool remove_single_endpoints) {
     skeleton = torch::constant_pad_nd(skeleton, {1, 1, 1, 1}, 0);
     auto skeleton_accessor = skeleton.accessor<bool, 2>();
     int H = skeleton.size(0), W = skeleton.size(1);
@@ -229,12 +228,14 @@ std::pair<PointWithID, int> track_branch_neighbors(Tensor2DAccessor<int> skeleto
  *     - The coordinates of the nodes
  *     - The edge list. Each edge is composed of the id of the two nodes and the id of the branch connecting them.
  */
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, int> parse_skeleton(torch::Tensor skeleton) {
-    IntPoint shape = {(int)skeleton.size(0), (int)skeleton.size(1)};
+std::tuple<EdgeList, std::vector<CurveYX>, std::vector<IntPoint>> parse_skeleton_to_graph(torch::Tensor& skeletonMap) {
+    // The skeletonMap will be modified with the labelled skeleton.
+    auto const& skeleton = skeletonMap.clone();
     auto skel_acc = skeleton.accessor<int, 2>();
+    auto label_acc = skeletonMap.accessor<int, 2>();
 
-    torch::Tensor labeled_skeleton = torch::zeros_like(skeleton, torch::kInt);
-    auto label_acc = labeled_skeleton.accessor<int, 2>();
+    IntPoint shape = {(int)skeletonMap.size(0), (int)skeletonMap.size(1)};
+    std::vector<CurveYX> branches_curves;
     std::vector<PointWithID> nodes;
     int nNodes = 0;
 
@@ -243,7 +244,12 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, int> parse_skeleton(torc
     for (int y = 1; y < shape.y - 1; y++) {
         for (int x = 1; x < shape.x - 1; x++) {
             const int pixelRole = skel_acc[y][x];
-            if (pixelRole != PixelRole::NODE) continue;
+            // Erase skeleton from the skeletonMap for later annotations
+            if (pixelRole == PixelRole::BACKGROUND) continue;
+            if (pixelRole == PixelRole::BRANCH_ROLE) {
+                label_acc[y][x] = 0;
+                continue;
+            }
 
             int node_id;
 #pragma omp atomic capture
@@ -251,133 +257,68 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, int> parse_skeleton(torc
                 node_id = nNodes;
                 nNodes++;
             }
-            node_id++;
             // Junctions
             nodes.push_back({y, x, node_id});
-            label_acc[y][x] = -node_id;
+            label_acc[y][x] = -node_id - 1;
         }
     }
 
     // -- Search branches --
-    int nBranches = 0;
-    std::vector<std::array<int32_t, 3>> edge_list;
+    // int nBranches = 0;
+    EdgeList edge_list;
     edge_list.reserve(nNodes);
-    torch::Tensor nodes_coordinates = torch::zeros({nNodes, 2}, torch::kInt);
-    auto nodes_coord_acc = nodes_coordinates.accessor<int, 2>();
+    std::vector<IntPoint> nodes_coordinates(nNodes);
 
     for (const PointWithID& node : nodes) {
-#ifdef DEBUG
-        std::cout << "====================================================" << std::endl;
-        std::cout << "Node " << node.id << "(" << node.y << ", " << node.x << ")" << std::endl;
-#endif
-
         // Save node coordinates
-        nodes_coord_acc[node.id - 1][0] = node.y;
-        nodes_coord_acc[node.id - 1][1] = node.x;
+        nodes_coordinates[node.id] = node;
 
         // -- Find next nodes and branches --
         auto const& [next_nodes, next_branches] = get_node_neighbors(skel_acc, {node.y, node.x}, shape);
 
-// Remember connection with nodes next to the current node
-#ifdef DEBUG
-        std::cout << "\tNeighbor nodes: " << next_nodes.size() << std::endl;
-#endif
+        // Remember connection with nodes next to the current node
         for (const IntPoint& n : next_nodes) {
-            int neighbor_node_id = -label_acc[n.y][n.x];
+            int neighbor_node_id = -label_acc[n.y][n.x] - 1;
             if (node.id < neighbor_node_id) {
-                edge_list.push_back({node.id, neighbor_node_id, 0});
+                edge_list.push_back({node.id, neighbor_node_id, (int)edge_list.size()});
+                branches_curves.push_back({{node.y, node.x}, {n.y, n.x}});
             }
-#ifdef DEBUG
-            std::cout << "\t\t Node " << neighbor_node_id << n << std::endl;
-#endif
         }
 
-// Track branches not yet labelled
-#ifdef DEBUG
-        std::cout << "\tNeighbor branches: " << next_branches.size() << std::endl;
-#endif
+        // Track branches not yet labelled
         for (const PointWithID& n : next_branches) {
-#ifdef DEBUG
-            std::cout << "\t\t == Branch ";
-#endif
-
             if (label_acc[n.y][n.x] == 0) {
-                nBranches++;
-                const int branch_id = nBranches;
+                const int branch_id = edge_list.size();
+                CurveYX branch_pixels;
+                branch_pixels.reserve(64);
+                branch_pixels.push_back({node.y, node.x});
 
                 PointWithID tracker = n;
                 int tracker_role = PixelRole::BRANCH_ROLE;
 
-#ifdef DEBUG
-                std::cout << branch_id << " ==" << std::endl << "\t\t\t";
-#endif
                 while (label_acc[tracker.y][tracker.x] == 0) {
                     // Label the branch
-                    label_acc[tracker.y][tracker.x] = branch_id;
-
-#ifdef DEBUG
-                    std::cout << tracker.point() << " -> ";
-#endif
+                    label_acc[tracker.y][tracker.x] = branch_id + 1;
+                    branch_pixels.push_back(tracker);
 
                     // Track next nodes and branches
                     std::tie(tracker, tracker_role) = track_branch_neighbors(skel_acc, tracker, shape);
 
                     if (tracker_role != PixelRole::BRANCH_ROLE) break;  // If node is found stop the tracking
                 }
-#ifdef DEBUG
-                std::cout << std::endl;
-#endif
+                // Save the branch curve
+                branch_pixels.push_back({tracker.y, tracker.x});
+                branches_curves.push_back(branch_pixels);
 
                 if (tracker_role == PixelRole::NODE) {
                     // Save connectivity
-                    const int other_node_id = -label_acc[tracker.y][tracker.x];
-                    if (node.id < other_node_id)
-                        edge_list.push_back({node.id, other_node_id, branch_id});
-                    else
-                        edge_list.push_back({other_node_id, node.id, branch_id});
-#ifdef DEBUG
-                    std::cout << "\t\t\t -> Node " << other_node_id << " " << tracker.point() << std::endl;
-#endif
-
+                    const int other_node_id = -label_acc[tracker.y][tracker.x] - 1;
+                    edge_list.push_back({node.id, other_node_id, branch_id});
                 } else {
-// Todo: Handle invalid skeleton
-#ifdef DEBUG
-                    std::cout << "\t\t!! No terminaisons found !! ";
-#endif
                 }
-
             }
-#ifdef DEBUG
-            else {
-                std::cout << label_acc[n.y][n.x] << " == (already tracked)" << std::endl;
-            }
-#endif
         }
     }
 
-    // -- Create edge list tensor --
-
-    // const torch::Tensor edge_list_tensor = torch::from_blob(edge_list.data(), {(long)edge_list.size(), 3},
-    // torch::kInt32);
-
-    torch::Tensor edge_list_tensor = torch::zeros({(int)edge_list.size(), 2}, torch::kInt32);
-    auto edge_list_acc = edge_list_tensor.accessor<int32_t, 2>();
-    int iEdgeNoBranch = 0;
-    for (const auto& v : edge_list) {
-        const int& edge_id = v[2];
-        if (edge_id > 0) {
-            edge_list_acc[edge_id - 1][0] = v[0] - 1;
-            edge_list_acc[edge_id - 1][1] = v[1] - 1;
-        } else {
-            edge_list_acc[nBranches + iEdgeNoBranch][0] = v[0] - 1;
-            edge_list_acc[nBranches + iEdgeNoBranch][1] = v[1] - 1;
-            iEdgeNoBranch++;
-        }
-    }
-    return {labeled_skeleton, edge_list_tensor, nodes_coordinates, nBranches};
-}
-
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("detect_skeleton_nodes", &detect_skeleton_nodes, "Detect junctions and endpoints in a skeleton.");
-    m.def("parse_skeleton", &parse_skeleton, "Parse a skeleton image into a graph of branches and nodes.");
+    return {edge_list, branches_curves, nodes_coordinates};
 }

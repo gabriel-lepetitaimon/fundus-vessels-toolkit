@@ -12,7 +12,7 @@ from ..lookup_array import (
     apply_lookup,
     apply_lookup_on_coordinates,
     create_removal_lookup,
-    invert_lookup,
+    invert_lookup_legacy,
 )
 
 
@@ -425,7 +425,7 @@ def merge_nodes_by_distance(
 
         nodes_coord = apply_lookup_on_coordinates(nodes_coord, node_lookup, weight=~endpoints_nodes)
         branch_lookup = apply_lookup(branch_lookup, branch_lookup2)
-        inverted_lookup = invert_lookup(node_lookup)
+        inverted_lookup = invert_lookup_legacy(node_lookup)
 
         for j, (m, d, r) in enumerate(distance[i + 1 :]):
             if m is not None:
@@ -462,7 +462,7 @@ def merge_nodes_clusters(
         - branches_by_node: A (N', M') boolean matrix where N' is the number of branches after merging.
         - branch_lookup: A (N,) array mapping the new branch labels.
         - node_lookup: A (M,) array mapping the new node labels.
-    """
+    """  # noqa: E501
     node_lookup = np.arange(branches_by_nodes.shape[1], dtype=np.int64)
     branches_to_remove = np.zeros(branches_by_nodes.shape[0], dtype=bool)
     branches_lookup = np.arange(branches_by_nodes.shape[0] + 1, dtype=np.int64)

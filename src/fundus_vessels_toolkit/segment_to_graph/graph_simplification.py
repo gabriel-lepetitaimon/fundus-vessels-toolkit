@@ -1,26 +1,44 @@
-from typing import Literal, Mapping, Optional, TypeAlias, TypedDict
+__all__ = [
+    "cluster_nodes_by_distance",
+    "merge_nodes_by_distance",
+    "merge_small_cycles",
+    "merge_equivalent_branches",
+    "remove_spurs",
+    "simplify_passing_nodes",
+    "simplify_graph",
+    "simplify_graph_legacy",
+    "NodeSimplificationCallBack",
+    "NodeMergeDistances",
+    "NodeMergeDistanceParam",
+    "SimplifyTopology",
+]
+
+from dataclasses import dataclass
+from typing import List, Literal, Mapping, Optional, TypeAlias
 
 import networkx as nx
 import numpy as np
 import numpy.typing as npt
 
-from ..utils.geometric import distance_matrix
+from ..utils.geometric import Point, distance_matrix
 from ..utils.graph.branch_by_nodes import (
     branches_by_nodes_to_branch_list,
     compute_is_endpoints,
     delete_nodes,
     fuse_nodes,
-    merge_equivalent_branches,
-    merge_nodes_by_distance,
     merge_nodes_clusters,
     node_rank,
-    reduce_clusters,
 )
+from ..utils.graph.branch_by_nodes import merge_equivalent_branches as merge_equivalent_branches_legacy
+from ..utils.graph.branch_by_nodes import merge_nodes_by_distance as merge_nodes_by_distance_legacy
+from ..utils.graph.branch_by_nodes import reduce_clusters as reduce_clusters_legacy
+from ..utils.graph.cluster import cluster_by_distance, reduce_clusters
 from ..utils.lookup_array import apply_lookup, apply_lookup_on_coordinates
-from ..vascular_graph import VGraph
+from ..vascular_data_objects import VGraph
 
 
-class NodeMergeDistanceDict(TypedDict):
+@dataclass
+class NodeMergeDistances:
     junction: float
     termination: float
     node: float
@@ -30,19 +48,355 @@ class NodeSimplificationCallBack:
     def __call__(
         self,
         node_to_fuse: npt.NDArray[np.bool_],
-        node_y: npt.NDArray[np.float_],
-        node_x: npt.NDArray[np.float_],
+        node_y: npt.NDArray[np.float64],
+        node_x: npt.NDArray[np.float64],
         skeleton: npt.NDArray[np.bool_],
         branches_by_nodes: npt.NDArray[np.uint64],
     ) -> npt.NDArray[np.bool_]:
         pass
 
 
-NodeMergeDistanceParam: TypeAlias = bool | float | NodeMergeDistanceDict
+NodeMergeDistanceParam: TypeAlias = bool | float | NodeMergeDistances
 SimplifyTopology: TypeAlias = Literal["node", "branch", "both"] | None
 
 
 def simplify_graph(
+    vessel_graph: VGraph,
+    max_spurs_length: float = 0,
+    nodes_merge_distance: NodeMergeDistanceParam = True,
+    max_cycles_length: float = 0,
+    simplify_topology: SimplifyTopology = "node",
+    *,
+    inplace=False,
+) -> VGraph:
+    """
+    Extract the naive vasculature graph from a vessel map.
+    If return label is True, the label map of branches and nodes are also computed and returned.
+
+    Small topological corrections are applied to the graph:
+        - nodes too close to each other are merged (max distance=5√2/2 by default)
+        - cycles with small perimeter are merged (max size=15% of the image width by default)
+        - if simplify_topology is True, the graph is simplified by merging equivalent branches (branches connecting the same junctions)
+            and removing nodes with degree 2.
+
+    Parameters
+    ----------
+        vessel_graph:
+            The graph of the vasculature extracted from the vessel map.
+
+        max_spurs_length:
+            If larger than 0, spurs (terminal branches) with a length smaller than this value are removed (disabled by default).
+        nodes_merge_distance:
+            If larger than 0, nodes separated by less than this distance are merged (5√2/2 by default).
+
+        max_cycles_length:
+            If larger than 0, cycles whose nodes are closer than this value from each other are merged (disabled by default).
+
+            .. note::
+                to limit computation time, only cycles with less than 5 nodes are considered.
+
+        simplify_topology:
+            - If ``'node'``, the graph is simplified by fusing nodes with degree 2 (connected to exactly 2 branches).
+            If ``'branch'``, the graph is simplified by merging equivalent branches (branches connecting the same junctions).
+            If ``'both'``, both simplifications are applied.
+
+    Returns
+    -------
+        The adjacency map of the graph. (Similar to an adjacency list but instead of being pair of node indices,
+            each row is a boolean vector with exactly 2 pixel set to True, corresponding to the 2 nodes connected by the branch.)
+        Shape: (nBranch, nNode) where nBranch and nNode are the number of branches and nodes (junctions or terminations).
+
+        If return_label is True, also return the label map of branches
+            (where each branch of the skeleton is labeled by a unique integer corresponding to its index in the adjacency matrix)
+        and the coordinates of the nodes as a tuple of (y, x) where y and x are vectors of length nNode.
+
+    """  # noqa: E501
+    if not inplace:
+        vessel_graph = vessel_graph.copy()
+
+    if max_spurs_length > 0:
+        remove_spurs(vessel_graph, max_spurs_length, inplace=True)
+
+    if nodes_merge_distance is True:
+        nodes_merge_distance = 2.5 * np.sqrt(2)
+    if isinstance(nodes_merge_distance, Mapping):
+        junctions_merge_distance = nodes_merge_distance.get("junction", 0)
+        terminations_merge_distance = nodes_merge_distance.get("termination", 0)
+        nodes_merge_distance = nodes_merge_distance.get("node", 0)
+    elif isinstance(nodes_merge_distance, NodeMergeDistances):
+        junctions_merge_distance = nodes_merge_distance.junction
+        terminations_merge_distance = nodes_merge_distance.termination
+        nodes_merge_distance = nodes_merge_distance.node
+    else:
+        junctions_merge_distance = 0
+        terminations_merge_distance = 0
+
+    if junctions_merge_distance > 0:
+        merge_nodes_by_distance(
+            vessel_graph, junctions_merge_distance, "junction", only_connected_nodes=True, inplace=True
+        )
+    if terminations_merge_distance > 0:
+        merge_nodes_by_distance(
+            vessel_graph, terminations_merge_distance, "endpoints", only_connected_nodes=False, inplace=True
+        )
+    if nodes_merge_distance > 0:
+        merge_nodes_by_distance(vessel_graph, nodes_merge_distance, "all", inplace=True)
+
+    if max_cycles_length > 0:
+        merge_small_cycles(vessel_graph, max_cycles_length, inplace=True)
+
+    if max_cycles_length > 0 or simplify_topology in ("branch", "both"):
+        max_nodes_distance = max_cycles_length if simplify_topology not in ("branch", "both") else None
+        merge_equivalent_branches(vessel_graph, max_nodes_distance, inplace=True)
+
+    if simplify_topology in ("node", "both"):
+        simplify_passing_nodes(vessel_graph, inplace=True)
+
+    return vessel_graph
+
+
+def cluster_nodes_by_distance(
+    vessel_graph: VGraph,
+    max_distance: float,
+    nodes_type: Literal["all", "junction", "endpoints"] = "all",
+    only_connected_nodes: Optional[bool] = None,
+) -> List[set[int]]:
+    """
+    Cluster nodes of the vessel graph by distance.
+
+    Parameters
+    ----------
+        vessel_graph:
+            The graph of the vasculature extracted from the vessel map.
+
+        max_distance:
+            The maximum distance between two nodes to be considered in the same cluster.
+
+        nodes_type:
+            The type of nodes to consider:`
+            - ``'all'``: all nodes are considered;
+            - ``'junction'``: only junctions and bifurcations are considered;
+            - ``'endpoints'``: only terminations are considered.
+
+        only_connected_nodes:
+            - If True, only nodes connected by a branch can be clustered.
+            - If False, only nodes not connected by a branch can be clustered.
+            - If None (by default), all nodes can be clustered.
+
+
+    Returns
+    -------
+        A list of sets of nodes indices. Each set contains the indices of nodes that are closer than max_distance from each other.
+
+    """  # noqa: E501
+
+    if nodes_type == "junction":
+        nodes_id = vessel_graph.non_endpoints_nodes()
+    elif nodes_type == "endpoints":
+        nodes_id = vessel_graph.endpoints_nodes()
+    else:
+        nodes_id = None
+
+    if only_connected_nodes:
+        # --- Cluster only connected nodes ---
+        # ... Only edges of the graph are considered
+        if nodes_id is None:
+            branches = vessel_graph.branch_list
+        else:
+            branch_id = np.argwhere(np.isin(vessel_graph.branch_list, nodes_id).all(axis=1)).flatten()
+            branches = vessel_graph.branch_list[branch_id]
+        nodes_coord = vessel_graph.nodes_coord()
+        # Compute the distance between the nodes of each branch
+        branch_dist = np.linalg.norm(nodes_coord[branches[:, 0]] - nodes_coord[branches[:, 1]], axis=1)
+        # Reduce the clusters
+        return reduce_clusters(branches[branch_dist < max_distance])
+
+    elif only_connected_nodes is None:
+        # --- Cluster all nodes ---
+        if nodes_id is None:
+            return cluster_by_distance(vessel_graph.nodes_coord(), max_distance)
+        else:
+            nodes_coord = vessel_graph.nodes_coord()[nodes_id]
+            clusters = cluster_by_distance(nodes_coord, max_distance)
+            return [{nodes_id[_] for _ in cluster} for cluster in clusters]
+
+    else:
+        # --- Cluster only unconnected nodes ---
+        # ... For each pair of independent subgraphs of the vessel graph, only their closest nodes can be clustered
+        # Get the independent subgraphs of the vessel graph
+        connected_nodes_id = vessel_graph.nodes_connected_graphs()
+        # Filter the nodes type
+        connected_nodes_id = [np.intersect1d(_, nodes_id, assume_unique=True) for _ in connected_nodes_id]
+        # Compute the distance between all these nodes
+        all_nodes_id = np.concatenate(connected_nodes_id)
+        all_nodes_coord = vessel_graph.nodes_coord()[all_nodes_id]
+        distance = np.linalg.norm(all_nodes_coord[:, None] - all_nodes_coord, axis=-1)
+        # and create a short id for each subgraph
+        connected_nodes_short_id = []
+        n = 0
+        for connected_nodes in connected_nodes_id:
+            connected_nodes_short_id.append(np.arange(n, n + len(connected_nodes)))
+            n += len(connected_nodes)
+        # For each pair of independent subgraphs, find the closest nodes ...
+        clusters = []
+        for i, (id1, sid1) in enumerate(zip(connected_nodes_id, connected_nodes_short_id, strict=True)):
+            for j, (id2, sid2) in enumerate(
+                zip(connected_nodes_id[i + 1 :], connected_nodes_short_id[i + 1 :], strict=True)
+            ):
+                j += i + 1
+                argmin = np.argmin(distance[sid1][:, sid2])
+                closest1, closest2 = (argmin // len(sid2), argmin % len(sid2))
+                # ... and add them to the clusters if they are closer than max_distance
+                if distance[sid1[closest1], sid2[closest2]] < max_distance:
+                    clusters.append({id1[closest1], id2[closest2]})
+        return reduce_clusters(clusters)
+
+
+def merge_nodes_by_distance(
+    vessel_graph: VGraph,
+    max_distance: float,
+    nodes_type: Literal["all", "junction", "endpoints"] = "all",
+    only_connected_nodes: Optional[bool] = None,
+    *,
+    inplace=False,
+) -> VGraph:
+    """
+    Merge nodes of the vessel graph by distance.
+
+    Parameters
+    ----------
+        vessel_graph:
+            The graph of the vasculature extracted from the vessel map.
+
+        max_distance:
+            The maximum distance between two nodes to be considered in the same cluster.
+
+        nodes_type:
+            The type of nodes to consider:`
+            - ``'all'``: all nodes are considered;
+            - ``'junction'``: only junctions and bifurcations are considered;
+            - ``'endpoints'``: only terminations are considered.
+
+    Returns
+    -------
+        The modified graph with the nodes merged.
+
+    """  # noqa: E501
+
+    clusters = cluster_nodes_by_distance(vessel_graph, max_distance, nodes_type, only_connected_nodes)
+    nodes_weight = None if nodes_type != "all" else (~vessel_graph.endpoints_nodes(as_mask=True)) * 1
+    return vessel_graph.merge_nodes(clusters, nodes_weight=nodes_weight, inplace=inplace, assume_reduced=True)
+
+
+def merge_small_cycles(vessel_graph: VGraph, max_cycle_size: float, inplace=False) -> VGraph:
+    """
+    Merge small cycles of the vessel graph.
+
+    Parameters
+    ----------
+        vessel_graph:
+            The graph of the vasculature extracted from the vessel map.
+
+        max_cycle_size:
+            The maximum distance between two nodes to be considered in the same cluster.
+
+    Returns
+    -------
+        The modified graph with the nodes merged.
+
+    """  # noqa: E501
+
+    nodes_coord = vessel_graph.nodes_coord()
+    nx_graph = nx.from_numpy_array(vessel_graph.node_adjacency_matrix())
+    cycles = [_ for _ in nx.chordless_cycles(nx_graph, length_bound=4) if len(_) > 2]
+    cycles_max_dist = [distance_matrix(nodes_coord[cycle]).max() for cycle in cycles]
+    cycles = [cycle for cycle, max_dist in zip(cycles, cycles_max_dist, strict=True) if max_dist < max_cycle_size]
+    cycles = reduce_clusters(cycles)
+    return vessel_graph.merge_nodes(cycles, inplace=inplace)
+
+
+def merge_equivalent_branches(vessel_graph: VGraph, max_nodes_distance: float = None, inplace=False) -> VGraph:
+    """
+    Merge equivalent branches of the vessel graph.
+
+    Parameters
+    ----------
+        vessel_graph:
+            The graph of the vasculature extracted from the vessel map.
+
+        max_nodes_distance:
+            The maximum distance between two nodes to be considered in the same cluster.
+
+    Returns
+    -------
+        The modified graph with the nodes merged.
+
+    """  # noqa: E501
+
+    branches, branches_inverse, branches_count = np.unique(
+        vessel_graph.branch_list, return_counts=True, return_inverse=True, axis=0
+    )
+
+    equi_branches_mask = branches_count > 1
+    if max_nodes_distance is not None:
+        equi_branches = branches[equi_branches_mask]
+        nodes_coord = vessel_graph.nodes_coord()
+        equi_branches_dist = np.linalg.norm(nodes_coord[equi_branches[:, 0]] - nodes_coord[equi_branches[:, 1]], axis=1)
+        equi_branches_mask[equi_branches_mask] &= equi_branches_dist < max_nodes_distance
+
+    branch_to_remove = []
+    for duplicate_id in np.argwhere(equi_branches_mask).flatten():
+        duplicate_branches_id = np.argwhere(branches_inverse == duplicate_id).flatten()
+        branch_to_remove.extend(duplicate_branches_id[1:])
+
+    return vessel_graph.delete_branches(branch_to_remove, inplace=inplace)
+
+
+def remove_spurs(vessel_graph: VGraph, max_spurs_length: float = 0, inplace=False) -> VGraph:
+    """
+    Remove spurs (terminal branches) whose chord length is shorter than max_spurs_distance.
+
+    Parameters
+    ----------
+        vessel_graph:
+            The graph of the vasculature extracted from the vessel map.
+
+        max_spurs_length:
+            If larger than 0, spurs (terminal branches) with a length smaller than this value are removed (disabled by default).
+
+    Returns
+    -------
+        The modified graph with the spurs removed.
+
+    """  # noqa: E501
+
+    terminal_branches = vessel_graph.terminal_branches()
+    terminal_branches_length = vessel_graph.branches_arc_length(terminal_branches)
+    return vessel_graph.delete_branches(terminal_branches[terminal_branches_length < max_spurs_length], inplace=inplace)
+
+
+def simplify_passing_nodes(vessel_graph: VGraph, inplace=False) -> VGraph:
+    """
+    Merge nodes of the vessel graph that are connected to only 2 branches.
+
+    Parameters
+    ----------
+        vessel_graph:
+            The graph of the vasculature extracted from the vessel map.
+
+    Returns
+    -------
+        The modified graph with the nodes merged.
+
+    """  # noqa: E501
+
+    nodes_to_fuse = np.argwhere(vessel_graph.nodes_degree() == 2).flatten()
+    if len(nodes_to_fuse):
+        return vessel_graph.fuse_nodes(nodes_to_fuse, inplace=inplace)
+    return vessel_graph
+
+
+def simplify_graph_legacy(
     vessel_graph: VGraph,
     max_spurs_distance: float = 0,
     nodes_merge_distance: NodeMergeDistanceParam = True,
@@ -96,8 +450,8 @@ def simplify_graph(
 
     """  # noqa: E501
     branches_by_nodes = vessel_graph.branches_by_nodes()
-    labeled_branches = vessel_graph.branch_labels_map
-    node_yx = vessel_graph.nodes_yx_coord
+    labeled_branches = vessel_graph.geometric_data().branches_label_map()
+    node_yx = vessel_graph.nodes_coord().astype(np.int)
     node_y, node_x = node_yx.T
 
     is_endpoint = compute_is_endpoints(branches_by_nodes)
@@ -139,15 +493,15 @@ def simplify_graph(
         node_to_fuse = (np.cumsum(nodes_mask) - 1)[node_to_fuse]
 
         # - Remove useless nodes
-        node_to_fuse = node_to_fuse[node_rank(branches_by_nodes[:, node_to_fuse]) == 2]
-        if np.any(node_to_fuse):
-            branches_by_nodes, branch_lookup2, nodes_mask, node_labels2 = fuse_nodes(
-                branches_by_nodes, node_to_fuse, (node_y, node_x)
-            )
+        # node_to_fuse = node_to_fuse[node_rank(branches_by_nodes[:, node_to_fuse]) == 2]
+        # if np.any(node_to_fuse):
+        #    branches_by_nodes, branch_lookup2, nodes_mask, node_labels2 = fuse_nodes(
+        #        branches_by_nodes, node_to_fuse, (node_y, node_x)
+        #    )
 
-            branch_lookup = apply_lookup(branch_lookup, branch_lookup2)
-            node_labels = tuple(np.concatenate((n, n1)) for n, n1 in zip(node_labels, node_labels2, strict=True))
-            node_y, node_x = node_y[nodes_mask], node_x[nodes_mask]
+        #    branch_lookup = apply_lookup(branch_lookup, branch_lookup2)
+        #    node_labels = tuple(np.concatenate((n, n1)) for n, n1 in zip(node_labels, node_labels2, strict=True))
+        #    node_y, node_x = node_y[nodes_mask], node_x[nodes_mask]
 
         is_endpoint = compute_is_endpoints(branches_by_nodes)
 
@@ -168,7 +522,7 @@ def simplify_graph(
             (is_endpoint, terminations_merge_distance, True),  # distance only for terminations
             (None, nodes_merge_distance, True),
         ]  # distance for all nodes
-        branches_by_nodes, branch_lookup2, nodes_coord = merge_nodes_by_distance(
+        branches_by_nodes, branch_lookup2, nodes_coord = merge_nodes_by_distance_legacy(
             branches_by_nodes, (node_y, node_x), distances
         )
         # - Apply the lookup tables on nodes and branches
@@ -191,7 +545,7 @@ def simplify_graph(
             cycle for cycle, max_dist in zip(cycles, cycles_max_dist, strict=True) if max_dist < merge_small_cycles
         ]
 
-        cycles = reduce_clusters(cycles)
+        cycles = reduce_clusters_legacy(cycles)
         # - Merge cycles
         branches_by_nodes, branch_lookup_2, nodes_mask = merge_nodes_clusters(
             branches_by_nodes, cycles, erase_branches=True
@@ -205,7 +559,7 @@ def simplify_graph(
         # - If simplify_topology is neither 'branch' nor 'both', limit the merge distance to half merge_small_cycles
         max_nodes_distance = merge_small_cycles if simplify_topology not in ("branch", "both") else None
         # - Merge equivalent branches
-        branches_by_nodes, branch_lookup_2 = merge_equivalent_branches(
+        branches_by_nodes, branch_lookup_2 = merge_equivalent_branches_legacy(
             branches_by_nodes,
             max_nodes_distance=max_nodes_distance,
             nodes_coordinates=(node_y, node_x),
@@ -242,9 +596,13 @@ def simplify_graph(
             branch_lookup = apply_lookup(branch_lookup, branch_lookup2, node_labels[2])
             node_y, node_x = node_y[nodes_mask], node_x[nodes_mask]
 
+    geo_data = vessel_graph.geometric_data().copy()
     if branch_lookup is not None:
         # Update branch labels
+        geo_data._reindex_branches(branch_lookup[1:] - 1)
         labeled_branches = branch_lookup[labeled_branches]
-    labeled_branches[node_labels[0].astype(np.int64), node_labels[1].astype(np.int64)] = node_labels[2]
 
-    return VGraph.from_branch_by_nodes(branches_by_nodes, labeled_branches, np.stack((node_y, node_x), axis=-1))
+    labeled_branches[node_labels[0].astype(np.int64), node_labels[1].astype(np.int64)] = node_labels[2]
+    geo_data.node_coord = {i: Point(y, x) for i, (y, x) in enumerate(zip(node_y, node_x))}
+
+    return VGraph.from_branch_by_nodes(branches_by_nodes, geo_data)

@@ -18,6 +18,9 @@
  * nodes.
  * @param branch_list A 2D tensor of shape (B, 2) containing the list of
  * branches.
+ *
+ * @return A list of pairs of points representing the first and last pixels of
+ * the branches.
  */
 std::vector<std::array<IntPoint, 2>> find_branch_endpoints(const torch::Tensor &branch_labels,
                                                            const torch::Tensor &node_yx,
@@ -100,6 +103,8 @@ std::vector<std::array<IntPoint, 2>> find_branch_endpoints(const torch::Tensor &
  * nodes.
  * @param branch_list A 2D tensor of shape (B, 2) containing the list of
  * branches.
+ *
+ * @return A list of the yx coordinates of the branches pixels.
  */
 std::vector<CurveYX> track_branches(const torch::Tensor &branch_labels, const torch::Tensor &node_yx,
                                     const torch::Tensor &branch_list) {
@@ -157,6 +162,17 @@ std::vector<CurveYX> track_branches(const torch::Tensor &branch_labels, const to
     return branches_pixels;
 }
 
+/**
+ * @brief Track the not-segmented pixel on a semi-infinite line defined by a start point and a direction.
+ *
+ * @param start The start point of the line.
+ * @param direction The direction of the line.
+ * @param segmentation An accessor to a 2D tensor of shape (H, W) containing the binary segmentation.
+ * @param max_distance The maximum distance to track.
+ *
+ * @return The first point of the line for which the segmentation is false. If no such point is found, return
+ * IntPoint::Invalid().
+ */
 IntPoint track_nearest_border(const IntPoint &start, const Point &direction, const Tensor2DAccessor<bool> &segmentation,
                               int max_distance) {
     if (direction.is_null()) return IntPoint::Invalid();
@@ -176,6 +192,20 @@ IntPoint track_nearest_border(const IntPoint &start, const Point &direction, con
     return last;
 }
 
+/**
+ * @brief Find the closest pixel to a point in a curve.
+ *
+ * This method returns the index of the closest pixel to a point in a curve.
+ * The search is performed between the start and end indexes.
+ *
+ * @param curve A list of points defining the curve.
+ * @param p The point to which the distance should be computed.
+ * @param start The start index of the search.
+ * @param end The end index of the search.
+ * @param findFirstLocalMinimum If true, the search stops at the first local minimum.
+ *
+ * @return A tuple containing the index of the closest pixel and the distance to the point.
+ */
 std::tuple<int, float> findClosestPixel(const CurveYX &curve, const Point &p, int start, int end,
                                         bool findFirstLocalMinimum) {
     const int inc = (start < end) ? 1 : -1;
@@ -189,4 +219,31 @@ std::tuple<int, float> findClosestPixel(const CurveYX &curve, const Point &p, in
         }
     }
     return min_point;
+}
+
+/**
+ * @brief Split a curve into contiguous curves.
+ *
+ * All points of the returned contiguous curves are adjacent (horizontally, vertically or diagonally).
+ *
+ * @param curve The curve to split.
+ *
+ * @return A list of contiguous curves.
+ *
+ */
+std::list<SizePair> splitInContiguousCurves(const CurveYX &curve) {
+    if (curve.size() < 2) return {{0, curve.size()}};
+
+    std::list<SizePair> curvesBoundaries;
+    std::size_t start = 0;
+    for (auto it = curve.begin() + 1; it != curve.end(); it++) {
+        auto const &&diff = *it - *(it - 1);
+        if (abs(diff.x) > 1 || abs(diff.y) > 1) {
+            curvesBoundaries.push_back(SizePair{start, (std::size_t)(it - curve.begin())});
+            start = it - curve.begin();
+        }
+    }
+    curvesBoundaries.push_back(SizePair{start, curve.size()});
+
+    return curvesBoundaries;
 }

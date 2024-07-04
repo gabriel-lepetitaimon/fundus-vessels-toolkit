@@ -12,6 +12,13 @@ class BezierSpline:
     def __init__(self, curves: List[BezierCubic]):
         self.curves = curves
 
+    def __repr__(self) -> str:
+        return f"BezierSpline({repr(self.curves)})"
+
+    def __str__(self) -> str:
+        descr = f"BezierSpline({len(self.curves)} curves):\n\t"
+        return descr + "\n\t".join(str(curve) for curve in self.curves)
+
     def to_path(self) -> str:
         return "\n".join(curve.to_path() for curve in self.curves)
 
@@ -55,6 +62,12 @@ class BezierSpline:
             points.append(self.curves[-1].p1)
         return np.array(points)
 
+    def __len__(self) -> int:
+        return len(self.curves)
+
+    def __getitem__(self, idx) -> BezierCubic:
+        return self.curves[idx]
+
 
 class BezierCubic(NamedTuple):
     p0: Point
@@ -62,12 +75,35 @@ class BezierCubic(NamedTuple):
     c1: Point
     p1: Point
 
+    def __str__(self) -> str:
+        return f"BezierCubic(p0={self.p0}, c0={self.c0}, c1={self.c1}, p1={self.p1})"
+
     @classmethod
     def from_array(cls, curve: np.array) -> BezierCubic:
         return cls(Point(*curve[0]), Point(*curve[1]), Point(*curve[2]), Point(*curve[3]))
 
     def to_path(self) -> str:
         return f"M {self.p0.x},{self.p0.y} C {self.c0.x},{self.c0.y} {self.c1.x},{self.c1.y} {self.p1.x},{self.p1.y}"
+
+    def to_array(self) -> np.array:
+        return np.array([self.p0, self.c0, self.c1, self.p1])
+
+    def parametrize(self, yx_points: np.ndarray, error=2) -> np.array:
+        bezier = self.to_array()
+        u = chordLengthParameterize(yx_points)
+        for i in range(20):
+            u = reparameterize(bezier, yx_points, u)
+            maxError, splitPoint = computeMaxError(yx_points, bezier, u)
+            if maxError < error**2:
+                break
+        return np.asarray(u).squeeze()
+
+    def evaluate(self, t: float):
+        return q(self.to_array(), t)
+
+    def evaluate_tangent(self, t: float, normalized=False):
+        tangent = qprime(self.to_array(), t)
+        return tangent / np.linalg.norm(tangent, axis=1)[:, None] if normalized else tangent
 
 
 # Fit one (ore more) Bezier curves to a set of points
@@ -77,7 +113,7 @@ def fitCurve(points, maxError):
     return fitCubic(points, leftTangent, rightTangent, maxError)
 
 
-def fitCubic(points, leftTangent, rightTangent, error, split_on_failed=True):
+def fitCubic(points, leftTangent, rightTangent, error, split_on_failed=True, return_parametrization=False):
     # Use heuristic if region only has two points in it
     if len(points) == 2:
         dist = np.linalg.norm(points[0] - points[1]) / 3.0
@@ -103,7 +139,7 @@ def fitCubic(points, leftTangent, rightTangent, error, split_on_failed=True):
             u = uPrime
 
     if not split_on_failed:
-        return [bezCurve]
+        return [bezCurve] if not return_parametrization else ([bezCurve], u)
 
     # Fitting failed -- split at max error point and fit recursively
     beziers = []
@@ -111,7 +147,7 @@ def fitCubic(points, leftTangent, rightTangent, error, split_on_failed=True):
     beziers += fitCubic(points[: splitPoint + 1], leftTangent, centerTangent, error)
     beziers += fitCubic(points[splitPoint:], -centerTangent, rightTangent, error)
 
-    return beziers
+    return beziers if not return_parametrization else (beziers, u)
 
 
 def generateBezier(points, parameters, leftTangent, rightTangent):
@@ -227,6 +263,9 @@ def normalize(v):
 
 # evaluates cubic bezier at t, return point
 def q(ctrlPoly, t):
+    if isinstance(t, np.ndarray):
+        t = t[:, np.newaxis]
+        ctrlPoly = np.asarray(ctrlPoly)[:, np.newaxis, :]
     return (
         (1.0 - t) ** 3 * ctrlPoly[0]
         + 3 * (1.0 - t) ** 2 * t * ctrlPoly[1]
@@ -237,6 +276,9 @@ def q(ctrlPoly, t):
 
 # evaluates cubic bezier first derivative at t, return point
 def qprime(ctrlPoly, t):
+    if isinstance(t, np.ndarray):
+        t = t[:, np.newaxis]
+        ctrlPoly = np.asarray(ctrlPoly)[:, np.newaxis, :]
     return (
         3 * (1.0 - t) ** 2 * (ctrlPoly[1] - ctrlPoly[0])
         + 6 * (1.0 - t) * t * (ctrlPoly[2] - ctrlPoly[1])
@@ -246,6 +288,9 @@ def qprime(ctrlPoly, t):
 
 # evaluates cubic bezier second derivative at t, return point
 def qprimeprime(ctrlPoly, t):
+    if isinstance(t, np.ndarray):
+        t = t[:, np.newaxis]
+        ctrlPoly = np.asarray(ctrlPoly)[:, np.newaxis, :]
     return 6 * (1.0 - t) * (ctrlPoly[2] - 2 * ctrlPoly[1] + ctrlPoly[0]) + 6 * (t) * (
         ctrlPoly[3] - 2 * ctrlPoly[2] + ctrlPoly[1]
     )

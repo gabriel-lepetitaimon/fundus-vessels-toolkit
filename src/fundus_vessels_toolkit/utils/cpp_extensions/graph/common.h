@@ -17,6 +17,7 @@
  *******************************************************************************************************************/
 using IntPair = std::array<int, 2>;
 using FloatPair = std::array<float, 2>;
+using SizePair = std::array<std::size_t, 2>;
 
 // === MATRIX ===
 template <typename T, unsigned int D1 = 2, unsigned int D2 = D1>
@@ -152,7 +153,7 @@ static const std::vector<float> GAUSSIAN_HALF_STD2 = gaussianHalfKernel1D(2, 7);
 static const std::vector<float> GAUSSIAN_HALF_STD3 = gaussianHalfKernel1D(3, 10);
 
 // === Average Filters ===
-std::vector<float> movingAvg(const std::vector<float>& x, int size = -1);
+std::vector<float> movingAvg(const std::vector<float>& x, std::size_t size, const std::vector<int>& evaluateAtID);
 std::vector<float> movingAvg(const std::vector<float>& x, const std::vector<float>& kernel);
 
 template <typename T>
@@ -203,9 +204,12 @@ struct Edge {
     bool operator<(const Edge& e) const;
 };
 
+using EdgeList = std::vector<Edge>;
 using GraphAdjList = std::vector<std::set<Edge>>;
+#pragma omp declare reduction(merge : std::vector<Edge> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
 
-GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N, bool directed = false);
+GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N = -1, bool directed = false);
+GraphAdjList edge_list_to_adjlist(const EdgeList& edges, int N = -1, bool directed = false);
 
 /*******************************************************************************************************************
  *             === TORCH ===
@@ -221,7 +225,18 @@ torch::Tensor vector_to_tensor(const std::vector<IntPair>& vec);
 torch::Tensor vector_to_tensor(const std::vector<FloatPair>& vec);
 torch::Tensor vector_to_tensor(const std::vector<std::vector<IntPair>>& vec);
 torch::Tensor vector_to_tensor(const std::vector<std::array<IntPoint, 2>>& vec);
-CurveYX tensor_to_curveYX(const torch::Tensor& tensor);
+torch::Tensor edge_list_to_tensor(const EdgeList& vec);
+
+template <typename T>
+std::vector<torch::Tensor> vectors_to_tensors(const std::vector<std::vector<T>>& vec) {
+    std::vector<torch::Tensor> tensors;
+    tensors.reserve(vec.size());
+    for (const auto& v : vec) tensors.push_back(vector_to_tensor(v));
+    return tensors;
+}
+
+CurveYX tensor_to_curve(const torch::Tensor& tensor);
+std::vector<CurveYX> tensors_to_curves(const std::vector<torch::Tensor>& tensors);
 std::vector<IntPair> tensor_to_vectorIntPair(const torch::Tensor& tensor);
 
 /*******************************************************************************************************************

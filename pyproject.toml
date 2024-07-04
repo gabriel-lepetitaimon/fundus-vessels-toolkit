@@ -13,6 +13,7 @@ dependencies = [
     'numpy',
     'scikit-image',
     'scipy',
+    'pandas',
     
     'pygmtools',
     'networkx>=3.1',

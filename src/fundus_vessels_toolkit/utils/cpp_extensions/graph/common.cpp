@@ -81,12 +81,29 @@ torch::Tensor vector_to_tensor(const std::vector<std::array<IntPoint, 2>>& vec) 
     return tensor;
 }
 
-CurveYX tensor_to_curveYX(const torch::Tensor& tensor) {
+torch::Tensor edge_list_to_tensor(const EdgeList& edge_list) {
+    torch::Tensor branches_list_tensor = torch::zeros({(int)edge_list.size(), 2}, torch::kInt32);
+    auto branches_list_acc = branches_list_tensor.accessor<int32_t, 2>();
+    for (const auto& v : edge_list) {
+        branches_list_acc[v.id][0] = v.start;
+        branches_list_acc[v.id][1] = v.end;
+    }
+    return branches_list_tensor;
+}
+
+CurveYX tensor_to_curve(const torch::Tensor& tensor) {
     auto accessor = tensor.accessor<int, 2>();
     CurveYX curveYX;
     curveYX.reserve(tensor.size(0));
     for (int i = 0; i < tensor.size(0); i++) curveYX.push_back({accessor[i][0], accessor[i][1]});
     return curveYX;
+}
+
+std::vector<CurveYX> tensors_to_curves(const std::vector<torch::Tensor>& tensors) {
+    std::vector<CurveYX> curves;
+    curves.reserve(tensors.size());
+    for (const auto& tensor : tensors) curves.push_back(tensor_to_curve(tensor));
+    return curves;
 }
 
 std::vector<IntPair> tensor_to_vectorIntPair(const torch::Tensor& tensor) {
@@ -253,21 +270,22 @@ std::vector<float> movingAvg(const std::vector<float>& x, const std::vector<floa
 }
 
 // === Moving Average ===
-std::vector<float> movingAvg(const std::vector<float>& x, int size) {
-    if (size < 0) size = x.size();
+std::vector<float> movingAvg(const std::vector<float>& x, std::size_t size, const std::vector<int>& evaluateAtID) {
+    const std::size_t xSize = x.size();
+    bool evaluateAll = evaluateAtID.size() == 0;
+    const std::size_t ySize = evaluateAll ? xSize : evaluateAtID.size();
 
-    std::vector<float> y;
-    y.reserve(x.size());
-    for (int i = 0; i < (int)x.size(); i++) {
+    std::vector<float> y(ySize);
+
+    for (std::size_t yI = 0; yI < ySize; yI++) {
+        const std::size_t i = evaluateAll ? yI : evaluateAtID[yI];
         float sum = 0;
         int count = 0;
-        for (int j = i - size; j <= i + size; j++) {
-            if (j >= 0 && j < (int)x.size()) {
-                sum += x[j];
-                count++;
-            }
+        for (std::size_t j = (i >= size ? i - size : 0); j <= (i + size < xSize ? i + size : xSize - 1); j++) {
+            sum += x[j];
+            count++;
         }
-        y.push_back(sum / count);
+        y[yI] = sum / count;
     }
     return y;
 }
@@ -317,6 +335,12 @@ bool Edge::operator<(const Edge& e) const {
 }
 
 GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N, bool directed) {
+    if (N < 0) {
+        N = 0;
+        for (const IntPair& e : edges) N = std::max(N, std::max(e[0], e[1]));
+        N++;
+    }
+
     GraphAdjList graph(N);
     int i = 0;
     for (const IntPair& e : edges) {
@@ -324,6 +348,21 @@ GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N, bool
         graph[edge.start].insert(edge);
         if (!directed) graph[edge.end].insert(edge);
         i++;
+    }
+    return graph;
+}
+
+GraphAdjList edge_list_to_adjlist(const EdgeList& edges, int N, bool directed) {
+    if (N < 0) {
+        N = 0;
+        for (const Edge& e : edges) N = std::max(N, std::max(e.start, e.end));
+        N++;
+    }
+
+    GraphAdjList graph(N);
+    for (const Edge& e : edges) {
+        graph[e.start].insert(e);
+        if (!directed) graph[e.end].insert(e);
     }
     return graph;
 }

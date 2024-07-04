@@ -1,1 +1,1 @@
-from .seg_to_graph import *
+from .seg_to_graph import FundusVesselSegToGraph, SegToGraph
