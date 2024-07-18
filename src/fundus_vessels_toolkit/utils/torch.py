@@ -16,7 +16,9 @@ def img_to_torch(x, device="cuda"):
                 x = x.permute(2, 0, 1)
             x = x.unsqueeze(0)
         case s if len(s) == 4:
-            assert s[1] == 3, f"Expected 3 channels, got {s[1]}"
+            if s[3] == 3:
+                x = x.permute(0, 3, 1, 2)
+            assert x.shape[1] == 3, f"Expected 3 channels, got {x.shape[1]}"
 
     return x.float().to(device=device)
 
@@ -25,7 +27,10 @@ def recursive_numpy2torch(x, device=None):
     if isinstance(x, torch.Tensor):
         return x.to(device) if device is not None else x
     if isinstance(x, np.ndarray):
-        x = torch.from_numpy(x)
+        try:
+            x = torch.from_numpy(x)
+        except ValueError:
+            x = torch.from_numpy(x.copy())
         return x.to(device) if device is not None else x
     if isinstance(x, dict):
         return {k: recursive_numpy2torch(v, device) for k, v in x.items()}
@@ -44,8 +49,8 @@ def recursive_torch2numpy(x):
         return {k: recursive_torch2numpy(v) for k, v in x.items()}
     if isinstance(x, list):
         return [recursive_torch2numpy(v) for v in x]
-    if isinstance(x, tuple):
-        return tuple(recursive_torch2numpy(v) for v in x)
+    if type(x) is tuple:
+        return type(x)(recursive_torch2numpy(v) for v in x)
     return x
 
 

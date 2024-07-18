@@ -178,56 +178,50 @@ std::vector<Point> fast_curve_tangent(const CurveYX& curveYX, const std::vector<
 /**
  * @brief Compute the inflection points of a curve.
  *
- * @param tangents A list of tangents defining the curve.
- * @param dthetaSmoothHalfKernel A kernel to smooth the derivative of the curve.
- * @param angle_threshold The threshold to consider a point as an inflection point.
+ * @param signedCurvature The signed curvature for each pixel of a curve.
+ * @param K_threshold The threshold to consider a point as an inflection point.
+ * If 0, the threshold is set to the 1st percentile of the absolute curvature.
  *
  * @return A list of indexes where the curve has an inflection point.
  */
-std::vector<std::size_t> curve_inflections_points(const std::vector<Point>& tangents, const float dK_threshold,
-                                                  const std::vector<float>& tangentSmoothKernel, std::size_t start,
-                                                  std::size_t end) {
-    if (end == 0) end = tangents.size() - 1;
-    const std::size_t curveSize = end - start - 2;  // -2 because we need 2 points to compute the second derivative dK
+std::vector<std::size_t> curve_inflections_points(const std::vector<float>& signedCurvature,
+                                                  const float kPercentileThreshold, int idOffset) {
+    const std::size_t curveSize = signedCurvature.size();
 
     // Check if enough points to compute the inflection points (median filtering size of quantize_triband() is 5)
     if (curveSize < 5) return {};
 
-    // --- Compute curvature K ---
-    auto const& K = tangents_to_curvature(tangents, tangentSmoothKernel, start, end);
+    // --- Find roots of the curvature ---
+    auto const& K = signedCurvature;
+    const float threshold = percentile(abs(K), kPercentileThreshold * 100);
+    auto const& K_quant = quantize_triband(K, -threshold, threshold);
 
-    // --- Compute derivative of curvature dK ---
-    auto const& dK = diff(K);
-
-    // --- Find local minimum of dK ---
-    const float threshold = percentile(abs(dK), dK_threshold * 100);
-    auto const& K_quant = quantize_triband(dK, -threshold, threshold);
-
-    std::list<SizePair> minimum_intervals;
+    std::list<SizePair> root_intervals;
     // Search for the first decreasing point
     std::size_t i = 0;
-    while (i < curveSize && K_quant[i] != -1) i++;
+    while (i < curveSize && K_quant[i] == 0) i++;
+
+    int lastK = K_quant[i];
     // Search for the minimum intervals
     for (; i < curveSize - 1; i++) {
-        if (K_quant[i + 1] != -1) {
+        int nextK = K_quant[i + 1];
+        if (nextK == 0) {
             std::size_t j;
             for (j = i + 1; j < curveSize; j++) {
-                if (K_quant[j] == 1)
-                    break;
-                else if (K_quant[j] == -1)
-                    i = j;
+                nextK = K_quant[j];
+                if (nextK != 0) break;
             }
-            minimum_intervals.push_back({i, j});
-
-            // Search for the next decreasing point
-            while (j < curveSize && K_quant[j] != -1) j++;
+            root_intervals.push_back({i, j});
             i = j;
-        }
+        } else if (lastK != nextK)
+            root_intervals.push_back({i, i});
+
+        lastK = nextK;
     }
     // Take the center of the intervals
     std::vector<std::size_t> inflections;
-    inflections.reserve(minimum_intervals.size());
-    for (auto const& interval : minimum_intervals) inflections.push_back((interval[0] + interval[1] + 1) / 2);
+    inflections.reserve(root_intervals.size());
+    for (auto const& interval : root_intervals) inflections.push_back((interval[0] + interval[1] + idOffset) / 2);
     return inflections;
 }
 
@@ -243,17 +237,31 @@ Point smooth_tangents(const CurveTangents& tangents, std::size_t i, const std::v
     return t.normalize();
 }
 
-std::vector<float> tangents_to_curvature(const CurveTangents& tangents, const std::vector<float> weight,
+static std::vector<float> LAST_TANGENT_GAUSSIAN_KERNEL = gaussianHalfKernel1D(5, 15);
+static float LAST_GAUSSIAN_STD = 5;
+
+Point smooth_tangents(const CurveTangents& tangents, std::size_t i, const float gaussianStd, std::size_t curveStart,
+                      std::size_t curveEnd) {
+    if (gaussianStd != LAST_GAUSSIAN_STD) {
+        LAST_GAUSSIAN_STD = gaussianStd;
+        LAST_TANGENT_GAUSSIAN_KERNEL = gaussianHalfKernel1D(gaussianStd);
+    }
+    return smooth_tangents(tangents, i, LAST_TANGENT_GAUSSIAN_KERNEL, curveStart, curveEnd);
+}
+
+std::vector<float> tangents_to_curvature(const CurveTangents& tangents, bool signedCurvature, const float gaussianStd,
                                          std::size_t start, std::size_t end) {
     if (end == 0) end = tangents.size();
     const std::size_t outSize = end - start - 1;
     std::vector<float> curvatures;
     curvatures.reserve(outSize);
 
-    Point lastT = smooth_tangents(tangents, start, weight, start, end);
+    Point lastT = smooth_tangents(tangents, start, gaussianStd, start, end);
     for (std::size_t i = 0; i < outSize; i++) {
-        auto const& t = smooth_tangents(tangents, i + start + 1, weight, start, end);
-        curvatures.push_back((t - lastT).norm());
+        auto const& t = smooth_tangents(tangents, i + start + 1, gaussianStd, start, end);
+        float K = (t - lastT).norm();
+        if (signedCurvature && lastT.cross(t) < 0) K = -K;
+        curvatures.push_back(K);
         lastT = t;
     }
 

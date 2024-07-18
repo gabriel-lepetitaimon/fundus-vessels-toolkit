@@ -27,7 +27,7 @@ class SegToGraph:
         skeletonize_method: SkeletonizeMethod | str = "lee",
         fix_hollow=True,
         clean_branches_extremities=20,
-        max_spurs_length=0,
+        max_spurs_length=1,
         max_spurs_calibre_factor=1,
         nodes_merge_distance: NodeMergeDistanceParam = True,
         merge_small_cycles: float = 0,
@@ -77,6 +77,7 @@ class SegToGraph:
         self.max_spurs_calibre_factor = max_spurs_calibre_factor
 
         self.nodes_merge_distance = nodes_merge_distance
+        self.iterative_nodes_merge = True
         self.merge_small_cycles = merge_small_cycles
         self.simplify_topology = simplify_topology
         self.node_simplification_criteria = None
@@ -91,9 +92,14 @@ class SegToGraph:
 
     # --- Intermediate steps ---
     def skeletonize(self, vessel_mask: npt.NDArray[np.bool_] | torch.Tensor) -> npt.NDArray[np.bool_] | torch.Tensor:
+        from ..segment_to_graph.skeleton_parsing import detect_skeleton_nodes
         from ..segment_to_graph.skeletonize import skeletonize
 
-        return skeletonize(vessel_mask, method=self.skeletonize_method) > 0
+        binary_skel = skeletonize(vessel_mask, method=self.skeletonize_method) > 0
+        remove_endpoint_branches = self.max_spurs_length > 0 or self.max_spurs_calibre_factor > 0
+        return detect_skeleton_nodes(
+            binary_skel, fix_hollow=self.fix_hollow, remove_endpoint_branches=remove_endpoint_branches
+        )
 
     def skel_to_vgraph(
         self,
@@ -113,10 +119,19 @@ class SegToGraph:
         return simplify_graph(
             graph,
             nodes_merge_distance=self.nodes_merge_distance,
+            iterative_nodes_merge=self.iterative_nodes_merge,
             max_cycles_length=self.merge_small_cycles,
             simplify_topology=self.simplify_topology,
             # node_simplification_criteria=self.node_simplification_criteria,
         )
+
+    # --- Utilitary methods ---
+    def seg_to_vgraph(
+        self,
+        vessels: npt.NDArray[np.bool_] | torch.Tensor,
+    ) -> VGraph:
+        skel = self.skeletonize(vessels)
+        return self.skel_to_vgraph(skel, vessels)
 
 
 class FundusVesselSegToGraph(SegToGraph):
@@ -128,7 +143,7 @@ class FundusVesselSegToGraph(SegToGraph):
         super(FundusVesselSegToGraph, self).__init__(
             fix_hollow=True,
             skeletonize_method="lee",
-            max_spurs_length=0,
+            max_spurs_length=1,
             max_spurs_calibre_factor=1,
             simplify_topology="node",
         )
@@ -144,7 +159,7 @@ class FundusVesselSegToGraph(SegToGraph):
         self._max_vessel_diameter = diameter
 
         self.clean_branches_extremities = diameter * 1.5
-        self.nodes_merge_distance = NodeMergeDistances(junction=diameter, termination=diameter, node=0)
+        self.nodes_merge_distance = NodeMergeDistances(junction=diameter * 2 / 3, termination=diameter, node=0)
         self.merge_small_cycles = diameter
 
     @property

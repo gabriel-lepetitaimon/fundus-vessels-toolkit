@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Self, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Self, Tuple, Type, TypeAlias
 
 import numpy as np
 
@@ -10,7 +9,7 @@ from ..utils.bezier import BSpline
 from ..utils.geometric import Point
 
 
-class VBranchGeoAttr(ABC):
+class VBranchGeoDataBase(ABC):
     """``VBranchGeoAttr`` is an abstract class defining a geometric attribute related to branch of a vascular graph."""
 
     def is_invalid(self, ctx: Dict[str, Any]) -> str:
@@ -72,42 +71,8 @@ class VBranchGeoAttr(ABC):
         pass
 
 
-@dataclass
-class VGeoAttr:
-    name: str
-    version: Optional[str] = ""
-    branch_geo_attr_type: type = VBranchGeoAttr
-
-    def __str__(self) -> str:
-        name = self.name
-        if self.version:
-            name += f"[{self.version}]"
-        return name
-
-    def __eq__(self, other: Any) -> bool:
-        return (
-            isinstance(other, VGeoAttr)
-            and self.name == other.name
-            and (self.version == other.version or self.version is None or other.version is None)
-        )
-
-    def __hash__(self) -> int:
-        return hash(str(self))
-
-    @staticmethod
-    def from_str(s: str, attr_type=VBranchGeoAttr) -> VGeoAttr:
-        if "[" in s:
-            name, version = s.split("[", 1)
-            version = version.strip("] ")
-            name = name.strip()
-        else:
-            name = s
-            version = ""
-        return VGeoAttr(name, version, attr_type)
-
-
 ####################################################################################################
-class VBranchCurveAttr(VBranchGeoAttr):
+class VBranchCurveData(VBranchGeoDataBase):
     """``VBranchParametricData`` is a class that stores
     the parametric data of a vascular graph."""
 
@@ -136,7 +101,7 @@ class VBranchCurveAttr(VBranchGeoAttr):
             )
         return ""
 
-    def merge(self, others: List[VBranchCurveAttr], ctx: Dict[str, Any]) -> VBranchCurveAttr:
+    def merge(self, others: List[VBranchCurveData], ctx: Dict[str, Any]) -> VBranchCurveData:
         """Merge the parametric data with another parametric data.
 
         Parameters
@@ -152,7 +117,7 @@ class VBranchCurveAttr(VBranchGeoAttr):
         self.array = np.concatenate([self.array] + [_.array for _ in others], axis=0)
         return self
 
-    def flip(self) -> VBranchCurveAttr:
+    def flip(self) -> VBranchCurveData:
         """Flip the parametric data.
 
         Returns
@@ -165,7 +130,7 @@ class VBranchCurveAttr(VBranchGeoAttr):
 
     def split(
         self, split_position: Point, split_id: int, ctx: Dict[str, Any]
-    ) -> Tuple[VBranchCurveAttr, VBranchCurveAttr]:
+    ) -> Tuple[VBranchCurveData, VBranchCurveData]:
         """Split the parametric data at a given position.
 
         Parameters
@@ -178,11 +143,11 @@ class VBranchCurveAttr(VBranchGeoAttr):
         Tuple[VBranchParametricData, VBranchParametricData]
             The parametric data of the two branches after the split.
         """
-        return (VBranchCurveAttr(self.array[:split_id]), VBranchCurveAttr(self.array[split_id:]))
+        return (VBranchCurveData(self.array[:split_id]), VBranchCurveData(self.array[split_id:]))
 
 
 ####################################################################################################
-class VBranchTangents(VBranchGeoAttr):
+class VBranchTangents(VBranchGeoDataBase):
     """``VBranchTangents`` is a class that stores the tangents of a branch of a vascular graph."""
 
     def __init__(self, array: np.ndarray) -> None:
@@ -257,14 +222,14 @@ class VBranchTangents(VBranchGeoAttr):
 
 
 ####################################################################################################
-class VBranchBSpline(VBranchGeoAttr):
+class VBranchBSpline(VBranchGeoDataBase):
     """``VBranchBSpline`` is a class that stores the B-spline representation of a branch of a vascular graph."""
 
     def __init__(self, bspline: np.ndarray | BSpline) -> None:
         super().__init__()
         if not isinstance(bspline, BSpline):
             bspline = BSpline.from_array(bspline)
-        self.bspline = bspline
+        self.bspline: BSpline = bspline
 
     def is_invalid(self, ctx: Dict[str, Any]) -> str:
         """Create a parametric data object from an array.
@@ -280,11 +245,19 @@ class VBranchBSpline(VBranchGeoAttr):
             The parametric data object.
         """
         curve = ctx["curve"]
-        if self.bspline[0].p0 != curve[0] or self.bspline[-1].p1 != curve[-1]:
+        if curve is None or not len(curve):
+            if len(self.bspline):
+                return "The B-spline representation of a curve-less branch must be empty."
+            else:
+                return ""
+        elif len(self.bspline) == 0:
+            return "The B-spline representation of a branch must have at least one segment."
+        if self.bspline[0].p0 != Point(*curve[0]) or self.bspline[-1].p1 != Point(*curve[-1]):
             return (
                 f"The B-spline representation of the branch must start at the first point of the curve "
                 f"and end at the last point of the curve. "
-                f"(Data provided: {self.bspline[0].p0} != {curve[0]} or {self.bspline[-1].p1} != {curve[-1]})"
+                f"(Data provided: "
+                f"{self.bspline[0].p0} != {Point(*curve[0])} or {self.bspline[-1].p1} != {Point(*curve[-1])})"
             )
         return ""
 
@@ -329,3 +302,127 @@ class VBranchBSpline(VBranchGeoAttr):
             The parametric data of the two branches after the split.
         """
         raise NotImplementedError
+
+    def __repr__(self) -> str:
+        return f"VBranchBSpline({self.bspline})"
+
+
+####################################################################################################
+class VBranchGeoDescriptor(NamedTuple):
+    name: str
+    geo_type: Type[VBranchGeoDataBase]
+
+    @staticmethod
+    def parse(
+        name: str | VBranchGeoDescriptor | Type[VBranchGeoDataBase], geo_type: Type[VBranchGeoDataBase]
+    ) -> VBranchGeoDescriptor:
+        if isinstance(name, VBranchGeoDescriptor):
+            if geo_type is not None and name.geo_type is not geo_type:
+                raise ValueError(f"Invalid geo type for descriptor {name.name}. Expected {geo_type}.")
+            return name
+        return VBranchGeoDescriptor(VBranchGeoDescriptor.parse_name(name), geo_type)
+
+    @staticmethod
+    def parse_name(name: str | VBranchGeoDescriptor | Type[VBranchGeoDataBase]) -> str:
+        if isinstance(name, str):
+            return name
+        if isinstance(name, VBranchGeoDescriptor):
+            return name.name
+        if isinstance(name, Type) and name is not VBranchGeoDataBase and issubclass(name, VBranchGeoDataBase):
+            return name.__name__
+        raise ValueError(f"Invalid name type: {type(name)}.")
+
+
+#: The type of curated dictionary of geometric data for branches.
+VBranchGeoDict: TypeAlias = Dict[str, List[VBranchGeoDataBase | None]]
+
+#: All the types which may be converted to a VBranchGeoData object.
+VBranchGeoDataLike: TypeAlias = np.ndarray | BSpline | VBranchGeoDataBase
+
+#: All the types which may be used to refer to a VBranchGeoData object.
+VBranchGeoDataKey: TypeAlias = VBranchGeoDescriptor | str | Type[VBranchGeoDataBase]
+
+#: The type of uncurated dictionary of geometric data for branches.
+VBranchGeoDictUncurated: TypeAlias = Dict[VBranchGeoDataKey, List[Optional[VBranchGeoDataLike]]]
+
+
+class VBranchGeoData:
+    """``VBranchGeoData`` is a utility class [...] ."""
+
+    Type: TypeAlias = Type[VBranchGeoDataBase]
+    Base = VBranchGeoDataBase
+    Descriptor = VBranchGeoDescriptor
+
+    BSpline = VBranchBSpline
+    Curve = VBranchCurveData
+    Tangents = VBranchTangents
+
+    @staticmethod
+    def from_data(
+        data: np.ndarray | BSpline | VBranchGeoDataBase, typehint: Optional[Type[VBranchGeoDataBase]] = None
+    ) -> VBranchGeoDataBase:
+        """Create a parametric data object from an array.
+
+        Parameters
+        ----------
+        array : np.ndarray
+            The array to create the parametric data from.
+
+        Returns
+        -------
+        VBranchParametricData
+            The parametric data object.
+        """
+        if isinstance(data, BSpline):
+            data = VBranchGeoData.BSpline(data)
+        if isinstance(data, np.ndarray):
+            data = VBranchGeoData.Curve(data)
+        if typehint is not None and not isinstance(data, typehint):
+            raise ValueError(f"Invalid VBranchGeoData type: {type(data)}. Expected {typehint}.")
+        raise ValueError(f"Invalid VBranchGeoData type: {type(data)}.")
+
+    @staticmethod
+    def parse_geo_dict(
+        data: VBranchGeoDictUncurated, vgeo_data_object
+    ) -> Tuple[VBranchGeoDict, Dict[str, VBranchGeoDescriptor]]:
+        """Parse a dictionary of geometric data.
+
+        Parameters
+        ----------
+        data : VBranchGeoDictExtended
+            The dictionary of geometric data to parse.
+
+        Returns
+        -------
+        VBranchGeoDict
+            The parsed geometric data.
+        """
+        branches_geo_data: VBranchGeoDict = {}
+        branches_geo_descriptors: Dict[str, VBranchGeoDescriptor] = {}
+
+        for geo_desc, branches_data in data.items():
+            geo_type = None
+            if isinstance(geo_desc, VBranchGeoDescriptor):
+                geo_type = geo_desc.geo_type
+            elif isinstance(geo_desc, Type) and issubclass(geo_desc, VBranchGeoDataBase):
+                geo_type = geo_desc
+
+            for branch_id, attr_data in enumerate(branches_data):
+                try:
+                    attr_data = VBranchGeoData.from_data(attr_data, geo_type)
+                except ValueError as e:
+                    raise ValueError(
+                        f"Invalid type for attribute {geo_desc} of branch {branch_id}. " + str(e)
+                    ) from None
+                if geo_type is None:
+                    geo_type = type(attr_data)
+
+                is_invalid = attr_data.is_invalid(vgeo_data_object._branch_ctx(branch_id))
+                if is_invalid:
+                    raise ValueError(f"Invalid attribute {geo_desc} of branch {branch_id}.\n{is_invalid}")
+
+            geo_desc = VBranchGeoDescriptor.parse(geo_desc, geo_type)
+            branches_geo_data[geo_desc.name] = branches_data
+            branches_geo_descriptors[geo_desc.name] = geo_desc
+
+        return branches_geo_data, branches_geo_descriptors

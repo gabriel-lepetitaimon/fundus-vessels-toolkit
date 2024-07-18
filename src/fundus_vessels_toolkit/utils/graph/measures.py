@@ -48,9 +48,12 @@ def extract_branch_geometry(
     branch_curves: List[torch.Tensor],
     segmentation: torch.Tensor,
     adaptative_tangent: bool = True,
-    bspline_max_error: float = 10,
-    bspline_dK_threshold: float = 0.15,
-) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor], torch.Tensor]:
+    return_calibre: bool = True,
+    return_curvature: bool = False,
+    extract_bspline: bool = True,
+    bspline_target_error: float = 10,
+    bspline_K_percentile_threshold: float = 0.15,
+) -> tuple[list[torch.Tensor], ...]:
     """Track branches from a labels map and extract their geometry.
 
 
@@ -68,6 +71,9 @@ def extract_branch_geometry(
     bspline_max_error : float, optional
         The maximum error allowed for the bspline interpolation. By default 10.
 
+    bspline_K_threshold : float, optional
+        The threshold on the curvature for the bspline interpolation. By default 0.15.
+
     Returns
     -------
     tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]
@@ -76,15 +82,19 @@ def extract_branch_geometry(
     - a 2D tensor of shape (n, 2) containing the tangent vectors at each branch point.
     - a 2D tensor of shape (n,) containing the branch width (or calibre) at each branch point.
 
-    If return_labels is True, the output will also contain:
-        - a 2D tensor of shape (H,W) containing the branch labels after terminations cleaning.
-
     """
     options = dict(
-        bspline_max_error=bspline_max_error,
         adaptative_tangent=adaptative_tangent,
-        bspline_dK_threshold=bspline_dK_threshold,
+        return_calibre=return_calibre,
+        return_curvature=return_curvature,
+        extract_bspline=extract_bspline,
+        bspline_target_error=bspline_target_error,
+        bspline_K_percentile_threshold=bspline_K_percentile_threshold,
     )
+
+    assert 0 <= bspline_K_percentile_threshold <= 1, "bspline_K_percentile_threshold must be in (0, 1)"
+    assert bspline_target_error >= 0, "bspline_target_error must be positive"
+
     branch_curves = [curve.cpu().int() for curve in branch_curves]
 
     return extract_branches_geometry_cpp(branch_curves, segmentation, options)

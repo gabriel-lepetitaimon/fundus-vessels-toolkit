@@ -3,6 +3,9 @@
 
 #include <set>
 
+template <typename T>
+using Tensor2DAccessor = at::TensorAccessor<T, 2UL, at::DefaultPtrTraits, signed long>;
+
 std::vector<std::set<int>> edges_to_adjacency_list(std::list<std::vector<int>> edges_list, int n_nodes = -1) {
     if (n_nodes == -1) {
         n_nodes = 0;
@@ -73,6 +76,177 @@ std::list<std::vector<int>> solve_clusters(std::list<std::vector<int>> edges_lis
     return clusters;
 }
 
+std::list<std::vector<int>> iterative_reduce_clusters(const torch::Tensor &edgeList, const torch::Tensor &edgeWeight,
+                                                      float maxWeight) {
+    // Sort edges by weight
+    auto const &argsort = torch::argsort(edgeWeight, 0, false);
+    auto const &sortedWeights = edgeWeight.index_select(0, argsort);
+
+    // Remove any edge with weight > maxWeight
+    auto const &weight = sortedWeights.accessor<float, 1>();
+    int nEdges = weight.size(0);
+    for (; nEdges > 0; nEdges--) {
+        if (weight[nEdges - 1] <= maxWeight) break;
+    }
+    if (nEdges == 0) return {};
+
+    // Sort and select edges
+    auto const &sortedEdges = edgeList.index_select(0, argsort);
+    auto const &edges = sortedEdges.accessor<int, 2>();
+    std::list<std::tuple<int, int, float, float>> sortedEdgesList;
+    for (int i = 0; i < nEdges; i++) sortedEdgesList.push_back({edges[i][0], edges[i][1], weight[i], weight[i]});
+
+    // Reduce clusters
+    std::map<int, std::pair<int, float>> nodeToCluster;  // {node: (clusterId, weightToClusterCenter)}
+    std::vector<std::list<int>> clusters;                // List of clusters of nodeId
+
+    auto update_edges_total_weight = [&](int nodeID, float deltaW) {
+        for (auto it = sortedEdgesList.begin(); it != sortedEdgesList.end(); it++) {
+            if (std::get<0>(*it) == nodeID || std::get<1>(*it) == nodeID) {
+                const float totalW = (std::get<3>(*it) += deltaW);
+                if (totalW > maxWeight) it = sortedEdgesList.erase(it);
+            }
+        }
+    };
+
+    while (!sortedEdgesList.empty()) {
+        auto [u, v, w_uv, totalW_uv] = sortedEdgesList.front();
+        sortedEdgesList.pop_front();
+
+        auto itU = nodeToCluster.find(u);
+        auto itV = nodeToCluster.find(v);
+
+        if (itU == nodeToCluster.end() && itV == nodeToCluster.end()) {
+            // If neither u nor v were already added to the clusters, create a new cluster
+            int clusterId = clusters.size();
+            clusters.push_back({u, v});
+            // The weight to the cluster center is half the edge weight
+            nodeToCluster[u] = {clusterId, w_uv / 2};
+            nodeToCluster[v] = {clusterId, w_uv / 2};
+
+        } else if (itU == nodeToCluster.end() || itV == nodeToCluster.end()) {
+            if (itU == nodeToCluster.end()) {
+                std::swap(u, v);
+                std::swap(itU, itV);
+            }
+
+            // If only u was added to the clusters, add v to u's cluster
+            int clusterId = std::get<0>(itU->second);
+            float w_u = std::get<1>(itU->second);
+            std::size_t n = clusters[clusterId].size();
+            // Compute weight of v to the cluster and check that it is below the threshold
+            float w_v = (w_uv + w_u) * n / (n + 1);
+            if (w_v > maxWeight) continue;
+            // Compute the delta weight of all nodes already in the cluster (except u) and check threshold
+            float deltaW = w_u - (w_v - w_uv);
+            bool valid = true;
+            for (int nodeId : clusters[clusterId]) {
+                if (nodeId == u) continue;
+                float totalW = std::get<1>(nodeToCluster[nodeId]) + deltaW;
+                if (totalW > maxWeight) {
+                    valid = false;
+                    break;
+                }
+            }
+            if (!valid) continue;  // If the threshold was exceeded, don't cluster v with u
+
+            // Update weight of u
+            float w_u_new = abs(w_v - w_uv);
+            update_edges_total_weight(u, w_u_new - w_u);
+            nodeToCluster[u] = {clusterId, w_u_new};
+            w_u = w_u_new;
+
+            // Update weight of existing nodes
+            for (int nodeId : clusters[clusterId]) {
+                auto [i, w_node] = nodeToCluster[nodeId];
+                nodeToCluster[nodeId] = {i, w_node + deltaW};
+                update_edges_total_weight(nodeId, deltaW);
+            }
+            // Add v to cluster
+            clusters[clusterId].push_back(v);
+            nodeToCluster[v] = {clusterId, w_v};
+            update_edges_total_weight(v, w_v);
+
+        } else if (itU->second != itV->second) {
+            // Merge the smallest cluster (cluster of v) into the largest (cluster of u)
+            if (clusters[std::get<0>(itU->second)].size() < clusters[std::get<0>(itV->second)].size()) {
+                std::swap(u, v);
+                std::swap(itU, itV);
+            }
+
+            int cluster1Id = std::get<0>(itU->second), cluster2Id = std::get<0>(itV->second);
+            auto &cluster1 = clusters[cluster1Id], &cluster2 = clusters[cluster2Id];
+
+            // Compute delta W for all nodes in cluster 1 and 2 (except u and v)
+            float w_u = std::get<1>(itU->second), w_v = std::get<1>(itV->second);
+            int n1 = cluster1.size(), n2 = cluster2.size();
+            float deltaW1 = (w_u + w_uv) * n2 / (n1 + n2);
+            float deltaW2 = (w_v + w_uv) * n1 / (n1 + n2);
+            // Check that the new weight of all nodes in cluster 1 and 2 are below the threshold
+            bool valid = true;
+            for (int nodeId : cluster1) {
+                if (nodeId == u) continue;
+                float totalW = std::get<1>(nodeToCluster[nodeId]) + deltaW1;
+                if (totalW > maxWeight) {
+                    valid = false;
+                    break;
+                }
+            }
+            if (!valid) continue;
+            for (int nodeId : cluster2) {
+                if (nodeId == v) continue;
+                float totalW = std::get<1>(nodeToCluster[nodeId]) + deltaW2;
+                if (totalW > maxWeight) {
+                    valid = false;
+                    break;
+                }
+            }
+            if (!valid) continue;
+
+            // Update weight in cluster1 (largest)
+            for (int nodeId : cluster1) {
+                if (nodeId == u) continue;
+                auto [i, w_node] = nodeToCluster[nodeId];
+                nodeToCluster[nodeId] = {i, w_node + deltaW1};
+                update_edges_total_weight(nodeId, deltaW1);
+            }
+            // Update weight of u
+            float w_u_new = abs(w_u - deltaW1);
+            nodeToCluster[u] = {cluster1Id, w_u_new};
+            update_edges_total_weight(u, w_u_new - w_u);
+
+            // Update weight and cluster of v
+            float w_v_new = abs(w_v - deltaW2);
+            nodeToCluster[v] = {cluster1Id, w_v_new};
+            cluster1.push_back(v);
+            update_edges_total_weight(v, w_v_new - w_v);
+
+            // Update weight and cluster of nodes in cluster2 (smallest)
+            for (int nodeId : cluster2) {
+                if (nodeId == v) continue;
+                auto [i, w_node] = nodeToCluster[nodeId];
+                nodeToCluster[nodeId] = {cluster1Id, w_node + deltaW2};
+                cluster1.push_back(nodeId);
+                update_edges_total_weight(nodeId, deltaW2);
+            }
+            cluster2.clear();
+        } else {
+            continue;
+        }
+
+        // Sort edge list by total weight
+        sortedEdgesList.sort([](auto const &a, auto const &b) { return std::get<3>(a) < std::get<3>(b); });
+    }
+
+    // Remove empty clusters
+    std::list<std::vector<int>> nonEmptyClusters;
+    for (auto const &cluster : clusters) {
+        if (!cluster.empty()) nonEmptyClusters.push_back(std::vector<int>(cluster.begin(), cluster.end()));
+    }
+
+    return nonEmptyClusters;
+}
+
 std::list<std::list<int>> solve_1d_chains(std::list<std::vector<int>> chains) {
     std::list<std::list<int>> solved_chains;
     for (auto chain : chains) {
@@ -122,5 +296,6 @@ std::list<std::list<int>> solve_1d_chains(std::list<std::vector<int>> chains) {
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("solve_clusters", &solve_clusters, "Solve clusters from edges list");
+    m.def("iterative_reduce_clusters", &iterative_reduce_clusters, "Iteratively reduce clusters from edge list");
     m.def("solve_1d_chains", &solve_1d_chains, "Solve 1D chains clusters from chains list");
 }

@@ -107,19 +107,31 @@ def quantified_roots(x, threshold=0):
 
     x_quant = np.digitize(x, [-threshold, threshold]) - 1
     x_quant = medfilt(x_quant * 1, 5)
-    v = x_quant[0]
-    points = {0: v}
-    for i in range(1, len(x_quant)):
-        if x_quant[i] != v:
-            v = x_quant[i]
-            points[i] = v
-    values = list(points.values())
-    bins = list(points.keys()) + [len(x)]
-    bins_center = [(bins[i] + bins[i + 1]) / 2 for i in range(len(bins) - 1)]
-    roots = []
-    for i in range(1, len(values) - 1):
-        if values[i] == 0 or (values[i - 1] != 0 and values[i - 1] != values[i]):
-            roots.append(bins_center[i])
+
+    root_intervals = []
+
+    # Search first non-zero value
+    i = 0
+    while i < len(x_quant) and x_quant[i] == 0:
+        i += 1
+
+    last_x = x_quant[i]
+    while i < len(x_quant) - 1:
+        next_x = x_quant[i + 1]
+        if next_x == 0:
+            for j in range(i + 1, len(x_quant)):
+                next_x = x_quant[j]
+                if next_x != 0:
+                    break
+            root_intervals.append((i, j))
+            i = j
+        elif last_x != next_x:
+            root_intervals.append((i, i))
+        last_x = next_x
+        i += 1
+
+    roots = [(start + end) // 2 for start, end in root_intervals]
+
     return np.array(roots).astype(int)
 
 

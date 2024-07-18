@@ -81,7 +81,7 @@ float fast_branch_calibre(const CurveYX &curveYX, std::size_t i, const Tensor2DA
     */
 
     Point pixelDiagonal = tangent.positiveCoordinates();
-    pixelDiagonal = pixelDiagonal / std::max(tangent.x, tangent.y);
+    pixelDiagonal = pixelDiagonal / std::max(pixelDiagonal.x, pixelDiagonal.y);
     return dist + pixelDiagonal.norm();
 }
 
@@ -99,16 +99,20 @@ float fast_branch_calibre(const CurveYX &curveYX, std::size_t i, const Tensor2DA
  *
  * @return A list of floats representing the width at each point.
  */
-std::vector<float> fast_branch_calibre(const CurveYX &curveYX, const Tensor2DAccessor<bool> &segmentation,
-                                       const std::vector<Point> &tangents, const std::vector<int> &evaluateAtID) {
-    const std::size_t outSize = curveYX.size();
-    std::vector<float> widths;
-    widths.reserve(outSize);
+Scalars fast_branch_calibre(const CurveYX &curveYX, const Tensor2DAccessor<bool> &segmentation,
+                            const std::vector<Point> &tangents, const std::vector<int> &evaluateAtID) {
+    const std::size_t curveSize = curveYX.size();
+    bool evaluateAll = evaluateAtID.size() == 0;
+    const std::size_t outSize = evaluateAll ? curveSize : evaluateAtID.size();
+    Scalars calibres(outSize, std::numeric_limits<float>::quiet_NaN());
 
-    for (std::size_t pointI = 0; pointI < outSize; pointI++)
-        widths.push_back(fast_branch_calibre(curveYX, pointI, segmentation, tangents[pointI]));
+    for (std::size_t pointI = 0; pointI < outSize; pointI++) {
+        const std::size_t i = evaluateAll ? pointI : evaluateAtID[pointI];
+        if (i < 0 || i >= curveSize) continue;
+        calibres[i] = fast_branch_calibre(curveYX, i, segmentation, tangents[pointI]);
+    }
 
-    return widths;
+    return calibres;
 }
 
 /**
@@ -126,8 +130,8 @@ std::vector<float> fast_branch_calibre(const CurveYX &curveYX, const Tensor2DAcc
  * @return A list of floats representing the width at each point.
  */
 
-std::vector<float> fast_branch_calibre(const CurveYX &curveYX, const Tensor2DAccessor<bool> &segmentation,
-                                       const std::vector<int> &evaluateAtID) {
+Scalars fast_branch_calibre(const CurveYX &curveYX, const Tensor2DAccessor<bool> &segmentation,
+                            const std::vector<int> &evaluateAtID) {
     return fast_branch_calibre(curveYX, segmentation, fast_curve_tangent(curveYX, TANGENT_HALF_GAUSS, evaluateAtID),
                                evaluateAtID);
 }

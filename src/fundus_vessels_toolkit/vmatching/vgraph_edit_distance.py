@@ -2,126 +2,9 @@ from typing import Tuple
 
 import numpy as np
 
-from ..vascular_data_objects import VGraph
-
-
-def euclidien_node_matching(
-    node1_yx: np.ndarray,
-    node2_yx: np.ndarray,
-    max_matching_distance: float | None = None,
-    min_distance: float | None = None,
-    density_sigma: float | None = None,
-    gamma: float = 0,
-    return_distance: bool = False,
-):
-    """
-    Match nodes from two graphs based on the euclidean distance between nodes.
-
-    Each node from the first graph is matched to the closest node from the second graph, if their distance is below
-      max_matching_distance. When multiple nodes from both graph are near each other, minimize the sum of the distance
-      between matched nodes.
-
-    This implementation use the Hungarian algorithm to maximize the sum of the inverse of the distance between
-        matched nodes.
-
-
-    Args:
-        node1_yx: tuple (y, x), where y and x are vectors of the same length and encode the coordinates of the nodes
-                    of the first graph.
-        node2_yx: same format as node1_yx but for the second graph.
-        max_matching_distance: maximum distance between two nodes to be considered as a match.
-        min_distance: set a lower bound to the distance between two nodes to prevent immediate match of superposed nodes.
-        gamma: parameter to exponentially increase the penalty of large distance.
-            If 0 (default), the algorithm simply minimize the sum of the distance between matched nodes.
-        return_distance: if True, return the distance between each matched nodes.
-    Returns:
-        A tuple (node1_matched, node2_matched), where node1_matched and node2_matched are vectors of the same length.
-          Every (node1_matched[i], node2_matched[i]) encode a match, node1_matched being the index of a node from the
-          first graph and node2_matched the index of the corresponding node from the second graph.
-
-        If return_distance is True, returns ((node1_matched, node2_matched), nodes_distance), where nodes_distance
-          is a vector of the same length as node1_matched and node2_matched, and encode the distance between each
-          matched nodes.
-    """
-    from pygmtools.linear_solvers import hungarian
-
-    n1 = len(node1_yx)
-    n2 = len(node2_yx)
-
-    # Compute the euclidean distance between each node
-    cross_euclidean_distance = np.linalg.norm(node1_yx[:, None] - node2_yx[None, :], axis=2)
-    max_distance = cross_euclidean_distance.max()
-
-    if gamma > 0:
-
-        def dist2weight(dist):
-            return np.exp(-gamma * dist / 1e3)
-
-    else:
-
-        def dist2weight(dist):
-            return max_distance - dist
-
-    # Compute the weight as the distance inverse (the Hungarian method maximise the sum of the weight)
-    weight = dist2weight(cross_euclidean_distance)
-
-    # Set the cost of not matched nodes to half the inverse of the maximum distance,
-    #  so that nodes separated by more than max_distance are better left unmatched.
-    if density_sigma is None:
-        min_weight = dist2weight(max_matching_distance) / 2 if max_matching_distance is not None else 0
-        min_weight1 = np.repeat([min_weight], n1, axis=0)
-        min_weight2 = np.repeat([min_weight], n2, axis=0)
-    else:
-        if min_distance is None:
-            min_distance = np.clip(max_matching_distance / 20, 1)
-
-        # Compute node density as the sum of the Gaussian kernel centered on each node
-        def influence(x):
-            return np.exp(-(x**2) / (2 * density_sigma**2))
-
-        self_euclidean_distance1 = np.linalg.norm(node1_yx[:, None] - node1_yx[None, :], axis=2)
-        self_euclidean_distance2 = np.linalg.norm(node2_yx[:, None] - node2_yx[None, :], axis=2)
-        self_density1 = np.clip(influence(self_euclidean_distance1).sum(axis=1) - 1, 0, 1)
-        self_density2 = np.clip(influence(self_euclidean_distance2).sum(axis=1) - 1, 0, 1)
-
-        cross_density = influence(cross_euclidean_distance)
-        cross_density1 = np.clip(cross_density.sum(axis=1), 0, 1)
-        cross_density2 = np.clip(cross_density.sum(axis=0), 0, 1)
-
-        density1 = (self_density1 + cross_density1) / 2
-        density2 = (self_density2 + cross_density2) / 2
-
-        # Compute a maximum matching distance per node based on the density of its closest neighbor in the other graph
-        closest_node1 = cross_euclidean_distance.argmin(axis=1)
-        closest_node2 = cross_euclidean_distance.argmin(axis=0)
-        factor1 = 1 - density2[closest_node1]
-        factor2 = 1 - density1[closest_node2]
-
-        max_matching_distance1 = np.clip(max_matching_distance * factor1, min_distance, max_matching_distance)
-        max_matching_distance2 = np.clip(max_matching_distance * factor2, min_distance, max_matching_distance)
-
-        # for i, (max_d, closest_node) in enumerate(zip(max_matching_distance1, closest_node1, strict=True)):
-        #     print(
-        #         f"[{str(i): >3}] : {max_d:.2f} ({str(closest_node): >3} -> {density2[closest_node]:.2f}: "
-        #         f"{cross_density2[closest_node]:.2f} & {self_density2[closest_node]:.2f})"
-        #     )
-
-        min_weight1 = dist2weight(max_matching_distance1) / 2
-        min_weight2 = dist2weight(max_matching_distance2) / 2
-
-    # Compute the Hungarian matching
-    matched_nodes = hungarian(
-        weight,
-        n1,
-        n2,
-        min_weight1,
-        min_weight2,
-    )
-    matched_nodes = np.where(matched_nodes)
-
-    if return_distance:
-        return matched_nodes, cross_euclidean_distance[matched_nodes]
-    return matched_nodes
+from ..utils.cpp_extensions.graph_cpp import shortest_secondary_path as cpp_shortest_path
+from ..vascular_data_objects.vgraph import VGraph
+from .node_matching import euclidien_node_matching
 
 
 def shortest_unmatched_path(
@@ -152,15 +35,13 @@ def shortest_unmatched_path(
         - A backtrack matrix of shape ``(matched_nodes, N1, 2)`` with the index of the edge and the index of the next node on the path from the node N1 to the primary node N. If no path exists between the two nodes, the matrix contains (-1, -1).
         - A backtrack matrix of shape ``(matched_nodes, N2, 2)`` with the index of the edge and the index of the next node on the path from the node N2 to the primary node N. If no path exists between the two nodes, the matrix contains (-1, -1).
     """  # noqa: E501
-    from .edit_distance_cy import shortest_secondary_path as cython_shortest_path
-
     primary_nodes = np.arange(matched_nodes)
 
     nb_node1 = adj_list1.max() + 1
-    dist1, backtrack1 = cython_shortest_path(adj_list1, primary_nodes, np.arange(matched_nodes, nb_node1))
+    dist1, backtrack1 = cpp_shortest_path(adj_list1, primary_nodes, np.arange(matched_nodes, nb_node1))
 
     nb_node2 = adj_list2.max() + 1
-    dist2, backtrack2 = cython_shortest_path(adj_list2, primary_nodes, np.arange(matched_nodes, nb_node2))
+    dist2, backtrack2 = cpp_shortest_path(adj_list2, primary_nodes, np.arange(matched_nodes, nb_node2))
 
     return dist1, dist2, backtrack1, backtrack2
 

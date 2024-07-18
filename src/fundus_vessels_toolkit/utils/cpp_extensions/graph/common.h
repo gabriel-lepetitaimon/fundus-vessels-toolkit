@@ -12,12 +12,22 @@
 // Use (void) to silence unused warnings.
 #define assertm(exp, msg) assert(((void)msg, exp))
 
+template <typename T>
+T get_if_exists(const std::map<std::string, T>& map, const std::string& key, const T& default_value) {
+    const auto& it = map.find(key);
+    if (it != map.end()) {
+        return it->second;
+    }
+    return default_value;
+}
+
 /*******************************************************************************************************************
  *             === MATH ===
  *******************************************************************************************************************/
 using IntPair = std::array<int, 2>;
 using FloatPair = std::array<float, 2>;
 using SizePair = std::array<std::size_t, 2>;
+using Scalars = std::vector<float>;
 
 // === MATRIX ===
 template <typename T, unsigned int D1 = 2, unsigned int D2 = D1>
@@ -88,9 +98,12 @@ struct Point {
 
     Point normalize() const;
     double dot(const Point& p) const;
+    double cross(const Point& p) const;
     double squaredNorm() const;
     double norm() const;
     Point positiveCoordinates() const;
+    Point rot90() const;
+    Point rot270() const;
     double angle() const;
     double angle(const Point& p) const;
 
@@ -194,6 +207,8 @@ inline double linspace(int i, double start, double end, int n, bool endpoint = t
     return start + i * step;
 }
 
+std::vector<std::size_t> arange(const std::size_t& start, const std::size_t& end, const std::size_t& step);
+
 std::vector<int> quantize_triband(const std::vector<float>& x, float low, float high, std::size_t medianHalfSize = 3);
 
 template <typename T>
@@ -222,28 +237,6 @@ std::vector<T> abs(const std::vector<T>& x) {
 
 static const float SQRT2 = sqrt(2);
 
-// === Graph ===
-
-struct Edge {
-    int start;
-    int end;
-    int id;
-
-    Edge(int start = 0, int end = 0, int id = 0);
-    Edge& operator=(const Edge& e);
-
-    bool operator==(const Edge& e) const;
-    bool operator!=(const Edge& e) const;
-    bool operator<(const Edge& e) const;
-};
-
-using EdgeList = std::vector<Edge>;
-using GraphAdjList = std::vector<std::set<Edge>>;
-#pragma omp declare reduction(merge : std::vector<Edge> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
-
-GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N = -1, bool directed = false);
-GraphAdjList edge_list_to_adjlist(const EdgeList& edges, int N = -1, bool directed = false);
-
 /*******************************************************************************************************************
  *             === TORCH ===
  *******************************************************************************************************************/
@@ -252,13 +245,14 @@ using Tensor2DAccessor = at::TensorAccessor<T, 2UL, at::DefaultPtrTraits, signed
 
 torch::Tensor vector_to_tensor(const std::vector<int>& vec);
 torch::Tensor vector_to_tensor(const std::vector<float>& vec);
+torch::Tensor vector_to_tensor(const std::vector<double>& vec);
+torch::Tensor vector_to_tensor(const std::vector<std::size_t>& vec);
 torch::Tensor vector_to_tensor(const std::vector<Point>& vec);
 torch::Tensor vector_to_tensor(const std::vector<IntPoint>& vec);
 torch::Tensor vector_to_tensor(const std::vector<IntPair>& vec);
 torch::Tensor vector_to_tensor(const std::vector<FloatPair>& vec);
 torch::Tensor vector_to_tensor(const std::vector<std::vector<IntPair>>& vec);
 torch::Tensor vector_to_tensor(const std::vector<std::array<IntPoint, 2>>& vec);
-torch::Tensor edge_list_to_tensor(const EdgeList& vec);
 
 template <typename T>
 std::vector<torch::Tensor> vectors_to_tensors(const std::vector<std::vector<T>>& vec) {
@@ -272,22 +266,50 @@ CurveYX tensor_to_curve(const torch::Tensor& tensor);
 std::vector<CurveYX> tensors_to_curves(const std::vector<torch::Tensor>& tensors);
 std::vector<IntPair> tensor_to_vectorIntPair(const torch::Tensor& tensor);
 PointList tensor_to_pointList(const torch::Tensor& tensor);
+Scalars tensor_to_scalars(const torch::Tensor& tensor);
 
-    /*******************************************************************************************************************
-     *             === NEIGHBORS ===
-     *******************************************************************************************************************/
-    /**
-     * @brief Structure representing neighborhood coordinates: (y, x) and the id of the neighbor.
-     *
-     * The id of the neighbor is in the following order:
-     *    0 1 2
-     *    7 . 3
-     *    6 5 4
-     *
-     */
-    static const std::array<PointWithID, 8> NEIGHBORHOOD = {
-        {{-1, -1, 0}, {-1, 0, 1}, {-1, 1, 2}, {0, 1, 3}, {1, 1, 4}, {1, 0, 5}, {1, -1, 6}, {0, -1, 7}}
-    };
+/*******************************************************************************************************************
+ *             === GRAPH ===
+ *******************************************************************************************************************/
+
+struct Edge {
+    int start;
+    int end;
+    int id;
+
+    Edge(int start = 0, int end = 0, int id = 0);
+    Edge& operator=(const Edge& e);
+    int other(int node) const;
+
+    bool operator==(const Edge& e) const;
+    bool operator!=(const Edge& e) const;
+    bool operator<(const Edge& e) const;
+};
+
+using EdgeList = std::vector<Edge>;
+using GraphAdjList = std::vector<std::set<Edge>>;
+#pragma omp declare reduction(merge : std::vector<Edge> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
+
+GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N = -1, bool directed = false);
+GraphAdjList edge_list_to_adjlist(const EdgeList& edges, int N = -1, bool directed = false);
+GraphAdjList edge_list_to_adjlist(const Tensor2DAccessor<int>& edges, int N = -1, bool directed = false);
+
+torch::Tensor edge_list_to_tensor(const EdgeList& vec);
+
+/*******************************************************************************************************************
+ *             === NEIGHBORS ===
+ *******************************************************************************************************************/
+/**
+ * @brief Structure representing neighborhood coordinates: (y, x) and the id of the neighbor.
+ *
+ * The id of the neighbor is in the following order:
+ *    0 1 2
+ *    7 . 3
+ *    6 5 4
+ *
+ */
+static const std::array<PointWithID, 8> NEIGHBORHOOD = {
+    {{-1, -1, 0}, {-1, 0, 1}, {-1, 1, 2}, {0, 1, 3}, {1, 1, 4}, {1, 0, 5}, {1, -1, 6}, {0, -1, 7}}};
 
 /**
  * @brief Structure representing neighborhood coordinates: (y, x) and the id of the neighbor. The close neighbors

@@ -8,9 +8,8 @@ using BSpline = std::vector<BezierCurve>;
 
 #define MAXPOINTS 1000 /* The most points you can have */
 
-std::tuple<BezierCurve, double, std::vector<double>> fit_bezier(const CurveYX& d, const PointList& tangent,
-                                                                double error, std::size_t first = 0,
-                                                                std::size_t last = 0);
+std::tuple<BezierCurve, double, std::vector<double>, std::vector<double>> fit_bezier(
+    const CurveYX& d, const PointList& tangent, double targetSqrError, std::size_t first = 0, std::size_t last = 0);
 
 BezierCurve bezier_regression(const CurveYX& d, std::size_t first, std::size_t last, const std::vector<double>& uPrime,
                               const Vector& t0, const Vector& t1);
@@ -36,9 +35,11 @@ Point BezierPolynomialTriangle(std::array<Point, N> V, double t) {
     return V[0];
 }
 
-std::tuple<double, std::size_t> computeMaxError(const CurveYX& d, std::size_t first, std::size_t last,
-                                                const BezierCurve& bezCurve, const std::vector<double>& u);
+std::tuple<std::vector<double>, double, std::size_t> computeMaxError(const CurveYX& d, std::size_t first,
+                                                                     std::size_t last, const BezierCurve& bezCurve,
+                                                                     const std::vector<double>& u);
 
+torch::Tensor bspline_to_tensor(const BezierCurve& bspline);
 torch::Tensor bspline_to_tensor(const BSpline& bspline);
 std::vector<torch::Tensor> bsplines_to_tensor(const std::vector<BSpline>& bsplines);
 

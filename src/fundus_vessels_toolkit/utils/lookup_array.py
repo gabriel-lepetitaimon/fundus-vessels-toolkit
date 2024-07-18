@@ -108,7 +108,7 @@ def complete_lookup(lookup: np.ndarray, max_index: int, assume_valid=False) -> n
     """
     lookup = np.asarray(lookup, dtype=int)
     assert lookup.ndim == 1, f"lookup must be a 1D array. Got {lookup.ndim} dimensions."
-    assert lookup.shape[0] < max_index, f"lookup must have less than {max_index+1} elements but has {lookup.shape[0]}."
+    assert len(lookup) <= max_index + 1, f"lookup must have less than {max_index+1} elements but has {lookup.shape[0]}."
     if not assume_valid:
         lookup_sorted, lookup_counts = np.unique(lookup, return_counts=True)
         if lookup_sorted[0] < 0:
@@ -200,4 +200,4 @@ def invert_complete_lookup(lookup):
     """
     out = np.empty_like(lookup)
     out[lookup] = np.arange(len(lookup), dtype=lookup.dtype)
-    return invert_lookup(out)
+    return out

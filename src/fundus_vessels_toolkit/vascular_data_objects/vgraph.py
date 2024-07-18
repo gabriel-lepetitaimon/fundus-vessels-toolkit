@@ -2,7 +2,7 @@ from __future__ import annotations
 
 __all__ = ["VGraph"]
 
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -69,7 +69,7 @@ class VGraph:
             geometric_data = [geometric_data]
 
         self._branch_list = branches_list
-        self._geometric_data = geometric_data
+        self._geometric_data: List[VGeometricData] = list(geometric_data)
 
         if nodes_count is None:
             nodes_indexes = np.unique(branches_list)
@@ -277,7 +277,9 @@ class VGraph:
         node_adj[self._branch_list[:, 1], self._branch_list[:, 0]] = True
         return node_adj
 
-    def incident_branches(self, node_idx: int | Iterable[int]) -> npt.NDArray[np.int_]:
+    def incident_branches(
+        self, node_idx: int | Iterable[int], return_branch_direction: bool = False
+    ) -> npt.NDArray[np.int_] | Tuple[npt.NDArray[np.int_], npt.NDArray[np.bool_]]:
         """Compute the indexes of the branches incident to the given node.
 
         Parameters
@@ -285,15 +287,26 @@ class VGraph:
         node_idx : int or Iterable[int]
             The indexes of the nodes to get the incident branches from.
 
+        sign_branch_direction : bool, optional
+            If True, also return weither the branch is outgoing from the node. Default is False.
+
         Returns
         -------
         np.ndarray
             The indexes of the branches incident to the given nodes.
-        """
+
+        np.ndarray
+            The direction of the branches incident to the given nodes. Only returned if ``return_branch_direction`` is True. True indicates that the branch is outgoing from the node.
+
+        """  # noqa: E501
         if isinstance(node_idx, int):
             node_idx = [node_idx]
         node_idx = np.asarray(node_idx, dtype=int)
-        return np.argwhere(np.any(np.isin(self._branch_list, node_idx), axis=1)).flatten()
+        branch_ids = np.argwhere(np.any(np.isin(self._branch_list, node_idx), axis=1)).flatten()
+        if return_branch_direction:
+            return branch_ids, np.isin(self._branch_list[branch_ids][:, 0], node_idx)
+        else:
+            return branch_ids
 
     def nodes_degree(self) -> npt.NDArray[np.int_]:
         """Compute the degree of each node in the graph.
@@ -388,6 +401,28 @@ class VGraph:
             count[nodes_id] += 1
         return coord / count[:, None]
 
+    def branches_node2node_length(self, ids: Optional[int | Iterable[int]] = None) -> npt.NDArray[np.float64]:
+        """Compute the length of the branches in the graph (averaged from all geometric data).
+
+        Parameters
+        ----------
+        ids : int or Iterable[int], optional
+            The indexes of the branches to compute the length from. If None, the length of all branches is computed.
+
+        Returns
+        -------
+        np.ndarray
+            An array of shape (B,) containing the length of the branches.
+        """
+        if ids is None:
+            branches = self.branch_list
+        else:
+            if isinstance(ids, int):
+                ids = [ids]
+            branches = self.branch_list[ids]
+
+        return np.linalg.norm(self.nodes_coord()[branches[:, 0]] - self.nodes_coord()[branches[:, 1]], axis=1)
+
     def branches_arc_length(
         self, ids: Optional[int | Iterable[int]] = None, fast_approximation=True
     ) -> npt.NDArray[np.float64]:
@@ -418,6 +453,8 @@ class VGraph:
                 total_arc_length[id] += gdata.branches_arc_length(fast_approximation=fast_approximation)
                 count[id] += 1
         else:
+            if isinstance(ids, int):
+                ids = [ids]
             # ... for a subset of branches
             total_arc_length = np.zeros(len(ids), dtype=float)
             count = np.zeros(len(ids), dtype=int)
@@ -485,14 +522,7 @@ class VGraph:
         np.ndarray
             An array of shape (H, W) containing the label map of the branches.
         """  # noqa: E501
-        if geometrical_data_priority is None:
-            geometrical_data_priority = range(len(self._geometric_data))
-        elif isinstance(geometrical_data_priority, int):
-            geometrical_data_priority = [geometrical_data_priority]
-        if isinstance(geometrical_data_priority, Iterable):
-            geometrical_data_priority = complete_lookup(
-                geometrical_data_priority, max_index=len(self._geometric_data) - 1
-            )
+        geometrical_data_priority = self._geometrical_data_priority(geometrical_data_priority)
 
         full_domain = Rect.union([gdata.domain for gdata in self._geometric_data])
         label_map = np.zeros(full_domain.shape, dtype=int)
@@ -502,18 +532,93 @@ class VGraph:
             label_map[domain.slice()] = gdata.branches_label_map()
         return label_map
 
+    def branches_geo_data(
+        self,
+        attr_name: str,
+        ids: Optional[int | Iterable[int]] = None,
+        geometrical_data_priority: Optional[int | Iterable[int]] = None,
+    ) -> list:
+        """Compute the geometric data of the branches in the graph.
+
+        Parameters
+        ----------
+        ids : int or Iterable[int], optional
+            The indexes of the branches to compute the geometric data from. If None, the geometric data of all branches is computed.
+
+        geometrical_data_priority : int or Iterable[int], optional
+            The indexes of the geometrical data to use to determine the label of the branches. The first geometrical data in the list has the highest priority.
+
+            If None (by default), the label is determined by the order of the geometrical data in the graph.
+
+        Returns
+        -------
+        list
+            A list of VGeometricData objects containing the geometric data of the branches.
+        """  # noqa: E501
+        geometrical_data_priority = self._geometrical_data_priority(geometrical_data_priority)
+
+        if ids is None:
+            ids = range(self.branches_count)
+        if isinstance(ids, int):
+            ids = [ids]
+
+        geo_data = [None for _ in ids]
+        for gdata_id in reversed(geometrical_data_priority):
+            gdata: VGeometricData = self._geometric_data[gdata_id]
+            branch_data = gdata.branch_data(attr_name, ids)
+            for i, data in enumerate(branch_data):
+                if data is not None:
+                    geo_data[i] = data
+
+        return geo_data
+
+    def _geometrical_data_priority(
+        self, geometrical_data_priority: Optional[int | Iterable[int]] = None
+    ) -> Iterable[int]:
+        if isinstance(geometrical_data_priority, int):
+            geometrical_data_priority = [geometrical_data_priority]
+        if isinstance(geometrical_data_priority, Iterable):
+            geometrical_data_priority = complete_lookup(
+                geometrical_data_priority, max_index=len(self._geometric_data) - 1
+            )
+        elif geometrical_data_priority is None:
+            geometrical_data_priority = range(len(self._geometric_data))
+        else:
+            raise ValueError("geometrical_data_priority must be an integer or an iterable of integers.")
+        return geometrical_data_priority
+
     ####################################################################################################################
     #  === GRAPH MANIPULATION ===
     ####################################################################################################################
-    def reindex_nodes(self, new_node_indexes, inverse_lookup=False) -> VGraph:
-        new_node_indexes = complete_lookup(new_node_indexes, max_index=self.nodes_count - 1)
-        if inverse_lookup:
-            new_node_indexes = invert_complete_lookup(new_node_indexes)
+    def reindex_nodes(self, indexes, inverse_lookup=False) -> VGraph:
+        """Reindex the nodes of the graph.
 
-        self._branch_list = new_node_indexes[self._branch_list]
-        self._nodes_attr = self._nodes_attr.reindex(new_node_indexes)
+        Parameters
+        ----------
+        new_node_indexes : npt.NDArray
+            The new indexes of the nodes.
+
+        inverse_lookup : bool, optional
+
+            - If False, indexes is sorted by old indexes and contains the new one: indexes[old_index] -> new_index.
+            - If True, indexes is sorted by new indexes and contains the old one: indexes[new_index] -> old_index.
+
+            By default: False.
+
+
+        Returns
+        -------
+        VGraph
+            _description_
+        """
+        indexes = complete_lookup(indexes, max_index=self.nodes_count - 1)
+        if inverse_lookup:
+            indexes = invert_complete_lookup(indexes)
+
+        self._branch_list = indexes[self._branch_list]
+        self._nodes_attr = self._nodes_attr.reindex(indexes)
         for gdata in self._geometric_data:
-            gdata._reindex_nodes(new_node_indexes)
+            gdata._reindex_nodes(indexes)
         return self
 
     def sort_nodes_by_degree(self, descending=True) -> VGraph:
@@ -552,6 +657,8 @@ class VGraph:
 
     # --- Private base edition ---
     def _delete_branches(self, branch_indexes: npt.NDArray[np.int_]):
+        if len(branch_indexes) == 0:
+            return
         branches_reindex = create_removal_lookup(branch_indexes, replace_value=-1, length=self.branches_count)
         for gdata in self._geometric_data:
             gdata._reindex_branches(branches_reindex)
@@ -560,6 +667,8 @@ class VGraph:
         self._branches_attr = self._branches_attr.drop(branch_indexes).reset_index(drop=True)
 
     def _delete_nodes(self, node_indexes: npt.NDArray[np.int_]):
+        if len(node_indexes) == 0:
+            return
         self._nodes_attr = self._nodes_attr.drop(node_indexes).reset_index(drop=True)
 
         nodes_reindex = create_removal_lookup(node_indexes, replace_value=-1, length=self.nodes_count)
@@ -651,10 +760,10 @@ class VGraph:
 
             # Store the other node as n0
             n0, n1 = self._branch_list[branches[0]]
-            n1_id = 1
+            # n1_id = 1
             if n0 == nNext:
                 n0 = n1
-                n1_id = 0
+                # n1_id = 0
                 flip_branches[0] = True
 
             # For each branch, check that its consecutive to the previous one and store the next node
@@ -670,7 +779,7 @@ class VGraph:
                 else:
                     raise ValueError(f"Branches {b} is not consecutive to branch {branches[i]}.")
             # Update the first branch
-            self._branch_list[branches[0], n1_id] = nNext
+            self._branch_list[branches[0]] = [n0, nNext]
 
             deleted_branches.extend(branches[1:])
             for gdata in self._geometric_data:
@@ -685,7 +794,6 @@ class VGraph:
                 "Some nodes are still referenced in the branch list and shouldn't be fused. "
                 "This is may be because nodes connecting consecutive branches are also connected to other branches."
             )
-
         self._delete_branches(deleted_branches)
         self._delete_nodes(fused_nodes)
 
@@ -777,7 +885,7 @@ class VGraph:
         incident_branches = self.incident_branches(node_indexes)
         return self.delete_branches(incident_branches, delete_orphan_nodes=True, inplace=inplace)
 
-    def fuse_nodes(self, nodes: npt.NDArray[np.int_], *, inplace=False) -> VGraph:
+    def fuse_nodes(self, nodes: npt.NDArray[np.int_], *, quiet_invalid_node=False, inplace=False) -> VGraph:
         """Fuse nodes connected to exactly two branches.
 
         The nodes are removed from the graph and their corresponding branches are merged.
@@ -796,7 +904,10 @@ class VGraph:
         for nodes_id in nodes:
             b = np.argwhere(np.any(self._branch_list == nodes_id, axis=1)).flatten()
             if len(b) != 2:
-                raise ValueError(f"Node {nodes_id} is not connected to exactly two branches.")
+                if not quiet_invalid_node:
+                    raise ValueError(f"Node {nodes_id} is not connected to exactly two branches.")
+                else:
+                    continue
             b0, b1 = b
 
             for branches in consecutive_branches:
@@ -899,8 +1010,18 @@ class VGraph:
     ####################################################################################################################
     #  === VISUALISATION UTILITIES ===
     ####################################################################################################################
-    def jppype_layer(self, edge_labels=False, node_labels=False, edge_map=True):
+    def jppype_layer(
+        self,
+        edge_labels=False,
+        node_labels=False,
+        edge_map=True,
+        bspline_attr=None,
+        max_colored_node_id: Optional[int] = None,
+    ):
         from jppype.layers import LayerGraph
+        from jppype.utilities.color import colormap_by_name
+
+        from .vgeometric_data import VBranchGeoData
 
         layer = LayerGraph(self.branch_list, self.nodes_coord(), self.geometric_data().branches_label_map())
         layer.set_options(
@@ -910,15 +1031,22 @@ class VGraph:
                 "edge_map_visible": edge_map,
             }
         )
+        if bspline_attr is not None:
+            branches_geodata = self.branches_geo_data(bspline_attr)
+            layer.edges_path = [
+                d.bspline.to_path() if isinstance(d, VBranchGeoData.BSpline) else "" for d in branches_geodata
+            ]
+        if max_colored_node_id:
+            node_cmap = {None: colormap_by_name()} | {
+                _: "#444" for _ in range(max_colored_node_id + 1, self.nodes_count + 1)
+            }
+            layer.nodes_cmap = node_cmap
+            incidents_branches = np.setdiff1d(
+                np.arange(self.branches_count), self.incident_branches(np.arange(max_colored_node_id + 1))
+            )
+            branch_cmap = {None: colormap_by_name()} | {int(_): "#444" for _ in incidents_branches}
+            layer.edges_cmap = branch_cmap
         return layer
-
-    def jppype_quiver_termination_tangents(self, std=7, offset=7, arrow_length=20):
-        from jppype.layers import LayerQuiver
-
-        terminations = self.endpoints_nodes()
-        yx = self.nodes_yx_coord[terminations]
-        uv = self.nodes_tangent(terminations, gaussian_std=std, gaussian_offset=offset) * arrow_length
-        return LayerQuiver(yx, uv, Rect.from_size(self._branch_labels_map.shape))
 
     def branch_normals_map(self, segmentation, only_terminations=False):
         import cv2
@@ -930,7 +1058,7 @@ class VGraph:
 
         out_map = np.zeros_like(segmentation, dtype=np.uint8)
 
-        yx_curves = {k: curve for k, curve in enumerate(self.geometric_data().branches_curve()) if len(curve) > 1}
+        yx_curves = {k: curve for k, curve in enumerate(self.geometric_data().branch_curve()) if len(curve) > 1}
         boundaries = {id: branch_boundaries(curve, segmentation, eval_point(curve)) for id, curve in yx_curves.items()}
 
         for i, curve in yx_curves.items():

@@ -199,8 +199,9 @@ float largest_near_calibre(const Edge &edge, const GraphAdjList &adjacency, cons
         auto const &curve = branchesCurves[nearEdge.id];
         if (curve.empty()) continue;
 
-        std::vector<int> evaluateAt = {(edge.start == nearEdge.start ? 0 : (int)curve.size() - 1)};
-        const float calibre = fast_branch_calibre(curve, segmentation, evaluateAt)[0];
+        int evaluateAtI = edge.start == nearEdge.start ? 0 : (int)curve.size() - 1;
+        auto const &tangent = fast_curve_tangent(curve, evaluateAtI);
+        const float calibre = fast_branch_calibre(curve, evaluateAtI, segmentation, tangent);
         maxCalibre = std::max(maxCalibre, calibre);
     }
     return maxCalibre;

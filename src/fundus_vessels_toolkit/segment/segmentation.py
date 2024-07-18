@@ -12,6 +12,7 @@ from pickle import UnpicklingError
 from typing import NamedTuple, Optional
 from urllib.error import HTTPError
 
+import numpy as np
 import segmentation_models_pytorch as smp
 import torch
 from torch.utils import model_zoo
@@ -36,6 +37,14 @@ class ModelCache(NamedTuple):
 
 
 _last_model: ModelCache = ModelCache(None, None)
+
+
+def clear_gpu_cache():
+    """
+    Clears the GPU cache.
+    """
+    _last_model = ModelCache(None, None)
+    torch.cuda.empty_cache()
 
 
 def segment_vessels(
@@ -82,20 +91,28 @@ def segment_vessels(
                     warnings.warn(
                         f"Image size {x.shape[-2:]} is not optimal for {model_name}.\n"
                         f"Consider resizing the image to a size close to 1024x1024.",
-                        stacklevel=None,
+                        stacklevel=1,
                     )
 
                 padded_shape = [ensure_superior_multiple(s, 32) for s in final_shape]
                 x = crop_pad(x, padded_shape)
                 y = model(x)
-                y = crop_pad(y, final_shape)[0, 1] > 0.5
+                y = crop_pad(y, final_shape)[:, 1] > 0.5
                 y = y.cpu().numpy()
 
-    if roi_mask == "auto":
-        from ..utils.fundus import compute_ROI_mask
+    if raw.ndim == 3:
+        y = y[0]
 
-        roi_mask = compute_ROI_mask(raw)
+    if isinstance(roi_mask, str) and roi_mask == "auto":
+        from ..utils.fundus import fundus_ROI
+
+        if raw.ndim == 4:
+            roi_mask = np.stack([fundus_ROI(_) for _ in raw])
+        else:
+            roi_mask = fundus_ROI(raw)
     if roi_mask is not None:
+        if roi_mask.ndim == 2 and y.ndim == 3:
+            roi_mask = roi_mask[None]
         y *= roi_mask
 
     return y

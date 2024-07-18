@@ -52,16 +52,19 @@ def skeleton_to_vgraph(
     """  # noqa: E501
     if isinstance(skeleton_map, np.ndarray):
         skeleton_map = torch.from_numpy(skeleton_map)
-    skeleton_map = skeleton_map.cpu().bool()
+    skeleton_map = skeleton_map.cpu()
     if segmentation_map is not None:
         if isinstance(segmentation_map, np.ndarray):
             segmentation_map = torch.from_numpy(segmentation_map)
         segmentation_map = segmentation_map.cpu().bool()
 
-    remove_endpoint_branches = max_spurs_length > 0 or max_spurs_calibre_factor > 0
-    skeleton_map = detect_skeleton_nodes(
-        skeleton_map, fix_hollow=fix_hollow, remove_endpoint_branches=remove_endpoint_branches
-    )
+    if skeleton_map.dtype == torch.bool:
+        remove_endpoint_branches = max_spurs_length > 0 or max_spurs_calibre_factor > 0
+        skeleton_map = detect_skeleton_nodes(
+            skeleton_map, fix_hollow=fix_hollow, remove_endpoint_branches=remove_endpoint_branches
+        )
+
+    skeleton_map = skeleton_map.int()
 
     labels, branch_list, nodes_yx, branches_curve = parse_skeleton(
         skeleton_map,
@@ -161,7 +164,7 @@ def detect_skeleton_nodes(
         skeleton_map = torch.from_numpy(skeleton_map)
 
     skeleton_rank = detect_skeleton_nodes_cpp(skeleton_map.cpu().bool(), fix_hollow, remove_endpoint_branches)
-    rank_lookup = torch.tensor([0, 2, 1, 2, 2], dtype=torch.uint8)
+    rank_lookup = torch.tensor([0, 2, 1, 2, 2, 2], dtype=torch.uint8)
     out = rank_lookup[skeleton_rank]
 
     return out.numpy() if cast_numpy else out

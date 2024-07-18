@@ -53,6 +53,52 @@ SkeletonRank detect_skeleton_rank(const bool pixelValue, const uint8_t neighbors
     return SkeletonRank::BRANCH;
 }
 
+void fix_hollow_crosses(Tensor2DAccessor<int>& parsedSkel, const std::vector<IntPoint>& hollow_crosses,
+                        std::vector<IntPoint>& endpoints, bool remove_single_endpoints) {
+    for (const IntPoint& p : hollow_crosses) {
+        for (const PointWithID& n : NEIGHBORHOOD) {  // Decrement neighbors
+            if (parsedSkel[p.y + n.y][p.x + n.x] > 0) parsedSkel[p.y + n.y][p.x + n.x]--;
+        }
+    }
+
+    for (const IntPoint& p : hollow_crosses) {
+        // Remove single endpoints around hollow crosses
+        for (const PointWithID& n : NEIGHBORHOOD) {
+            if (parsedSkel[p.y + n.y][p.x + n.x] == SkeletonRank::ENDPOINT)
+                parsedSkel[p.y + n.y][p.x + n.x] = SkeletonRank::NONE;
+        }
+        // Detect skeleton rank again on hollow crosses
+        const uint8_t neighbors = get_neighborhood(parsedSkel, p.y, p.x);
+        bool removeThisCross = false;
+        for (int s = 0; s < 4; s++) {
+            auto const& rolledNeighbors = roll_neighbors(neighbors, s * 2);
+            if (hit_and_miss(rolledNeighbors, 0b01010000, 0b00000111) ||
+                hit_and_miss(rolledNeighbors, 0b11100000, 0b00001110)) {
+                removeThisCross = true;
+                break;
+            }
+        }
+        if (removeThisCross) {
+            parsedSkel[p.y][p.x] = SkeletonRank::NONE;
+        } else {
+            SkeletonRank point = detect_skeleton_rank(true, neighbors);
+            parsedSkel[p.y][p.x] = point;
+            if (remove_single_endpoints && point == SkeletonRank::ENDPOINT) endpoints.push_back(p);
+        }
+
+        // Detect skeleton rank again on the hollow crosses neighbors
+        for (auto n : NEIGHBORHOOD) {
+            const IntPoint n_p = p + n;
+            if (parsedSkel[n_p.y][n_p.x] >= SkeletonRank::BRANCH) {
+                const uint8_t n_neighbors = get_neighborhood(parsedSkel, n_p.y, n_p.x);
+                SkeletonRank point = detect_skeleton_rank(true, n_neighbors);
+                parsedSkel[n_p.y][n_p.x] = point;
+                if (remove_single_endpoints && point == SkeletonRank::ENDPOINT) endpoints.push_back(n_p);
+            }
+        }
+    }
+}
+
 /**
  * @brief Fix the skeleton of a binary image.
  *
@@ -75,10 +121,10 @@ torch::Tensor detect_skeleton_nodes(torch::Tensor skeleton, bool fix_hollow, boo
     std::vector<IntPoint> endpoints;
 
 #pragma omp parallel for collapse(2) reduction(merge : endpoints, hollow_crosses)
-    for (int y = 0; y < H - 1; y++) {
+    for (int y = 1; y < H - 1; y++) {
         for (int x = 1; x < W - 1; x++) {
             const uint8_t neighbors = get_neighborhood(skeleton_accessor, y, x);
-            const SkeletonRank point = detect_skeleton_rank(skeleton_accessor[y][x], neighbors);
+            const SkeletonRank point = detect_skeleton_rank((bool)skeleton_accessor[y][x], neighbors);
             if (point == SkeletonRank::HOLLOW_CROSS) {
                 if (fix_hollow) hollow_crosses.push_back({y, x});
             } else if (remove_single_endpoints && point == SkeletonRank::ENDPOINT) {
@@ -88,19 +134,8 @@ torch::Tensor detect_skeleton_nodes(torch::Tensor skeleton, bool fix_hollow, boo
         }
     }
 
-    // Fill Hollow Crosses and decrement their neighbors
-    for (const IntPoint& p : hollow_crosses) {
-        parsed_accessor[p.y][p.x] = SkeletonRank::BRANCH;
-        for (const PointWithID& n : NEIGHBORHOOD) {
-            if (parsed_accessor[p.y + n.y][p.x + n.x] > 0) parsed_accessor[p.y + n.y][p.x + n.x]--;
-        }
-    }
-
-    // Detect skeleton point again on hollow crosses
-    for (const IntPoint& p : hollow_crosses) {
-        const uint8_t neighbors = get_neighborhood(parsed_accessor, p.y, p.x);
-        parsed_accessor[p.y][p.x] = detect_skeleton_rank(parsed_accessor[p.y][p.x], neighbors);
-    }
+    // Fix Hollow Cross
+    if (fix_hollow) fix_hollow_crosses(parsed_accessor, hollow_crosses, endpoints, remove_single_endpoints);
 
 // Remove single endpoints
 #pragma omp parallel for
@@ -241,8 +276,8 @@ std::tuple<EdgeList, std::vector<CurveYX>, std::vector<IntPoint>> parse_skeleton
 
 // -- Search junctions and endpoints --
 #pragma omp parallel for collapse(2) reduction(merge : nodes)
-    for (int y = 1; y < shape.y - 1; y++) {
-        for (int x = 1; x < shape.x - 1; x++) {
+    for (int y = 0; y < shape.y - 0; y++) {
+        for (int x = 0; x < shape.x - 0; x++) {
             const int pixelRole = skel_acc[y][x];
             // Erase skeleton from the skeletonMap for later annotations
             if (pixelRole == PixelRole::BACKGROUND) continue;
@@ -308,13 +343,15 @@ std::tuple<EdgeList, std::vector<CurveYX>, std::vector<IntPoint>> parse_skeleton
                 }
                 // Save the branch curve
                 branch_pixels.push_back({tracker.y, tracker.x});
-                branches_curves.push_back(branch_pixels);
 
                 if (tracker_role == PixelRole::NODE) {
                     // Save connectivity
                     const int other_node_id = -label_acc[tracker.y][tracker.x] - 1;
                     edge_list.push_back({node.id, other_node_id, branch_id});
+                    branches_curves.push_back(branch_pixels);
                 } else {
+                    // Ignore the branch
+                    for (const IntPoint& p : branch_pixels) label_acc[p.y][p.x] = 0;
                 }
             }
         }

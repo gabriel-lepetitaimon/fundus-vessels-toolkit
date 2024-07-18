@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from functools import reduce
 from typing import Iterable, List, NamedTuple, Tuple, TypeGuard, overload
 
@@ -20,6 +21,14 @@ class Rect(NamedTuple):
     @property
     def top_left(self) -> Point:
         return Point(self.y, self.x)
+
+    @property
+    def top_right(self) -> Point:
+        return Point(self.y, self.x + self.w)
+
+    @property
+    def bottom_left(self) -> Point:
+        return Point(self.y + self.h, self.x)
 
     @property
     def bottom_right(self) -> Point:
@@ -49,8 +58,11 @@ class Rect(NamedTuple):
     def area(self) -> float:
         return self.h * self.w
 
+    def corners(self) -> Tuple[Point, Point, Point, Point]:
+        return self.top_left, self.top_right, self.bottom_right, self.bottom_left
+
     def to_int(self):
-        return Rect(*(int(round(_)) for _ in (self.h, self.w, self.y, self.x)))
+        return Rect(int(math.ceil(self.h)), int(math.ceil(self.w)), int(math.floor(self.y)), int(math.floor(self.x)))
 
     @classmethod
     def from_tuple(
@@ -61,9 +73,9 @@ class Rect(NamedTuple):
         | Tuple[float | int, float | int]
         | Tuple[float | int, float | int, float | int, float | int],
     ):
-        if isinstance(rect, (float, int)):
+        if np.isscalar(rect):
             rect = (rect, rect)
-        elif isinstance(rect, tuple) and len(rect) in (2, 4) and all(isinstance(_, (float, int)) for _ in rect):
+        elif isinstance(rect, tuple) and len(rect) in (2, 4) and all(np.isscalar(_) for _ in rect):
             pass
         else:
             raise TypeError("Rect can only be created from a float or a tuple of 2 or 4 floats")
@@ -109,42 +121,24 @@ class Rect(NamedTuple):
         *p: float | int | Tuple[float | int, float | int] | Tuple[float | int, float | int, float | int, float | int],
         ensure_positive: bool = False,
     ) -> Rect:
-        if (
-            len(p) == 1
-            and isinstance(p[0], tuple)
-            and len(p[0]) == 2
-            and all(isinstance(_, (float, int)) for _ in p[0])
-        ):
-            # case ((bottom, right), )
-            p2 = Point(p[0], p[1])
-            p1 = Point.origin()
-        elif len(p) == 2 and all(isinstance(_, (float, int)) for _ in p):
-            # case (bottom, right)
-            p2 = Point(p[0], p[1])
-            p1 = Point.origin()
-        elif (
-            len(p) == 2
-            and all(isinstance(_, tuple) for _ in p)
-            and all(isinstance(_, (float, int)) for _ in p[0] + p[1])
-        ):
-            # case ((top, left), (bottom, right))
-            p1 = Point(p[0])
-            p2 = Point(p[1])
-        elif len(p) == 4 and all(isinstance(_, (float, int)) for _ in p):
-            # case (top, left, bottom, right)
-            p1 = Point(p[0], p[1])
-            p2 = Point(p[2], p[3])
-        elif (
-            len(p) == 1
-            and isinstance(p[0], tuple)
-            and len(p[0]) == 4
-            and all(isinstance(_, (float, int)) for _ in p[0])
-        ):
-            # case ((top, left, bottom, right), )
-            p1 = Point(p[0])
-            p2 = Point(p[1])
-        else:
-            raise TypeError("Rect can only be created from 2 or 4 floats or from 2 tuples of 2 floats")
+        match p:
+            case ((bottom, right),) if all(np.isscalar(_) for _ in p[0]):
+                p2 = Point(bottom, right)
+                p1 = Point.origin()
+            case (bottom, right) if all(np.isscalar(_) for _ in p):
+                p2 = Point(bottom, right)
+                p1 = Point.origin()
+            case ((top, left), (bottom, right)) if all(np.isscalar(_) for _ in p[0] + p[1]):
+                p1 = Point(top, left)
+                p2 = Point(bottom, right)
+            case (top, left, bottom, right) if all(np.isscalar(_) for _ in p):
+                p1 = Point(top, left)
+                p2 = Point(bottom, right)
+            case ((top, left, bottom, right),) if all(np.isscalar(_) for _ in p[0]):
+                p1 = Point(top, left)
+                p2 = Point(bottom, right)
+            case _:
+                raise TypeError("Rect can only be created from 2 or 4 floats or from 2 tuples of 2 floats")
 
         if not ensure_positive:
             return cls(abs(p2.y - p1.y), abs(p2.x - p1.x), min(p1.y, p2.y), min(p1.x, p2.x))
@@ -154,7 +148,7 @@ class Rect(NamedTuple):
 
     @classmethod
     def from_center(cls, center: Tuple[float, float], shape: float | Tuple[float, float]) -> Rect:
-        if isinstance(shape, (float, int)):
+        if np.isscalar(shape):
             shape = (shape, shape)
         return cls(shape[0], shape[1], center[0] - shape[0] // 2, center[1] - shape[1] // 2)
 
@@ -207,14 +201,14 @@ class Rect(NamedTuple):
         return not self.is_self_empty()
 
     def __add__(self, other: Point | float) -> Rect:
-        if isinstance(other, float):
+        if np.isscalar(other):
             other = Point(other, other)
         if isinstance(other, Point):
             return self.translate(other.y, other.x)
         raise TypeError("Rect can only be translated by a Point or a float")
 
     def __sub__(self, other: Point | float) -> Rect:
-        if isinstance(other, float):
+        if np.isscalar(other):
             other = Point(other, other)
         if isinstance(other, Point):
             return self.translate(-other.y, -other.x)
@@ -260,20 +254,15 @@ class Rect(NamedTuple):
     def pad(self, top: float, right: float, bottom: float, left: float) -> Rect: ...
 
     def pad(self, *pad: float | Tuple[float, float]) -> Rect:
-        if len(pad) == 1 and isinstance(pad[0], (int, float)):
+        if len(pad) == 1 and np.isscalar(pad[0]):
             pad = (pad[0],) * 4
-        elif (
-            len(pad) == 1
-            and isinstance(pad[0], tuple)
-            and len(pad[0]) == 2
-            and all(isinstance(_, (int, float)) for _ in pad[0])
-        ):
+        elif len(pad) == 1 and isinstance(pad[0], tuple) and len(pad[0]) == 2 and all(np.isscalar(_) for _ in pad[0]):
             # case ((vertical, horizontal), )
             pad = (pad[0][0], pad[0][1]) * 2
-        elif len(pad) == 2 and all(isinstance(_, (int, float)) for _ in pad):
+        elif len(pad) == 2 and all(np.isscalar(_) for _ in pad):
             # case (vertical, horizontal)
             pad = pad * 2
-        elif len(pad) == 4 and all(isinstance(_, (int, float)) for _ in pad):
+        elif len(pad) == 4 and all(np.isscalar(_) for _ in pad):
             # case (top, right, bottom, left)
             pass
         else:
@@ -306,21 +295,12 @@ class Point(NamedTuple):
     def __str__(self) -> str:
         return f"({self.y:.1f}, {self.x:.1f})"
 
+    @property
     def xy(self) -> tuple[float, float]:
         return self.x, self.y
 
-    def to_int(self) -> Point:
-        return Point(int(round(self.y)), int(round(self.x)))
-
-    def clip(self, rect: float | Tuple[float, float] | Tuple[float, float, float, float]) -> Point:
-        rect = Rect.from_tuple(rect)
-        return Point(
-            min(max(self.y, rect.top), rect.bottom),
-            min(max(self.x, rect.left), rect.right),
-        )
-
     def __add__(self, other: Tuple[float, float] | float):
-        if isinstance(other, (float, int)):
+        if np.isscalar(other):
             return Point(self.y + other, self.x + other)
         y, x = other
         return Point(self.y + y, self.x + x)
@@ -329,7 +309,7 @@ class Point(NamedTuple):
         return self + other
 
     def __sub__(self, other: Tuple[float, float] | float):
-        if isinstance(other, (float, int)):
+        if np.isscalar(other):
             return Point(self.y - other, self.x - other)
         y, x = other
         return Point(self.y - y, self.x - x)
@@ -337,8 +317,11 @@ class Point(NamedTuple):
     def __rsub__(self, other: Tuple[float, float] | float):
         return -(self - other)
 
+    def __neg__(self):
+        return Point(-self.y, -self.x)
+
     def __mul__(self, other: Tuple[float, float] | float):
-        if isinstance(other, (float, int)):
+        if np.isscalar(other):
             return Point(self.y * other, self.x * other)
         y, x = other
         return Point(self.y * y, self.x * x)
@@ -347,13 +330,13 @@ class Point(NamedTuple):
         return self * other
 
     def __truediv__(self, other: Tuple[float, float] | float):
-        if isinstance(other, (float, int)):
+        if np.isscalar(other):
             return Point(self.y / other, self.x / other)
         y, x = other
         return Point(self.y / y, self.x / x)
 
     def __rtruediv__(self, other: Tuple[float, float] | float):
-        if isinstance(other, (float, int)):
+        if np.isscalar(other):
             return Point(other / self.y, other / self.x)
         y, x = other
         return Point(y / self.y, x / self.x)
@@ -367,10 +350,10 @@ class Point(NamedTuple):
 
     @classmethod
     def from_tuple(cls, point: float | int | Tuple[float | int] | Tuple[float | int, float | int]):
-        if isinstance(point, (float, int)):
+        if np.isscalar(point):
             return cls(point, point)
         if len(point) == 1:
-            if isinstance(point[0], (float, int)):
+            if np.isscalar(point[0]):
                 return cls(point[0], point[0])
             if isinstance(point[0], tuple):
                 return cls(*point[0])
@@ -398,6 +381,34 @@ class Point(NamedTuple):
 
     def is_nan(self) -> bool:
         return np.isnan(self.y) or np.isnan(self.x)
+
+    def to_int(self) -> Point:
+        return Point(int(round(self.y)), int(round(self.x)))
+
+    def ceil(self) -> Point:
+        return Point(int(math.ceil(self.y)), int(math.ceil(self.x)))
+
+    def floor(self) -> Point:
+        return Point(int(math.floor(self.y)), int(math.floor(self.x)))
+
+    def clip(self, rect: float | Tuple[float, float] | Tuple[float, float, float, float]) -> Point:
+        rect = Rect.from_tuple(rect)
+        return Point(
+            min(max(self.y, rect.top), rect.bottom),
+            min(max(self.x, rect.left), rect.right),
+        )
+
+    @property
+    def norm(self) -> float:
+        return math.sqrt(self.x * self.x + self.y * self.y)
+
+    @property
+    def angle(self) -> float:
+        return math.atan2(self.y, self.x)
+
+    def normalized(self) -> Point:
+        norm = self.norm
+        return Point.origin() if norm == 0 else self / norm
 
 
 def distance_matrix(points_coord: np.ndarray):

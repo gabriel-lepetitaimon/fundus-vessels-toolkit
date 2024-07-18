@@ -1,6 +1,7 @@
+from .geometry_parsing import populate_geometry
 from .graph_simplification import (
-    NodeMergeDistances,
     NodeMergeDistanceParam,
+    NodeMergeDistances,
     NodeSimplificationCallBack,
     SimplifyTopology,
     cluster_nodes_by_distance,

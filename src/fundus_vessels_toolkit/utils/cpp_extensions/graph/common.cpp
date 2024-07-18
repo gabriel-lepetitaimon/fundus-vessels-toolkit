@@ -17,6 +17,20 @@ torch::Tensor vector_to_tensor(const std::vector<float>& vec) {
     return tensor;
 }
 
+torch::Tensor vector_to_tensor(const std::vector<double>& vec) {
+    torch::Tensor tensor = torch::zeros({(long)vec.size()}, torch::kFloat64);
+    auto accessor = tensor.accessor<double, 1>();
+    for (int i = 0; i < (int)vec.size(); i++) accessor[i] = vec[i];
+    return tensor;
+}
+
+torch::Tensor vector_to_tensor(const std::vector<std::size_t>& vec) {
+    torch::Tensor tensor = torch::zeros({(long)vec.size()}, torch::kInt64);
+    auto accessor = tensor.accessor<int64_t, 1>();
+    for (int i = 0; i < (int)vec.size(); i++) accessor[i] = vec[i];
+    return tensor;
+}
+
 torch::Tensor vector_to_tensor(const std::vector<IntPair>& vec) {
     torch::Tensor tensor = torch::zeros({(long)vec.size(), 2}, torch::kInt32);
     auto accessor = tensor.accessor<int, 2>();
@@ -110,16 +124,24 @@ std::vector<IntPair> tensor_to_vectorIntPair(const torch::Tensor& tensor) {
     auto accessor = tensor.accessor<int, 2>();
     std::vector<IntPair> vec;
     vec.reserve(tensor.size(0));
-    for (int i = 0; i < tensor.size(0); i++) vec.push_back({accessor[i][0], accessor[i][1]});
+    for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) vec.push_back({accessor[i][0], accessor[i][1]});
     return vec;
 }
 
 PointList tensor_to_pointList(const torch::Tensor& tensor) {
-    auto accessor = tensor.accessor<int, 2>();
+    auto accessor = tensor.accessor<float, 2>();
     PointList curve;
     curve.reserve(tensor.size(0));
-    for (int i = 0; i < tensor.size(0); i++) curve.push_back({accessor[i][0], accessor[i][1]});
+    for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) curve.push_back({accessor[i][0], accessor[i][1]});
     return curve;
+}
+
+Scalars tensor_to_scalars(const torch::Tensor& tensor) {
+    auto accessor = tensor.accessor<float, 1>();
+    Scalars vec;
+    vec.reserve(tensor.size(0));
+    for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) vec.push_back(accessor[i]);
+    return vec;
 }
 
 // === IntPoint ===
@@ -191,8 +213,11 @@ Point Point::normalize() const {
 }
 
 double Point::dot(const Point& p) const { return y * p.y + x * p.x; }
+double Point::cross(const Point& p) const { return y * p.x - x * p.y; }
 double Point::squaredNorm() const { return y * y + x * x; }
 Point Point::positiveCoordinates() const { return Point(std::abs(y), std::abs(x)); }
+Point Point::rot90() const { return Point(-x, y); }
+Point Point::rot270() const { return Point(x, -y); }
 double Point::norm() const { return sqrt(y * y + x * x); }
 double Point::angle() const { return atan2(y, x); }
 double Point::angle(const Point& p) const { return acos(dot(p) / (norm() * p.norm())); }
@@ -305,6 +330,13 @@ float distance(const IntPoint& p1, const IntPoint& p2) { return sqrt(pow(p1.y - 
 float distanceSqr(const Point& p1, const Point& p2) { return pow(p1.y - p2.y, 2) + pow(p1.x - p2.x, 2); }
 float distanceSqr(const IntPoint& p1, const IntPoint& p2) { return pow(p1.y - p2.y, 2) + pow(p1.x - p2.x, 2); }
 
+std::vector<std::size_t> arange(const std::size_t& start, const std::size_t& end, const std::size_t& step) {
+    std::vector<std::size_t> vec;
+    vec.reserve((end - start) / step);
+    for (std::size_t i = start; i < end; i += step) vec.push_back(i);
+    return vec;
+}
+
 std::vector<int> linspace_int(int start, int end, u_int n, bool endpoint) {
     if (n == 1) return {start};
 
@@ -350,6 +382,8 @@ Edge& Edge::operator=(const Edge& e) {
     return *this;
 }
 
+int Edge::other(int node) const { return (node == start) ? end : start; }
+
 bool Edge::operator==(const Edge& e) const { return (start == e.start && end == e.end && id == e.id); }
 bool Edge::operator!=(const Edge& e) const { return (start != e.start || end != e.end || id != e.id); }
 bool Edge::operator<(const Edge& e) const {
@@ -387,6 +421,25 @@ GraphAdjList edge_list_to_adjlist(const EdgeList& edges, int N, bool directed) {
     for (const Edge& e : edges) {
         graph[e.start].insert(e);
         if (!directed) graph[e.end].insert(e);
+    }
+    return graph;
+}
+
+GraphAdjList edge_list_to_adjlist(const Tensor2DAccessor<int>& edges, int N, bool directed) {
+    const std::size_t E = (std::size_t)edges.size(0);
+    if (N < 0) {
+        N = 0;
+        for (std::size_t i = 0; i < E; i++) N = std::max(N, std::max(edges[i][0], edges[i][1]));
+        N++;
+    }
+
+    GraphAdjList graph(N);
+    int i = 0;
+    for (std::size_t j = 0; j < E; j++) {
+        const Edge edge(edges[j][0], edges[j][1], i);
+        graph[edge.start].insert(edge);
+        if (!directed) graph[edge.end].insert(edge);
+        i++;
     }
     return graph;
 }

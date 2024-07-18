@@ -1,26 +1,91 @@
 from __future__ import annotations, print_function
 
-from typing import List, NamedTuple, Tuple
+from typing import List, NamedTuple, Optional, Tuple
 
 import numpy as np
+import torch
 
 from .geometric import Point
 from .graph.measures import curve_tangent
+from .torch import autocast_torch
 
 
-class BSpline:
-    def __init__(self, curves: List[BezierCubic]):
-        self.curves = curves
-
-    def __repr__(self) -> str:
-        return f"BSpline({repr(self.curves)})"
+class BezierCubic(NamedTuple):
+    p0: Point
+    c0: Point
+    c1: Point
+    p1: Point
 
     def __str__(self) -> str:
-        descr = f"BSpline({len(self.curves)} curves):\n\t"
-        return descr + "\n\t".join(str(curve) for curve in self.curves)
+        return f"BezierCubic(p0={self.p0}, c0={self.c0}, c1={self.c1}, p1={self.p1})"
+
+    @classmethod
+    def from_array(cls, curve: np.array) -> BezierCubic:
+        points = [Point(float(p[0]), float(p[1])) for p in curve[:4]]
+        return cls(*points)
 
     def to_path(self) -> str:
-        return "\n".join(curve.to_path() for curve in self.curves)
+        if self.p0.is_nan() or self.c0.is_nan() or self.c1.is_nan() or self.p1.is_nan():
+            return ""
+        return f"M {self.p0.x},{self.p0.y} C {self.c0.x},{self.c0.y} {self.c1.x},{self.c1.y} {self.p1.x},{self.p1.y}"
+
+    def to_array(self) -> np.array:
+        return np.array([self.p0, self.c0, self.c1, self.p1])
+
+    def chord_length(self) -> float:
+        return np.linalg.norm(self.p0 - self.p1)
+
+    def arc_length(self, fast_approximation=False):
+        if fast_approximation:
+            return (
+                np.linalg.norm(self.p0 - self.p1)
+                + np.linalg.norm(self.c0 - self.p0)
+                + np.linalg.norm(self.c1 - self.c0)
+                + np.linalg.norm(self.p1 - self.c1)
+            ) / 2
+        else:
+            u = np.linspace(0, 1, int(self.arc_length(fast_approximation=True)) + 1, endpoint=True)
+            bezier = self.to_array()
+            return np.sum(np.linalg.norm(q(bezier, u[1:]) - q(bezier, u[:-1]), axis=1))
+
+    def parametrize(self, yx_points: np.ndarray, error=2) -> np.array:
+        bezier = self.to_array()
+        u = chordLengthParameterize(yx_points)
+        for i in range(20):
+            u = reparameterize(bezier, yx_points, u)
+            maxError, splitPoint = computeMaxError(yx_points, bezier, u)
+            if maxError < error**2:
+                break
+        return np.asarray(u).squeeze()
+
+    def evaluate(self, t: float):
+        return q(self.to_array(), t)
+
+    def evaluate_tangent(self, t: float, normalized=False):
+        tangent = qprime(self.to_array(), t)
+        return tangent / np.linalg.norm(tangent, axis=1)[:, None] if normalized else tangent
+
+    def flip(self) -> BezierCubic:
+        return BezierCubic(self.p1, self.c1, self.c0, self.p0)
+
+    def has_nan(self) -> bool:
+        return any(p.is_nan() for p in self)
+
+
+class BSpline(tuple[BezierCubic]):
+    def __new__(cls, iterable: np.Iterable[BezierCubic] = ()) -> BSpline:
+        assert all(isinstance(_, BezierCubic) for _ in iterable), "All elements of a BSpline must be BezierCubic"
+        return super(BSpline, cls).__new__(cls, tuple(iterable))
+
+    def __repr__(self) -> str:
+        return f"BSpline({','.join([repr(_) for _ in self])})"
+
+    def __str__(self) -> str:
+        descr = f"BSpline({len(self)} curves):\n\t"
+        return descr + "\n\t".join(str(curve) for curve in self)
+
+    def to_path(self) -> str:
+        return "\n".join(curve.to_path() for curve in self)
 
     @classmethod
     def fit(cls, yx_points: np.array, max_error: float, split_on=None, tangent_std=2) -> BSpline:
@@ -50,7 +115,7 @@ class BSpline:
     def intermediate_points(self, return_tangent=False) -> np.array | Tuple[np.array, np.array]:
         points = []
         tangents = []
-        for curve in self.curves:
+        for curve in self:
             points.append(curve.p0)
             if return_tangent:
                 tangents.append(curve.c0 - curve.p0)
@@ -59,62 +124,24 @@ class BSpline:
         if return_tangent:
             return np.array(points), np.array(tangents)
         else:
-            points.append(self.curves[-1].p1)
+            points.append(self[-1].p1)
         return np.array(points)
 
     def flip(self) -> BSpline:
-        return BSpline([curve.flip() for curve in reversed(self.curves)])
-
-    def __add__(self, other: BSpline) -> BSpline:
-        return BSpline(self.curves + other.curves)
-
-    def __len__(self) -> int:
-        return len(self.curves)
-
-    def __getitem__(self, idx) -> BezierCubic:
-        return self.curves[idx]
+        return BSpline([curve.flip() for curve in reversed(self)])
 
 
-class BezierCubic(NamedTuple):
-    p0: Point
-    c0: Point
-    c1: Point
-    p1: Point
+@autocast_torch
+def fit_bezier_cubic(
+    curve: torch.Tensor, tangents: torch.Tensor, max_error: float, start: Optional[int] = 0, end: Optional[int] = 0
+) -> Tuple[BezierCubic, float, torch.Tensor]:
+    from .cpp_extensions.graph_cpp import fit_bezier as fit_bezier_cpp
 
-    def __str__(self) -> str:
-        return f"BezierCubic(p0={self.p0}, c0={self.c0}, c1={self.c1}, p1={self.p1})"
+    curve = curve.cpu().int()
+    tangents = tangents.cpu().float()
 
-    @classmethod
-    def from_array(cls, curve: np.array) -> BezierCubic:
-        return cls(Point(*curve[0]), Point(*curve[1]), Point(*curve[2]), Point(*curve[3]))
-
-    def to_path(self) -> str:
-        if self.p0.is_nan() or self.c0.is_nan() or self.c1.is_nan() or self.p1.is_nan():
-            return ""
-        return f"M {self.p0.x},{self.p0.y} C {self.c0.x},{self.c0.y} {self.c1.x},{self.c1.y} {self.p1.x},{self.p1.y}"
-
-    def to_array(self) -> np.array:
-        return np.array([self.p0, self.c0, self.c1, self.p1])
-
-    def parametrize(self, yx_points: np.ndarray, error=2) -> np.array:
-        bezier = self.to_array()
-        u = chordLengthParameterize(yx_points)
-        for i in range(20):
-            u = reparameterize(bezier, yx_points, u)
-            maxError, splitPoint = computeMaxError(yx_points, bezier, u)
-            if maxError < error**2:
-                break
-        return np.asarray(u).squeeze()
-
-    def evaluate(self, t: float):
-        return q(self.to_array(), t)
-
-    def evaluate_tangent(self, t: float, normalized=False):
-        tangent = qprime(self.to_array(), t)
-        return tangent / np.linalg.norm(tangent, axis=1)[:, None] if normalized else tangent
-
-    def flip(self) -> BezierCubic:
-        return BezierCubic(self.p1, 2 * self.p1 - self.c1, 2 * self.p0 - self.c0, self.p0)
+    bezier, max_error, u = fit_bezier_cpp(curve, tangents, max_error, start, end)
+    return BezierCubic.from_array(bezier), max_error, u
 
 
 # Fit one (ore more) Bezier curves to a set of points

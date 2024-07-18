@@ -24,6 +24,7 @@ def get_torch_extensions():
         extra_link_args += ["-lgomp"]
     else:
         print("Compiling without OpenMP...")
+        extra_compile_args["cxx"] += ["-Wno-unknown-pragmas"]
 
     extra_compile_args["cxx"] += ["-fdiagnostics-color=always"]  # Colorize the output
     extra_compile_args["cxx"] += ["-Wno-dangling-reference"]  # Remove dangling reference warning from torch

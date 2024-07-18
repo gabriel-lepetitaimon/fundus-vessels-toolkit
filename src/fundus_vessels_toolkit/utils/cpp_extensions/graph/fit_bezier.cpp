@@ -15,12 +15,12 @@ from "Graphics Gems", Academic Press, 1990
  * Vector t0, t1 : Unit tangent vectors at endpoints
  * double error : User-defined error squared
  */
-std::tuple<BezierCurve, double, std::vector<double>> fit_bezier(const CurveYX& d, const std::vector<Point>& tangent,
-                                                                double error, std::size_t first, std::size_t last) {
+std::tuple<BezierCurve, double, std::vector<double>, std::vector<double>> fit_bezier(
+    const CurveYX& d, const std::vector<Point>& tangent, double targetSqrError, std::size_t first, std::size_t last) {
     BezierCurve bezCurve;          /*Control points of fitted Bezier curve*/
-    const int MAX_ITERATIONS = 20; /*  Max times to try iterating  */
+    const int MAX_ITERATIONS = 10; /*  Max times to try iterating  */
 
-    double iterationError = error * 4.0; /* fixed issue 23 */
+    double iterationError = targetSqrError * 4.0; /* fixed issue 23 */
     if (last == 0) last = d.size() - 1;
     std::size_t nPts = last - first + 1;
 
@@ -34,7 +34,7 @@ std::tuple<BezierCurve, double, std::vector<double>> fit_bezier(const CurveYX& d
         bezCurve[3] = d[last];
         bezCurve[1] = d[first] + t0 * dist;
         bezCurve[2] = d[last] + t1 * dist;
-        return {bezCurve, 0, {(double)first, (double)last}};
+        return {bezCurve, 0, {0.0, 0.0}, {(double)first, (double)last}};
     }
 
     /*  Parameterize points, and attempt to fit curve */
@@ -42,18 +42,20 @@ std::tuple<BezierCurve, double, std::vector<double>> fit_bezier(const CurveYX& d
     bezCurve = bezier_regression(d, first, last, u, t0, t1);
 
     /*  Find max deviation of points to fitted curve */
-    auto [maxError, splitPoint] = computeMaxError(d, first, last, bezCurve, u);
+    auto const& [sqrErrorIni, maxSqrErrorIni, _] = computeMaxError(d, first, last, bezCurve, u);
+
+    if (maxSqrErrorIni < targetSqrError || maxSqrErrorIni > iterationError)
+        return {bezCurve, maxSqrErrorIni, sqrErrorIni, u};
 
     /*  If error not too large, try some reparameterization and iteration */
-    if (maxError > error && maxError < iterationError) {
-        for (int i = 0; i < MAX_ITERATIONS; i++) {
-            reparameterize(u, bezCurve, d, first, last);
-            bezCurve = bezier_regression(d, first, last, u, t0, t1);
-            std::tie(maxError, splitPoint) = computeMaxError(d, first, last, bezCurve, u);
-            if (maxError < error) break;
-        }
+    for (int i = 0; i <= MAX_ITERATIONS; i++) {
+        reparameterize(u, bezCurve, d, first, last);
+        bezCurve = bezier_regression(d, first, last, u, t0, t1);
+        auto const& [sqrError, maxSqrError, split] = computeMaxError(d, first, last, bezCurve, u);
+        if (maxSqrError < targetSqrError || i == MAX_ITERATIONS) return {bezCurve, maxSqrError, sqrError, u};
     }
-    return {bezCurve, maxError, u};
+
+    return {bezCurve, maxSqrErrorIni, sqrErrorIni, u};
 }
 
 /*
@@ -70,28 +72,32 @@ BezierCurve bezier_regression(const CurveYX& d, std::size_t first, std::size_t l
     int nPts = last - first + 1;
 
     /* Compute the A's	*/
-    std::vector<std::array<Vector, 2>> A; /* Precomputed rhs for eqn	*/
+    /*
+    std::vector<std::array<Vector, 2>> A; // Precomputed rhs for eqn
     A.reserve(nPts);
     for (int i = 0; i < nPts; i++) {
         double u = uPrime[i];
         A.push_back({t0 * B1(u), t1 * B2(u)});
     }
+    */
 
     /* Create the C and X matrices	*/
     Matrix2<double> C = {{{0.0, 0.0}, {0.0, 0.0}}};
     std::array<double, 2> X = {0.0, 0.0};
 
     for (int i = 0; i < nPts; i++) {
-        C[0][0] += A[i][0].dot(A[i][0]);
-        C[0][1] += A[i][0].dot(A[i][1]);
+        const double& u = uPrime[i];
+        std::array<Vector, 2> A = {t0 * B1(u), t1 * B2(u)};
+        C[0][0] += A[0].dot(A[0]);
+        C[0][1] += A[0].dot(A[1]);
         /*					C[1][0] += V2Dot(&A[i][0], &A[i][1]); // C[1][0] = C[0][1]*/
-        C[1][1] += A[i][1].dot(A[i][1]);
+        C[1][1] += A[1].dot(A[1]);
 
         Vector tmp = d[first + i];
-        tmp -= d[first] * (B0(uPrime[i]) + B1(uPrime[i])) + d[last] * (B2(uPrime[i]) + B3(uPrime[i]));
+        tmp -= d[first] * (B0(u) + B1(u)) + d[last] * (B2(u) + B3(u));
 
-        X[0] += A[i][0].dot(tmp);
-        X[1] += A[i][1].dot(tmp);
+        X[0] += A[0].dot(tmp);
+        X[1] += A[1].dot(tmp);
     }
     C[1][0] = C[0][1];
 
@@ -277,25 +283,39 @@ double B3(double u) { return u * u * u; }
  * double *u : Parameterization of points
  * int *splitPoint : Point of maximum error
  */
-std::tuple<double, std::size_t> computeMaxError(const CurveYX& d, std::size_t first, std::size_t last,
-                                                const BezierCurve& bezCurve, const std::vector<double>& u) {
+std::tuple<std::vector<double>, double, std::size_t> computeMaxError(const CurveYX& d, std::size_t first,
+                                                                     std::size_t last, const BezierCurve& bezCurve,
+                                                                     const std::vector<double>& u) {
     double maxDist; /*  Maximum error		*/
     double dist;    /*  Current error		*/
     Point P;        /*  Point on curve		*/
     Vector v;       /*  Vector from point to curve	*/
 
+    std::vector<double> sqrErrors;
+    sqrErrors.reserve(last - first + 1);
     std::size_t splitPoint = (last - first + 1) / 2;
     maxDist = 0.0;
     for (std::size_t i = first + 1; i < last; i++) {
         P = BezierPolynomialTriangle(bezCurve, u[i - first]);
         v = P - d[i];
         dist = v.squaredNorm();
+        sqrErrors.push_back(dist);
         if (dist >= maxDist) {
             maxDist = dist;
             splitPoint = i;
         }
     }
-    return {maxDist, splitPoint};
+    return {sqrErrors, maxDist, splitPoint};
+}
+
+torch::Tensor bspline_to_tensor(const BezierCurve& bspline) {
+    torch::Tensor spline_t = torch::zeros({4, 2}, torch::kFloat);
+    auto spline_acc = spline_t.accessor<float, 2>();
+    for (int j = 0; j < 4; j++) {
+        spline_acc[j][0] = bspline[j].y;
+        spline_acc[j][1] = bspline[j].x;
+    }
+    return spline_t;
 }
 
 torch::Tensor bspline_to_tensor(const BSpline& bspline) {

@@ -32,7 +32,7 @@ from ..utils.graph.branch_by_nodes import (
 from ..utils.graph.branch_by_nodes import merge_equivalent_branches as merge_equivalent_branches_legacy
 from ..utils.graph.branch_by_nodes import merge_nodes_by_distance as merge_nodes_by_distance_legacy
 from ..utils.graph.branch_by_nodes import reduce_clusters as reduce_clusters_legacy
-from ..utils.graph.cluster import cluster_by_distance, reduce_clusters
+from ..utils.graph.cluster import cluster_by_distance, iterative_reduce_clusters, reduce_clusters
 from ..utils.lookup_array import apply_lookup, apply_lookup_on_coordinates
 from ..vascular_data_objects import VGraph
 
@@ -64,6 +64,7 @@ def simplify_graph(
     vessel_graph: VGraph,
     max_spurs_length: float = 0,
     nodes_merge_distance: NodeMergeDistanceParam = True,
+    iterative_nodes_merge: bool = True,
     max_cycles_length: float = 0,
     simplify_topology: SimplifyTopology = "node",
     *,
@@ -131,19 +132,36 @@ def simplify_graph(
         junctions_merge_distance = 0
         terminations_merge_distance = 0
 
-    if junctions_merge_distance > 0:
-        merge_nodes_by_distance(
-            vessel_graph, junctions_merge_distance, "junction", only_connected_nodes=True, inplace=True
-        )
     if terminations_merge_distance > 0:
         merge_nodes_by_distance(
-            vessel_graph, terminations_merge_distance, "endpoints", only_connected_nodes=False, inplace=True
+            vessel_graph,
+            max_distance=terminations_merge_distance,
+            nodes_type="endpoints",
+            only_connected_nodes=False,
+            inplace=True,
+            iterative_clustering=iterative_nodes_merge,
         )
-    if nodes_merge_distance > 0:
-        merge_nodes_by_distance(vessel_graph, nodes_merge_distance, "all", inplace=True)
 
     if max_cycles_length > 0:
         merge_small_cycles(vessel_graph, max_cycles_length, inplace=True)
+
+    if junctions_merge_distance > 0:
+        merge_nodes_by_distance(
+            vessel_graph,
+            max_distance=junctions_merge_distance,
+            nodes_type="junction",
+            only_connected_nodes=True,
+            inplace=True,
+            iterative_clustering=iterative_nodes_merge,
+        )
+    if nodes_merge_distance > 0:
+        merge_nodes_by_distance(
+            vessel_graph,
+            max_distance=nodes_merge_distance,
+            nodes_type="all",
+            inplace=True,
+            iterative_clustering=iterative_nodes_merge,
+        )
 
     if max_cycles_length > 0 or simplify_topology in ("branch", "both"):
         max_nodes_distance = max_cycles_length if simplify_topology not in ("branch", "both") else None
@@ -160,6 +178,7 @@ def cluster_nodes_by_distance(
     max_distance: float,
     nodes_type: Literal["all", "junction", "endpoints"] = "all",
     only_connected_nodes: Optional[bool] = None,
+    iterative_clustering: bool = False,
 ) -> List[set[int]]:
     """
     Cluster nodes of the vessel graph by distance.
@@ -209,15 +228,18 @@ def cluster_nodes_by_distance(
         # Compute the distance between the nodes of each branch
         branch_dist = np.linalg.norm(nodes_coord[branches[:, 0]] - nodes_coord[branches[:, 1]], axis=1)
         # Reduce the clusters
+        if iterative_clustering:
+            bmask = branch_dist < max_distance
+            return iterative_reduce_clusters(branches[bmask], branch_dist[bmask], max_distance)
         return reduce_clusters(branches[branch_dist < max_distance])
 
     elif only_connected_nodes is None:
         # --- Cluster all nodes ---
         if nodes_id is None:
-            return cluster_by_distance(vessel_graph.nodes_coord(), max_distance)
+            return cluster_by_distance(vessel_graph.nodes_coord(), max_distance, iterative=iterative_clustering)
         else:
             nodes_coord = vessel_graph.nodes_coord()[nodes_id]
-            clusters = cluster_by_distance(nodes_coord, max_distance)
+            clusters = cluster_by_distance(nodes_coord, max_distance, iterative=iterative_clustering)
             return [{nodes_id[_] for _ in cluster} for cluster in clusters]
 
     else:
@@ -259,6 +281,7 @@ def merge_nodes_by_distance(
     only_connected_nodes: Optional[bool] = None,
     *,
     inplace=False,
+    iterative_clustering=False,
 ) -> VGraph:
     """
     Merge nodes of the vessel graph by distance.
@@ -283,7 +306,13 @@ def merge_nodes_by_distance(
 
     """  # noqa: E501
 
-    clusters = cluster_nodes_by_distance(vessel_graph, max_distance, nodes_type, only_connected_nodes)
+    clusters = cluster_nodes_by_distance(
+        vessel_graph=vessel_graph,
+        max_distance=max_distance,
+        nodes_type=nodes_type,
+        only_connected_nodes=only_connected_nodes,
+        iterative_clustering=iterative_clustering,
+    )
     nodes_weight = None if nodes_type != "all" else (~vessel_graph.endpoints_nodes(as_mask=True)) * 1
     return vessel_graph.merge_nodes(clusters, nodes_weight=nodes_weight, inplace=inplace, assume_reduced=True)
 
@@ -346,7 +375,7 @@ def merge_equivalent_branches(vessel_graph: VGraph, max_nodes_distance: float = 
 
     branch_to_remove = []
     for duplicate_id in np.argwhere(equi_branches_mask).flatten():
-        duplicate_branches_id = np.argwhere(branches_inverse == duplicate_id).flatten()
+        duplicate_branches_id = np.argwhere(branches_inverse.flatten() == duplicate_id).flatten()
         branch_to_remove.extend(duplicate_branches_id[1:])
 
     return vessel_graph.delete_branches(branch_to_remove, inplace=inplace)
@@ -392,7 +421,7 @@ def simplify_passing_nodes(vessel_graph: VGraph, inplace=False) -> VGraph:
 
     nodes_to_fuse = np.argwhere(vessel_graph.nodes_degree() == 2).flatten()
     if len(nodes_to_fuse):
-        return vessel_graph.fuse_nodes(nodes_to_fuse, inplace=inplace)
+        return vessel_graph.fuse_nodes(nodes_to_fuse, inplace=inplace, quiet_invalid_node=True)
     return vessel_graph
 
 

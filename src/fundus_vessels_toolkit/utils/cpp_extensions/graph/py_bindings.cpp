@@ -1,6 +1,7 @@
 #include <pybind11/stl.h>
 
 #include "branch.h"
+#include "edit_distance.h"
 #include "graph.h"
 #include "skeleton.h"
 
@@ -63,12 +64,13 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_curves(
     std::map<std::string, double> options = {}) {
     auto const &seg_acc = segmentation.accessor<bool, 2>();
     auto const &curves = tensors_to_curves(branch_curves);
-    auto const &[tangents, calibres, bsplines] = extract_branches_geometry(curves, seg_acc, options);
+    auto const &[tangents, calibres, curvatures, bsplines] = extract_branches_geometry(curves, seg_acc, options);
 
     // --- Convert to tensor ---
     std::vector<std::vector<torch::Tensor>> out;
     out.push_back(vectors_to_tensors(tangents));
     if (calibres.size() > 0) out.push_back(vectors_to_tensors(calibres));
+    if (curvatures.size() > 0) out.push_back(vectors_to_tensors(curvatures));
     if (bsplines.size() > 0) out.push_back(bsplines_to_tensor(bsplines));
 
     return out;
@@ -104,13 +106,14 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_skeleton(
     }
 
     // --- Extract branches geometry ---
-    auto const &[tangents, calibres, bsplines] = extract_branches_geometry(curves, seg_acc, options, true);
+    auto const &[tangents, calibres, curvatures, bsplines] = extract_branches_geometry(curves, seg_acc, options, true);
 
     // --- Convert to tensor ---
     std::vector<std::vector<torch::Tensor>> out;
     out.push_back(vectors_to_tensors(curves));
     out.push_back(vectors_to_tensors(tangents));
     if (calibres.size() > 0) out.push_back(vectors_to_tensors(calibres));
+    if (curvatures.size() > 0) out.push_back(vectors_to_tensors(curvatures));
     if (bsplines.size() > 0) out.push_back(bsplines_to_tensor(bsplines));
 
     return out;
@@ -169,7 +172,7 @@ torch::Tensor fast_branch_calibre_torch(const torch::Tensor &curveYX, const torc
     return widths_tensor.clone();
 }
 
-torch::Tensor curve_curvature(const torch::Tensor &curveYX, const torch::Tensor &tangents) {
+torch::Tensor compute_curvature(const torch::Tensor &curveYX, const torch::Tensor &tangents) {
     const CurveYX &curve = tensor_to_curve(curveYX);
     const PointList &tangents_vec = tensor_to_pointList(tangents);
     auto const &contiguousCurvesStartEnd = splitInContiguousCurves(curve);
@@ -177,12 +180,29 @@ torch::Tensor curve_curvature(const torch::Tensor &curveYX, const torch::Tensor 
     torch::Tensor curvatures_tensor = torch::empty({(long)curve.size()}, torch::kFloat);
 
     for (auto const &[start, end] : contiguousCurvesStartEnd) {
-        auto const &curvatures = tangents_to_curvature(tangents_vec, TANGENT_SMOOTHING_KERNEL, start, end);
+        auto const &curvatures = tangents_to_curvature(tangents_vec, 5, start, end);
 
         for (std::size_t i = start; i < end; i++) curvatures_tensor[i] = curvatures[i - start];
     }
 
     return curvatures_tensor;
+}
+
+torch::Tensor find_inflections_points(const torch::Tensor &curvatures, float K_threshold = 0.05) {
+    auto const &curvatures_vec = tensor_to_scalars(curvatures);
+    auto const &inflections = curve_inflections_points(curvatures_vec, K_threshold);
+    return vector_to_tensor(inflections);
+}
+
+std::tuple<torch::Tensor, double, torch::Tensor> fit_bezier_torch(const torch::Tensor &curveYX,
+                                                                  const torch::Tensor &tangents,
+                                                                  double bspline_max_error, std::size_t start,
+                                                                  std::size_t end) {
+    const CurveYX &curve = tensor_to_curve(curveYX);
+    const PointList &tangents_vec = tensor_to_pointList(tangents);
+    auto const &curvatures = tangents_to_curvature(tangents_vec, true, 5, start, end);
+    auto const &[bezier, maxError, sqrError, u] = fit_bezier(curve, tangents_vec, bspline_max_error, start, end);
+    return {bspline_to_tensor(bezier), maxError, vector_to_tensor(u)};
 }
 
 /**************************************************************************************
@@ -199,11 +219,16 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fast_curve_tangent", &fast_curve_tangent_torch, "Evaluate the tangent of a curve.");
     m.def("fast_branch_boundaries", &fast_branch_boundaries_torch, "Evaluate the boundaries of a branch.");
     m.def("fast_branch_calibre", &fast_branch_calibre_torch, "Evaluate the width of a branch.");
-    m.def("curve_curvature", &curve_curvature, "Evaluate the curvature of a curve.");
+    m.def("curve_curvature", &compute_curvature, "Evaluate the curvature of a curve.");
+    m.def("find_inflections_points", &find_inflections_points, "Find the inflection points of a curve.");
+    m.def("fit_bezier", &fit_bezier_torch, "Fit a cubic bezier curve to a set of points.");
 
     // === Skeleton.h ===
     m.def("detect_skeleton_nodes", &detect_skeleton_nodes, "Detect junctions and endpoints in a skeleton.");
 
     // === Branch.h ===
     m.def("find_branch_endpoints", &find_branch_endpoints, "Find the first and last endpoint of each branch.");
+
+    // === EditDistance.h ===
+    m.def("shortest_secondary_path", &shortest_secondary_path, "Compute the shortest path between two sets of nodes.");
 }

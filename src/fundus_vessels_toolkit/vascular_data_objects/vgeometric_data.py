@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 from copy import copy, deepcopy
-from typing import Dict, Generator, Iterable, List, Optional, Tuple, TypeAlias
+from typing import Dict, Generator, Iterable, List, Optional, Tuple, Type
 
 import numpy as np
 import numpy.typing as npt
 
+from fundus_vessels_toolkit.utils.bezier import BSpline
 from fundus_vessels_toolkit.utils.lookup_array import invert_lookup
 from fundus_vessels_toolkit.utils.math import np_find_sorted
 
 from ..utils.geometric import Point, Rect
-from .vbranch_geo_attr import VBranchCurveAttr, VBranchGeoAttr, VGeoAttr
-
-BranchesAttributes: TypeAlias = Dict[VGeoAttr, List[Optional[VBranchGeoAttr]]]
+from .vbranch_geodata import (
+    VBranchGeoData,
+    VBranchGeoDataKey,
+    VBranchGeoDataLike,
+    VBranchGeoDescriptor,
+    VBranchGeoDict,
+    VBranchGeoDictUncurated,
+)
 
 
 class VGeometricData:
@@ -23,7 +29,7 @@ class VGeometricData:
         nodes_coord: npt.NDArray[np.uint32],
         branches_curve: List[npt.NDArray[np.uint32]],
         domain: Rect,
-        branches_attr: Optional[Dict[VGeoAttr | str, List[Optional[np.ndarray | VBranchGeoAttr]]]] = None,
+        branches_attr: Optional[VBranchGeoDictUncurated] = None,
         nodes_id: Optional[npt.NDArray[np.uint32]] = None,
         branches_id: Optional[npt.NDArray[np.uint32]] = None,
     ):
@@ -59,23 +65,22 @@ class VGeometricData:
 
         # Check and define nodes coordinates and index
         nodes_coord = np.asarray(nodes_coord, dtype=np.float32)
-        assert (
-            nodes_coord.ndim == 2 and nodes_coord.shape[1] == 2
-        ), "The node coordinates should be a 2D array with shape (n_nodes, 2)."
+        if not nodes_coord.ndim == 2 and nodes_coord.shape[1] == 2:
+            raise ValueError("The node coordinates should be a 2D array with shape (n_nodes, 2).")
         self._nodes_coord = nodes_coord
 
         if nodes_id is not None:
             nodes_id = np.asarray(nodes_id, dtype=np.uint32)
-            assert nodes_id.ndim == 1 and nodes_id.shape[0] == nodes_coord.shape[0], (
-                "The node ids should be a 1D array with the same length as the number of nodes. "
-                f"Got shape {nodes_id.shape} instead of {nodes_coord.shape}."
-            )
+            if not (nodes_id.ndim == 1 and nodes_id.shape[0] == nodes_coord.shape[0]):
+                raise ValueError(
+                    "The node ids should be a 1D array with the same length as the number of nodes. "
+                    f"Got shape {nodes_id.shape} instead of {nodes_coord.shape}."
+                )
         self._nodes_id = nodes_id
 
         # Check and define branches curves and index
-        assert all(
-            isinstance(curve, np.ndarray) and curve.ndim == 2 and curve.shape[1] == 2 for curve in branches_curve
-        ), "The branch curves should be a list of 2D arrays with shape (n_points, 2)."
+        if not all(isinstance(c, np.ndarray) and c.ndim == 2 and c.shape[1] == 2 for c in branches_curve):
+            raise ValueError("The branch curves should be a list of 2D arrays with shape (n_points, 2).")
         self._branches_curve = branches_curve
 
         if branches_id is not None:
@@ -87,34 +92,11 @@ class VGeometricData:
         self._branches_id = branches_id
 
         # Check and define branches curves attributes
-        if branches_attr is None or not len(branches_attr):
-            self._branches_attrs: BranchesAttributes = {}
-        else:
-            self._branches_attrs: BranchesAttributes = {}
-            for attr_name, attr in branches_attr.items():
-                attr_type = None
-                for branch_id, attr_data in enumerate(attr):
-                    if isinstance(attr_data, np.ndarray):
-                        attr_data = VBranchCurveAttr(attr_data)
-                        attr[branch_id] = attr_data
-                    elif not isinstance(attr_data, VBranchGeoAttr):
-                        raise ValueError(
-                            f"Invalid type for attribute {attr_name} of branch {branch_id}. "
-                            f"Expected np.ndarray or VBranchGeoAttr, got {type(attr_data)}."
-                        )
-                    elif attr_type is not None and not isinstance(attr_data, attr_type):
-                        raise ValueError(
-                            f"Inconsistent type for attribute {attr_name} of branch {branch_id}: {type(attr_data)}. "
-                            f"Previous branches were of type: {attr_type}."
-                        )
-                    else:
-                        attr_type = type(attr_data)
-                    is_invalid = attr_data.is_invalid(self._branch_ctx(branch_id))
-                    if is_invalid:
-                        raise ValueError(f"Invalid attribute {attr_name} of branch {branch_id}.\n{is_invalid}.")
-                if not isinstance(attr_name, VGeoAttr):
-                    attr_name = VGeoAttr.from_str(attr_name, attr_type)
-                self._branches_attrs[attr_name] = attr
+        self._branch_data_dict: VBranchGeoDict = {}
+        self._branches_attrs_descriptors: Dict[str, VBranchGeoDescriptor] = {}
+
+        if branches_attr is not None:
+            self._branch_data_dict, self._branches_attrs_descriptors = VBranchGeoData.parse_geo_dict(branches_attr)
 
         # Ensure that the nodes and branches are sorted by their index in the graph
         self._sort_internal_nodes_index()
@@ -126,7 +108,7 @@ class VGeometricData:
         nodes_coord: Dict[int, Point],
         branches_curve: Dict[int, npt.NDArray[np.uint32]],
         domain: Rect,
-        branches_attr: Optional[Dict[str, Dict[int, np.ndarray | VBranchGeoAttr]]] = None,
+        branches_attr: Optional[Dict[str, Dict[int, VBranchGeoDataLike]]] = None,
     ) -> VGeometricData:
         """Create a VGeometricData object from dictionaries.
 
@@ -166,7 +148,8 @@ class VGeometricData:
         other = copy(self)
         other._nodes_coord = self._nodes_coord.copy()
         other._branches_curve = [v.copy() for v in self._branches_curve]
-        other._branches_attrs = deepcopy(self._branches_attrs)
+        other._branch_data_dict = deepcopy(self._branch_data_dict)
+        other._branches_attrs_descriptors = deepcopy(self._branches_attrs_descriptors)
         return other
 
     ####################################################################################################################
@@ -205,7 +188,7 @@ class VGeometricData:
             return index
 
     def nodes_coord(
-        self, id: Optional[int | npt.NDArray[np.int32]] = None, *, graph_indexing=True
+        self, id: Optional[int | npt.NDArray[np.int32]] = None, *, graph_indexing=True, apply_domain=False
     ) -> Point | np.ndarray:
         """Return the coordinates of the nodes in the graph."""
 
@@ -218,7 +201,10 @@ class VGeometricData:
 
         if isinstance(id, np.ndarray):
             internal_id = self._graph_to_internal_nodes_index(id, graph_indexing=graph_indexing)
-            return self._nodes_coord[internal_id] if not is_single else self._nodes_coord[internal_id[0]]
+            coord = self._nodes_coord[internal_id]
+            if apply_domain:
+                coord += np.array(self.domain.top_left)[None, :]
+            return coord if not is_single else coord[0]
         else:
             raise TypeError("Invalid type for node id.")
 
@@ -251,7 +237,7 @@ class VGeometricData:
             ), f"Invalid branch index {index}."
             return index
 
-    def branches_curve(
+    def branch_curve(
         self, id: Optional[int | npt.NDArray[np.int32]] = None, *, graph_indexing=True
     ) -> npt.NDArray[np.int_] | List[npt.NDArray[np.int_]] | Generator[npt.NDArray[np.int_]]:
         """Return the coordinates of the pixels that compose the branches of the graph."""
@@ -260,20 +246,22 @@ class VGeometricData:
 
         is_single = np.isscalar(id)
         if is_single:
-            id = np.asarray([id])
+            id = np.array([id])
+        else:
+            id = np.asarray(id)
 
         if isinstance(id, np.ndarray):
             internal_id = self._graph_to_internal_branches_index(id, graph_index=graph_indexing, check_valid=False)
             if is_single:
-                return self._branches_curve[internal_id[0]] if internal_id[0] > 0 else None
-            return [self._branches_curve[i] if i > 0 else None for i in internal_id]
+                return self._branches_curve[internal_id[0]] if internal_id[0] >= 0 else None
+            return [self._branches_curve[i] if i >= 0 else None for i in internal_id]
 
         else:
             raise TypeError("Invalid type for branches index.")
 
     def _branch_ctx(self, id: int) -> Dict[str, any]:
         """Return the context of a branch."""
-        return {"curve": self.branches_curve(id)}
+        return {"curve": self.branch_curve(id)}
 
     ####################################################################################################################
     #  === COMPUTABLE GEOMETRIC PROPERTIES ===
@@ -288,9 +276,7 @@ class VGeometricData:
         """
         branches_label_map = np.zeros(self.domain.shape, dtype=np.int_)
         for branch_id, branch_curve in zip(self.branches_id, self._branches_curve, strict=True):
-            branches_label_map[branch_curve[:, 0] - self.domain.top, branch_curve[:, 1] - self.domain.left] = (
-                branch_id + 1
-            )
+            branches_label_map[branch_curve[:, 0], branch_curve[:, 1]] = branch_id + 1
         return branches_label_map
 
     def branches_arc_length(
@@ -306,7 +292,7 @@ class VGeometricData:
         is_single = np.isscalar(graph_ids)
         arc = []
 
-        for curve in self.branches_curve(graph_ids):
+        for curve in self.branch_curve(graph_ids):
             if curve is None:
                 arc.append(0)
             elif fast_approximation:
@@ -320,7 +306,7 @@ class VGeometricData:
         is_single = np.isscalar(graph_ids)
         chord = []
 
-        for curve in self.branches_curve(graph_ids):
+        for curve in self.branch_curve(graph_ids):
             if curve is None:
                 chord.append(0)
             else:
@@ -361,7 +347,7 @@ class VGeometricData:
                     closest_point = closest_point
             return min_distance, closest_point if return_closest_point else min_distance
 
-        curve = self.branches_curve(branch_id)
+        curve = self.branch_curve(branch_id)
         point = np.asarray(point)[None, :]
         distances = np.linalg.norm(point - curve, axis=1)
         min_i = np.argmin(distances)
@@ -370,29 +356,7 @@ class VGeometricData:
     ####################################################################################################################
     #  === BRANCH GEOMETRIC ATTRIBUTES ===
     ####################################################################################################################
-    def attr_by_branch(self, branch_id: int, version=None) -> Dict[str, VBranchGeoAttr]:
-        """Return the attributes of a branch.
-
-        Parameters
-        ----------
-        branch_id : int
-            The id of the branch.
-
-        Returns
-        -------
-        Dict[str, VBranchGeoAttr]
-            The attributes of the branch. The keys are the attribute names and the values are the attribute values.
-        """
-        all_versions = {
-            attr: attr_data[branch_id]
-            for attr, attr_data in self._branches_attrs.items()
-            if attr_data[branch_id] is not None
-        }
-        if version is None:
-            return {str(attr): attr_data for attr, attr_data in all_versions.items()}
-        return {attr.name: attr_data for attr, attr_data in all_versions.items() if attr.version == version}
-
-    def attr_by_types(self, attr_type: type, version=None) -> Dict[str, VBranchGeoAttr]:
+    def list_branch_data(self, branch_id: int) -> Dict[str, VBranchGeoData.Base]:
         """Return the attributes of a branch.
 
         Parameters
@@ -406,17 +370,18 @@ class VGeometricData:
             The attributes of the branch. The keys are the attribute names and the values are the attribute values.
         """
         return {
-            str(attr): attr_data for attr, attr_data in self._branches_attrs.items() if isinstance(attr_data, attr_type)
+            attr: attr_data[branch_id]
+            for attr, attr_data in self._branch_data_dict.items()
+            if attr_data[branch_id] is not None
         }
 
-    def branches_attr(
+    def branch_data(
         self,
         attr_name: str,
         branch_id: Optional[int | npt.NDArray[np.int32]] = None,
         *,
-        version: Optional[str] = None,
         graph_indexing=True,
-    ) -> VBranchGeoAttr | List[VBranchGeoAttr]:
+    ) -> VBranchGeoData.Base | List[VBranchGeoData.Base]:
         """Return the attribute of a branch.
 
         Parameters
@@ -432,31 +397,26 @@ class VGeometricData:
         VBranchGeoAttr
             The attribute of the branch.
         """
-        attr = self._fetch_attr(attr_name, version)
+        attr = self._fetch_branch_data(attr_name)
         if branch_id is None:
             return attr
 
         is_single = np.isscalar(branch_id)
         if is_single:
-            branch_id = np.asarray([branch_id])
+            branch_id = [branch_id]
+        branch_id = np.asarray(branch_id)
 
-        if isinstance(branch_id, np.ndarray):
-            internal_id = self._graph_to_internal_branches_index(
-                branch_id, graph_index=graph_indexing, check_valid=False
-            )
-            if is_single:
-                return attr[internal_id[0]] if internal_id[0] > 0 else None
-            return [attr[i] if i > 0 else None for i in internal_id]
-        else:
-            raise TypeError(f"Invalid type: {type(branch_id)} for branches index.")
+        internal_id = self._graph_to_internal_branches_index(branch_id, graph_index=graph_indexing, check_valid=False)
+        if is_single:
+            return attr[internal_id[0]] if internal_id[0] >= 0 else None
+        return [attr[i] if i >= 0 else None for i in internal_id]
 
-    def set_branches_attr(
+    def set_branch_data(
         self,
-        attr_name: str,
-        attr_data: VBranchGeoAttr | np.ndarray | List[VBranchGeoAttr | np.ndarray],
+        attr_name: VBranchGeoDataKey,
+        attr_data: VBranchGeoDataLike | List[Optional[VBranchGeoDataLike]],
         branch_id: Optional[int | npt.NDArray[np.int32]] = None,
         *,
-        version: Optional[str] = "",
         graph_indexing=True,
         no_check=False,
     ) -> None:
@@ -488,7 +448,7 @@ class VGeometricData:
             branch_id = self._graph_to_internal_branches_index(branch_id, graph_indexing=graph_indexing)
 
         # Check: attr_data
-        if isinstance(attr_data, (np.ndarray, VBranchGeoAttr)):
+        if isinstance(attr_data, (np.ndarray, VBranchGeoData.Base)):
             assert len(branch_id) == 1, "Invalid number of branches for attribute data."
             attr_data = [attr_data]
         else:
@@ -496,14 +456,16 @@ class VGeometricData:
 
         attr_type = None
         for i, data in enumerate(attr_data):
-            if not isinstance(data, np.ndarray):
-                data = VBranchCurveAttr(data)
+            if data is None:
+                continue
+            if isinstance(data, np.ndarray):
+                data = VBranchGeoData.Curve(data)
             if attr_type is not None:
                 assert isinstance(data, attr_type), (
                     f"Inconsistent type for attribute {attr_name} of branch {branch_id[i]}: {type(data)}. "
                     f"Previous branches were of type: {attr_type}."
                 )
-            elif isinstance(data, VBranchGeoAttr):
+            elif isinstance(data, VBranchGeoData.Base):
                 attr_type = type(data)
             else:
                 raise ValueError(f"Invalid type for attribute data: {type(data)}.")
@@ -513,24 +475,121 @@ class VGeometricData:
                     raise ValueError(f"Invalid attribute {attr_name} of branch {branch_id[i]}.\n{is_invalid}.")
 
         # === Set Attribute ===
-        attr = self._fetch_attr(attr_name, version, attr_type, emplace=True)
-        for i, data in zip(branch_id, attr_data):
+        attr = self._fetch_branch_data(attr_name, attr_type, emplace=True)
+        for i, data in zip(branch_id, attr_data, strict=True):
             attr[i] = data
 
-    def _fetch_attr(
-        self, attr_name: str, version: Optional[str] = None, attr_type: type = VBranchGeoAttr, *, emplace=False
-    ) -> List[Optional[VBranchGeoAttr]]:
+    def _fetch_branch_data(
+        self, attr_name: str, attr_type: type = None, *, emplace=False
+    ) -> List[Optional[VBranchGeoData.Base]]:
         """Fetch the attribute data of a branch."""
-        if emplace:
-            # TODO: if the type is not correct, raise an error
-            return self._branches_attrs.getdefault(
-                VGeoAttr.from_str(attr_name, attr_type), [None] * self.branches_count
-            )
-        else:
-            # TODO: if the type is not correct, raise an error
-            attr = self._branches_attrs.get(VGeoAttr.from_str(attr_name, attr_type), None)
-            if attr is None:
+        desc = self._branches_attrs_descriptors.get(attr_name, None)
+        if desc is None:
+            if emplace:
+                self._branches_attrs_descriptors[attr_name] = VBranchGeoDescriptor(attr_name, attr_type)
+                attr_data = [None for _ in range(self.branches_count)]
+                self._branch_data_dict[attr_name] = attr_data
+                return attr_data
+            else:
                 raise KeyError(f"Attribute {attr_name} not found.")
+        else:
+            if attr_type is not None and not issubclass(attr_type, desc.geo_type):
+                raise TypeError(
+                    f"Invalid type for attribute {attr_name}: {attr_type}. " f"Expected type: {desc.geo_type}."
+                )
+            return self._branch_data_dict[attr_name]
+
+    ####################################################################################################################
+    #  === BRANCHES GEOMETRIC ATTRIBUTES SPECIALIZATION  ===
+    ####################################################################################################################
+    def branch_data_by_types(self, attr_type: VBranchGeoData.Type) -> Dict[str, VBranchGeoData.Base]:
+        """Return the attributes of a branch.
+
+        Parameters
+        ----------
+        branch_id : int
+            The id of the branch.
+
+        Returns
+        -------
+        Dict[str, VBranchGeoAttr]
+            The attributes of the branch. The keys are the attribute names and the values are the attribute values.
+        """
+        return {
+            str(attr): attr_data
+            for attr, attr_data in self._branch_data_dict.items()
+            if isinstance(attr_data, attr_type)
+        }
+
+    def set_branch_bspline(
+        self,
+        name: VBranchGeoDataKey,
+        bspline: BSpline | npt.NDArray[np.float32] | List[BSpline | npt.NDArray[np.float32]],
+        branch_id: Optional[int | npt.NDArray[np.int32]] = None,
+        *,
+        graph_indexing=True,
+        no_check=False,
+    ) -> None:
+        """Set a BSpline representation of one or more branch.
+
+        Parameters
+        ----------
+        name : str
+            The name of the attribute
+
+        bspline : BSpline | List[BSpline]
+            The BSpline representation of the branch. If a list is provided, the length should be the same as the number of branches.
+
+        branch_id : Optional[int  |  npt.NDArray[np.int32]], optional
+            The id of the branch(es), by default None
+
+        graph_indexing : bool, optional
+            Whether the branch_id is indexed according to the graph (True) or to the internal representation (False), by default True.
+
+        no_check : bool, optional
+            If True, do not check the validity of the attribute data, by default False
+        """  # noqa: E501
+        if isinstance(bspline, BSpline) or (isinstance(bspline, np.ndarray) and bspline.ndim == 1):
+            bspline = [bspline]
+        bspline = [VBranchGeoData.BSpline(b) if b is not None else None for b in bspline]
+        self.set_branch_data(name, bspline, branch_id, graph_indexing=graph_indexing, no_check=no_check)
+
+    def branch_bspline(
+        self, name: str, branch_id: Optional[int | npt.NDArray[np.int32]] = None
+    ) -> BSpline | List[BSpline]:
+        """Return the BSpline representation of a branch.
+
+        Parameters
+        ----------
+        name : str
+            The name of the attribute
+
+        branch_id : int
+            The id of the branch.
+
+        Returns
+        -------
+        BSpline
+            The BSpline representation of the branch.
+        """
+        is_single = np.isscalar(branch_id)
+        if is_single:
+            branch_id = [branch_id]
+
+        bsplines = []
+        data = self.branch_data(name, branch_id)
+
+        for i, d in enumerate(data):
+            if d is None:
+                bsplines.append(BSpline())
+            elif isinstance(d, VBranchGeoData.BSpline):
+                bsplines.append(d.bspline)
+            else:
+                raise TypeError(
+                    f"Invalid type: attribute {name} of branch {branch_id[i]} is not a VBranchGeoData.BSpline."
+                )
+
+        return bsplines[0] if is_single else bsplines
 
     ####################################################################################################################
     #  === GRAPH MANIPULATION ===
@@ -545,7 +604,7 @@ class VGeometricData:
             self._nodes_coord = self._nodes_coord[sorted_index]
 
     def _reindex_nodes(self, new_node_index: npt.NDArray[np.int_]) -> None:
-        """Reindex the nodes in the graph.
+        """Reindex the nodes in the graph.  # noqa: E501
 
         Parameters
         ----------
@@ -571,7 +630,7 @@ class VGeometricData:
         if np.any(np.diff(sorted_index) < 1):
             self._branches_id = self.branches_id[sorted_index]
             self._branches_curve = [self._branches_curve[i] for i in sorted_index]
-            self._branches_attrs = {k: [v[i] for i in sorted_index] for k, v in self._branches_attrs.items()}
+            self._branch_data_dict = {k: [v[i] for i in sorted_index] for k, v in self._branch_data_dict.items()}
 
     def _reindex_branches(self, new_branch_index: npt.NDArray[np.int_]) -> None:
         """Reindex the branches in the graph.
@@ -589,7 +648,7 @@ class VGeometricData:
             else:
                 inverted_index = invert_lookup(new_branch_index)
                 self._branches_curve = [self._branches_curve[i] for i in inverted_index]
-                self._branches_attrs = {k: [v[i] for i in inverted_index] for k, v in self._branches_attrs.items()}
+                self._branch_data_dict = {k: [v[i] for i in inverted_index] for k, v in self._branch_data_dict.items()}
         else:
             self._branches_id = new_branch_index[self._branches_id]
             branch_to_delete = self._branches_id < 0
@@ -598,8 +657,9 @@ class VGeometricData:
                 self._branches_curve = [
                     curve for i, curve in enumerate(self._branches_curve) if not branch_to_delete[i]
                 ]
-                self._branches_attrs = {
-                    k: [v for i, v in enumerate(v) if not branch_to_delete[i]] for k, v in self._branches_attrs.items()
+                self._branch_data_dict = {
+                    k: [v for i, v in enumerate(v) if not branch_to_delete[i]]
+                    for k, v in self._branch_data_dict.items()
                 }
             self._sort_internal_branches_index()
 
@@ -657,15 +717,16 @@ class VGeometricData:
         branch0 = consecutive_branches[0]
         next_branches = consecutive_branches[1:]
 
-        new_branch_curve = np.concatenate(self.branches_curve(consecutive_branches, graph_indexing=False))
-        self._branches_curve[branch0] = new_branch_curve
+        branches_curve = [b for b in self.branch_curve(consecutive_branches, graph_indexing=False) if b is not None]
+        if len(branches_curve):
+            self._branches_curve[branch0] = np.concatenate(branches_curve)
 
-        for attr_name, attr_data in self._branches_attrs.items():
+        for attr_name, attr_data in self._branch_data_dict.items():
             new_attr = attr_data[branch0].merge(
                 [attr_data[branch_id] for branch_id in next_branches],
                 self._branch_ctx(branch0),
             )
-            self._branches_attrs[attr_name][branch0] = new_attr
+            self._branch_data_dict[attr_name][branch0] = new_attr
 
     def _split_branch(self, id: int, new_branch_id: int, splitPosition: int | Point):
         """Split a branch into two branches at a given position.
@@ -683,7 +744,7 @@ class VGeometricData:
 
         """
         internal_id = int(self._graph_to_internal_branches_index(id)[0])
-        curve = self.branches_curve(internal_id, graph_indexing=False)
+        curve = self.branch_curve(internal_id, graph_indexing=False)
         if curve is None:
             return
 
@@ -693,17 +754,17 @@ class VGeometricData:
             splitIndex = splitPosition
             splitPosition = Point(*curve[splitIndex])
 
-        new_internal_id = len(self.branches_curve)
+        new_internal_id = len(self.branch_curve)
         self._branches_curve[internal_id] = curve[splitIndex:]
         self._branches_curve[new_internal_id] = curve[:splitIndex]
         self._branches_id[new_internal_id] = new_branch_id
 
-        for attr_name, branches_attr in self._branches_attrs.items():
+        for attr_name, branches_attr in self._branch_data_dict.items():
             attr = branches_attr[internal_id]
             if attr is not None:
                 b0, b1 = attr.split(splitPosition, splitIndex, self._branch_ctx(internal_id))
-                self._branches_attrs[attr_name][internal_id] = b0
-                self._branches_attrs[attr_name][new_internal_id] = b1
+                self._branch_data_dict[attr_name][internal_id] = b0
+                self._branch_data_dict[attr_name][new_internal_id] = b1
 
         self._sort_internal_branches_index()
 
@@ -720,8 +781,29 @@ class VGeometricData:
             internal_ids = [internal_ids]
 
         for branch_id in internal_ids:
-            self._branches_curve[branch_id] = np.flip(self.branches_curve(branch_id), axis=0)
-            for attr_data in self._branches_attrs.values():
+            self._branches_curve[branch_id] = np.flip(self.branch_curve(branch_id), axis=0)
+            for attr_data in self._branch_data_dict.values():
                 branch_attr = attr_data[branch_id]
                 if branch_attr is not None:
                     attr_data[branch_id] = branch_attr.flip()
+
+    ####################################################################################################################
+    #  === VISUALISATION TOOLS ===
+    ####################################################################################################################
+    def jppype_bspline_tangents(self, bspline_name: str = "bspline", scaling=1):
+        from jppype.layers import LayerQuiver
+
+        points = []
+        tangents = []
+        bsplines = self.branch_bspline(bspline_name)
+        for bspline in bsplines:
+            if bspline is None or not len(bspline):
+                continue
+            p, t = bspline.intermediate_points(return_tangent=True)
+            nan = np.isnan(p).any(axis=1) | np.isnan(t).any(axis=1)
+            p = p[~nan]
+            t = t[~nan]
+            points.extend(p)
+            tangents.extend(t)
+
+        return LayerQuiver(np.stack(points), np.stack(tangents) * scaling, self.domain, "scene")
