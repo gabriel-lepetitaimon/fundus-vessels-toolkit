@@ -28,7 +28,7 @@ def get_torch_extensions():
 
     extra_compile_args["cxx"] += ["-fdiagnostics-color=always"]  # Colorize the output
     extra_compile_args["cxx"] += ["-Wno-dangling-reference"]  # Remove dangling reference warning from torch
-    extra_link_args += ["-lsupc++"]  # Fix import error: "undefined symbol: __cxa_call_terminate"
+    # extra_link_args += ["-lsupc++"]  # Fix import error: "undefined symbol: __cxa_call_terminate"
 
     CPP_FOLDER = Path("src/fundus_vessels_toolkit/utils/cpp_extensions")
 
