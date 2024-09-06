@@ -4,35 +4,45 @@
 
 // === FROM_VECTOR ===
 torch::Tensor vector_to_tensor(const std::vector<int>& vec) {
-    torch::Tensor tensor = torch::zeros({(long)vec.size()}, torch::kInt32);
+    torch::Tensor tensor = torch::empty({(long)vec.size()}, torch::kInt32);
     auto accessor = tensor.accessor<int, 1>();
     for (int i = 0; i < (int)vec.size(); i++) accessor[i] = vec[i];
     return tensor;
 }
 
 torch::Tensor vector_to_tensor(const std::vector<float>& vec) {
-    torch::Tensor tensor = torch::zeros({(long)vec.size()}, torch::kFloat32);
+    torch::Tensor tensor = torch::empty({(long)vec.size()}, torch::kFloat32);
     auto accessor = tensor.accessor<float, 1>();
     for (int i = 0; i < (int)vec.size(); i++) accessor[i] = vec[i];
     return tensor;
 }
 
 torch::Tensor vector_to_tensor(const std::vector<double>& vec) {
-    torch::Tensor tensor = torch::zeros({(long)vec.size()}, torch::kFloat64);
+    torch::Tensor tensor = torch::empty({(long)vec.size()}, torch::kFloat64);
     auto accessor = tensor.accessor<double, 1>();
     for (int i = 0; i < (int)vec.size(); i++) accessor[i] = vec[i];
     return tensor;
 }
 
 torch::Tensor vector_to_tensor(const std::vector<std::size_t>& vec) {
-    torch::Tensor tensor = torch::zeros({(long)vec.size()}, torch::kInt64);
+    torch::Tensor tensor = torch::empty({(long)vec.size()}, torch::kInt64);
     auto accessor = tensor.accessor<int64_t, 1>();
     for (int i = 0; i < (int)vec.size(); i++) accessor[i] = vec[i];
     return tensor;
 }
 
 torch::Tensor vector_to_tensor(const std::vector<IntPair>& vec) {
-    torch::Tensor tensor = torch::zeros({(long)vec.size(), 2}, torch::kInt32);
+    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kInt32);
+    auto accessor = tensor.accessor<int, 2>();
+    for (int i = 0; i < (int)vec.size(); i++) {
+        accessor[i][0] = vec[i][0];
+        accessor[i][1] = vec[i][1];
+    }
+    return tensor;
+}
+
+torch::Tensor vector_to_tensor(const std::vector<UIntPair>& vec) {
+    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kInt32);
     auto accessor = tensor.accessor<int, 2>();
     for (int i = 0; i < (int)vec.size(); i++) {
         accessor[i][0] = vec[i][0];
@@ -42,7 +52,7 @@ torch::Tensor vector_to_tensor(const std::vector<IntPair>& vec) {
 }
 
 torch::Tensor vector_to_tensor(const std::vector<FloatPair>& vec) {
-    torch::Tensor tensor = torch::zeros({(long)vec.size(), 2}, torch::kFloat32);
+    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kFloat32);
     auto accessor = tensor.accessor<float, 2>();
     for (int i = 0; i < (int)vec.size(); i++) {
         accessor[i][0] = vec[i][0];
@@ -52,7 +62,7 @@ torch::Tensor vector_to_tensor(const std::vector<FloatPair>& vec) {
 }
 
 torch::Tensor vector_to_tensor(const std::vector<std::array<IntPair, 2>>& vec) {
-    torch::Tensor tensor = torch::zeros({(long)vec.size(), 2, 2}, torch::kInt32);
+    torch::Tensor tensor = torch::empty({(long)vec.size(), 2, 2}, torch::kInt32);
     auto accessor = tensor.accessor<int, 3>();
     for (int i = 0; i < (int)vec.size(); i++) {
         accessor[i][0][0] = vec[i][0][0];
@@ -64,7 +74,7 @@ torch::Tensor vector_to_tensor(const std::vector<std::array<IntPair, 2>>& vec) {
 }
 
 torch::Tensor vector_to_tensor(const std::vector<Point>& vec) {
-    torch::Tensor tensor = torch::zeros({(long)vec.size(), 2}, torch::kDouble);
+    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kDouble);
     auto accessor = tensor.accessor<double, 2>();
     for (int i = 0; i < (int)vec.size(); i++) {
         accessor[i][0] = vec[i].y;
@@ -74,7 +84,7 @@ torch::Tensor vector_to_tensor(const std::vector<Point>& vec) {
 }
 
 torch::Tensor vector_to_tensor(const std::vector<IntPoint>& vec) {
-    torch::Tensor tensor = torch::zeros({(long)vec.size(), 2}, torch::kInt32);
+    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kInt32);
     auto accessor = tensor.accessor<int, 2>();
     for (int i = 0; i < (int)vec.size(); i++) {
         accessor[i][0] = vec[i].y;
@@ -84,7 +94,7 @@ torch::Tensor vector_to_tensor(const std::vector<IntPoint>& vec) {
 }
 
 torch::Tensor vector_to_tensor(const std::vector<std::array<IntPoint, 2>>& vec) {
-    torch::Tensor tensor = torch::zeros({(long)vec.size(), 2, 2}, torch::kInt32);
+    torch::Tensor tensor = torch::empty({(long)vec.size(), 2, 2}, torch::kInt32);
     auto accessor = tensor.accessor<int, 3>();
     for (int i = 0; i < (int)vec.size(); i++) {
         accessor[i][0][0] = vec[i][0].y;
@@ -96,7 +106,7 @@ torch::Tensor vector_to_tensor(const std::vector<std::array<IntPoint, 2>>& vec) 
 }
 
 torch::Tensor edge_list_to_tensor(const EdgeList& edge_list) {
-    torch::Tensor branches_list_tensor = torch::zeros({(int)edge_list.size(), 2}, torch::kInt32);
+    torch::Tensor branches_list_tensor = torch::empty({(int)edge_list.size(), 2}, torch::kInt32);
     auto branches_list_acc = branches_list_tensor.accessor<int32_t, 2>();
     for (const auto& v : edge_list) {
         branches_list_acc[v.id][0] = v.start;
@@ -144,6 +154,24 @@ Scalars tensor_to_scalars(const torch::Tensor& tensor) {
     return vec;
 }
 
+torch::Tensor remove_rows(const torch::Tensor& tensor, std::vector<int> rows) {
+    if (rows.empty()) return tensor;
+    std::sort(rows.begin(), rows.end());
+    std::vector<long> shape(tensor.dim());
+    shape[0] = tensor.size(0) - rows.size();
+    rows.push_back(tensor.size(0));
+    for (int i = 1; i < tensor.dim(); i++) shape[i] = tensor.size(i);
+
+    torch::Tensor new_tensor = torch::empty(shape, tensor.options());
+    auto const iniSlice = torch::indexing::Slice(0, rows[0], 1);
+    new_tensor.index({iniSlice}) = tensor.index({iniSlice});
+    for (std::size_t i = 1; i < rows.size(); i++) {
+        new_tensor.index_put_({torch::indexing::Slice(rows[i - 1] + 1 - i, rows[i] - i, 1)},
+                              tensor.index({torch::indexing::Slice(rows[i - 1] + 1, rows[i], 1)}));
+    }
+    return new_tensor;
+}
+
 // === IntPoint ===
 IntPoint::IntPoint(int y, int x) : y(y), x(x) {}
 IntPoint::IntPoint(IntPair yx) : y(yx[0]), x(yx[1]) {}
@@ -172,9 +200,10 @@ IntPair IntPoint::toIntPair() const { return {y, x}; }
 
 // === Point ===
 Point::Point(double y, double x) : y(y), x(x) {}
-Point::Point(IntPair yx) : y(yx[0]), x(yx[1]) {}
-Point::Point(FloatPair yx) : y(yx[0]), x(yx[1]) {}
-Point::Point(IntPoint yx) : y(yx.y), x(yx.x) {}
+Point::Point(const IntPair& yx) : y(yx[0]), x(yx[1]) {}
+Point::Point(const FloatPair& yx) : y(yx[0]), x(yx[1]) {}
+Point::Point(const IntPoint& yx) : y(yx.y), x(yx.x) {}
+Point::Point(const at::TensorAccessor<float, 1UL, at::DefaultPtrTraits, signed long>& yx) : y(yx[0]), x(yx[1]) {}
 
 // assignment operator modifies object, therefore non-const
 Point& Point::operator=(const Point& p) {
@@ -213,6 +242,7 @@ Point Point::normalize() const {
 }
 
 double Point::dot(const Point& p) const { return y * p.y + x * p.x; }
+double Point::cos(const Point& p) const { return dot(p) / (norm() * p.norm()); }
 double Point::cross(const Point& p) const { return y * p.x - x * p.y; }
 double Point::squaredNorm() const { return y * y + x * x; }
 Point Point::positiveCoordinates() const { return Point(std::abs(y), std::abs(x)); }
@@ -221,6 +251,19 @@ Point Point::rot270() const { return Point(x, -y); }
 double Point::norm() const { return sqrt(y * y + x * x); }
 double Point::angle() const { return atan2(y, x); }
 double Point::angle(const Point& p) const { return acos(dot(p) / (norm() * p.norm())); }
+/// @brief Rotate the point by an angle in radians. Positive rotation is clockwise.
+/// @param angle
+/// @return The rotated point.
+Point Point::rotate(double angle) const { return rotate(Point(sin(angle), cos(angle))); }
+/// @brief Rotate the point by the angle from the positive x-axis to the u vector.
+/// @param u A unitary vector.
+/// @return The rotated point.
+Point Point::rotate(const Point& u) const { return Point(y * u.x + x * u.y, x * u.x - y * u.y); }
+/// @brief Rotate the point by the angle from the u vector to the positive x-axis (effectively using u as the new
+/// base vector for the x-axis).
+/// @param u A unitary vector.
+/// @return The rotated point.
+Point Point::rotate_neg(const Point& u) const { return Point(y * u.x - x * u.y, x * u.x + y * u.y); }
 
 bool Point::is_inside(double h, double w) const { return (x >= 0 && x < w && y >= 0 && y < h); }
 bool Point::is_inside(const Point& p) const { return (x >= 0 && x < p.x && y >= 0 && y < p.y); }
@@ -386,11 +429,7 @@ int Edge::other(int node) const { return (node == start) ? end : start; }
 
 bool Edge::operator==(const Edge& e) const { return (start == e.start && end == e.end && id == e.id); }
 bool Edge::operator!=(const Edge& e) const { return (start != e.start || end != e.end || id != e.id); }
-bool Edge::operator<(const Edge& e) const {
-    if (start != e.start) return start < e.start;
-    if (end != e.end) return end < e.end;
-    return id < e.id;
-}
+bool Edge::operator<(const Edge& e) const { return id < e.id; }
 
 GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N, bool directed) {
     if (N < 0) {
@@ -425,7 +464,7 @@ GraphAdjList edge_list_to_adjlist(const EdgeList& edges, int N, bool directed) {
     return graph;
 }
 
-GraphAdjList edge_list_to_adjlist(const Tensor2DAccessor<int>& edges, int N, bool directed) {
+GraphAdjList edge_list_to_adjlist(const Tensor2DAcc<int>& edges, int N, bool directed) {
     const std::size_t E = (std::size_t)edges.size(0);
     if (N < 0) {
         N = 0;

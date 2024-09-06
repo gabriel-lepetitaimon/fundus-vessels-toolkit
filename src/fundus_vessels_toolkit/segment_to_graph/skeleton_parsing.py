@@ -7,9 +7,8 @@ import torch
 from ..utils.cpp_extensions.graph_cpp import detect_skeleton_nodes as detect_skeleton_nodes_cpp
 from ..utils.cpp_extensions.graph_cpp import parse_skeleton as parse_skeleton_cpp
 from ..utils.cpp_extensions.graph_cpp import parse_skeleton_with_cleanup as parse_skeleton_with_cleanup_cpp
-from ..utils.geometric import Point
 from ..utils.torch import autocast_torch
-from ..vascular_data_objects import VGeometricData, VGraph
+from ..vascular_data_objects import VBranchGeoData, VGeometricData, VGraph
 
 
 def skeleton_to_vgraph(
@@ -66,18 +65,29 @@ def skeleton_to_vgraph(
 
     skeleton_map = skeleton_map.int()
 
-    labels, branch_list, nodes_yx, branches_curve = parse_skeleton(
+    outs = parse_skeleton(
         skeleton_map,
         segmentation_map=segmentation_map,
         clean_branches_extremities=clean_branches_extremities,
         max_spurs_length=max_spurs_length,
         max_spurs_calibre_factor=max_spurs_calibre_factor,
     )
+    branch_list, nodes_yx, branches_curve = outs[:3]
+    labels = outs[-1]
+
     geo_data = VGeometricData(
         nodes_coord=nodes_yx.numpy(),
         branches_curve=[_.numpy() for _ in branches_curve],
         domain=labels.shape,
     )
+    if segmentation_map is not None and clean_branches_extremities > 0:
+        tangents_calibres = outs[3]
+        tangents = [VBranchGeoData.TerminationTangents(t[:, :2].numpy()) for t in tangents_calibres]
+        calibres = [VBranchGeoData.TerminationData(t[:, 2].numpy()) for t in tangents_calibres]
+        boundaries = [VBranchGeoData.TerminationData(t[:, 3:7].reshape(2, 2, 2).numpy()) for t in tangents_calibres]
+        geo_data.set_branch_data(VBranchGeoData.Fields.TERMINATION_TANGENTS, tangents)
+        geo_data.set_branch_data(VBranchGeoData.Fields.TERMINATION_CALIBRES, calibres)
+        geo_data.set_branch_data(VBranchGeoData.Fields.TERMINATION_BOUNDARIES, boundaries)
 
     return VGraph(branch_list.numpy(), geo_data)
 
@@ -85,7 +95,7 @@ def skeleton_to_vgraph(
 @autocast_torch
 def parse_skeleton(
     skeleton_map: torch.Tensor,
-    segmentation_map: torch.Tensor = None,
+    segmentation_map: Optional[torch.Tensor] = None,
     clean_branches_extremities=0,
     max_spurs_length=0,
     max_spurs_calibre_factor=1,
@@ -127,7 +137,7 @@ def parse_skeleton(
         out = parse_skeleton_with_cleanup_cpp(skeleton_map, segmentation_map, opts)
     else:
         out = parse_skeleton_cpp(skeleton_map)
-    return (skeleton_map,) + out
+    return out + (skeleton_map,)
 
 
 @autocast_torch
@@ -164,7 +174,7 @@ def detect_skeleton_nodes(
         skeleton_map = torch.from_numpy(skeleton_map)
 
     skeleton_rank = detect_skeleton_nodes_cpp(skeleton_map.cpu().bool(), fix_hollow, remove_endpoint_branches)
-    rank_lookup = torch.tensor([0, 2, 1, 2, 2, 2], dtype=torch.uint8)
+    rank_lookup = torch.tensor([0, 3, 1, 2, 2, 2], dtype=torch.uint8)
     out = rank_lookup[skeleton_rank]
 
     return out.numpy() if cast_numpy else out

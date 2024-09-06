@@ -173,15 +173,35 @@ def create_removal_lookup(
         return lookup
 
 
-def invert_lookup(lookup):
+def invert_lookup(lookup, max_index=None):
     """
     Invert a lookup array. The lookup array must be a 1D array of integers. The output array is a 1D array of length
-    max(lookup) + 1. Any negative value is considered as deleted values.
+    max(lookup) + 1. Any -1 index is considered as deleted.
     Pseudo code:
-        [ argwhere(lookup==i) for i in range(max(lookup) + 1) ]
+        [ argwhere(lookup==i)[0] if i in lookup else -1 for i in range(max(lookup) + 1) ]
     """
-    unique_id, inverse = np.unique(lookup, return_index=True)
-    return inverse[unique_id >= 0]
+    if max_index is None:
+        max_index = lookup.max()
+    out = np.full(max_index + 2, -1, dtype=lookup.dtype)
+    out[lookup] = np.arange(len(lookup), dtype=lookup.dtype)
+    return out[:-1]
+
+    # Slower version:
+    # unique_id, inverse = np.unique(lookup, return_index=True)
+    # return inverse[unique_id >= 0]
+
+
+def reorder_array(array, indexes, max_index=None):
+    """
+    Reorder an array according to an index table.
+    This is equivalent to array[invert_lookup[indexes]].
+
+    """
+    if max_index is None:
+        max_index = indexes.max()
+    out = np.empty((max_index + 2,) + array.shape[1:], dtype=array.dtype)
+    out[indexes] = array
+    return out[:-1]
 
 
 def invert_lookup_legacy(lookup):

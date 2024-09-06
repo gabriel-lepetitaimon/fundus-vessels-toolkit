@@ -53,7 +53,7 @@ SkeletonRank detect_skeleton_rank(const bool pixelValue, const uint8_t neighbors
     return SkeletonRank::BRANCH;
 }
 
-void fix_hollow_crosses(Tensor2DAccessor<int>& parsedSkel, const std::vector<IntPoint>& hollow_crosses,
+void fix_hollow_crosses(Tensor2DAcc<int>& parsedSkel, const std::vector<IntPoint>& hollow_crosses,
                         std::vector<IntPoint>& endpoints, bool remove_single_endpoints) {
     for (const IntPoint& p : hollow_crosses) {
         for (const PointWithID& n : NEIGHBORHOOD) {  // Decrement neighbors
@@ -181,7 +181,7 @@ inline bool is_node(int pixelRole) { return pixelRole >= PixelRole::NODE; }
  *     - The coordinates of neighbor nodes.
  *     - The coordinates of neighbor branches.
  */
-std::pair<std::vector<IntPoint>, std::vector<PointWithID>> get_node_neighbors(Tensor2DAccessor<int> skeleton,
+std::pair<std::vector<IntPoint>, std::vector<PointWithID>> get_node_neighbors(Tensor2DAcc<int> skeleton,
                                                                               IntPoint current, IntPoint shape) {
     std::vector<IntPoint> nodes;
     std::vector<PointWithID> branches;
@@ -232,15 +232,14 @@ std::pair<std::vector<IntPoint>, std::vector<PointWithID>> get_node_neighbors(Te
  *     - The coordinates of neighbor nodes.
  *     - The coordinates of neighbor branches.
  */
-std::pair<PointWithID, int> track_branch_neighbors(Tensor2DAccessor<int> skeleton, PointWithID current,
-                                                   IntPoint shape) {
+std::pair<PointWithID, int> track_branch_neighbors(Tensor2DAcc<int> skeleton, PointWithID current, IntPoint shape) {
     PointWithID nextBranchPoint = {0, 0, -1};
     for (const int& n_id : TRACK_NEXT_NEIGHBORS[current.id]) {
         const IntPoint n = NEIGHBORHOOD[n_id] + current;
         if (!n.is_inside(shape)) continue;
 
         int pixelRole = skeleton[n.y][n.x];
-        if (pixelRole == PixelRole::NODE) {
+        if (is_node(pixelRole)) {
             return {{n.y, n.x, n_id}, pixelRole};
         } else if (nextBranchPoint.id == -1 && pixelRole == PixelRole::BRANCH_ROLE) {
             nextBranchPoint = {n.y, n.x, n_id};
@@ -344,7 +343,7 @@ std::tuple<EdgeList, std::vector<CurveYX>, std::vector<IntPoint>> parse_skeleton
                 // Save the branch curve
                 branch_pixels.push_back({tracker.y, tracker.x});
 
-                if (tracker_role == PixelRole::NODE) {
+                if (is_node(tracker_role)) {
                     // Save connectivity
                     const int other_node_id = -label_acc[tracker.y][tracker.x] - 1;
                     edge_list.push_back({node.id, other_node_id, branch_id});

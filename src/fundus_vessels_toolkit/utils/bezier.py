@@ -24,10 +24,15 @@ class BezierCubic(NamedTuple):
         points = [Point(float(p[0]), float(p[1])) for p in curve[:4]]
         return cls(*points)
 
-    def to_path(self) -> str:
+    def to_path(self, offset: Optional[Point] = None) -> str:
         if self.p0.is_nan() or self.c0.is_nan() or self.c1.is_nan() or self.p1.is_nan():
             return ""
-        return f"M {self.p0.x},{self.p0.y} C {self.c0.x},{self.c0.y} {self.c1.x},{self.c1.y} {self.p1.x},{self.p1.y}"
+        oy, ox = offset if offset is not None else (0, 0)
+        return (
+            f"M {self.p0.x-ox},{self.p0.y-oy} "
+            f"C {self.c0.x-ox},{self.c0.y-oy} {self.c1.x-ox},{self.c1.y-oy} "
+            f"{self.p1.x-ox},{self.p1.y-oy}"
+        )
 
     def to_array(self) -> np.array:
         return np.array([self.p0, self.c0, self.c1, self.p1])
@@ -84,8 +89,8 @@ class BSpline(tuple[BezierCubic]):
         descr = f"BSpline({len(self)} curves):\n\t"
         return descr + "\n\t".join(str(curve) for curve in self)
 
-    def to_path(self) -> str:
-        return "\n".join(curve.to_path() for curve in self)
+    def to_path(self, offset: Optional[Point] = None) -> str:
+        return "\n".join(curve.to_path(offset) for curve in self)
 
     @classmethod
     def fit(cls, yx_points: np.array, max_error: float, split_on=None, tangent_std=2) -> BSpline:

@@ -44,7 +44,7 @@ def compute_ROI_mask(img: np.ndarray, median_blur_size: int | None = None, thres
 
 
 def fundus_ROI(
-    fundus: np.ndarray, blur_radius=5, morphological_clean=False, smoothing_radius=0, final_erosion=4
+    fundus: np.ndarray, blur_radius=5, morphological_clean=False, smoothing_radius=0, final_erosion=10
 ) -> np.ndarray:
     """Compute the region of interest (ROI) of a fundus image.
 
@@ -78,11 +78,13 @@ def fundus_ROI(
 
     """
     padding = blur_radius + smoothing_radius
-    fundus = np.pad(fundus[..., 1], ((padding, padding), (padding, padding)), mode="constant")
+    fundus = np.pad(fundus[..., 2], ((padding, padding), (padding, padding)), mode="constant")
     if fundus.dtype != np.uint8:
-        fundus = (fundus * 255).astype(np.uint8)
+        if fundus.max() <= 1:
+            fundus *= 255
+        fundus = fundus.astype(np.uint8)
     fundus = cv2.medianBlur(fundus, blur_radius * 2 - 1)
-    mask = fundus > 10
+    mask = fundus > 30
 
     if morphological_clean:
         # Remove small objects

@@ -11,8 +11,9 @@
  *  - a list of the tangents of the branches (or the bezier node and control points),
  *  - the width of the branches
  */
-std::tuple<std::vector<CurveTangents>, std::vector<Scalars>, std::vector<Scalars>, std::vector<BSpline>>
-extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAccessor<bool>& segmentation,
+std::tuple<std::vector<CurveTangents>, std::vector<Scalars>, std::vector<IntPointPairs>, std::vector<Scalars>,
+           std::vector<BSpline>>
+extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAcc<bool>& segmentation,
                           std::map<std::string, double> options, bool assume_contiguous) {
     // --- Parse Options ---
     bool adaptative_tangent = get_if_exists(options, "adaptative_tangent", 1.0) > 0;
@@ -20,18 +21,21 @@ extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAcce
     float bspline_KpercentileThreshold = get_if_exists(options, "bspline_K_percentile_threshold", 0.1);
 
     bool return_calibre = get_if_exists(options, "return_calibre", 1.0) > 0;
-    bool extract_bspline = get_if_exists(options, "extract_bspline", 1.0) > 0;
+    bool return_boundaries = get_if_exists(options, "return_boundaries", 0.0) > 0;
     bool return_curvature = get_if_exists(options, "return_curvature", 0.0) > 0;
+    bool extract_bspline = get_if_exists(options, "extract_bspline", 1.0) > 0;
 
     // --- Prepare result vectors ---
     auto nCurves = branch_curves.size();
     std::vector<CurveTangents> branchesTangents(nCurves);
     std::vector<Scalars> branchesCalibre;
     if (return_calibre) branchesCalibre.resize(nCurves);
-    std::vector<BSpline> branchesBSpline;
-    if (extract_bspline) branchesBSpline.resize(nCurves);
+    std::vector<IntPointPairs> branchesBoundaries;
+    if (return_boundaries) branchesBoundaries.resize(nCurves);
     std::vector<Scalars> branchesCurvature;
     if (return_curvature) branchesCurvature.resize(nCurves);
+    std::vector<BSpline> branchesBSpline;
+    if (extract_bspline) branchesBSpline.resize(nCurves);
 
 // --- Extract geometry of each branches ---
 #pragma omp parallel for
@@ -45,6 +49,7 @@ extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAcce
         auto& tangents = branchesTangents[curveI];
         tangents.resize(curve.size());
         if (return_calibre) branchesCalibre[curveI].resize(curve.size());
+        if (return_boundaries) branchesBoundaries[curveI].resize(curve.size());
 
         // Split the branch curve into contiguous curves
         auto const& contiguousCurvesStartEnd =
@@ -56,17 +61,26 @@ extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAcce
                 branchesTangents[curveI][i] = tangent;
 
                 // Compute the calibre of the curve
-                if (return_calibre || adaptative_tangent) {
-                    auto calibre = fast_branch_calibre(curve, i, segmentation, tangent);
+                if (return_calibre || return_boundaries || adaptative_tangent) {
+                    auto boundaries = fast_branch_boundaries(curve, i, segmentation, tangent);
 
-                    if (adaptative_tangent && calibre == calibre) {
-                        const auto& refinedTangent =
-                            curve_tangent(curve, i, std::clamp(calibre, 1.5f, 15.0f), true, true, start, end);
-                        branchesTangents[curveI][i] = refinedTangent;
-                        if (return_calibre)
-                            branchesCalibre[curveI][i] = fast_branch_calibre(curve, i, segmentation, refinedTangent);
-                    } else if (return_calibre)
-                        branchesCalibre[curveI][i] = calibre;
+                    if (return_calibre || adaptative_tangent) {
+                        auto calibre = fast_branch_calibre(boundaries[0], boundaries[1], tangent);
+
+                        if (adaptative_tangent && calibre == calibre) {
+                            const auto& refinedTangent =
+                                curve_tangent(curve, i, std::clamp(calibre, 1.5f, 15.0f), true, true, start, end);
+                            branchesTangents[curveI][i] = refinedTangent;
+                            if (return_boundaries || return_calibre)
+                                boundaries = fast_branch_boundaries(curve, i, segmentation, refinedTangent);
+                            if (return_calibre)
+                                branchesCalibre[curveI][i] =
+                                    fast_branch_calibre(boundaries[0], boundaries[1], refinedTangent);
+                        } else if (return_calibre)
+                            branchesCalibre[curveI][i] = calibre;
+                    }
+
+                    if (return_boundaries) branchesBoundaries[curveI][i] = boundaries;
                 }
             }
 
@@ -91,7 +105,7 @@ extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAcce
             }
         }
     }
-    return std::make_tuple(branchesTangents, branchesCalibre, branchesCurvature, branchesBSpline);
+    return std::make_tuple(branchesTangents, branchesCalibre, branchesBoundaries, branchesCurvature, branchesBSpline);
 }
 
 BSpline bspline_regression(const CurveYX& curve, const CurveTangents& tangents, double targetSqrError,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from functools import reduce
-from typing import Iterable, List, NamedTuple, Tuple, TypeGuard, overload
+from typing import Iterable, List, NamedTuple, Optional, Tuple, TypeGuard, overload
 
 import numpy as np
 import numpy.typing as npt
@@ -51,8 +51,12 @@ class Rect(NamedTuple):
         return self.x + self.w
 
     @property
-    def shape(self) -> Point:
+    def size(self) -> Point:
         return Point(y=self.h, x=self.w)
+
+    @property
+    def shape(self) -> Tuple[float, float]:
+        return self.h, self.w
 
     @property
     def area(self) -> float:
@@ -244,6 +248,19 @@ class Rect(NamedTuple):
             ensure_positive=True,
         )
 
+    def clip_to_size(self, shape: Tuple[float, float], center: Optional[Tuple[float, float]] = None):
+        if center is None:
+            center = self.center
+        h, w = self.shape
+        H, W = shape
+        x0, y0 = self.top_left
+        xC, yC = center
+        if h > H:
+            y0 = max(xC - H / 2, y0) if xC - y0 > y0 + h - xC else min(xC - H / 2, y0 + h - H)
+        if w > W:
+            x0 = max(yC - W / 2, x0) if yC - x0 > x0 + w - xC else min(yC - W / 2, x0 + w - W)
+        return Rect.from_points((y0, x0), (y0 + min(h, H), x0 + min(w, W)))
+
     @overload
     def pad(self, pad: float | Tuple[float, float]) -> Rect: ...
 
@@ -360,6 +377,9 @@ class Point(NamedTuple):
         if len(point) == 2:
             return cls(*point)
         raise TypeError("Point can only be created from a float or a tuple of 2 floats")
+
+    def numpy(self) -> np.ndarray:
+        return np.array(self)
 
     @overload
     def distance(self, other: Point) -> float: ...

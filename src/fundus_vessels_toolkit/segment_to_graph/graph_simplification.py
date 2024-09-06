@@ -63,6 +63,7 @@ SimplifyTopology: TypeAlias = Literal["node", "branch", "both"] | None
 def simplify_graph(
     vessel_graph: VGraph,
     max_spurs_length: float = 0,
+    min_orphan_branches_length: float = 0,
     nodes_merge_distance: NodeMergeDistanceParam = True,
     iterative_nodes_merge: bool = True,
     max_cycles_length: float = 0,
@@ -87,6 +88,10 @@ def simplify_graph(
 
         max_spurs_length:
             If larger than 0, spurs (terminal branches) with a length smaller than this value are removed (disabled by default).
+
+        min_orphan_branches_length:
+            If larger than 0, orphan branches (connected to no other branches) shorter than this value are removed (disabled by default).
+
         nodes_merge_distance:
             If larger than 0, nodes separated by less than this distance are merged (5√2/2 by default).
 
@@ -154,6 +159,7 @@ def simplify_graph(
             inplace=True,
             iterative_clustering=iterative_nodes_merge,
         )
+
     if nodes_merge_distance > 0:
         merge_nodes_by_distance(
             vessel_graph,
@@ -166,6 +172,9 @@ def simplify_graph(
     if max_cycles_length > 0 or simplify_topology in ("branch", "both"):
         max_nodes_distance = max_cycles_length if simplify_topology not in ("branch", "both") else None
         merge_equivalent_branches(vessel_graph, max_nodes_distance, inplace=True)
+
+    if min_orphan_branches_length > 0:
+        remove_orphan_branches(vessel_graph, min_orphan_branches_length, inplace=True)
 
     if simplify_topology in ("node", "both"):
         simplify_passing_nodes(vessel_graph, inplace=True)
@@ -224,6 +233,8 @@ def cluster_nodes_by_distance(
         else:
             branch_id = np.argwhere(np.isin(vessel_graph.branch_list, nodes_id).all(axis=1)).flatten()
             branches = vessel_graph.branch_list[branch_id]
+        # Exclude branches with the same start and end nodes
+        branches = branches[branches[:, 0] != branches[:, 1]]
         nodes_coord = vessel_graph.nodes_coord()
         # Compute the distance between the nodes of each branch
         branch_dist = np.linalg.norm(nodes_coord[branches[:, 0]] - nodes_coord[branches[:, 1]], axis=1)
@@ -402,6 +413,32 @@ def remove_spurs(vessel_graph: VGraph, max_spurs_length: float = 0, inplace=Fals
     terminal_branches = vessel_graph.terminal_branches()
     terminal_branches_length = vessel_graph.branches_arc_length(terminal_branches)
     return vessel_graph.delete_branches(terminal_branches[terminal_branches_length < max_spurs_length], inplace=inplace)
+
+
+def remove_orphan_branches(vessel_graph: VGraph, min_length: float | bool = 0, inplace=False) -> VGraph:
+    """
+    Remove single branches (branches connected to no other branches) whose length is shorter than min_length.
+
+    Parameters
+    ----------
+    vessel_graph :
+        The graph of the vasculature extracted from the vessel
+    min_length : float, optional
+        The minimum length of the single branches to keep, by default 0.
+    inplace : bool, optional
+        If True, modify the graph in place, by default False.
+
+    Returns
+    -------
+        The modified graph with the single branches removed.
+    """
+    if not min_length or (np.isscalar(min_length) and min_length <= 0):
+        return vessel_graph
+    orphan_branches = vessel_graph.orphan_branches()
+    if np.isscalar(min_length):
+        single_branches_length = vessel_graph.branches_arc_length(orphan_branches)
+        orphan_branches = orphan_branches[single_branches_length < min_length]
+    return vessel_graph.delete_branches(orphan_branches, inplace=inplace)
 
 
 def simplify_passing_nodes(vessel_graph: VGraph, inplace=False) -> VGraph:

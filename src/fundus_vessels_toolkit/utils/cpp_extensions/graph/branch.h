@@ -10,19 +10,20 @@ using CurveTangents = std::vector<Point>;
  *              === BRANCH_CALIBRE.CPP ===
  **************************************************************************************/
 std::array<IntPoint, 2> fast_branch_boundaries(const CurveYX &curveYX, const std::size_t i,
-                                               const Tensor2DAccessor<bool> &segmentation, const Point &tangent);
+                                               const Tensor2DAcc<bool> &segmentation, const Point &tangent);
 std::array<IntPoint, 2> fast_branch_boundaries(const CurveYX &curveYX, const std::size_t i,
-                                               const Tensor2DAccessor<bool> &segmentation);
+                                               const Tensor2DAcc<bool> &segmentation);
 std::vector<std::array<IntPoint, 2>> fast_branch_boundaries(const CurveYX &curveYX,
-                                                            const Tensor2DAccessor<bool> &segmentation,
+                                                            const Tensor2DAcc<bool> &segmentation,
                                                             const std::vector<Point> &tangents,
                                                             const std::vector<int> &evaluateAtID = {});
 
-float fast_branch_calibre(const CurveYX &curveYX, std::size_t i, const Tensor2DAccessor<bool> &segmentation,
+float fast_branch_calibre(const Point &boundL, const Point &boundR, const Point &tangent = {0, 0});
+float fast_branch_calibre(const CurveYX &curveYX, std::size_t i, const Tensor2DAcc<bool> &segmentation,
                           const Point &tangent);
-Scalars fast_branch_calibre(const CurveYX &curveYX, const Tensor2DAccessor<bool> &segmentation,
+Scalars fast_branch_calibre(const CurveYX &curveYX, const Tensor2DAcc<bool> &segmentation,
                             const std::vector<Point> &tangents, const std::vector<int> &evaluateAtID = {});
-Scalars fast_branch_calibre(const CurveYX &curveYX, const Tensor2DAccessor<bool> &segmentation,
+Scalars fast_branch_calibre(const CurveYX &curveYX, const Tensor2DAcc<bool> &segmentation,
                             const std::vector<int> &evaluateAtID = {});
 
 /**************************************************************************************
@@ -68,7 +69,7 @@ std::vector<std::array<IntPoint, 2>> find_branch_endpoints(const torch::Tensor &
 std::vector<CurveYX> track_branches(const torch::Tensor &branch_labels, const torch::Tensor &node_yx,
                                     const torch::Tensor &branch_list);
 
-IntPoint track_nearest_border(const IntPoint &start, const Point &direction, const Tensor2DAccessor<bool> &segmentation,
+IntPoint track_nearest_border(const IntPoint &start, const Point &direction, const Tensor2DAcc<bool> &segmentation,
                               int max_distance = 40);
 
 std::tuple<int, float> findClosestPixel(const CurveYX &curve, const Point &p, int start, int end,
@@ -79,28 +80,27 @@ std::list<SizePair> splitInContiguousCurves(const CurveYX &curve);
 /**************************************************************************************
  *              === BRANCH_FIXING.CPP ===
  **************************************************************************************/
-void clean_branches_skeleton(std::vector<CurveYX> &branchCurves, Tensor2DAccessor<int> &branchesLabelMap,
-                             const Tensor2DAccessor<bool> &segmentation, const GraphAdjList &adjacency,
-                             const int maxRemovedLength);
+std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_branches_skeleton(
+    std::vector<CurveYX> &branchCurves, Tensor2DAcc<int> &branchesLabelMap, const Tensor2DAcc<bool> &segmentation,
+    const GraphAdjList &adjacency, const int maxRemovedLength);
 
-std::vector<int> clean_branch_skeleton_around_node(const std::vector<CurveYX> &branchCurves, const int nodeID,
-                                                   const std::set<Edge> &node_adjacency,
-                                                   const Tensor2DAccessor<bool> &segmentation,
-                                                   const int maxRemovedLength);
+std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_skeleton_around_node(
+    const std::vector<CurveYX> &branchCurves, const int nodeID, const std::set<Edge> &node_adjacency,
+    const Tensor2DAcc<bool> &segmentation, const int maxRemovedLength);
 
-std::vector<Edge> find_small_spurs(const std::vector<CurveYX> &branchCurves,
-                                   const Tensor2DAccessor<int> &branchesLabelMap, const GraphAdjList &adjacency,
-                                   const Tensor2DAccessor<bool> &segmentation, float max_spurs_length,
-                                   const float max_calibre_ratio);
+std::vector<Edge> find_small_spurs(const std::vector<CurveYX> &branchCurves, const Tensor2DAcc<int> &branchesLabelMap,
+                                   const GraphAdjList &adjacency, const Tensor2DAcc<bool> &segmentation,
+                                   float max_spurs_length, const float max_calibre_ratio);
 
 float largest_near_calibre(const Edge &edge, const GraphAdjList &adjacency, const std::vector<CurveYX> &branchesCurves,
-                           const Tensor2DAccessor<bool> &segmentation);
+                           const Tensor2DAcc<bool> &segmentation);
 
 /**************************************************************************************
  *              === BRANCH_GEOMETRY.CPP ===
  **************************************************************************************/
-std::tuple<std::vector<CurveTangents>, std::vector<Scalars>, std::vector<Scalars>, std::vector<BSpline>>
-extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAccessor<bool> &segmentation,
+std::tuple<std::vector<CurveTangents>, std::vector<Scalars>, std::vector<IntPointPairs>, std::vector<Scalars>,
+           std::vector<BSpline>>
+extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAcc<bool> &segmentation,
                           std::map<std::string, double> options = {}, bool assume_contiguous = false);
 
 BSpline bspline_regression(const CurveYX &curve, const CurveTangents &tangents, const Scalars &curvatures,

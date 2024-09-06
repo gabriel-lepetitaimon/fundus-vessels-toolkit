@@ -4,7 +4,7 @@
 #include <set>
 
 template <typename T>
-using Tensor2DAccessor = at::TensorAccessor<T, 2UL, at::DefaultPtrTraits, signed long>;
+using Tensor2DAcc = at::TensorAccessor<T, 2UL, at::DefaultPtrTraits, signed long>;
 
 std::vector<std::set<int>> edges_to_adjacency_list(std::list<std::vector<int>> edges_list, int n_nodes = -1) {
     if (n_nodes == -1) {
@@ -167,7 +167,7 @@ std::list<std::vector<int>> iterative_reduce_clusters(const torch::Tensor &edgeL
             nodeToCluster[v] = {clusterId, w_v};
             update_edges_total_weight(v, w_v);
 
-        } else if (itU->second != itV->second) {
+        } else if (std::get<0>(itU->second) != std::get<0>(itV->second)) {
             // Merge the smallest cluster (cluster of v) into the largest (cluster of u)
             if (clusters[std::get<0>(itU->second)].size() < clusters[std::get<0>(itV->second)].size()) {
                 std::swap(u, v);
@@ -250,21 +250,25 @@ std::list<std::vector<int>> iterative_reduce_clusters(const torch::Tensor &edgeL
 std::list<std::list<int>> solve_1d_chains(std::list<std::vector<int>> chains) {
     std::list<std::list<int>> solved_chains;
     for (auto chain : chains) {
-        // Ensure unique elements
+        // Ensure each index is not part of the middle of another chain
         for (auto solved_chain : solved_chains) {
             auto it = solved_chain.begin();
-            auto const &penultimate = --solved_chain.end();
-            while (++it != penultimate) {
-                if (std::find(chain.begin(), chain.end(), *it) != chain.end()) {
-                    PyErr_SetString(PyExc_ValueError, "Chain contains duplicate elements");
-                    return {};
-                }
+            it++;
+            auto penultimate = solved_chain.end();
+            penultimate--;
+
+            while (it != penultimate) {
+                TORCH_CHECK_VALUE(std::find(chain.begin(), chain.end(), *it) == chain.end(), "Index ", *it,
+                                  " is part of multiple chains.");
+                it++;
             }
         }
 
-        bool chain_found = false;
+        int chain_found = 0;
         // Try to append chain to existing solved chains
-        for (auto &solved_chain : solved_chains) {
+        auto it = solved_chains.begin();
+        for (; it != solved_chains.end(); it++) {
+            auto &solved_chain = *it;
             auto const &front = chain.front();
             auto const &back = chain.back();
             auto const &solved_begin = solved_chain.begin();
@@ -272,30 +276,93 @@ std::list<std::list<int>> solve_1d_chains(std::list<std::vector<int>> chains) {
 
             if (solved_back == front) {
                 solved_chain.insert(solved_chain.end(), chain.begin() + 1, chain.end());
-                chain_found = true;
+                chain_found = 1;
                 break;
             } else if (solved_back == back) {
                 solved_chain.insert(solved_chain.end(), chain.rbegin() + 1, chain.rend());
-                chain_found = true;
+                chain_found = 1;
                 break;
             } else if (*solved_begin == back) {
                 solved_chain.insert(solved_begin, chain.begin(), chain.end() - 1);
-                chain_found = true;
+                chain_found = -1;
                 break;
             } else if (*solved_begin == front) {
                 solved_chain.insert(solved_begin, chain.rbegin(), chain.rend() - 1);
-                chain_found = true;
+                chain_found = -1;
                 break;
             }
         }
-        if (!chain_found) solved_chains.push_back(std::list<int>(chain.begin(), chain.end()));
+        if (!chain_found)
+            solved_chains.push_back(std::list<int>(chain.begin(), chain.end()));
+        else {
+            // If a chain was found, ensure that, if the new extremity is a part of another chain, the chains are merged
+            auto &chain = *it;
+            const int extremity = chain_found == 1 ? chain.back() : chain.front();
+            auto other_it = it;
+            other_it++;
+            if (chain_found == 1) {
+                for (; other_it != solved_chains.end(); other_it++) {
+                    if (other_it->front() == extremity) {
+                        chain.insert(chain.end(), ++other_it->begin(), other_it->end());
+                        solved_chains.erase(other_it);
+                        break;
+                    } else if (other_it->back() == extremity) {
+                        chain.insert(chain.end(), ++other_it->rbegin(), other_it->rend());
+                        solved_chains.erase(other_it);
+                        break;
+                    }
+                }
+            } else {
+                for (; other_it != solved_chains.end(); other_it++) {
+                    if (other_it->front() == extremity) {
+                        chain.insert(chain.begin(), other_it->rbegin(), --other_it->rend());
+                        solved_chains.erase(other_it);
+                        break;
+                    } else if (other_it->back() == extremity) {
+                        chain.insert(chain.begin(), other_it->begin(), --other_it->end());
+                        solved_chains.erase(other_it);
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     return solved_chains;
+}
+
+std::vector<torch::Tensor> remove_consecutive_duplicates(const torch::Tensor &tensor, bool return_index = false) {
+    TORCH_CHECK_VALUE(tensor.dim() == 2 && tensor.size(0) > 0, "Input tensor must be 2D and non empty.");
+    std::size_t K = (std::size_t)tensor.size(1);
+    auto outTensor = torch::empty({tensor.size(0), tensor.size(1)}, tensor.options());
+    auto indexTensor = torch::empty({tensor.size(0)}, tensor.options().dtype(torch::kInt32));
+    auto out = outTensor.accessor<int, 2>(), acc = tensor.accessor<int, 2>();
+    auto id = indexTensor.accessor<int, 1>();
+
+    for (std::size_t k = 0; k < K; k++) out[0][k] = acc[0][k];
+    std::size_t j = 1;
+    for (std::size_t i = 1; i < (std::size_t)tensor.size(0); i++) {
+        for (std::size_t k = 0; k < K; k++) {
+            if (acc[i][k] != acc[i - 1][k]) {
+                for (std::size_t l = 0; l < K; l++) out[j][l] = acc[i][l];
+                id[j] = i;
+                j++;
+                break;
+            }
+        }
+    }
+
+    outTensor = outTensor.slice(0, 0, j);
+    if (return_index) {
+        indexTensor = indexTensor.slice(0, 0, j);
+        return {outTensor, indexTensor};
+    } else
+        return {outTensor};
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("solve_clusters", &solve_clusters, "Solve clusters from edges list");
     m.def("iterative_reduce_clusters", &iterative_reduce_clusters, "Iteratively reduce clusters from edge list");
     m.def("solve_1d_chains", &solve_1d_chains, "Solve 1D chains clusters from chains list");
+    m.def("remove_consecutive_duplicates", &remove_consecutive_duplicates, "Remove consecutive duplicates from tensor");
 }

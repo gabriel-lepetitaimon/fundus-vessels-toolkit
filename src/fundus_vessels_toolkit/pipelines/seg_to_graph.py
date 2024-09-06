@@ -29,6 +29,7 @@ class SegToGraph:
         clean_branches_extremities=20,
         max_spurs_length=1,
         max_spurs_calibre_factor=1,
+        min_orphan_branch_length=0,
         nodes_merge_distance: NodeMergeDistanceParam = True,
         merge_small_cycles: float = 0,
         simplify_topology: SimplifyTopology = "node",
@@ -76,6 +77,7 @@ class SegToGraph:
         self.max_spurs_length = max_spurs_length
         self.max_spurs_calibre_factor = max_spurs_calibre_factor
 
+        self.min_orphan_branch_length = min_orphan_branch_length
         self.nodes_merge_distance = nodes_merge_distance
         self.iterative_nodes_merge = True
         self.merge_small_cycles = merge_small_cycles
@@ -122,6 +124,7 @@ class SegToGraph:
             iterative_nodes_merge=self.iterative_nodes_merge,
             max_cycles_length=self.merge_small_cycles,
             simplify_topology=self.simplify_topology,
+            min_orphan_branches_length=self.min_orphan_branch_length,
             # node_simplification_criteria=self.node_simplification_criteria,
         )
 
@@ -139,7 +142,7 @@ class FundusVesselSegToGraph(SegToGraph):
     Specialization of Seg2Graph for retinal vessels.
     """
 
-    def __init__(self, max_vessel_diameter=5, prevent_node_simplification_on_borders=35):
+    def __init__(self, max_vessel_diameter=20, prevent_node_simplification_on_borders=35):
         super(FundusVesselSegToGraph, self).__init__(
             fix_hollow=True,
             skeletonize_method="lee",
@@ -158,6 +161,7 @@ class FundusVesselSegToGraph(SegToGraph):
     def max_vessel_diameter(self, diameter):
         self._max_vessel_diameter = diameter
 
+        self.min_orphan_branch_length = diameter * 1.5
         self.clean_branches_extremities = diameter * 1.5
         self.nodes_merge_distance = NodeMergeDistances(junction=diameter * 2 / 3, termination=diameter, node=0)
         self.merge_small_cycles = diameter

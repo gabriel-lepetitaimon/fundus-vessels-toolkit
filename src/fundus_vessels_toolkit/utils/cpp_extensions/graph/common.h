@@ -22,13 +22,33 @@ T get_if_exists(const std::map<std::string, T>& map, const std::string& key, con
 }
 
 /*******************************************************************************************************************
- *             === MATH ===
+ *             === VECTORS AND ARRAYS ===
  *******************************************************************************************************************/
 using IntPair = std::array<int, 2>;
+using UIntPair = std::array<unsigned int, 2>;
 using FloatPair = std::array<float, 2>;
 using SizePair = std::array<std::size_t, 2>;
 using Scalars = std::vector<float>;
 
+template <typename T>
+class no_init {
+    static_assert(std::is_fundamental<T>::value, "should be a fundamental type");
+
+   public:
+    // constructor without initialization
+    no_init() noexcept {}
+    // implicit conversion T → no_init<T>
+    constexpr no_init(T value) noexcept : v_{value} {}
+    // implicit conversion no_init<T> → T
+    constexpr operator T() const noexcept { return v_; }
+
+   private:
+    T v_;
+};
+
+/*******************************************************************************************************************
+ *             === MATH ===
+ *******************************************************************************************************************/
 // === MATRIX ===
 template <typename T, unsigned int D1 = 2, unsigned int D2 = D1>
 using Matrix2 = std::array<std::array<T, D2>, D1>;
@@ -69,6 +89,9 @@ struct IntPoint {
     }
 };
 
+/// @brief Point structure with double coordinates.
+/// The coordinates are stored as (row, column), i.e. (y, x). The geometric operation assume a Cartesian coordinate
+/// system defined by a x (positive right) and y (positive down) axis. Direct rotations are therefore clockwise.
 struct Point {
     double y;
     double x;
@@ -76,9 +99,10 @@ struct Point {
     // default + parameterized constructor
     Point(double y = 0, double x = 0);
 
-    Point(IntPair yx);
-    Point(FloatPair yx);
-    Point(IntPoint yx);
+    Point(const IntPair& yx);
+    Point(const FloatPair& yx);
+    Point(const IntPoint& yx);
+    Point(const at::TensorAccessor<float, 1UL, at::DefaultPtrTraits, signed long>& yx);
 
     // assignment operator modifies object, therefore non-const
     Point& operator=(const Point& p);
@@ -98,6 +122,7 @@ struct Point {
 
     Point normalize() const;
     double dot(const Point& p) const;
+    double cos(const Point& p) const;
     double cross(const Point& p) const;
     double squaredNorm() const;
     double norm() const;
@@ -106,6 +131,9 @@ struct Point {
     Point rot270() const;
     double angle() const;
     double angle(const Point& p) const;
+    Point rotate(double angle) const;
+    Point rotate(const Point& u) const;
+    Point rotate_neg(const Point& u) const;
 
     bool is_inside(double H, double W) const;
     bool is_inside(const Point& p) const;
@@ -133,6 +161,8 @@ struct Point {
 using CurveYX = std::vector<IntPoint>;
 using Vector = Point;
 using PointList = std::vector<Point>;
+using IntPointPair = std::array<IntPoint, 2>;
+using IntPointPairs = std::vector<IntPointPair>;
 
 struct PointWithID : IntPoint {
     int id;
@@ -237,11 +267,50 @@ std::vector<T> abs(const std::vector<T>& x) {
 
 static const float SQRT2 = sqrt(2);
 
+/// @brief Compute the index of the lower triangular matrix.
+/// The lower triangular matrix is stored in a 1D array. The index of the element (i, j) is given by:
+///     index = i * (i + 1) / 2 + j
+///
+/// Example:
+///     For a 4x4 matrix:
+///     | 0 - - - |
+///     | 1 2 - - |
+///     | 3 4 5 - |
+///     | 6 7 8 9 |
+/// @param row Index of the row. Must be > 0.
+/// @param col Index of the column. col < row.
+/// @return std::size_t Index of the element in the lower triangular matrix.
+inline std::size_t lower_triangular_index(std::size_t row, std::size_t col) {
+    if (row >= col)
+        return row * (row + 1) / 2 + col;
+    else
+        return col * (col + 1) / 2 + row;
+}
+
+template <unsigned int N>
+inline std::size_t matrix_index(const std::array<uint, N>& index, std::array<std::size_t, N> shape) {
+    std::size_t idx = 0, stride = 1;
+    for (int i = N - 1; i >= 0; i--) {
+        idx += index[i] * stride;
+        stride *= shape[i];
+    }
+    return idx;
+}
+
 /*******************************************************************************************************************
  *             === TORCH ===
  *******************************************************************************************************************/
 template <typename T>
-using Tensor2DAccessor = at::TensorAccessor<T, 2UL, at::DefaultPtrTraits, signed long>;
+using Tensor1DAcc = at::TensorAccessor<T, 1UL, at::DefaultPtrTraits, signed long>;
+
+template <typename T>
+using Tensor2DAcc = at::TensorAccessor<T, 2UL, at::DefaultPtrTraits, signed long>;
+
+template <typename T>
+using Tensor3DAcc = at::TensorAccessor<T, 3UL, at::DefaultPtrTraits, signed long>;
+
+template <typename T>
+using Tensor4DAcc = at::TensorAccessor<T, 4UL, at::DefaultPtrTraits, signed long>;
 
 torch::Tensor vector_to_tensor(const std::vector<int>& vec);
 torch::Tensor vector_to_tensor(const std::vector<float>& vec);
@@ -250,9 +319,12 @@ torch::Tensor vector_to_tensor(const std::vector<std::size_t>& vec);
 torch::Tensor vector_to_tensor(const std::vector<Point>& vec);
 torch::Tensor vector_to_tensor(const std::vector<IntPoint>& vec);
 torch::Tensor vector_to_tensor(const std::vector<IntPair>& vec);
+torch::Tensor vector_to_tensor(const std::vector<UIntPair>& vec);
 torch::Tensor vector_to_tensor(const std::vector<FloatPair>& vec);
 torch::Tensor vector_to_tensor(const std::vector<std::vector<IntPair>>& vec);
-torch::Tensor vector_to_tensor(const std::vector<std::array<IntPoint, 2>>& vec);
+torch::Tensor vector_to_tensor(const IntPointPairs& vec);
+
+torch::Tensor remove_rows(const torch::Tensor& tensor, std::vector<int> rows);
 
 template <typename T>
 std::vector<torch::Tensor> vectors_to_tensors(const std::vector<std::vector<T>>& vec) {
@@ -277,7 +349,7 @@ struct Edge {
     int end;
     int id;
 
-    Edge(int start = 0, int end = 0, int id = 0);
+    Edge(int start = 0, int end = 0, int id = -1);
     Edge& operator=(const Edge& e);
     int other(int node) const;
 
@@ -292,7 +364,7 @@ using GraphAdjList = std::vector<std::set<Edge>>;
 
 GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N = -1, bool directed = false);
 GraphAdjList edge_list_to_adjlist(const EdgeList& edges, int N = -1, bool directed = false);
-GraphAdjList edge_list_to_adjlist(const Tensor2DAccessor<int>& edges, int N = -1, bool directed = false);
+GraphAdjList edge_list_to_adjlist(const Tensor2DAcc<int>& edges, int N = -1, bool directed = false);
 
 torch::Tensor edge_list_to_tensor(const EdgeList& vec);
 
@@ -403,7 +475,7 @@ uint8_t roll_neighbors(uint8_t neighborhood, uint8_t n);
  * @return unsigned short Value of the 8 neighbors of the pixel. The top-left neighbor is the most significant bit.
  */
 template <typename T>
-uint8_t get_neighborhood_safe(const Tensor2DAccessor<T>& z, int y, int x) {
+uint8_t get_neighborhood_safe(const Tensor2DAcc<T>& z, int y, int x) {
     uint8_t neighbors = 0;
     if (y > 0) {
         if (x > 0 && z[y - 1][x - 1] > 0) neighbors |= 0b10000000;
@@ -439,7 +511,7 @@ uint8_t get_neighborhood_safe(const Tensor2DAccessor<T>& z, int y, int x) {
  * @return unsigned short Value of the 8 neighbors of the pixel. The top-left neighbor is the most significant bit.
  */
 template <typename T>
-uint8_t get_neighborhood(const Tensor2DAccessor<T>& z, int y, int x) {
+uint8_t get_neighborhood(const Tensor2DAcc<T>& z, int y, int x) {
     uint8_t neighbors = 0;
     neighbors |= z[y - 1][x - 1] > 0 ? 0b10000000 : 0;
     neighbors |= z[y - 1][x] > 0 ? 0b01000000 : 0;

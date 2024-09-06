@@ -16,11 +16,11 @@ std::size_t nodesCount(const EdgeList &edgeList);
  *              === GRAPH_FIXING.CPP ===
  **************************************************************************************/
 void remove_branches(std::vector<Edge> branchesToRemove, std::vector<CurveYX> &branchCurves,
-                     Tensor2DAccessor<int> &branchesLabelMap, EdgeList &edge_list);
+                     Tensor2DAcc<int> &branchesLabelMap, EdgeList &edge_list);
 
 void remove_nodes(std::vector<std::size_t> nodesIdToRemove, EdgeList &edge_list, std::vector<IntPoint> &nodeCoords,
-                  Tensor2DAccessor<int> &labelMap);
+                  Tensor2DAcc<int> &labelMap);
 
-void remove_singleton_nodes(EdgeList &edge_list, std::vector<IntPoint> &nodeCoords, Tensor2DAccessor<int> &labelMap);
+void remove_singleton_nodes(EdgeList &edge_list, std::vector<IntPoint> &nodeCoords, Tensor2DAcc<int> &labelMap);
 
 #endif  // GRAPH_H

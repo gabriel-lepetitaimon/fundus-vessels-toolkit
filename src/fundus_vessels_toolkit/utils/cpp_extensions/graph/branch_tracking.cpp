@@ -173,7 +173,7 @@ std::vector<CurveYX> track_branches(const torch::Tensor &branch_labels, const to
  * @return The first point of the line for which the segmentation is false. If no such point is found, return
  * IntPoint::Invalid().
  */
-IntPoint track_nearest_border(const IntPoint &start, const Point &direction, const Tensor2DAccessor<bool> &segmentation,
+IntPoint track_nearest_border(const IntPoint &start, const Point &direction, const Tensor2DAcc<bool> &segmentation,
                               int max_distance) {
     if (direction.is_null()) return IntPoint::Invalid();
     const int H = segmentation.size(0), W = segmentation.size(1);

@@ -4,7 +4,7 @@ import numpy as np
 
 from ..utils.cpp_extensions.graph_cpp import shortest_secondary_path as cpp_shortest_path
 from ..vascular_data_objects.vgraph import VGraph
-from .node_matching import euclidien_node_matching
+from .node_matching import match_nodes_by_distance
 
 
 def shortest_unmatched_path(
@@ -164,7 +164,7 @@ def naive_edit_distance(
 
     """  # noqa: E501
     # Match nodes
-    node_match_id1, node_match_id2 = euclidien_node_matching(
+    node_match_id1, node_match_id2 = match_nodes_by_distance(
         graph1.nodes_coord(),
         graph2.nodes_coord(),
         max_matching_distance=max_matching_distance,
@@ -217,3 +217,6 @@ def naive_edit_distance(
     if return_labels:
         return n_diff1, n_diff2, (nb_match, unique_branches1, unique_branches2)
     return n_diff1, n_diff2
+
+
+########################################################################################################################

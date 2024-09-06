@@ -12,11 +12,15 @@
  * @param segmentation An accessor to a 2D tensor of shape (H, W) containing the vessels binary segmentation.
  * @param adjacency The adjacency list of the vessels graph.
  * @param maxRemovedLength The maximum number of pixels to remove from the branch.
+ *
+ * @return A list of pairs of vectors and floats representing the tangent and the calibre of the branch at the
+ * terminations.
  */
-void clean_branches_skeleton(std::vector<CurveYX> &branchCurves, Tensor2DAccessor<int> &branchesLabelMap,
-                             const Tensor2DAccessor<bool> &segmentation, const GraphAdjList &adjacency,
-                             const int maxRemovedLength) {
+std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_branches_skeleton(
+    std::vector<CurveYX> &branchCurves, Tensor2DAcc<int> &branchesLabelMap, const Tensor2DAcc<bool> &segmentation,
+    const GraphAdjList &adjacency, const int maxRemovedLength) {
     std::vector<IntPair> branches_terminations(branchCurves.size(), {0, 0});
+    std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> out(branchCurves.size());
 
 #pragma omp parallel for
     for (int nodeID = 0; nodeID < (int)adjacency.size(); nodeID++) {
@@ -28,9 +32,10 @@ void clean_branches_skeleton(std::vector<CurveYX> &branchCurves, Tensor2DAccesso
         // ... and store the termination indexes, in order to clean them later.
         int i = 0;
         for (auto const &edge : node_adjacency) {
-            const int termination = (int)node_terminations[i];
+            auto const &[termination, tangent, calibre, boundL, boundR] = node_terminations[i];
             if (nodeID == edge.start) branches_terminations[edge.id][0] = termination;
             if (nodeID == edge.end) branches_terminations[edge.id][1] = termination + 1;
+            out[edge.id][nodeID == edge.start ? 0 : 1] = {tangent, calibre, boundL, boundR};
             i++;
         }
     }
@@ -54,6 +59,8 @@ void clean_branches_skeleton(std::vector<CurveYX> &branchCurves, Tensor2DAccesso
             branchYX.clear();
         }
     }
+
+    return out;
 }
 
 /**
@@ -73,11 +80,13 @@ void clean_branches_skeleton(std::vector<CurveYX> &branchCurves, Tensor2DAccesso
  * @param segmentation An accessor to a 2D tensor of shape (H, W) containing the binary segmentation.
  * @param maxRemovedLength The maximum number of pixels to remove from the branch.
  *
+ * @return A list of tuples containing the index of the first valid pixel, the tangent and the calibre of
+ * the branch at this pixel.
+ *
  */
-std::vector<int> clean_branch_skeleton_around_node(const std::vector<CurveYX> &branchCurves, const int nodeID,
-                                                   const std::set<Edge> &node_adjacency,
-                                                   const Tensor2DAccessor<bool> &segmentation,
-                                                   const int maxRemovedLength) {
+std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_skeleton_around_node(
+    const std::vector<CurveYX> &branchCurves, const int nodeID, const std::set<Edge> &node_adjacency,
+    const Tensor2DAcc<bool> &segmentation, const int maxRemovedLength) {
     // === Preparation ==
     // Read branches id and side
     std::vector<std::tuple<int, bool>> branchesInfos;
@@ -104,7 +113,9 @@ std::vector<int> clean_branch_skeleton_around_node(const std::vector<CurveYX> &b
         const int inc = forward ? 1 : -1;
         auto const [start, end] = get_branch_start_end(branchID, forward);
         // === If the branch is too short, keep it ===
-        if (curveYX.size() <= 3) return end;
+        if (curveYX.size() <= 3)
+            return std::make_tuple(start, Point(curveYX[end] - curveYX[start]).normalize(), 0.0f, curveYX[start],
+                                   curveYX[start]);
 
         // === Check if pixel is valid (Lambda Function) ===
         auto is_branch_pixel_valid = [&](const IntPoint &p, const std::array<IntPoint, 2> &boundaries,
@@ -145,24 +156,27 @@ std::vector<int> clean_branch_skeleton_around_node(const std::vector<CurveYX> &b
         for (int i = start; i != end; i += inc) {
             nextTangent = fast_curve_tangent(curveYX, i + inc, TANGENT_HALF_GAUSS, forward, !forward);
             nextBoundaries = fast_branch_boundaries(curveYX, i + inc, segmentation, nextTangent);
-            if (is_branch_pixel_valid(curveYX[i], boundaries, nextBoundaries)) return i;
+            if (is_branch_pixel_valid(curveYX[i], boundaries, nextBoundaries)) {
+                float calibre = fast_branch_calibre(boundaries[0], boundaries[1], tangent);
+                return std::make_tuple(i, tangent, calibre, boundaries[0], boundaries[1]);
+            }
 
             tangent = nextTangent;
             boundaries = nextBoundaries;
         }
 
-        return end;
+        return std::make_tuple(end, tangent, fast_branch_calibre(boundaries[0], boundaries[1], tangent), boundaries[0],
+                               boundaries[1]);
     };
 
-    std::vector<int> out(branchesInfos.size());
+    std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> out(branchesInfos.size());
     for (std::size_t i = 0; i < branchesInfos.size(); i++) out[i] = find_first_valid_branch_pixel(i);
     return out;
 }
 
-std::vector<Edge> find_small_spurs(const std::vector<CurveYX> &branchCurves,
-                                   const Tensor2DAccessor<int> &branchesLabelMap, const GraphAdjList &adjacency,
-                                   const Tensor2DAccessor<bool> &segmentation, float max_spurs_length,
-                                   const float max_calibre_ratio) {
+std::vector<Edge> find_small_spurs(const std::vector<CurveYX> &branchCurves, const Tensor2DAcc<int> &branchesLabelMap,
+                                   const GraphAdjList &adjacency, const Tensor2DAcc<bool> &segmentation,
+                                   float max_spurs_length, const float max_calibre_ratio) {
     max_spurs_length = std::max(max_spurs_length, 1.0f);
 
     // Search for the terminal edges
@@ -193,7 +207,7 @@ std::vector<Edge> find_small_spurs(const std::vector<CurveYX> &branchCurves,
 }
 
 float largest_near_calibre(const Edge &edge, const GraphAdjList &adjacency, const std::vector<CurveYX> &branchesCurves,
-                           const Tensor2DAccessor<bool> &segmentation) {
+                           const Tensor2DAcc<bool> &segmentation) {
     float maxCalibre = 0;
     for (auto const &nearEdge : adjacency[edge.start]) {
         auto const &curve = branchesCurves[nearEdge.id];

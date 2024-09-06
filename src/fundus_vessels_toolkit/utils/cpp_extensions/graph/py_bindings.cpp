@@ -15,7 +15,7 @@ std::tuple<torch::Tensor, torch::Tensor, std::vector<torch::Tensor>> parse_skele
     return {edge_list_to_tensor(edge_list), vector_to_tensor(node_yx), vectors_to_tensors(branches_curves)};
 }
 
-std::tuple<torch::Tensor, torch::Tensor, std::vector<torch::Tensor>> parse_skeleton_with_cleanup(
+std::tuple<torch::Tensor, torch::Tensor, std::vector<torch::Tensor>, torch::Tensor> parse_skeleton_with_cleanup(
     torch::Tensor labelMap, torch::Tensor segmentation, std::map<std::string, double> options = {}) {
     // --- Parse the skeleton ---
     auto [edge_list, branches_curves, node_yx] = parse_skeleton_to_graph(labelMap);
@@ -25,8 +25,26 @@ std::tuple<torch::Tensor, torch::Tensor, std::vector<torch::Tensor>> parse_skele
 
     // --- Clean the branches terminations ---
     double clean_terminations = options.count("clean_terminations") ? options["clean_terminations"] : 0;
-    if (clean_terminations > 0)
-        clean_branches_skeleton(branches_curves, labels_acc, seg_acc, adj_list, clean_terminations);
+    auto tangents_calibres_tensor = torch::empty({0}, torch::kFloat);
+    if (clean_terminations > 0) {
+        auto const tangents_calibres =
+            clean_branches_skeleton(branches_curves, labels_acc, seg_acc, adj_list, clean_terminations);
+        const long n_branches = (long)tangents_calibres.size();
+        tangents_calibres_tensor = torch::empty({n_branches, 2, 7}, torch::kFloat);
+        auto accessor = tangents_calibres_tensor.accessor<float, 3>();
+        for (int i = 0; i < n_branches; i++) {
+            auto const &tc = tangents_calibres[i];
+            for (int j = 0; j < 2; j++) {
+                accessor[i][j][0] = std::get<0>(tc[j]).y;
+                accessor[i][j][1] = std::get<0>(tc[j]).x;
+                accessor[i][j][2] = std::get<1>(tc[j]);
+                accessor[i][j][3] = std::get<2>(tc[j]).y;
+                accessor[i][j][4] = std::get<2>(tc[j]).x;
+                accessor[i][j][5] = std::get<3>(tc[j]).y;
+                accessor[i][j][6] = std::get<3>(tc[j]).x;
+            }
+        }
+    }
 
     // --- Remove spurs ---
     double max_spurs_length = options.count("max_spurs_length") ? options["max_spurs_length"] : 0;
@@ -34,12 +52,21 @@ std::tuple<torch::Tensor, torch::Tensor, std::vector<torch::Tensor>> parse_skele
     if (max_spurs_length > 0 || remove_spurs_ratio > 0) {
         auto const &spurs =
             find_small_spurs(branches_curves, labels_acc, adj_list, seg_acc, max_spurs_length, remove_spurs_ratio);
-        remove_branches(spurs, branches_curves, labels_acc, edge_list);
-        remove_singleton_nodes(edge_list, node_yx, labels_acc);
-        // !! The adj_list is not updated, but it is not used anymore !!
+        if (spurs.size() > 0) {
+            remove_branches(spurs, branches_curves, labels_acc, edge_list);
+            remove_singleton_nodes(edge_list, node_yx, labels_acc);
+            if (tangents_calibres_tensor.size(0) > 0) {
+                std::vector<int> spurs_ids;
+                spurs_ids.reserve(spurs.size());
+                for (auto const &spur : spurs) spurs_ids.push_back(spur.id);
+                tangents_calibres_tensor = remove_rows(tangents_calibres_tensor, spurs_ids);
+            }
+            // !! The adj_list is not updated, but it is not used anymore !!
+        }
     }
 
-    return {edge_list_to_tensor(edge_list), vector_to_tensor(node_yx), vectors_to_tensors(branches_curves)};
+    return {edge_list_to_tensor(edge_list), vector_to_tensor(node_yx), vectors_to_tensors(branches_curves),
+            tangents_calibres_tensor};
 }
 
 /*********************************************************************************************
@@ -64,12 +91,14 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_curves(
     std::map<std::string, double> options = {}) {
     auto const &seg_acc = segmentation.accessor<bool, 2>();
     auto const &curves = tensors_to_curves(branch_curves);
-    auto const &[tangents, calibres, curvatures, bsplines] = extract_branches_geometry(curves, seg_acc, options);
+    auto const &[tangents, calibres, boundaries, curvatures, bsplines] =
+        extract_branches_geometry(curves, seg_acc, options);
 
     // --- Convert to tensor ---
     std::vector<std::vector<torch::Tensor>> out;
     out.push_back(vectors_to_tensors(tangents));
     if (calibres.size() > 0) out.push_back(vectors_to_tensors(calibres));
+    if (boundaries.size() > 0) out.push_back(vectors_to_tensors(boundaries));
     if (curvatures.size() > 0) out.push_back(vectors_to_tensors(curvatures));
     if (bsplines.size() > 0) out.push_back(bsplines_to_tensor(bsplines));
 
@@ -106,13 +135,15 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_skeleton(
     }
 
     // --- Extract branches geometry ---
-    auto const &[tangents, calibres, curvatures, bsplines] = extract_branches_geometry(curves, seg_acc, options, true);
+    auto const &[tangents, calibres, boundaries, curvatures, bsplines] =
+        extract_branches_geometry(curves, seg_acc, options, true);
 
     // --- Convert to tensor ---
     std::vector<std::vector<torch::Tensor>> out;
     out.push_back(vectors_to_tensors(curves));
     out.push_back(vectors_to_tensors(tangents));
     if (calibres.size() > 0) out.push_back(vectors_to_tensors(calibres));
+    if (boundaries.size() > 0) out.push_back(vectors_to_tensors(boundaries));
     if (curvatures.size() > 0) out.push_back(vectors_to_tensors(curvatures));
     if (bsplines.size() > 0) out.push_back(bsplines_to_tensor(bsplines));
 
@@ -231,4 +262,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // === EditDistance.h ===
     m.def("shortest_secondary_path", &shortest_secondary_path, "Compute the shortest path between two sets of nodes.");
+    m.def("nodes_similarity", &nodes_similarity, "Compute the similarity between two sets of nodes.");
 }
