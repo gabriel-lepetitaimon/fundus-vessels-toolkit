@@ -76,6 +76,54 @@ class BezierCubic(NamedTuple):
     def has_nan(self) -> bool:
         return any(p.is_nan() for p in self)
 
+    def c0_sym(self, d=-1, relative=True) -> Point:
+        """Compute the symmetric control point of c0 with respect to p0.
+
+        The argument d allows to move the symmetric control point along the line p0-c0.
+
+        Parameters
+        ----------
+        d : int, optional
+            Distance from c0 to the symmetric control point, by default -1 (i.e. symmetric of c0 with respect to p0).
+
+        relative : bool, optional
+            If True (by default), d is multiplied by the distance between c0 and p0.
+            Otherwise d is considered as an absolute distance (in pixel).
+
+        Returns
+        -------
+        Point
+            The symmetric control point of c0 with respect to p0 or any point along the line p0-c0.
+        """
+        v = self.c0 - self.p0
+        if not relative:
+            v = v.normalized()
+        return self.p0 + v * d
+
+    def c1_sym(self, d=-1, relative=True) -> Point:
+        """Compute the symmetric control point of c1 with respect to p1.
+
+        The argument d allows to move the symmetric control point along the line p1-c1.
+
+        Parameters
+        ----------
+        d : int, optional
+            Distance from c1 to the symmetric control point, by default -1 (i.e. symmetric of c1 with respect to p1).
+
+        relative : bool, optional
+            If True (by default), d is multiplied by the distance between c1 and p1.
+            Otherwise d is considered as an absolute distance (in pixel).
+
+        Returns
+        -------
+        Point
+            The symmetric control point of c1 with respect to p1 or any point along the line p1-c1.
+        """
+        v = self.c1 - self.p1
+        if not relative:
+            v = v.normalized()
+        return self.p1 + v * d
+
 
 class BSpline(tuple[BezierCubic]):
     def __new__(cls, iterable: np.Iterable[BezierCubic] = ()) -> BSpline:
@@ -91,6 +139,12 @@ class BSpline(tuple[BezierCubic]):
 
     def to_path(self, offset: Optional[Point] = None) -> str:
         return "\n".join(curve.to_path(offset) for curve in self)
+
+    def __add__(self, other: BSpline) -> BSpline:
+        return BSpline(super().__add__(other))
+
+    def __radd__(self, other: BSpline) -> BSpline:
+        return BSpline(other + super())
 
     @classmethod
     def fit(cls, yx_points: np.array, max_error: float, split_on=None, tangent_std=2) -> BSpline:
@@ -134,6 +188,43 @@ class BSpline(tuple[BezierCubic]):
 
     def flip(self) -> BSpline:
         return BSpline([curve.flip() for curve in reversed(self)])
+
+    def filling_curves(
+        self, start: Optional[Point] = None, end: Optional[Point] = None, *, smoothing=0
+    ) -> List[BezierCubic]:
+        filling = []
+        if len(self) == 0:
+            if start is not None and end is not None:
+                filling.append(BezierCubic(start, start, end, end))
+            return filling
+
+        if start is not None:
+            p_start = self[0].p0
+            start_c = self[0].c0_sym(-start.distance(p_start) * smoothing, relative=False) if smoothing else p_start
+            filling.append(BezierCubic(start, start, start_c, p_start))
+
+        for prev, next in zip(self[:-1], self[1:], strict=True):
+            if prev.p1 == next.p0:
+                continue
+            if smoothing:
+                dist = prev.p1.distance(next.p0)
+                prev_c = prev.c1_sym(-dist * smoothing, relative=False)
+                next_c = next.c0_sym(-dist * smoothing, relative=False)
+            else:
+                prev_c, next_c = prev.p1, next.p0
+            filling.append(BezierCubic(prev.p1, prev_c, next_c, next.p0))
+
+        if end is not None:
+            p_last = self[-1].p1
+            last_c = self[-1].c1_sym(-end.distance(p_last) * smoothing, relative=False) if smoothing else p_last
+            filling.append(BezierCubic(p_last, last_c, end, end))
+
+        return filling
+
+    def tips_tangents(self, normalize=True) -> Tuple[Point, Point]:
+        t0 = self[0].c0 - self[0].p0
+        t1 = self[-1].c1 - self[-1].p1
+        return (t0.normalized(), t1.normalized()) if normalize else (t0, t1)
 
 
 @autocast_torch

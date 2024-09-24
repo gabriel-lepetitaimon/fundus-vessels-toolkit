@@ -70,7 +70,19 @@ def extract_branch_geometry(
     adaptative_tangent : bool, optional
         If True, the standard deviation of the gaussian weighting the curve points is set to the vessel calibre.
 
-    bspline_max_error : float, optional
+    return_calibre : bool, optional
+        If True, the output will contain the branch width (or calibre) at each branch point. By default True.
+
+    return_boundaries : bool, optional
+        If True, the output will contain the boundaries of the branches. By default False.
+
+    return_curvature : bool, optional
+        If True, the output will contain the curvature of the branches. By default False.
+
+    extract_bspline : bool, optional
+        If True, the output will contain the bspline interpolation of the branches. By default True.
+
+    bspline_target_error : float, optional
         The maximum error allowed for the bspline interpolation. By default 10.
 
     bspline_K_threshold : float, optional
@@ -109,7 +121,7 @@ def extract_branch_geometry_from_skeleton(
     node_yx: torch.Tensor,
     edge_list: torch.Tensor,
     segmentation: torch.Tensor,
-    clean_terminations: int = 20,
+    clean_branches_tips: int = 20,
     return_labels: bool = False,
     adaptative_tangent: bool = True,
 ) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor], torch.Tensor]:
@@ -130,8 +142,8 @@ def extract_branch_geometry_from_skeleton(
     segmentation : torch.Tensor
         A 2D tensor of shape (H, W) containing the segmentation of the image.
 
-    clean_terminations : int, optional
-        The maximum number of pixels removable at branch termination. By default 20.
+    clean_branches_tips : int, optional
+        The maximum number of pixels removable at branches tips. By default 20.
 
     return_labels : bool, optional
 
@@ -144,11 +156,11 @@ def extract_branch_geometry_from_skeleton(
     - a 2D tensor of shape (n,) containing the branch width (or calibre) at each branch point.
 
     If return_labels is True, the output will also contain:
-        - a 2D tensor of shape (H,W) containing the branch labels after terminations cleaning.
+        - a 2D tensor of shape (H,W) containing the branch labels after tips cleaning.
 
     """
     options = dict(
-        clean_terminations=float(clean_terminations), bspline_max_error=4, adaptative_tangent=adaptative_tangent
+        clean_branches_tips=float(clean_branches_tips), bspline_max_error=4, adaptative_tangent=adaptative_tangent
     )
 
     branch_labels = branch_labels.int()
@@ -218,40 +230,43 @@ def extract_bifurcations_parameters(branches_calibre, branches_tangent, branches
         adj_list[node0].append((branchID, False))  # The branch is outgoing from the node
         adj_list[node1].append((branchID, True))  # The branch is incident to the node
 
+    tangents = [b.data if b is not None and len(b.data) else None for b in branches_tangent]
+    calibres = [b.data if b is not None and len(b.data) else None for b in branches_calibre]
+
     bifurcations = []
     for nodeID, node_adjacency in enumerate(adj_list):
         if len(node_adjacency) == 3:
-            if any(len(branches_tangent[_[0]]) == 0 for _ in node_adjacency):
+            if any(tangents[_[0]] is None for _ in node_adjacency):
                 continue
             if directed:
                 b0 = [b for b, incident in node_adjacency if incident][0]
                 b1, b2 = [b for b, incident in node_adjacency if b != b0]
-                dir0 = (np.arctan2(*branches_tangent[b0][-1]) + np.pi) % (2 * np.pi)
-                dir1 = np.arctan2(*branches_tangent[b1][0])
-                dir2 = np.arctan2(*branches_tangent[b2][0])
-                c0 = np.mean(branches_calibre[b0][-10:])
-                c1 = np.mean(branches_calibre[b1][:10])
-                c2 = np.mean(branches_calibre[b2][:10])
+                dir0 = (np.arctan2(*tangents[b0][-1]) + np.pi) % (2 * np.pi)
+                dir1 = np.arctan2(*tangents[b1][0])
+                dir2 = np.arctan2(*tangents[b2][0])
+                c0 = np.mean(calibres[b0][-10:])
+                c1 = np.mean(calibres[b1][:10])
+                c2 = np.mean(calibres[b2][:10])
             else:
                 (b0, b0_incident), (b1, b1_incident), (b2, b2_incident) = node_adjacency
                 if b0_incident:
-                    dir0 = (np.arctan2(*branches_tangent[b0][-1]) + np.pi) % (2 * np.pi)
-                    c0 = np.mean(branches_calibre[b0][-10:])
+                    dir0 = (np.arctan2(*tangents[b0][-1]) + np.pi) % (2 * np.pi)
+                    c0 = np.mean(calibres[b0][-10:])
                 else:
-                    dir0 = np.arctan2(*branches_tangent[b0][0])
-                    c0 = np.mean(branches_calibre[b0][:10])
+                    dir0 = np.arctan2(*tangents[b0][0])
+                    c0 = np.mean(calibres[b0][:10])
                 if b1_incident:
-                    dir1 = (np.arctan2(*branches_tangent[b1][-1]) + np.pi) % (2 * np.pi)
-                    c1 = np.mean(branches_calibre[b1][-10:])
+                    dir1 = (np.arctan2(*tangents[b1][-1]) + np.pi) % (2 * np.pi)
+                    c1 = np.mean(calibres[b1][-10:])
                 else:
-                    dir1 = np.arctan2(*branches_tangent[b1][0])
-                    c1 = np.mean(branches_calibre[b1][:10])
+                    dir1 = np.arctan2(*tangents[b1][0])
+                    c1 = np.mean(calibres[b1][:10])
                 if b2_incident:
-                    dir2 = (np.arctan2(*branches_tangent[b2][-1]) + np.pi) % (2 * np.pi)
-                    c2 = np.mean(branches_calibre[b2][-10:])
+                    dir2 = (np.arctan2(*tangents[b2][-1]) + np.pi) % (2 * np.pi)
+                    c2 = np.mean(calibres[b2][-10:])
                 else:
-                    dir2 = np.arctan2(*branches_tangent[b2][0])
-                    c2 = np.mean(branches_calibre[b2][:10])
+                    dir2 = np.arctan2(*tangents[b2][0])
+                    c2 = np.mean(calibres[b2][:10])
 
                 # Use the largest branch as the main branch
                 if c1 > c0 and c1 > c2:

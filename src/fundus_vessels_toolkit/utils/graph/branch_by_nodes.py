@@ -417,8 +417,8 @@ def merge_nodes_by_distance(
         endpoints_nodes = compute_is_endpoints(branches_by_nodes)
 
         if remove_branch is None:
-            termination_branches = np.sum(branches_by_nodes[:, endpoints_nodes].astype(bool), axis=1) == 1
-            remove_branch = np.where(termination_branches)[0]
+            endpoints_branches = np.sum(branches_by_nodes[:, endpoints_nodes].astype(bool), axis=1) == 1
+            remove_branch = np.where(endpoints_branches)[0]
         branches_by_nodes, branch_lookup2, node_lookup = merge_nodes_clusters(
             branches_by_nodes, nodes_clusters, erase_branches=remove_branch
         )

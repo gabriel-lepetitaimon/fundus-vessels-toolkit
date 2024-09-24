@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from IPython.display import display
 from ipywidgets import HTML, GridBox, Layout
-from jppype.utilities.color import colormap_by_name
+from jppype.utils.color import colormap_by_name
 from plotly import graph_objects as go
 
 from ..utils.fundus_projections import FundusProjection

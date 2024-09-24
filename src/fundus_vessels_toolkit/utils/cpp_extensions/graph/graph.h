@@ -6,9 +6,9 @@
 /**************************************************************************************
  *              === GRAPH_UTILS.CPP ===
  **************************************************************************************/
-EdgeList terminal_edges(const EdgeList &edgeList);
+EdgeList terminal_edges(const EdgeList &edgeList, bool directed = false);
 EdgeList terminal_edges(const GraphAdjList &edgeList);
-std::vector<int> nodes_rank(const EdgeList &edgeList);
+std::vector<int> nodes_rank(const EdgeList &edgeList, bool onlyIncoming = false);
 std::vector<int> nodes_rank(const GraphAdjList &edgeList);
 std::size_t nodesCount(const EdgeList &edgeList);
 

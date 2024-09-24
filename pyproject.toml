@@ -30,7 +30,7 @@ dev = [
     'nbsphinx',         # To include notebook in doc
 	'ipython'           # (also required to parse notebook)
 ]
-examples = ['jppype>=0.2.0a4']
+examples = ['jppype>=0.2.0a6']
 experimentations = ['nntemplate']
 
 [project.urls]

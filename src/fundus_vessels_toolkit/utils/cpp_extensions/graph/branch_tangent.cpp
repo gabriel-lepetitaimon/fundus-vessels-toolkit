@@ -53,6 +53,11 @@ Point curve_tangent(const CurveYX& curveYX, std::size_t i, const std::function<f
     return tangent.normalize();
 }
 
+Point adaptative_curve_tangent(const CurveYX& curveYX, std::size_t i, const float calibre, const bool forward,
+                               const bool backward, const std::size_t curveStart, const std::size_t curveEnd) {
+    return curve_tangent(curveYX, i, std::clamp(calibre, 1.5f, 15.0f), forward, backward, curveStart, curveEnd);
+}
+
 Point curve_tangent(const CurveYX& curveYX, std::size_t i, const float std, const bool forward, const bool backward,
                     const std::size_t curveStart, const std::size_t curveEnd) {
     return curve_tangent(

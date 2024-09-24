@@ -85,8 +85,8 @@ def segment_vessels(
         case SegmentModel.resnet34:
             with torch.no_grad():
                 x = img_to_torch(x, device)
-                final_shape = x.shape
 
+                final_shape = x.shape
                 if not (1000 < final_shape[3] < 1500):
                     warnings.warn(
                         f"Image size {x.shape[-2:]} is not optimal for {model_name}.\n"
@@ -94,6 +94,7 @@ def segment_vessels(
                         stacklevel=1,
                     )
 
+                x = torch.flip(x, [1])  # RGB to BGR
                 padded_shape = [ensure_superior_multiple(s, 32) for s in final_shape]
                 x = crop_pad(x, padded_shape)
                 y = model(x)

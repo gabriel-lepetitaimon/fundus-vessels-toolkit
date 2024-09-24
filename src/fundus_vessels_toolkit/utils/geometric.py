@@ -378,6 +378,10 @@ class Point(NamedTuple):
             return cls(*point)
         raise TypeError("Point can only be created from a float or a tuple of 2 floats")
 
+    @classmethod
+    def from_array(cls, point: npt.NDArray[np.float]) -> Point:
+        return cls(float(point[0]), float(point[1]))
+
     def numpy(self) -> np.ndarray:
         return np.array(self)
 

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <map>
 #include <tuple>
 #include <vector>
 
@@ -339,7 +340,6 @@ std::vector<CurveYX> tensors_to_curves(const std::vector<torch::Tensor>& tensors
 std::vector<IntPair> tensor_to_vectorIntPair(const torch::Tensor& tensor);
 PointList tensor_to_pointList(const torch::Tensor& tensor);
 Scalars tensor_to_scalars(const torch::Tensor& tensor);
-
 /*******************************************************************************************************************
  *             === GRAPH ===
  *******************************************************************************************************************/

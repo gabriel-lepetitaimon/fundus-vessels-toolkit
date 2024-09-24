@@ -69,7 +69,7 @@ extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAcc<
 
                         if (adaptative_tangent && calibre == calibre) {
                             const auto& refinedTangent =
-                                curve_tangent(curve, i, std::clamp(calibre, 1.5f, 15.0f), true, true, start, end);
+                                adaptative_curve_tangent(curve, i, calibre, true, true, start, end);
                             branchesTangents[curveI][i] = refinedTangent;
                             if (return_boundaries || return_calibre)
                                 boundaries = fast_branch_boundaries(curve, i, segmentation, refinedTangent);

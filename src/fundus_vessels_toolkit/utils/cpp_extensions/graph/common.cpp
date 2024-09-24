@@ -2,176 +2,6 @@
 
 #include <cmath>
 
-// === FROM_VECTOR ===
-torch::Tensor vector_to_tensor(const std::vector<int>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size()}, torch::kInt32);
-    auto accessor = tensor.accessor<int, 1>();
-    for (int i = 0; i < (int)vec.size(); i++) accessor[i] = vec[i];
-    return tensor;
-}
-
-torch::Tensor vector_to_tensor(const std::vector<float>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size()}, torch::kFloat32);
-    auto accessor = tensor.accessor<float, 1>();
-    for (int i = 0; i < (int)vec.size(); i++) accessor[i] = vec[i];
-    return tensor;
-}
-
-torch::Tensor vector_to_tensor(const std::vector<double>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size()}, torch::kFloat64);
-    auto accessor = tensor.accessor<double, 1>();
-    for (int i = 0; i < (int)vec.size(); i++) accessor[i] = vec[i];
-    return tensor;
-}
-
-torch::Tensor vector_to_tensor(const std::vector<std::size_t>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size()}, torch::kInt64);
-    auto accessor = tensor.accessor<int64_t, 1>();
-    for (int i = 0; i < (int)vec.size(); i++) accessor[i] = vec[i];
-    return tensor;
-}
-
-torch::Tensor vector_to_tensor(const std::vector<IntPair>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kInt32);
-    auto accessor = tensor.accessor<int, 2>();
-    for (int i = 0; i < (int)vec.size(); i++) {
-        accessor[i][0] = vec[i][0];
-        accessor[i][1] = vec[i][1];
-    }
-    return tensor;
-}
-
-torch::Tensor vector_to_tensor(const std::vector<UIntPair>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kInt32);
-    auto accessor = tensor.accessor<int, 2>();
-    for (int i = 0; i < (int)vec.size(); i++) {
-        accessor[i][0] = vec[i][0];
-        accessor[i][1] = vec[i][1];
-    }
-    return tensor;
-}
-
-torch::Tensor vector_to_tensor(const std::vector<FloatPair>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kFloat32);
-    auto accessor = tensor.accessor<float, 2>();
-    for (int i = 0; i < (int)vec.size(); i++) {
-        accessor[i][0] = vec[i][0];
-        accessor[i][1] = vec[i][1];
-    }
-    return tensor;
-}
-
-torch::Tensor vector_to_tensor(const std::vector<std::array<IntPair, 2>>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size(), 2, 2}, torch::kInt32);
-    auto accessor = tensor.accessor<int, 3>();
-    for (int i = 0; i < (int)vec.size(); i++) {
-        accessor[i][0][0] = vec[i][0][0];
-        accessor[i][0][1] = vec[i][0][1];
-        accessor[i][1][0] = vec[i][1][0];
-        accessor[i][1][1] = vec[i][1][1];
-    }
-    return tensor;
-}
-
-torch::Tensor vector_to_tensor(const std::vector<Point>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kDouble);
-    auto accessor = tensor.accessor<double, 2>();
-    for (int i = 0; i < (int)vec.size(); i++) {
-        accessor[i][0] = vec[i].y;
-        accessor[i][1] = vec[i].x;
-    }
-    return tensor;
-}
-
-torch::Tensor vector_to_tensor(const std::vector<IntPoint>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kInt32);
-    auto accessor = tensor.accessor<int, 2>();
-    for (int i = 0; i < (int)vec.size(); i++) {
-        accessor[i][0] = vec[i].y;
-        accessor[i][1] = vec[i].x;
-    }
-    return tensor;
-}
-
-torch::Tensor vector_to_tensor(const std::vector<std::array<IntPoint, 2>>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size(), 2, 2}, torch::kInt32);
-    auto accessor = tensor.accessor<int, 3>();
-    for (int i = 0; i < (int)vec.size(); i++) {
-        accessor[i][0][0] = vec[i][0].y;
-        accessor[i][0][1] = vec[i][0].x;
-        accessor[i][1][0] = vec[i][1].y;
-        accessor[i][1][1] = vec[i][1].x;
-    }
-    return tensor;
-}
-
-torch::Tensor edge_list_to_tensor(const EdgeList& edge_list) {
-    torch::Tensor branches_list_tensor = torch::empty({(int)edge_list.size(), 2}, torch::kInt32);
-    auto branches_list_acc = branches_list_tensor.accessor<int32_t, 2>();
-    for (const auto& v : edge_list) {
-        branches_list_acc[v.id][0] = v.start;
-        branches_list_acc[v.id][1] = v.end;
-    }
-    return branches_list_tensor;
-}
-
-CurveYX tensor_to_curve(const torch::Tensor& tensor) {
-    auto accessor = tensor.accessor<int, 2>();
-    CurveYX curveYX;
-    curveYX.reserve(tensor.size(0));
-    for (int i = 0; i < tensor.size(0); i++) curveYX.push_back({accessor[i][0], accessor[i][1]});
-    return curveYX;
-}
-
-std::vector<CurveYX> tensors_to_curves(const std::vector<torch::Tensor>& tensors) {
-    std::vector<CurveYX> curves;
-    curves.reserve(tensors.size());
-    for (const auto& tensor : tensors) curves.push_back(tensor_to_curve(tensor));
-    return curves;
-}
-
-std::vector<IntPair> tensor_to_vectorIntPair(const torch::Tensor& tensor) {
-    auto accessor = tensor.accessor<int, 2>();
-    std::vector<IntPair> vec;
-    vec.reserve(tensor.size(0));
-    for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) vec.push_back({accessor[i][0], accessor[i][1]});
-    return vec;
-}
-
-PointList tensor_to_pointList(const torch::Tensor& tensor) {
-    auto accessor = tensor.accessor<float, 2>();
-    PointList curve;
-    curve.reserve(tensor.size(0));
-    for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) curve.push_back({accessor[i][0], accessor[i][1]});
-    return curve;
-}
-
-Scalars tensor_to_scalars(const torch::Tensor& tensor) {
-    auto accessor = tensor.accessor<float, 1>();
-    Scalars vec;
-    vec.reserve(tensor.size(0));
-    for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) vec.push_back(accessor[i]);
-    return vec;
-}
-
-torch::Tensor remove_rows(const torch::Tensor& tensor, std::vector<int> rows) {
-    if (rows.empty()) return tensor;
-    std::sort(rows.begin(), rows.end());
-    std::vector<long> shape(tensor.dim());
-    shape[0] = tensor.size(0) - rows.size();
-    rows.push_back(tensor.size(0));
-    for (int i = 1; i < tensor.dim(); i++) shape[i] = tensor.size(i);
-
-    torch::Tensor new_tensor = torch::empty(shape, tensor.options());
-    auto const iniSlice = torch::indexing::Slice(0, rows[0], 1);
-    new_tensor.index({iniSlice}) = tensor.index({iniSlice});
-    for (std::size_t i = 1; i < rows.size(); i++) {
-        new_tensor.index_put_({torch::indexing::Slice(rows[i - 1] + 1 - i, rows[i] - i, 1)},
-                              tensor.index({torch::indexing::Slice(rows[i - 1] + 1, rows[i], 1)}));
-    }
-    return new_tensor;
-}
-
 // === IntPoint ===
 IntPoint::IntPoint(int y, int x) : y(y), x(x) {}
 IntPoint::IntPoint(IntPair yx) : y(yx[0]), x(yx[1]) {}
@@ -416,7 +246,172 @@ std::vector<int> quantize_triband(const std::vector<float>& x, float low, float 
     return medianFilter(y, medianHalfSize);
 }
 
-// === Graph ===
+/*******************************************************************************************************************
+ *             === TORCH ===
+ *******************************************************************************************************************/
+// === FROM_VECTOR ===
+torch::Tensor vector_to_tensor(const std::vector<int>& vec) {
+    torch::Tensor tensor = torch::empty({(long)vec.size()}, torch::kInt32);
+    auto accessor = tensor.accessor<int, 1>();
+    for (int i = 0; i < (int)vec.size(); i++) accessor[i] = vec[i];
+    return tensor;
+}
+
+torch::Tensor vector_to_tensor(const std::vector<float>& vec) {
+    torch::Tensor tensor = torch::empty({(long)vec.size()}, torch::kFloat32);
+    auto accessor = tensor.accessor<float, 1>();
+    for (int i = 0; i < (int)vec.size(); i++) accessor[i] = vec[i];
+    return tensor;
+}
+
+torch::Tensor vector_to_tensor(const std::vector<double>& vec) {
+    torch::Tensor tensor = torch::empty({(long)vec.size()}, torch::kFloat64);
+    auto accessor = tensor.accessor<double, 1>();
+    for (int i = 0; i < (int)vec.size(); i++) accessor[i] = vec[i];
+    return tensor;
+}
+
+torch::Tensor vector_to_tensor(const std::vector<std::size_t>& vec) {
+    torch::Tensor tensor = torch::empty({(long)vec.size()}, torch::kInt64);
+    auto accessor = tensor.accessor<int64_t, 1>();
+    for (int i = 0; i < (int)vec.size(); i++) accessor[i] = vec[i];
+    return tensor;
+}
+
+torch::Tensor vector_to_tensor(const std::vector<IntPair>& vec) {
+    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kInt32);
+    auto accessor = tensor.accessor<int, 2>();
+    for (int i = 0; i < (int)vec.size(); i++) {
+        accessor[i][0] = vec[i][0];
+        accessor[i][1] = vec[i][1];
+    }
+    return tensor;
+}
+
+torch::Tensor vector_to_tensor(const std::vector<UIntPair>& vec) {
+    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kInt32);
+    auto accessor = tensor.accessor<int, 2>();
+    for (int i = 0; i < (int)vec.size(); i++) {
+        accessor[i][0] = vec[i][0];
+        accessor[i][1] = vec[i][1];
+    }
+    return tensor;
+}
+
+torch::Tensor vector_to_tensor(const std::vector<FloatPair>& vec) {
+    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kFloat32);
+    auto accessor = tensor.accessor<float, 2>();
+    for (int i = 0; i < (int)vec.size(); i++) {
+        accessor[i][0] = vec[i][0];
+        accessor[i][1] = vec[i][1];
+    }
+    return tensor;
+}
+
+torch::Tensor vector_to_tensor(const std::vector<std::array<IntPair, 2>>& vec) {
+    torch::Tensor tensor = torch::empty({(long)vec.size(), 2, 2}, torch::kInt32);
+    auto accessor = tensor.accessor<int, 3>();
+    for (int i = 0; i < (int)vec.size(); i++) {
+        accessor[i][0][0] = vec[i][0][0];
+        accessor[i][0][1] = vec[i][0][1];
+        accessor[i][1][0] = vec[i][1][0];
+        accessor[i][1][1] = vec[i][1][1];
+    }
+    return tensor;
+}
+
+torch::Tensor vector_to_tensor(const std::vector<Point>& vec) {
+    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kDouble);
+    auto accessor = tensor.accessor<double, 2>();
+    for (int i = 0; i < (int)vec.size(); i++) {
+        accessor[i][0] = vec[i].y;
+        accessor[i][1] = vec[i].x;
+    }
+    return tensor;
+}
+
+torch::Tensor vector_to_tensor(const std::vector<IntPoint>& vec) {
+    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kInt32);
+    auto accessor = tensor.accessor<int, 2>();
+    for (int i = 0; i < (int)vec.size(); i++) {
+        accessor[i][0] = vec[i].y;
+        accessor[i][1] = vec[i].x;
+    }
+    return tensor;
+}
+
+torch::Tensor vector_to_tensor(const std::vector<std::array<IntPoint, 2>>& vec) {
+    torch::Tensor tensor = torch::empty({(long)vec.size(), 2, 2}, torch::kInt32);
+    auto accessor = tensor.accessor<int, 3>();
+    for (int i = 0; i < (int)vec.size(); i++) {
+        accessor[i][0][0] = vec[i][0].y;
+        accessor[i][0][1] = vec[i][0].x;
+        accessor[i][1][0] = vec[i][1].y;
+        accessor[i][1][1] = vec[i][1].x;
+    }
+    return tensor;
+}
+
+torch::Tensor remove_rows(const torch::Tensor& tensor, std::vector<int> rows) {
+    if (rows.empty()) return tensor;
+    std::sort(rows.begin(), rows.end());
+    std::vector<long> shape(tensor.dim());
+    shape[0] = tensor.size(0) - rows.size();
+    rows.push_back(tensor.size(0));
+    for (int i = 1; i < tensor.dim(); i++) shape[i] = tensor.size(i);
+
+    torch::Tensor new_tensor = torch::empty(shape, tensor.options());
+    auto const iniSlice = torch::indexing::Slice(0, rows[0], 1);
+    new_tensor.index({iniSlice}) = tensor.index({iniSlice});
+    for (std::size_t i = 1; i < rows.size(); i++) {
+        new_tensor.index_put_({torch::indexing::Slice(rows[i - 1] + 1 - i, rows[i] - i, 1)},
+                              tensor.index({torch::indexing::Slice(rows[i - 1] + 1, rows[i], 1)}));
+    }
+    return new_tensor;
+}
+
+CurveYX tensor_to_curve(const torch::Tensor& tensor) {
+    auto accessor = tensor.accessor<int, 2>();
+    CurveYX curveYX;
+    curveYX.reserve(tensor.size(0));
+    for (int i = 0; i < tensor.size(0); i++) curveYX.push_back({accessor[i][0], accessor[i][1]});
+    return curveYX;
+}
+
+std::vector<CurveYX> tensors_to_curves(const std::vector<torch::Tensor>& tensors) {
+    std::vector<CurveYX> curves;
+    curves.reserve(tensors.size());
+    for (const auto& tensor : tensors) curves.push_back(tensor_to_curve(tensor));
+    return curves;
+}
+
+std::vector<IntPair> tensor_to_vectorIntPair(const torch::Tensor& tensor) {
+    auto accessor = tensor.accessor<int, 2>();
+    std::vector<IntPair> vec;
+    vec.reserve(tensor.size(0));
+    for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) vec.push_back({accessor[i][0], accessor[i][1]});
+    return vec;
+}
+
+PointList tensor_to_pointList(const torch::Tensor& tensor) {
+    auto accessor = tensor.accessor<float, 2>();
+    PointList curve;
+    curve.reserve(tensor.size(0));
+    for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) curve.push_back({accessor[i][0], accessor[i][1]});
+    return curve;
+}
+
+Scalars tensor_to_scalars(const torch::Tensor& tensor) {
+    auto accessor = tensor.accessor<float, 1>();
+    Scalars vec;
+    vec.reserve(tensor.size(0));
+    for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) vec.push_back(accessor[i]);
+    return vec;
+}
+
+/*******************************************************************************************************************
+ *             === GRAPH ===
+ *******************************************************************************************************************/
 Edge::Edge(int start, int end, int id) : start(start), end(end), id(id) {}
 Edge& Edge::operator=(const Edge& e) {
     this->start = e.start;
@@ -481,6 +476,16 @@ GraphAdjList edge_list_to_adjlist(const Tensor2DAcc<int>& edges, int N, bool dir
         i++;
     }
     return graph;
+}
+
+torch::Tensor edge_list_to_tensor(const EdgeList& edge_list) {
+    torch::Tensor branches_list_tensor = torch::empty({(int)edge_list.size(), 2}, torch::kInt32);
+    auto branches_list_acc = branches_list_tensor.accessor<int32_t, 2>();
+    for (const auto& v : edge_list) {
+        branches_list_acc[v.id][0] = v.start;
+        branches_list_acc[v.id][1] = v.end;
+    }
+    return branches_list_tensor;
 }
 
 /*******************************************************************************************************************

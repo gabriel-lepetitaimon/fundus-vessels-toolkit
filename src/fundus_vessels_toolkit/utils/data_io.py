@@ -62,3 +62,57 @@ def load_numpy_dict(file_path: str | Path) -> NumpyDict:
 
 def pandas_to_numpy_dict(data_frame) -> NumpyDict:
     return {col: data_frame[col].to_numpy() for col in data_frame.columns}
+
+
+def load_av(file, av_inverted=False, pad=None):
+    from .safe_import import import_cv2
+
+    cv2 = import_cv2()
+
+    av_color = cv2.imread(str(file))
+    if av_color is None:
+        raise ValueError(f"Could not load image from {file}")
+
+    av = np.zeros(av_color.shape[:2], dtype=np.uint8)  # Unknown
+    v = av_color.mean(axis=2) > 10
+    a = av_color[:, :, 2] > av_color[:, :, 0]
+    if av_inverted:
+        a = ~a
+    av[v & a] = 1  # Artery
+    av[v & ~a] = 2  # Vein
+
+    if pad is not None:
+        av = np.pad(av, pad, mode="constant", constant_values=0)
+    return av
+
+
+def load_image(path: str | Path, binarize=False, resize=None, pad=None, cast_to_float=True) -> np.ndarray:
+    from .safe_import import import_cv2
+
+    cv2 = import_cv2()
+
+    img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if img.ndim == 3:
+        if img.shape[2] == 4:
+            img = img[:, :, :3]
+        img = img[:, :, ::-1]  # BGR to RGB
+
+    if img is None:
+        raise ValueError(f"Could not load image from {path}")
+
+    if resize is not None:
+        img = cv2.resize(img, resize)
+
+    if binarize:
+        img = img.mean(axis=2) > 127 if img.ndim == 3 else img > 127
+    elif cast_to_float:
+        img = img.astype(float) / 255
+
+    if pad is not None:
+        if isinstance(pad, int):
+            pad = ((pad, pad), (pad, pad))
+        elif isinstance(pad, tuple) and all(isinstance(_, int) for _ in pad) and len(pad) == 2:
+            pad = (pad, pad)
+        img = np.pad(img, pad, mode="constant", constant_values=0)
+
+    return img

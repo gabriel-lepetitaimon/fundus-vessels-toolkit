@@ -20,6 +20,7 @@ import networkx as nx
 import numpy as np
 import numpy.typing as npt
 
+from ..utils.cluster import cluster_by_distance, iterative_reduce_clusters, reduce_clusters
 from ..utils.geometric import Point, distance_matrix
 from ..utils.graph.branch_by_nodes import (
     branches_by_nodes_to_branch_list,
@@ -32,15 +33,14 @@ from ..utils.graph.branch_by_nodes import (
 from ..utils.graph.branch_by_nodes import merge_equivalent_branches as merge_equivalent_branches_legacy
 from ..utils.graph.branch_by_nodes import merge_nodes_by_distance as merge_nodes_by_distance_legacy
 from ..utils.graph.branch_by_nodes import reduce_clusters as reduce_clusters_legacy
-from ..utils.graph.cluster import cluster_by_distance, iterative_reduce_clusters, reduce_clusters
 from ..utils.lookup_array import apply_lookup, apply_lookup_on_coordinates
-from ..vascular_data_objects import VGraph
+from ..vascular_data_objects import VBranchGeoData, VGraph
 
 
 @dataclass
 class NodeMergeDistances:
     junction: float
-    termination: float
+    tip: float
     node: float
 
 
@@ -110,7 +110,7 @@ def simplify_graph(
     -------
         The adjacency map of the graph. (Similar to an adjacency list but instead of being pair of node indices,
             each row is a boolean vector with exactly 2 pixel set to True, corresponding to the 2 nodes connected by the branch.)
-        Shape: (nBranch, nNode) where nBranch and nNode are the number of branches and nodes (junctions or terminations).
+        Shape: (nBranch, nNode) where nBranch and nNode are the number of branches and nodes (junctions or tips).
 
         If return_label is True, also return the label map of branches
             (where each branch of the skeleton is labeled by a unique integer corresponding to its index in the adjacency matrix)
@@ -127,20 +127,20 @@ def simplify_graph(
         nodes_merge_distance = 2.5 * np.sqrt(2)
     if isinstance(nodes_merge_distance, Mapping):
         junctions_merge_distance = nodes_merge_distance.get("junction", 0)
-        terminations_merge_distance = nodes_merge_distance.get("termination", 0)
+        tips_merge_distance = nodes_merge_distance.get("tip", 0)
         nodes_merge_distance = nodes_merge_distance.get("node", 0)
     elif isinstance(nodes_merge_distance, NodeMergeDistances):
         junctions_merge_distance = nodes_merge_distance.junction
-        terminations_merge_distance = nodes_merge_distance.termination
+        tips_merge_distance = nodes_merge_distance.tip
         nodes_merge_distance = nodes_merge_distance.node
     else:
         junctions_merge_distance = 0
-        terminations_merge_distance = 0
+        tips_merge_distance = 0
 
-    if terminations_merge_distance > 0:
+    if tips_merge_distance > 0:
         merge_nodes_by_distance(
             vessel_graph,
-            max_distance=terminations_merge_distance,
+            max_distance=tips_merge_distance,
             nodes_type="endpoints",
             only_connected_nodes=False,
             inplace=True,
@@ -204,7 +204,7 @@ def cluster_nodes_by_distance(
             The type of nodes to consider:`
             - ``'all'``: all nodes are considered;
             - ``'junction'``: only junctions and bifurcations are considered;
-            - ``'endpoints'``: only terminations are considered.
+            - ``'endpoints'``: only endpoints are considered.
 
         only_connected_nodes:
             - If True, only nodes connected by a branch can be clustered.
@@ -309,7 +309,7 @@ def merge_nodes_by_distance(
             The type of nodes to consider:`
             - ``'all'``: all nodes are considered;
             - ``'junction'``: only junctions and bifurcations are considered;
-            - ``'endpoints'``: only terminations are considered.
+            - ``'endpoints'``: only endpoints are considered.
 
     Returns
     -------
@@ -410,7 +410,7 @@ def remove_spurs(vessel_graph: VGraph, max_spurs_length: float = 0, inplace=Fals
 
     """  # noqa: E501
 
-    terminal_branches = vessel_graph.terminal_branches()
+    terminal_branches = vessel_graph.endpoints_branches()
     terminal_branches_length = vessel_graph.branches_arc_length(terminal_branches)
     return vessel_graph.delete_branches(terminal_branches[terminal_branches_length < max_spurs_length], inplace=inplace)
 
@@ -441,7 +441,14 @@ def remove_orphan_branches(vessel_graph: VGraph, min_length: float | bool = 0, i
     return vessel_graph.delete_branches(orphan_branches, inplace=inplace)
 
 
-def simplify_passing_nodes(vessel_graph: VGraph, inplace=False) -> VGraph:
+def simplify_passing_nodes(
+    vessel_graph: VGraph,
+    *,
+    not_fusable: Optional[npt.ArrayLike] = None,
+    min_angle: float = 0,
+    with_same_label=None,
+    inplace=False,
+) -> VGraph:
     """
     Merge nodes of the vessel graph that are connected to only 2 branches.
 
@@ -450,15 +457,58 @@ def simplify_passing_nodes(vessel_graph: VGraph, inplace=False) -> VGraph:
         vessel_graph:
             The graph of the vasculature extracted from the vessel map.
 
+        not_fusable:
+            A list of nodes that should not be merged.
+
+        min_angle:
+            Under this minimum angle (in degrees) between the two branches connected to a passing node, the node is considered as a junction and is not removed.
+
+            (Require the terminaison tangents field to be field in `VGeometricData`)
+
+        with_same_label:
+            If not None, the nodes are merged only if they have the same label.
+            If a string, use ``vessel_graph.branches_attr[with_same_label]`` as the labels.
+
     Returns
     -------
         The modified graph with the nodes merged.
 
     """  # noqa: E501
+    incident_branches = None
 
+    # === Get all nodes with degree 2 ===
     nodes_to_fuse = np.argwhere(vessel_graph.nodes_degree() == 2).flatten()
+
+    if not_fusable is not None:
+        # === Filter out nodes that should not be merged ===
+        nodes_to_fuse = np.setdiff1d(nodes_to_fuse, not_fusable)
+
+    if min_angle > 0:
+        # === Filter out nodes with a too small angle between their two incident branches ===
+        geo_data = vessel_graph.geometric_data()
+        d = np.stack(geo_data.tip_geodata_around_node(nodes_to_fuse, [VBranchGeoData.Fields.TIPS_TANGENTS]))
+        incident_branches = d["branches"]
+        t = d[VBranchGeoData.Fields.TIPS_TANGENTS]
+        cos = np.sum(t[..., 0] * t[..., 1], axis=1)
+        nodes_to_fuse = nodes_to_fuse[cos >= np.cos(np.deg2rad(min_angle))]
+
+    if with_same_label is not None:
+        # === Filter nodes which don't have the same label ===
+        if isinstance(with_same_label, str):
+            # Attempt to get the labels from the branches attributes
+            with_same_label = vessel_graph.branches_attr[with_same_label]
+
+        if incident_branches is None:
+            # Get the incident branches if not already computed
+            incident_branches = vessel_graph.incident_branches_individual(nodes_to_fuse)
+
+        same_label = [with_same_label[b1] == with_same_label[b2] for b1, b2 in incident_branches]
+        nodes_to_fuse = nodes_to_fuse[same_label]
+
     if len(nodes_to_fuse):
-        return vessel_graph.fuse_nodes(nodes_to_fuse, inplace=inplace, quiet_invalid_node=True)
+        return vessel_graph.fuse_nodes(
+            nodes_to_fuse, inplace=inplace, quiet_invalid_node=True, incident_branches=incident_branches
+        )
     return vessel_graph
 
 
@@ -508,7 +558,7 @@ def simplify_graph_legacy(
     -------
         The adjacency map of the graph. (Similar to an adjacency list but instead of being pair of node indices,
             each row is a boolean vector with exactly 2 pixel set to True, corresponding to the 2 nodes connected by the branch.)
-        Shape: (nBranch, nNode) where nBranch and nNode are the number of branches and nodes (junctions or terminations).
+        Shape: (nBranch, nNode) where nBranch and nNode are the number of branches and nodes (junctions or endpoints).
 
         If return_label is True, also return the label map of branches
             (where each branch of the skeleton is labeled by a unique integer corresponding to its index in the adjacency matrix)
@@ -575,17 +625,17 @@ def simplify_graph_legacy(
         nodes_merge_distance = 2.5 * np.sqrt(2)
     if isinstance(nodes_merge_distance, Mapping):
         junctions_merge_distance = nodes_merge_distance.get("junction", 0)
-        terminations_merge_distance = nodes_merge_distance.get("termination", 0)
+        tips_merge_distance = nodes_merge_distance.get("tip", 0)
         nodes_merge_distance = nodes_merge_distance.get("node", 0)
     else:
         junctions_merge_distance = 0
-        terminations_merge_distance = 0
+        tips_merge_distance = 0
 
-    if nodes_merge_distance > 0 or junctions_merge_distance > 0 or terminations_merge_distance > 0:
+    if nodes_merge_distance > 0 or junctions_merge_distance > 0 or tips_merge_distance > 0:
         # Merge nodes clusters smaller than nodes_merge_distance
         distances = [
             (~is_endpoint, junctions_merge_distance, True),  # distance only for junctions
-            (is_endpoint, terminations_merge_distance, True),  # distance only for terminations
+            (is_endpoint, tips_merge_distance, True),  # distance only for tips
             (None, nodes_merge_distance, True),
         ]  # distance for all nodes
         branches_by_nodes, branch_lookup2, nodes_coord = merge_nodes_by_distance_legacy(

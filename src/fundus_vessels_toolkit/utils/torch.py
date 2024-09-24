@@ -1,8 +1,9 @@
 import numpy as np
-import torch
 
 
 def img_to_torch(x, device="cuda"):
+    import torch
+
     if isinstance(x, np.ndarray):
         if x.dtype == np.uint8:
             x = x.astype(np.float32) / 255.0
@@ -24,6 +25,8 @@ def img_to_torch(x, device="cuda"):
 
 
 def recursive_numpy2torch(x, device=None):
+    import torch
+
     if isinstance(x, torch.Tensor):
         return x.to(device) if device is not None else x
     if isinstance(x, np.ndarray):
@@ -42,6 +45,8 @@ def recursive_numpy2torch(x, device=None):
 
 
 def recursive_torch2numpy(x):
+    import torch
+
     if isinstance(x, torch.Tensor):
         r = x.cpu().numpy()
         return r
@@ -55,6 +60,8 @@ def recursive_torch2numpy(x):
 
 
 def torch_apply(func, *args, device=None, **kwargs):
+    import torch
+
     from_numpy = None
     new_args = []
     for arg in args:

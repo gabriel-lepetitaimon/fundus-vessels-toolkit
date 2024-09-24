@@ -99,7 +99,7 @@ float fast_branch_calibre(const Point &boundL, const Point &boundR, const Point 
 float fast_branch_calibre(const CurveYX &curveYX, std::size_t i, const Tensor2DAcc<bool> &segmentation,
                           const Point &tangent) {
     auto [boundL, boundR] = fast_branch_boundaries(curveYX, i, segmentation, tangent);
-    if (!boundL.is_valid() || !boundR.is_valid()) return std::numeric_limits<float>::quiet_NaN();
+    if (!boundL.is_valid() || !boundR.is_valid()) return INVALID_CALIBRE;
     return fast_branch_calibre(boundL, boundR, tangent);
 }
 
@@ -122,7 +122,7 @@ Scalars fast_branch_calibre(const CurveYX &curveYX, const Tensor2DAcc<bool> &seg
     const std::size_t curveSize = curveYX.size();
     bool evaluateAll = evaluateAtID.size() == 0;
     const std::size_t outSize = evaluateAll ? curveSize : evaluateAtID.size();
-    Scalars calibres(outSize, std::numeric_limits<float>::quiet_NaN());
+    Scalars calibres(outSize, INVALID_CALIBRE);
 
     for (std::size_t pointI = 0; pointI < outSize; pointI++) {
         const std::size_t i = evaluateAll ? pointI : evaluateAtID[pointI];

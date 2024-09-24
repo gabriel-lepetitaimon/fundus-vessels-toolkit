@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Dict, Tuple
 
 import numpy as np
 
@@ -159,3 +159,48 @@ def quantified_local_minimum(x, dthreshold=None):
 
     roots = [(start + end + 1) // 2 for start, end in local_minimum_interval]
     return np.array(roots).astype(int)
+
+
+def extract_splits(x, medfilt_size=5) -> Dict[Tuple[int, int], float | int]:
+    from scipy.signal import medfilt
+
+    if len(x) > medfilt_size:
+        x = medfilt(x, medfilt_size)
+    change = np.argwhere(np.diff(x) != 0).flatten() + 1
+
+    if len(change) == 0:
+        return {(0, len(x)): x[0]}
+
+    return {
+        (0, change[0]): x[0],
+        **{(change[i], change[i + 1]): x[change[i]] for i in range(len(change) - 1)},
+        (change[-1], len(x)): x[change[-1]],
+    }
+
+
+def as_1d_array(data: Any) -> Tuple[np.ndarray | None, bool]:
+    """Convert the data to a numpy array.
+
+    Parameters
+    ----------
+    data : Any
+        The data to convert.
+
+    Returns
+    -------
+    np.ndarray | None
+        The data as a numpy array.
+
+    bool
+        Whether the data is a scalar.
+    """
+    if data is None:
+        return None, False
+
+    data = np.asarray(data, dtype=float)
+    if data.ndim == 0:
+        return data[None], True
+    if data.ndim == 1:
+        return data, False
+
+    raise ValueError("Impossible to convert to a 1D vector.")

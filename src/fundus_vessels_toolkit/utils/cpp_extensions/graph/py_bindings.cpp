@@ -19,16 +19,20 @@ std::tuple<torch::Tensor, torch::Tensor, std::vector<torch::Tensor>, torch::Tens
     torch::Tensor labelMap, torch::Tensor segmentation, std::map<std::string, double> options = {}) {
     // --- Parse the skeleton ---
     auto [edge_list, branches_curves, node_yx] = parse_skeleton_to_graph(labelMap);
-    auto const &adj_list = edge_list_to_adjlist(edge_list, node_yx.size());
     auto labels_acc = labelMap.accessor<int, 2>();
     auto seg_acc = segmentation.accessor<bool, 2>();
 
-    // --- Clean the branches terminations ---
-    double clean_terminations = options.count("clean_terminations") ? options["clean_terminations"] : 0;
+    double min_spurs_length = get_if_exists(options, "min_spurs_length", 0.);
+    if (min_spurs_length > 0) remove_small_spurs(min_spurs_length + 1, edge_list, branches_curves, node_yx, labels_acc);
+
+    // --- Clean the branches tips ---
+    double clean_branches_tips = get_if_exists(options, "clean_branches_tips", 0.);
+    bool adaptativeTangent = get_if_exists(options, "adaptative_tangent", 1.) > 0;
     auto tangents_calibres_tensor = torch::empty({0}, torch::kFloat);
-    if (clean_terminations > 0) {
-        auto const tangents_calibres =
-            clean_branches_skeleton(branches_curves, labels_acc, seg_acc, adj_list, clean_terminations);
+    if (clean_branches_tips > 0) {
+        auto const &adj_list = edge_list_to_adjlist(edge_list, node_yx.size());
+        auto const tangents_calibres = clean_branches_skeleton(branches_curves, labels_acc, seg_acc, adj_list,
+                                                               clean_branches_tips, adaptativeTangent);
         const long n_branches = (long)tangents_calibres.size();
         tangents_calibres_tensor = torch::empty({n_branches, 2, 7}, torch::kFloat);
         auto accessor = tangents_calibres_tensor.accessor<float, 3>();
@@ -47,11 +51,11 @@ std::tuple<torch::Tensor, torch::Tensor, std::vector<torch::Tensor>, torch::Tens
     }
 
     // --- Remove spurs ---
-    double max_spurs_length = options.count("max_spurs_length") ? options["max_spurs_length"] : 0;
-    double remove_spurs_ratio = options.count("max_spurs_calibre_ratio") ? options["max_spurs_calibre_ratio"] : 0;
-    if (max_spurs_length > 0 || remove_spurs_ratio > 0) {
+    double spurs_calibre_factor = get_if_exists(options, "spurs_calibre_factor", 0.);
+    if (min_spurs_length > 0 || spurs_calibre_factor > 0) {
+        double max_spurs_length = get_if_exists(options, "max_spurs_length", std::numeric_limits<double>::max());
         auto const &spurs =
-            find_small_spurs(branches_curves, labels_acc, adj_list, seg_acc, max_spurs_length, remove_spurs_ratio);
+            find_spurs(branches_curves, edge_list, seg_acc, min_spurs_length, spurs_calibre_factor, max_spurs_length);
         if (spurs.size() > 0) {
             remove_branches(spurs, branches_curves, labels_acc, edge_list);
             remove_singleton_nodes(edge_list, node_yx, labels_acc);
@@ -127,11 +131,12 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_skeleton(
     // --- Track branches ---
     auto curves = track_branches(branch_labels, node_yx, branch_list);
 
-    // --- Clean the branches terminations ---
-    int clean_terminations = options.count("clean_terminations") ? options["clean_terminations"] : 0;
-    if (clean_terminations > 0) {
+    // --- Clean the branches tips ---
+    int clean_branches_tips = get_if_exists(options, "clean_branches_tips", 0.);
+    bool adaptativeTangent = get_if_exists(options, "adaptative_tangent", 1.) > 0;
+    if (clean_branches_tips > 0) {
         auto const &adj_list = edge_list_to_adjlist(tensor_to_vectorIntPair(branch_list), node_yx.size(0));
-        clean_branches_skeleton(curves, labels_acc, seg_acc, adj_list, clean_terminations);
+        clean_branches_skeleton(curves, labels_acc, seg_acc, adj_list, clean_branches_tips, adaptativeTangent);
     }
 
     // --- Extract branches geometry ---

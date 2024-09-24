@@ -9,6 +9,11 @@ using CurveTangents = std::vector<Point>;
 /**************************************************************************************
  *              === BRANCH_CALIBRE.CPP ===
  **************************************************************************************/
+
+static const float INVALID_CALIBRE = std::numeric_limits<float>::quiet_NaN();
+
+inline bool is_valid_calibre(float calibre) { return !std::isnan(calibre); }
+
 std::array<IntPoint, 2> fast_branch_boundaries(const CurveYX &curveYX, const std::size_t i,
                                                const Tensor2DAcc<bool> &segmentation, const Point &tangent);
 std::array<IntPoint, 2> fast_branch_boundaries(const CurveYX &curveYX, const std::size_t i,
@@ -29,6 +34,9 @@ Scalars fast_branch_calibre(const CurveYX &curveYX, const Tensor2DAcc<bool> &seg
 /**************************************************************************************
  *              === BRANCH_TANGENT.CPP ===
  **************************************************************************************/
+Point adaptative_curve_tangent(const CurveYX &curveYX, std::size_t i, const float calibre, const bool forward,
+                               const bool backward, const std::size_t curveStart = 0, const std::size_t curveEnd = 0);
+
 Point curve_tangent(const CurveYX &curveYX, std::size_t i, const std::function<float(float)> &weighting,
                     std::size_t stride = 1, const bool forward = true, const bool backward = true,
                     const std::size_t curveStart = 0, std::size_t curveEnd = 0);
@@ -82,17 +90,24 @@ std::list<SizePair> splitInContiguousCurves(const CurveYX &curve);
  **************************************************************************************/
 std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_branches_skeleton(
     std::vector<CurveYX> &branchCurves, Tensor2DAcc<int> &branchesLabelMap, const Tensor2DAcc<bool> &segmentation,
-    const GraphAdjList &adjacency, const int maxRemovedLength);
+    const GraphAdjList &adjacency, const int maxRemovedLength, bool adaptativeTangent = false);
 
 std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_skeleton_around_node(
     const std::vector<CurveYX> &branchCurves, const int nodeID, const std::set<Edge> &node_adjacency,
-    const Tensor2DAcc<bool> &segmentation, const int maxRemovedLength);
+    const Tensor2DAcc<bool> &segmentation, const int maxRemovedLength, bool adaptativeTangent);
 
-std::vector<Edge> find_small_spurs(const std::vector<CurveYX> &branchCurves, const Tensor2DAcc<int> &branchesLabelMap,
-                                   const GraphAdjList &adjacency, const Tensor2DAcc<bool> &segmentation,
-                                   float max_spurs_length, const float max_calibre_ratio);
+std::tuple<int, Vector, float, IntPoint, IntPoint> clean_branch_skeleton_tip(
+    const std::vector<CurveYX> &branchCurves, const int branchID, const bool startTermination,
+    const Tensor2DAcc<bool> &segmentation, const int maxRemovedLength, bool adaptativeTangent);
 
-float largest_near_calibre(const Edge &edge, const GraphAdjList &adjacency, const std::vector<CurveYX> &branchesCurves,
+void remove_small_spurs(float min_length, EdgeList &edgeList, std::vector<CurveYX> &branchCurves,
+                        std::vector<IntPoint> &nodeCoords, Tensor2DAcc<int> &labelMap);
+
+std::vector<Edge> find_spurs(const std::vector<CurveYX> &branchCurves, const EdgeList &edgeList,
+                             const Tensor2DAcc<bool> &segmentation, float min_length, const float calibre_factor,
+                             const float max_length = 100);
+
+float largest_node_calibre(const int nodeId, const GraphAdjList &adjacency, const std::vector<CurveYX> &branchesCurves,
                            const Tensor2DAcc<bool> &segmentation);
 
 /**************************************************************************************

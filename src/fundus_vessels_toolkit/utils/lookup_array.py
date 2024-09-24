@@ -8,11 +8,14 @@ from .binary_mask import index_to_mask
 T = TypeVar("T")
 
 
-def add_empty_to_lookup(lookup: np.ndarray) -> np.ndarray:
+def add_empty_to_lookup(lookup: np.ndarray, increment_index=True) -> np.ndarray:
     """
     Add an empty entry to a lookup table: insert a 0 at the beginning of the array and increment all other values by 1.
     """
-    return np.concatenate([[0], lookup + 1], dtype=lookup.dtype)
+    if increment_index:
+        return np.concatenate([[0], lookup + 1], dtype=lookup.dtype)
+    else:
+        return np.concatenate([[-1], lookup], dtype=lookup.dtype)
 
 
 def apply_lookup(

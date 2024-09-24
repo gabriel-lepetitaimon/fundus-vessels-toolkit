@@ -1,14 +1,14 @@
 from typing import List, Set, Tuple
 
 import numpy as np
-import torch  # Required cpp extension loading  # noqa: F401
+import torch  # Required for cpp extension loading
 
-from ..cpp_extensions.clusters_cpp import iterative_reduce_clusters as iterative_reduce_clusters_cpp
-from ..cpp_extensions.clusters_cpp import remove_consecutive_duplicates as remove_consecutive_duplicates_cpp
-from ..cpp_extensions.clusters_cpp import solve_1d_chains as solve_1d_chains_cpp
-from ..cpp_extensions.clusters_cpp import solve_clusters as solve_clusters_cpp
-from ..geometric import Point
-from ..torch import autocast_torch
+from .cpp_extensions.clusters_cpp import iterative_reduce_clusters as iterative_reduce_clusters_cpp
+from .cpp_extensions.clusters_cpp import remove_consecutive_duplicates as remove_consecutive_duplicates_cpp
+from .cpp_extensions.clusters_cpp import solve_1d_chains as solve_1d_chains_cpp
+from .cpp_extensions.clusters_cpp import solve_clusters as solve_clusters_cpp
+from .geometric import Point
+from .torch import autocast_torch
 
 
 def reduce_clusters(clusters: List[Set[int]]) -> List[Set[int]]:

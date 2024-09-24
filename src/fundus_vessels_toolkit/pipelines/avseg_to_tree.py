@@ -1,13 +1,13 @@
-__all__ = ["SegToGraph", "FundusVesselSegToGraph"]
+from typing import Any
+
+__all__ = ["AVSegToTree"]
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import numpy.typing as npt
 import torch
-
-from fundus_vessels_toolkit.utils import if_none
 
 from ..segment_to_graph import (
     NodeMergeDistanceParam,
@@ -15,14 +15,13 @@ from ..segment_to_graph import (
     SimplifyTopology,
     SkeletonizeMethod,
 )
-from ..vascular_data_objects import VGraph
+from ..utils import if_none
+from ..utils.data_io import load_av, load_image
+from ..utils.geometric import Point
+from ..vascular_data_objects import FundusData, VGraph, VTree
 
 
-class SegToGraph:
-    """
-    Utility class to extract the graph of the skeleton from a binary image.
-    """
-
+class AVSegToTree:
     def __init__(
         self,
         skeletonize_method: SkeletonizeMethod | str = "lee",
@@ -35,7 +34,7 @@ class SegToGraph:
         nodes_merge_distance: NodeMergeDistanceParam = True,
         merge_small_cycles: float = 0,
         simplify_topology: SimplifyTopology = "node",
-        parse_geometry=False,
+        parse_geometry=True,
         adaptative_tangents=False,
         bspline_target_error=3,
     ):
@@ -90,6 +89,8 @@ class SegToGraph:
         bspline_target_error:
             Target error for the bspline interpolation of the branches. Default is 3.
         """  # noqa: E501
+        self.mask_optic_disc = True
+
         self.skeletonize_method: SkeletonizeMethod | str = skeletonize_method
 
         self.fix_hollow = fix_hollow
@@ -97,6 +98,10 @@ class SegToGraph:
         self.min_terminal_branch_length = min_terminal_branch_length
         self.min_terminal_branch_calibre_ratio = min_terminal_branch_calibre_ratio
         self.max_spurs_length = max_spurs_length
+
+        self.assign_ratio_threshold = 4 / 5
+        self.assign_split_branch = True
+        self.propagate_assigned_labels = True
 
         self.simplification_enabled = True
         self.min_orphan_branch_length = min_orphan_branch_length
@@ -112,54 +117,42 @@ class SegToGraph:
 
     def __call__(
         self,
-        vessel_mask: npt.NDArray[np.bool_] | torch.Tensor | str | Path,
-    ) -> VGraph:
-        """
-        Extract the graph of the skeleton from a binary image.
+        fundus: Optional[FundusData] = None,
+        /,
+        *,
+        av: Optional[npt.NDArray[np.int_] | torch.Tensor | str | Path] = None,
+        od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
+    ) -> Tuple[VGraph, VGraph]:
+        if fundus is None:
+            if av is None or od is None:
+                raise ValueError("Either `fundus` or `av` and `od` must be provided.")
+            fundus = FundusData(vessels=av, od=od)
+        else:
+            fundus = fundus.update(vessels=av, od=od)
 
-        Parameters
-        ----------
-        vessel_mask : npt.NDArray[np.bool_] | torch.Tensor | str | Path
-            Binary image of the vessels or path to such image.
+        if self.mask_optic_disc:
+            av_seg = fundus.av.copy()
+            av_seg[fundus.od] = 0
+            fundus = fundus.update(vessels=av_seg)
 
-        Returns
-        -------
-        VGraph
-            The vascular graph
-        """
-        seg = self.img_to_seg(vessel_mask)
-        skel = self.skeletonize(seg)
-        graph = self.skel_to_vgraph(skel, vessel_mask)
-        if self.simplification_enabled:
-            self.simplify(graph, inplace=True)
-        if self.geometry_parsing_enabled:
-            graph = self.populate_geometry(graph, vessel_mask)
-        return graph
+        vessel_skeleton = self.skeletonize(fundus.vessels)
+        graph = self.skel_to_vgraph(vessel_skeleton, fundus.vessels)
+        self.assign_av_labels(graph, fundus.av, inplace=True)
+        graphs = self.split_av_graph(graph)
+        trees = []
+        for g in graphs:
+            self.simplify_graph(g, inplace=True)
+            if self.geometry_parsing_enabled:
+                self.populate_geometry(g, fundus, inplace=True)
+            trees.append(self.vgraph_to_vtree(g, fundus.od_center))
+        return trees
 
     # --- Intermediate steps ---
-    def img_to_seg(self, img: npt.ArrayLike | torch.Tensor | str | Path):
-        if isinstance(img, (str, Path)):
-            from ..utils.data_io import load_image
-
-            img = load_image(img)
-
-        if img.ndim == 3:
-            r_value = np.unique(img[..., 2])
-            if np.all(r_value == np.array([0, 1])):
-                # Red channel is binary: the image is a segmentation mask
-                img = img.sum(axis=2) > 0.5
-            else:
-                # Red channel is not binary: the image is a fundus image
-                from ..segment import segment_vessels
-
-                img = segment_vessels(img)
-        return img
-
-    def skeletonize(self, vessel_mask: npt.NDArray[np.bool_] | torch.Tensor) -> npt.NDArray[np.bool_] | torch.Tensor:
+    def skeletonize(self, vessels: npt.NDArray[np.bool_] | torch.Tensor) -> npt.NDArray[np.bool_] | torch.Tensor:
         from ..segment_to_graph.skeleton_parsing import detect_skeleton_nodes
         from ..segment_to_graph.skeletonize import skeletonize
 
-        binary_skel = skeletonize(vessel_mask, method=self.skeletonize_method) > 0
+        binary_skel = skeletonize(vessels > 0, method=self.skeletonize_method) > 0
         remove_endpoint_branches = self.min_terminal_branch_length > 0 or self.min_terminal_branch_calibre_ratio > 0
         return detect_skeleton_nodes(
             binary_skel, fix_hollow=self.fix_hollow, remove_endpoint_branches=remove_endpoint_branches
@@ -167,22 +160,52 @@ class SegToGraph:
 
     def skel_to_vgraph(
         self,
-        skeleton_mask: npt.NDArray[np.bool_] | torch.Tensor,
-        segmentation_mask: Optional[npt.NDArray[np.bool_] | torch.Tensor] = None,
+        skeleton: npt.NDArray[np.bool_] | torch.Tensor,
+        vessels: Optional[npt.NDArray[np.bool_] | torch.Tensor | FundusData] = None,
     ) -> VGraph:
+        from ..segment_to_graph.graph_simplification import simplify_graph
         from ..segment_to_graph.skeleton_parsing import skeleton_to_vgraph
 
-        return skeleton_to_vgraph(
-            skeleton_mask,
-            vessels=segmentation_mask,
+        graph = skeleton_to_vgraph(
+            skeleton,
+            vessels=vessels,
             fix_hollow=self.fix_hollow,
             clean_branches_tips=self.clean_branches_tips,
             min_terminal_branch_length=self.min_terminal_branch_length,
             min_terminal_branch_calibre_ratio=self.min_terminal_branch_calibre_ratio,
             max_spurs_length=self.max_spurs_length,
         )
+        return simplify_graph(
+            graph,
+            nodes_merge_distance=NodeMergeDistances(junction=0, tip=0, node=0),
+            max_cycles_length=self.merge_small_cycles,
+            simplify_topology=None,
+            min_orphan_branches_length=self.min_orphan_branch_length,
+            # node_simplification_criteria=self.node_simplification_criteria,
+            inplace=True,
+        )
 
-    def simplify(self, graph: VGraph, inplace=False):
+    def assign_av_labels(
+        self, graph: VGraph, av_map: npt.NDArray[np.int_], av_attr: Optional[str] = None, inplace: bool = False
+    ) -> VGraph:
+        from ..segment_to_graph.av_tree_parsing import assign_av_label
+
+        return assign_av_label(
+            graph,
+            av_map=av_map,
+            ratio_threshold=self.assign_ratio_threshold,
+            split_av_branch=self.assign_split_branch,
+            av_attr=if_none(av_attr, "av"),
+            propagate_labels=self.propagate_assigned_labels,
+            inplace=inplace,
+        )
+
+    def split_av_graph(self, graph: VGraph, av_attr: Optional[str] = None) -> Tuple[VGraph, VGraph]:
+        from ..segment_to_graph.av_tree_parsing import av_split
+
+        return av_split(graph, av_attr=if_none(av_attr, "av"))
+
+    def simplify_graph(self, graph: VGraph, inplace=False):
         from ..segment_to_graph.graph_simplification import simplify_graph
 
         return simplify_graph(
@@ -190,47 +213,69 @@ class SegToGraph:
             nodes_merge_distance=self.nodes_merge_distance,
             iterative_nodes_merge=self.iterative_nodes_merge,
             max_cycles_length=self.merge_small_cycles,
-            simplify_topology=self.simplify_topology,
+            simplify_topology=None,
             min_orphan_branches_length=self.min_orphan_branch_length,
-            # node_simplification_criteria=self.node_simplification_criteria,
             inplace=inplace,
         )
 
-    def populate_geometry(self, graph: VGraph, vessels_segmentation: npt.NDArray[np.bool_] | torch.Tensor):
+    def populate_geometry(
+        self,
+        graph: VGraph,
+        vessels: npt.NDArray[np.bool_] | torch.Tensor | FundusData,
+        inplace: bool = False,
+    ) -> VGraph:
         from ..segment_to_graph.geometry_parsing import populate_geometry
 
         return populate_geometry(
             graph,
-            vessels_segmentation,
+            vessels,
             adaptative_tangents=self.adaptative_tangents,
             bspline_target_error=self.bspline_target_error,
+            inplace=inplace,
         )
 
+    def vgraph_to_vtree(self, graph: VGraph, od_pos: Point) -> VTree:
+        from ..segment_to_graph.av_tree_parsing import vgraph_to_vtree
+
+        return vgraph_to_vtree(graph, od_pos, True)
+
     # --- Utility methods ---
-    def from_skel(
+    def to_vgraph(
         self,
-        skel: npt.NDArray[np.bool_] | torch.Tensor,
-        vessels: npt.NDArray[np.bool_] | torch.Tensor,
-        simplify: bool = None,
-        populate_geometry: bool = None,
+        fundus: Optional[FundusData] = None,
+        /,
+        *,
+        av: Optional[npt.NDArray[np.int_] | torch.Tensor | str | Path] = None,
+        od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
+        populate_geometry: Optional[bool] = None,
     ) -> VGraph:
-        vgraph = self.skel_to_vgraph(skel, vessels)
-        if if_none(simplify, self.simplification_enabled):
-            self.simplify(vgraph, inplace=True)
+        if fundus is None:
+            if av is None:
+                raise ValueError("Either `fundus` or `av` and `od` must be provided.")
+            fundus = FundusData(vessels=av, od=od)
+        else:
+            fundus = fundus.update(vessels=av, od=od)
 
+        if fundus.has_od and self.mask_optic_disc:
+            av_seg = fundus.av.copy()
+            av_seg[fundus.od] = 0
+            fundus = fundus.update(vessels=av_seg)
+
+        vessel_skeleton = self.skeletonize(fundus.vessels)
+        graph = self.skel_to_vgraph(vessel_skeleton, fundus)
+        self.assign_av_labels(graph, fundus, inplace=True)
         if if_none(populate_geometry, self.geometry_parsing_enabled):
-            vgraph = self.populate_geometry(vgraph, vessels)
+            self.populate_geometry(graph, fundus, inplace=True)
+        return graph
 
-        return vgraph
 
-
-class FundusVesselSegToGraph(SegToGraph):
+class FundusAVSegToTree(AVSegToTree):
     """
-    Specialization of Seg2Graph for retinal vessels.
+    Specialization of AVSegToTree for retinal vessels.
     """
 
-    def __init__(self, max_vessel_diameter=20, prevent_node_simplification_on_borders=35, parse_geometry=False):
-        super(FundusVesselSegToGraph, self).__init__(
+    def __init__(self, max_vessel_diameter=20, parse_geometry=True):
+        super(FundusAVSegToTree, self).__init__(
             fix_hollow=True,
             skeletonize_method="lee",
             min_terminal_branch_length=4,
@@ -239,7 +284,6 @@ class FundusVesselSegToGraph(SegToGraph):
             parse_geometry=parse_geometry,
         )
         self.max_vessel_diameter = max_vessel_diameter
-        self.prevent_node_simplification_on_borders = prevent_node_simplification_on_borders
 
     @property
     def max_vessel_diameter(self):
@@ -254,30 +298,3 @@ class FundusVesselSegToGraph(SegToGraph):
         self.nodes_merge_distance = NodeMergeDistances(junction=diameter * 2 / 3, tip=diameter, node=0)
         self.merge_small_cycles = diameter
         self.max_spurs_length = diameter * 1.5
-
-    @property
-    def prevent_node_simplification_on_borders(self):
-        return self._prevent_node_simplification_on_borders
-
-    @prevent_node_simplification_on_borders.setter
-    def prevent_node_simplification_on_borders(self, prevent: bool | int):
-        if prevent:
-            if prevent is True:
-                prevent = 35
-
-            def criteria(node, node_y, node_x, skeleton, branches_by_nodes_adj):
-                h, w = skeleton.shape
-
-                return (
-                    ((node_y - h / 2) ** 2 + (node_x - w / 2) ** 2 < (max(h, w) / 2 - prevent) ** 2)
-                    & (node_y > prevent)
-                    & (node_y < h - prevent)
-                    & (node_x > prevent)
-                    & (node_x < w - prevent)
-                    & node
-                )
-
-            self.node_simplification_criteria = criteria
-        else:
-            self.node_simplification_criteria = None
-        self._prevent_node_simplification_on_borders = prevent

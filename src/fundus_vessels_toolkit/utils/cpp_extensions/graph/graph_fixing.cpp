@@ -19,7 +19,9 @@ void remove_branches(std::vector<Edge> branchesToRemove, std::vector<CurveYX> &b
         } else {
             // If the branch is not to be removed:
             //  - Copy the corresponding curve and edge to their new position
-            branchCurves[nBranches] = branchCurves[i];
+            auto const &curve = branchCurves[i];
+            branchCurves[nBranches] = curve;
+            for (auto const &p : curve) branchesLabelMap[p.y][p.x] = nBranches;
             edge_list[nBranches] = edge_list[i];
             edge_list[nBranches].id = nBranches;
             nBranches++;
@@ -87,6 +89,10 @@ void remove_nodes(std::vector<std::size_t> nodesIdToRemove, EdgeList &edge_list,
 
     // Update the edge list
     for (auto &edge : edge_list) {
+        if (lookupTable[edge.start] == -1 || lookupTable[edge.end] == -1) {
+            edge.id = -1;
+            continue;
+        }
         edge.start = lookupTable[edge.start];
         edge.end = lookupTable[edge.end];
     }
