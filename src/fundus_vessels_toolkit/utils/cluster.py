@@ -17,7 +17,7 @@ def reduce_clusters(clusters: List[Set[int]]) -> List[Set[int]]:
     """
     clusters = [list(c) for c in clusters]
     clusters = solve_clusters_cpp(clusters, True)
-    return clusters
+    return [c for c in clusters if len(c) > 0]
 
 
 @autocast_torch

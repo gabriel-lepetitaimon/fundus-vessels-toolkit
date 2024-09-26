@@ -1,6 +1,4 @@
-from typing import Any
-
-__all__ = ["AVSegToTree"]
+__all__ = ["AVSegToTree", "FundusAVSegToTree"]
 
 from pathlib import Path
 from typing import Optional, Tuple
@@ -16,7 +14,6 @@ from ..segment_to_graph import (
     SkeletonizeMethod,
 )
 from ..utils import if_none
-from ..utils.data_io import load_av, load_image
 from ..utils.geometric import Point
 from ..vascular_data_objects import FundusData, VGraph, VTree
 
@@ -141,10 +138,12 @@ class AVSegToTree:
         graphs = self.split_av_graph(graph)
         trees = []
         for g in graphs:
-            self.simplify_graph(g, inplace=True)
-            if self.geometry_parsing_enabled:
-                self.populate_geometry(g, fundus, inplace=True)
             trees.append(self.vgraph_to_vtree(g, fundus.od_center))
+
+        if self.geometry_parsing_enabled:
+            for tree in trees:
+                self.populate_geometry(tree, fundus, inplace=True)
+
         return trees
 
     # --- Intermediate steps ---
@@ -175,7 +174,7 @@ class AVSegToTree:
             min_terminal_branch_calibre_ratio=self.min_terminal_branch_calibre_ratio,
             max_spurs_length=self.max_spurs_length,
         )
-        return simplify_graph(
+        simplify_graph(
             graph,
             nodes_merge_distance=NodeMergeDistances(junction=0, tip=0, node=0),
             max_cycles_length=self.merge_small_cycles,
@@ -183,6 +182,19 @@ class AVSegToTree:
             min_orphan_branches_length=self.min_orphan_branch_length,
             # node_simplification_criteria=self.node_simplification_criteria,
             inplace=True,
+        )
+
+        return graph
+
+    def populate_geometry(self, graph: VGraph, fundus: FundusData, inplace: bool = False) -> VGraph:
+        from ..segment_to_graph.geometry_parsing import populate_geometry
+
+        return populate_geometry(
+            graph,
+            fundus.vessels,
+            adaptative_tangents=self.adaptative_tangents,
+            bspline_target_error=self.bspline_target_error,
+            inplace=inplace,
         )
 
     def assign_av_labels(
@@ -205,39 +217,25 @@ class AVSegToTree:
 
         return av_split(graph, av_attr=if_none(av_attr, "av"))
 
-    def simplify_graph(self, graph: VGraph, inplace=False):
-        from ..segment_to_graph.graph_simplification import simplify_graph
+    # def simplify_graph(self, graph: VGraph, inplace=False):
+    #     from ..segment_to_graph.graph_simplification import simplify_graph
 
-        return simplify_graph(
-            graph,
-            nodes_merge_distance=self.nodes_merge_distance,
-            iterative_nodes_merge=self.iterative_nodes_merge,
-            max_cycles_length=self.merge_small_cycles,
-            simplify_topology=None,
-            min_orphan_branches_length=self.min_orphan_branch_length,
-            inplace=inplace,
-        )
-
-    def populate_geometry(
-        self,
-        graph: VGraph,
-        vessels: npt.NDArray[np.bool_] | torch.Tensor | FundusData,
-        inplace: bool = False,
-    ) -> VGraph:
-        from ..segment_to_graph.geometry_parsing import populate_geometry
-
-        return populate_geometry(
-            graph,
-            vessels,
-            adaptative_tangents=self.adaptative_tangents,
-            bspline_target_error=self.bspline_target_error,
-            inplace=inplace,
-        )
+    #     return simplify_graph(
+    #         graph,
+    #         nodes_merge_distance=self.nodes_merge_distance,
+    #         iterative_nodes_merge=self.iterative_nodes_merge,
+    #         max_cycles_length=self.merge_small_cycles,
+    #         simplify_topology=None,
+    #         min_orphan_branches_length=self.min_orphan_branch_length,
+    #         inplace=inplace,
+    #     )
 
     def vgraph_to_vtree(self, graph: VGraph, od_pos: Point) -> VTree:
-        from ..segment_to_graph.av_tree_parsing import vgraph_to_vtree
+        from ..segment_to_graph.av_tree_parsing import clean_vtree, simplify_av_graph, vgraph_to_vtree
 
-        return vgraph_to_vtree(graph, od_pos, True)
+        graph = simplify_av_graph(graph, inplace=False)
+        tree = vgraph_to_vtree(graph, od_pos)
+        return clean_vtree(tree)
 
     # --- Utility methods ---
     def to_vgraph(

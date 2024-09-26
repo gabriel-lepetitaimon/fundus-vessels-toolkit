@@ -178,7 +178,7 @@ def extract_splits(x, medfilt_size=5) -> Dict[Tuple[int, int], float | int]:
     }
 
 
-def as_1d_array(data: Any) -> Tuple[np.ndarray | None, bool]:
+def as_1d_array(data: Any, *, dtype=None) -> Tuple[np.ndarray | None, bool]:
     """Convert the data to a numpy array.
 
     Parameters
@@ -194,13 +194,19 @@ def as_1d_array(data: Any) -> Tuple[np.ndarray | None, bool]:
     bool
         Whether the data is a scalar.
     """
+
+    # TODO: Remove the None check and assume that data is valid, bad practice...
     if data is None:
         return None, False
 
-    data = np.asarray(data, dtype=float)
+    data = np.asarray(data, dtype=dtype)
     if data.ndim == 0:
         return data[None], True
     if data.ndim == 1:
         return data, False
 
-    raise ValueError("Impossible to convert to a 1D vector.")
+    raise ValueError(f"Impossible to convert {data} to a 1D vector.")
+
+
+def modulo_pi(x):
+    return (x + np.pi) % (2 * np.pi) - np.pi

@@ -198,8 +198,8 @@ class FundusData:
                 av_map = np.zeros(vessels.shape[:2], dtype=np.uint8)
                 av_map[vessels[:, :, 0]] = AVLabel.ART
                 av_map[vessels[:, :, 2]] = AVLabel.VEI
+                av_map[vessels[:, :, 1]] = AVLabel.BOTH
                 av_map[vessels[:, :, 2] & vessels[:, :, 0]] = AVLabel.BOTH
-                av_map[vessels[:, :, 1]] = AVLabel.UNK
                 vessels = av_map
         elif vessels.ndim == 2:
             if vessels.dtype == bool:
@@ -414,21 +414,26 @@ class FundusData:
             view = View2D()
         view.add_image(self._fundus, "fundus")
 
+        COLORS = {
+            AVLabel.ART: "coral",
+            AVLabel.VEI: "cornflowerblue",
+            AVLabel.BOTH: "darkorchid",
+            AVLabel.UNK: "gray",
+            10: "white",
+            11: "white",
+        }
+
+        labels = np.zeros(self.shape, dtype=np.uint8)
         if self._vessels is not None:
-            AV_COLORS = {
-                AVLabel.ART: "firebrick",
-                AVLabel.VEI: "blue",
-                AVLabel.BOTH: "purple",
-                AVLabel.UNK: "gray",
-            }
-            view.add_label(self._vessels, "vessels", colormap=AV_COLORS, opacity=labels_opacity)
+            labels = self._vessels
 
         if self._od is not None:
-            view.add_label(self._od * 1, "od", colomap="white", opacity=labels_opacity)
+            labels[self._od] = 10
 
         if self._macula is not None:
-            view.add_label(self._macula * 1, "macula", colomap="orange", opacity=labels_opacity)
+            labels[self._macula] = 11
 
+        view.add_label(labels, "AnatomicalData", opacity=labels_opacity, colormap=COLORS)
         return view
 
     def show(self, labels_alpha=0.5):

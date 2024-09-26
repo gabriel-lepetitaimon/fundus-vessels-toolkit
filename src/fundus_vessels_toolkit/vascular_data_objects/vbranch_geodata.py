@@ -237,18 +237,40 @@ class VBranchTangents(VBranchGeoDataBase):
 
 ####################################################################################################
 class VBranchTipsData(VBranchGeoDataBase):
-    """``VBranchTipsData`` is a class that stores a scalar associated with the tips of a vascular branch."""
+    """``VBranchTipsData`` is a class that stores a data associated with the tips of a vascular branch."""
 
     def __init__(self, data: np.ndarray) -> None:
         super().__init__()
-        assert data.ndim >= 1 and data.shape[0] == 2, "Tip data shape must be (2, ...)."
+        data = np.array(data, dtype=self.dtype())
+        expected_shape = (2, *self.data_shape())
+        assert (
+            data.shape == expected_shape
+        ), f"{self.__class__.__qualname__} data shape must be {expected_shape} but {data.shape} was provided."
         self.data = data
+
+    @classmethod
+    @abstractmethod
+    def data_shape(cls) -> Tuple[int, ...]: ...
+
+    @classmethod
+    def dtype(cls):
+        return float
+
+    @classmethod
+    def create_empty(cls) -> Self:
+        return cls([cls.empty_data()] * 2)
+
+    @classmethod
+    def empty_data(self) -> np.ndarray:
+        nan = np.empty(self.data_shape(), dtype=self.dtype())
+        nan.fill(float("nan"))
+        return nan
 
     def is_empty(self) -> bool:
         return not np.all(np.isnan(self.data))
 
     def merge(self, others: List[VBranchTipsData], ctx: BranchGeoDataEditContext) -> VBranchTipsData:
-        self.data = np.array([self.data[0], others[-1].data[1]])
+        self.data = np.array([self.data[0], others[-1].data[1] if others[-1] is not None else self.empty_data()])
         return self
 
     def flip(self) -> VBranchTangents:
@@ -256,26 +278,48 @@ class VBranchTipsData(VBranchGeoDataBase):
         return self
 
     def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
-        nan = np.empty_like(self.data[0])
-        nan.fill(float("nan"))
+        nan = self.empty_data()
         cls = self.__class__
         return (
-            (cls(np.array([self.data[0], nan])),)
-            + (cls(np.array([nan, nan])),) * (len(splits_id) - 3)
-            + (cls(np.array([nan, self.data[1]])),)
+            [cls(np.array([self.data[0], nan]))]
+            + [self.create_empty() for _ in range(len(splits_id) - 3)]
+            + [cls(np.array([nan, self.data[1]]))]
         )
+
+
+####################################################################################################
+class VBranchTipsScalarData(VBranchTipsData):
+    """``VBranchTipsScalarData`` is a class that stores a scalar associated with the tips of a vascular branch."""
+
+    @classmethod
+    def data_shape(cls) -> Tuple[int, ...]:
+        return ()
+
+    @classmethod
+    def empty_data(cls) -> np.ndarray:
+        return np.array(float("nan"), dtype=float)
+
+
+####################################################################################################
+class VBranchTipsDoublePointsData(VBranchTipsData):
+    """``VBranchTipsScalarData`` is a class that stores a scalar associated with the tips of a vascular branch."""
+
+    @classmethod
+    def data_shape(cls) -> Tuple[int, ...]:
+        return (2, 2)
 
 
 ####################################################################################################
 class VBranchTipsTangents(VBranchTipsData):
     """``VBranchTipsTangents`` is a class that stores the tangents associated with the tips of a vascular branch."""
 
-    def __init__(self, data: np.ndarray) -> None:
-        super().__init__(data)
-        assert (
-            data.ndim == 2 and data.shape[0] == 2 and data.shape[1] == 2
-        ), "Tangents at a branch tips  must be a 2D array of shape (2, 2)."
-        self.data = data
+    @classmethod
+    def data_shape(cls) -> Tuple[int, ...]:
+        return (2,)
+
+    @classmethod
+    def empty_data(cls) -> np.ndarray:
+        return np.zeros(2, dtype=float)
 
     def is_empty(self) -> bool:
         return not np.all(np.isnan(self.data) | (self.data == 0))
@@ -283,15 +327,6 @@ class VBranchTipsTangents(VBranchTipsData):
     def flip(self) -> VBranchTangents:
         self.data = -np.flip(self.data, axis=0)
         return self
-
-    def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
-        empty = np.zeros_like(self.data[0])
-        cls = self.__class__
-        return (
-            (cls(np.array([self.data[0], empty])),)
-            + (cls(np.array([empty, empty])),) * (len(splits_id) - 3)
-            + (cls(np.array([empty, self.data[1]])),)
-        )
 
 
 ####################################################################################################
@@ -350,6 +385,17 @@ class VBranchGeoDescriptor(NamedTuple):
     name: str
     geo_type: Optional[Type[VBranchGeoDataBase]] = None
 
+    def __str__(self) -> str:
+        return self.name
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+    def __eq__(self, value: object) -> bool:
+        if isinstance(value, VBranchGeoDescriptor):
+            return self.name == value.name and self.geo_type == value.geo_type
+        return self.name == str(value)
+
     @staticmethod
     def parse(key: VBranchGeoDataKey, geo_type: Optional[Type[VBranchGeoDataBase]] = None) -> VBranchGeoDescriptor:
         if isinstance(key, Type) and issubclass(key, VBranchGeoDataBase):
@@ -395,13 +441,13 @@ class VBranchGeoField(Enum):
     BSPLINE = VBranchGeoDescriptor("BSPLINE", VBranchBSpline)
 
     #: The tangents at the branches tips.
-    TIPS_TANGENTS = VBranchGeoDescriptor("TIPS_TANGENTS", VBranchTipsTangents)
+    TIPS_TANGENT = VBranchGeoDescriptor("TIPS_TANGENT", VBranchTipsTangents)
 
     #: The calibre at the branches tips.
-    TIPS_CALIBRES = VBranchGeoDescriptor("TIPS_CALIBRE", VBranchTipsData)
+    TIPS_CALIBRE = VBranchGeoDescriptor("TIPS_CALIBRE", VBranchTipsScalarData)
 
     #: The position of the left and right boundaries of the branches tips.
-    TIPS_BOUNDARIES = VBranchGeoDescriptor("TIPS_BOUNDARIES", VBranchTipsData)
+    TIPS_BOUNDARIES = VBranchGeoDescriptor("TIPS_BOUNDARIES", VBranchTipsDoublePointsData)
 
     @classmethod
     def by_type(cls, geo_type: Type[VBranchGeoDataBase]) -> VBranchGeoField:
@@ -410,9 +456,15 @@ class VBranchGeoField(Enum):
         if issubclass(geo_type, VBranchBSpline):
             return cls.BSPLINE
         if issubclass(geo_type, VBranchTipsTangents):
-            return cls.TIPS_TANGENTS
+            return cls.TIPS_TANGENT
 
         raise ValueError(f"Impossible to infer VBranchGeoField from geo type: {geo_type}.")
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+    def __eq__(self, value: object) -> bool:
+        return self.name == str(value)
 
 
 #: The type of curated dictionary of geometric data for branches.
@@ -439,8 +491,10 @@ class VBranchGeoData:
     BSpline = VBranchBSpline
     Curve = VBranchCurveData
     Tangents = VBranchTangents
-    TipsTangents = VBranchTipsTangents
     TipsData = VBranchTipsData
+    TipsTangents = VBranchTipsTangents
+    TipsScalar = VBranchTipsScalarData
+    Tips2Points = VBranchTipsDoublePointsData
 
     @staticmethod
     def from_data(

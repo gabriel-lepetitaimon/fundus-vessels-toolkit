@@ -486,24 +486,28 @@ def simplify_passing_nodes(
     if min_angle > 0:
         # === Filter out nodes with a too small angle between their two incident branches ===
         geo_data = vessel_graph.geometric_data()
-        d = np.stack(geo_data.tip_geodata_around_node(nodes_to_fuse, [VBranchGeoData.Fields.TIPS_TANGENTS]))
-        incident_branches = d["branches"]
-        t = d[VBranchGeoData.Fields.TIPS_TANGENTS]
+        d = geo_data.tip_data_around_node([VBranchGeoData.Fields.TIPS_TANGENT], nodes_to_fuse)
+        incident_branches = np.stack(d["branches"])
+        t = np.stack(d[VBranchGeoData.Fields.TIPS_TANGENT])
         cos = np.sum(t[..., 0] * t[..., 1], axis=1)
-        nodes_to_fuse = nodes_to_fuse[cos >= np.cos(np.deg2rad(min_angle))]
+        fuseable_nodes = cos >= np.cos(np.deg2rad(min_angle))
+        nodes_to_fuse = nodes_to_fuse[fuseable_nodes]
+        incident_branches = incident_branches[fuseable_nodes]
 
     if with_same_label is not None:
         # === Filter nodes which don't have the same label ===
         if isinstance(with_same_label, str):
             # Attempt to get the labels from the branches attributes
             with_same_label = vessel_graph.branches_attr[with_same_label]
+        with_same_label = np.asarray(with_same_label)
 
         if incident_branches is None:
             # Get the incident branches if not already computed
-            incident_branches = vessel_graph.incident_branches_individual(nodes_to_fuse)
+            incident_branches = np.stack(vessel_graph.incident_branches_individual(nodes_to_fuse))
 
-        same_label = [with_same_label[b1] == with_same_label[b2] for b1, b2 in incident_branches]
+        same_label = with_same_label[incident_branches[:, 0]] == with_same_label[incident_branches[:, 1]]
         nodes_to_fuse = nodes_to_fuse[same_label]
+        incident_branches = incident_branches[same_label]
 
     if len(nodes_to_fuse):
         return vessel_graph.fuse_nodes(

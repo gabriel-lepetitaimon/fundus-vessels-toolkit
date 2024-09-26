@@ -1,2 +1,2 @@
-from .bifurcations import bifurcations_parameters
-from .tortuosity import tortuosity_parameters
+from .bifurcations import bifurcations_biomarkers
+from .branches import tortuosity_parameters

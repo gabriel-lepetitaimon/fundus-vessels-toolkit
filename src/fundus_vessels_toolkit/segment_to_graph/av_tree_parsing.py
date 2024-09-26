@@ -1,3 +1,4 @@
+from logging import warning
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -6,7 +7,7 @@ import skimage.segmentation as sk_seg
 
 from ..utils.geometric import Point
 from ..utils.math import extract_splits
-from ..vascular_data_objects import AVLabel, FundusData, VGraph, VTree
+from ..vascular_data_objects import AVLabel, FundusData, VBranchGeoData, VGraph, VTree
 from .graph_simplification import simplify_passing_nodes
 
 
@@ -150,9 +151,13 @@ def simplify_av_graph(
     geodata = graph.geometric_data()
 
     # === Remove geometry of branches with unknown type ===
-    for branch in graph.branches():
-        if branch.attr[av_attr] == AVLabel.UNK:
-            geodata.clear_branches_gdata(branch.i)
+    geodata.clear_branches_gdata(
+        [
+            b.id
+            for b in graph.branches()
+            if (b.attr[av_attr] == AVLabel.UNK and b.arc_length() < 30) or b.attr[av_attr] == AVLabel.BOTH
+        ]
+    )
 
     # === Remove passing nodes of same type ===
     simplify_passing_nodes(graph, min_angle=100, with_same_label=av_attr, inplace=True)
@@ -161,7 +166,7 @@ def simplify_av_graph(
     branch_to_fuse = []
     for branch in graph.branches():
         if (
-            branch.chord_length() > 30
+            branch.arc_length() > 30
             and branch.attr["av"] == AVLabel.UNK
             and all(node.attr["av"] == AVLabel.UNK for node in branch.nodes)
         ):
@@ -204,39 +209,45 @@ def av_split(graph: VGraph, *, av_attr: str = "av") -> Tuple[VGraph, VGraph]:
     return a_graph, v_graph
 
 
-def vgraph_to_vtree(graph: VGraph, root_pos: Point, reorder_nodes: bool = False) -> VTree:
+def vgraph_to_vtree(
+    graph: VGraph, root_pos: Point, reorder_nodes: bool = False, reorder_branches: bool = False
+) -> VTree:
+    # === Prepare graph ===
+    graph = graph.copy()
+    loop_branches = graph.self_loop_branches()
+    if len(loop_branches) > 0:
+        warning.warn("The graph contains self loop branches. They will be ignored.")
+        graph.delete_branches(loop_branches, inplace=True)
+
     nodes_coord = graph.nodes_coord()
     branch_list = graph.branch_list
 
-    final_roots = []
-    final_branch_list = np.empty_like(branch_list)
-    final_n_branches = 0
-    final_branch_reindex = -np.ones((len(graph.branch_list),), dtype=int)
-    final_branch_flip = np.zeros(len(graph.branch_list), dtype=bool)
+    # === Prepare result variables ===
+    branch_tree = -np.ones((graph.branches_count,), dtype=int)
+    branch_dirs = np.zeros(len(graph.branch_list), dtype=bool)
+    visited_branches = np.zeros(graph.branches_count, dtype=bool)
 
-    branches_tree = -np.ones((graph.branches_count,), dtype=int)
+    # === Utilities method ===
+    def list_adjacent_branches(node: int) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.bool_]]:
+        branches = np.argwhere(np.any(branch_list == node, axis=1)).flatten()
+        return np.stack([branches, np.where(branch_list[branches, 0] == node, 1, 0)]).T
 
-    visited_nodes = np.zeros(graph.nodes_count, dtype=bool)
+    ID, DIR = 0, 1
 
-    def list_children(node: int) -> Tuple[np.ndarray, np.ndarray]:
-        """Find the children of a node in the graph and the branches to reach them.
+    def list_direct_successors(branch: int) -> Tuple[np.ndarray, np.ndarray]:
+        head_node = branch_list[branch, 1 if branch_dirs[branch] else 0]
+        branches_id_dirs = list_adjacent_branches(head_node)
+        branches_id_dirs = branches_id_dirs[branches_id_dirs[:, ID] != branch]
+        return branches_id_dirs
 
-        Returns
-        -------
-        Self loop branches:
-            The indexes of the branches that loop back to the node as a 1d array.
+    stack = []
 
-        Children nodes:
-            A 2d array of shape (N, 3) where N is the number of children. Each row contains the index of the branch
-            to reach the child, the index of the child node and a boolean indicating if the branch is inverted.
-        """
-        branches_n0 = branch_list[:, 0] == node
-        branches_n1 = branch_list[:, 1] == node
-        loop_branches = np.argwhere(branches_n0 & branches_n1).flatten()
-        ibranches = np.argwhere(np.logical_xor(branches_n0, branches_n1)).flatten()
-        invert_ibranches = branches_n1[ibranches]
-        children_nodes = branch_list[ibranches, 1 - invert_ibranches]
-        return loop_branches, np.stack([ibranches, children_nodes, invert_ibranches], axis=1)
+    def affiliate(branch: int, successors: np.ndarray):
+        succ_ids, succ_dirs = successors.T
+        branch_tree[succ_ids] = branch
+        branch_dirs[succ_ids] = succ_dirs
+        visited_branches[succ_ids] = True
+        stack.extend(succ_ids)
 
     # === Find the root node of each sub tree ===
     roots = {}
@@ -245,86 +256,107 @@ def vgraph_to_vtree(graph: VGraph, root_pos: Point, reorder_nodes: bool = False)
         min_node_id = np.argmin(nodes_dist)
         roots[nodes[min_node_id]] = nodes_dist[min_node_id]
 
-    final_roots = sorted(roots, key=roots.get)
+    for root in sorted(roots, key=roots.get):
+        root_branches_dirs = list_adjacent_branches(root)
+        for root_branch, root_dir in root_branches_dirs:
+            if not visited_branches[root_branch]:
+                stack.append(root_branch)
+                visited_branches[root_branch] = True
+                branch_dirs[root_branch] = root_dir
 
     # === Walk the branches list of each sub tree ===
-    for root in final_roots:
-        stack = [root]
-        delayed_stack: Dict[int, List[int]] = {}  # {node: [parent_node, ...]}
-        while stack or delayed_stack:
-            if stack:
-                node = stack.pop()
+    delayed_stack: Dict[int, List[int]] = {}  # {node: [branch, ...]}
+    while stack or delayed_stack:
+        if stack:
+            branch = stack.pop(0)
 
-                # 1. List the children of the first node on the stack
-                loop_branches, children = list_children(node)
+            # 1. List the children of the first branch on the stack
+            successors = list_direct_successors(branch)
+            successors_ids = successors[:, ID]
 
-                # 2. Add the self loop branches to the final tree
-                for loop_branch in loop_branches:
-                    final_branch_list[final_n_branches] = node, node
-                    final_branch_reindex[loop_branch] = final_n_branches
-                    final_n_branches += 1
+            # 2. If the branch has more than 2 successors, its evaluation is delayed until
+            #    all other branch are visited, to resolve potential cycles.
+            if len(successors_ids) > 2:
+                head_node = branch_list[branch, 1 if branch_dirs[branch] else 0]
+                if head_node not in delayed_stack:
+                    delayed_stack[head_node] = [branch]
+                else:
+                    delayed_stack[head_node].append(branch)
+                continue
 
-                # 3. If the node has more than 3 incident branches, its evaluation is delayed until
-                #    all other nodes are visited, to resolve potential cycles.
-                if len(children) > 3:
-                    if node not in delayed_stack:
-                        delayed_stack[node] = [node]
-                    else:
-                        delayed_stack[node].append(node)
-                    continue
+            # 3. Otherwise, check if any of the children has already been visited
+            if np.any(visited_branches[successors_ids]):
+                print("Cycle detected")
+                successors = successors[~visited_branches[successors_ids]]
 
-                # 4. Otherwise, remove the already visited children
-                already_visited = visited_nodes[children[:, 1]]
-                if np.sum(already_visited) > 1:
-                    print("Cycle detected")
-                children = children[~already_visited]
-            else:
-                # 1'. If the stack is empty, evaluate a delayed nodes
-                node, roots = delayed_stack.popitem()
-                _, children = list_children(node)
-                already_visited = visited_nodes[children[:, 1]]
-                if np.sum(already_visited) > len(roots):
-                    print("Cycle detected")
-                children = children[~already_visited]
+            # 4. Remember the hierarchy of the branches and add the children to the stack
+            affiliate(branch, successors)
 
-                # TODO: Decide which node is the parent of the delayed node AND store it...
-                # This require a modification of VTree to explicitly store the parent of each node.
+        else:
+            # 1'. If the stack is empty, evaluate a delayed nodes
+            node, ancestors = (k := next(iter(delayed_stack)), delayed_stack.pop(k))
 
-            # 5. Add the children to the final tree
-            for child_branch, child_node, inverted in children:
-                final_branch_list[final_n_branches] = node, child_node
-                final_branch_reindex[child_branch] = final_n_branches
-                final_branch_flip[child_branch] = inverted
-                final_n_branches += 1
+            if len(ancestors) == 1:
+                # 2'. If the node has only one ancestor, process it as a normal branch
+                branch = ancestors[0]
+                successors = list_direct_successors(branch)
+                affiliate(branch, successors)
+                continue
 
-                stack.append(child_node)
-            visited_nodes[node] = True
+            # 3'. Otherwise, list all incident branches of the node and remove the ancestors
+            successors_id_dirs = list_adjacent_branches(node)
+            successors_id_dirs = successors_id_dirs[~np.isin(successors_id_dirs[:, ID], ancestors)]
+            successors = successors_id_dirs[:, ID]
+            succ_dirs = successors_id_dirs[:, DIR]
+            acst_dirs = branch_dirs[ancestors]
 
-    assert final_n_branches == graph.branches_count, "Some branches were not added to the tree."
-    assert np.all(visited_nodes), "Some nodes were not visited during the tree traversal."
+            # 4'. For each successor, determine the best ancestor base on branch direction
+            adjacent_branches = np.concatenate([ancestors, successors])
+            adjacent_dirs = np.concatenate([~acst_dirs, succ_dirs])
+            adjacent_nodes = branch_list[adjacent_branches][:, 1 - adjacent_dirs]
+            tangents = graph.geometric_data().tip_data(
+                VBranchGeoData.Fields.TIPS_TANGENT, adjacent_branches, first_tip=adjacent_dirs
+            )
+            for i, t in enumerate(tangents):  # If the tangent is not available, use the nodes coordinates
+                if np.isnan(t).any() or np.sum(t) == 0:
+                    tangents[i] = Point.from_array(nodes_coord[adjacent_nodes[i]] - nodes_coord[node]).normalized()
+            acst_tangents = -tangents[: len(ancestors)]
+            succ_tangents = tangents[len(ancestors) :]
+            cos_angles = np.sum(succ_tangents[:, None, :] * acst_tangents[None, :, :], axis=-1)
+            best_ancestor = np.argmax(cos_angles, axis=1)
+            for succ, acst in zip(successors, ancestors[best_ancestor], strict=True):
+                branch_tree[succ] = acst
+                branch_dirs[succ] = succ_dirs[succ]
+                stack.append(succ)
+                visited_branches[succ] = True
+
+    assert np.all(visited_branches), "Some branches were not added to the tree."
 
     # === Reorder the branches ===
-    final_branch_list = np.array(final_branch_list)
-    geometric_data = graph.geometric_data().copy()
-    geometric_data._flip_branches_direction(np.argwhere(final_branch_flip).flatten())
-    geometric_data._reindex_branches(final_branch_reindex)
 
-    vtree = VTree(
-        final_branch_list,
-        branches_tree,
-        None,
-        geometric_data=geometric_data,
-        nodes_attr=graph.nodes_attr,
-        branches_attr=graph.branches_attr.set_index(final_branch_reindex),
-        nodes_count=graph.nodes_count,
-    )
+    vtree = VTree.from_graph(graph, branch_tree, branch_dirs, copy=False)
 
     if reorder_nodes:
-        new_order = []
+        new_order = np.array([n.id for n in vtree.walk_nodes(depth_first=False)], dtype=int)
+        _, idx = np.unique(new_order, return_index=True)  # Take the first occurrence of each node
+        vtree.reindex_nodes(new_order[np.sort(idx)], inverse_lookup=True)
 
-        for root in vtree.root_nodes_id:
-            new_order.append(root)
-            new_order.extend(vtree.walk(root, depth_first=False))
-        vtree.reindex_nodes(new_order, inverse_lookup=True)
+    if reorder_branches:
+        new_order = [b.id for b in vtree.walk_branches(depth_first=False)]
+        vtree.reindex_branches(new_order, inverse_lookup=True)
+
+    return vtree
+
+
+def clean_vtree(vtree: VTree, *, av_attr: str = "av") -> VTree:
+    # === Remove terminal with unknown type ===
+    while to_delete := [b.id for b in vtree.branches() if not b.has_successors and b.attr[av_attr] == AVLabel.UNK]:
+        vtree.delete_branches(to_delete, inplace=True)
+
+    # === Remove passing nodes ===
+    indegrees = vtree.node_indegree()
+    outdegrees = vtree.node_outdegree()
+    passing_nodes = np.argwhere((indegrees == 1) & (outdegrees == 1)).flatten()
+    vtree.fuse_nodes(passing_nodes, quiet_invalid_node=False, inplace=True)
 
     return vtree

@@ -92,6 +92,9 @@ def load_image(path: str | Path, binarize=False, resize=None, pad=None, cast_to_
     cv2 = import_cv2()
 
     img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if img is None:
+        raise ValueError(f"Could not load image from {path}")
+
     if img.ndim == 3:
         if img.shape[2] == 4:
             img = img[:, :, :3]

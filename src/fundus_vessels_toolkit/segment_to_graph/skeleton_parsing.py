@@ -95,10 +95,10 @@ def skeleton_to_vgraph(
         tangents, calibres, boundaries = [], [], []
         for t in outs[-1]:
             tangents.append(VBranchGeoData.TipsTangents(t[:, :2].numpy()))
-            calibres.append(VBranchGeoData.TipsData(t[:, 2].numpy()))
-            boundaries.append(VBranchGeoData.TipsData(t[:, 3:7].reshape(2, 2, 2).numpy()))
-        geo_data.set_branch_data(VBranchGeoData.Fields.TIPS_TANGENTS, tangents)
-        geo_data.set_branch_data(VBranchGeoData.Fields.TIPS_CALIBRES, calibres)
+            calibres.append(VBranchGeoData.TipsScalar(t[:, 2].numpy()))
+            boundaries.append(VBranchGeoData.Tips2Points(t[:, 3:7].reshape(2, 2, 2).numpy()))
+        geo_data.set_branch_data(VBranchGeoData.Fields.TIPS_TANGENT, tangents)
+        geo_data.set_branch_data(VBranchGeoData.Fields.TIPS_CALIBRE, calibres)
         geo_data.set_branch_data(VBranchGeoData.Fields.TIPS_BOUNDARIES, boundaries)
 
     return VGraph(branch_list.numpy(), geo_data)
