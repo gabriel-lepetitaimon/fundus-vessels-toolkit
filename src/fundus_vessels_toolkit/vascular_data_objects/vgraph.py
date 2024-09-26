@@ -4,7 +4,7 @@ __all__ = ["VGraph"]
 
 import itertools
 from pathlib import Path
-from typing import Generator, Iterable, List, Literal, Optional, Tuple, Type, overload
+from typing import Dict, Generator, Iterable, List, Literal, Optional, Tuple, Type, overload
 from weakref import WeakSet
 
 import numpy as np
@@ -23,7 +23,7 @@ from ..utils.graph.branch_by_nodes import (
 )
 from ..utils.lookup_array import add_empty_to_lookup, complete_lookup, create_removal_lookup, invert_complete_lookup
 from ..utils.pandas import DFSetterAccessor
-from .vgeometric_data import VBranchGeoDataKey, VGeometricData
+from .vgeometric_data import VBranchGeoData, VBranchGeoDataKey, VGeometricData
 
 
 ########################################################################################################################
@@ -195,12 +195,42 @@ class VGraphBranch:
         return DFSetterAccessor(self.__graph._branches_attr, self._id)
 
     def curve(self, geo_data=0) -> npt.NDArray[np.int_]:
+        """Return the indexes of the pixels forming the curve of the branch as a 2D array of shape (n, 2).
+
+        This method is a shortcut to :meth:`VGeometricData.branch_curve`.
+
+        Parameters
+        ----------
+        geo_data : int, optional
+            The index of the geometrical_data, by default 0
+
+        Returns
+        -------
+        np.ndarray
+            The indexes of the pixels forming the curve of the branch.
+        """
         return self.__graph.geometric_data(geo_data).branch_curve(self._id)
 
     def bspline(self, geo_data=0) -> BSpline:
         return self.__graph.geometric_data(geo_data).branch_bspline(self._id)
 
-    def geodata(self, attr_name: VBranchGeoDataKey, geo_data=0):
+    def geodata(self, attr_name: VBranchGeoDataKey, geo_data=0) -> VBranchGeoData.Base | Dict[str, VBranchGeoData.Base]:
+        """Access the geometric data of the branch.
+
+        This method is a shortcut to :meth:`VGeometricData.branch_data`.
+
+        Parameters
+        ----------
+        attr_name : VBranchGeoDataKey
+            The name of the attribute to access.
+        geo_data : int, optional
+            The index of the geometrical_data, by default 0
+
+        Returns
+        -------
+        Any
+            The value of the attribute.
+        """
         return self.__graph.geometric_data(geo_data).branch_data(attr_name, self._id)
 
     def node_to_node_length(self, geo_data=0) -> float:
@@ -1163,9 +1193,9 @@ class VGraph:
         self._branches_attr = self._branches_attr.drop(branch_indexes).reset_index(drop=True)
 
         if update_refs:
-            branches_reindex_refs = add_empty_to_lookup(branches_reindex, increment_index=False)
+            reindex_refs = add_empty_to_lookup(branches_reindex, increment_index=False)
             for branch in self._branches_refs:
-                branch._id = branches_reindex_refs[branch._id + 1]
+                branch._id = reindex_refs[branch._id + 1]
 
         return branches_reindex
 
@@ -1615,6 +1645,18 @@ class VGraph:
     BRANCH_ACCESSOR_TYPE: Type[VGraphBranch] = VGraphBranch
 
     def node(self, node_id: int, /) -> VGraphNode:
+        """Create a reference to a given node of the graph.
+
+        Parameters
+        ----------
+        node_id : int
+            The index of the node.
+
+        Returns
+        -------
+        VGraphNode
+            A reference to the node.
+        """
         assert 0 <= node_id < self.nodes_count, f"Node index {node_id} is out of range."
         return self.__class__.NODE_ACCESSOR_TYPE(self, node_id)
 
@@ -1626,6 +1668,27 @@ class VGraph:
         only_degree: Optional[int | npt.ArrayLike[np.int_]] = None,
         dynamic_iterator: bool = False,
     ) -> Generator[VGraphNode]:
+        """Iterate over the nodes of a graph, encapsulated in :class:`VGraphNode` objects.
+
+        Parameters
+        ----------
+        ids : int or npt.ArrayLike[int], optional
+            The indexes of the nodes to iterate over. If None, iterate over all nodes.
+
+        only_degree : int or npt.ArrayLike[int], optional
+            If not None, iterate only over the nodes with the given degree.
+
+        dynamic_iterator : bool, optional
+            If True, iterate over all the nodes present in the graph when this method is called.
+            All nodes added during the iteration will be ignored. Nodes reindexed during the iteration will be visited in their original order at the time of the call. Deleted nodes will not be visited.
+
+            Enable this option if you plan to modify the graph during the iteration. If you only plan to read the graph, disable this option for better performance.
+
+        Returns
+        -------
+        Generator[VGraphNode]
+            A generator that yields nodes.
+        """  # noqa: E501
         nodes_ids = range(self.nodes_count) if ids is None else np.atleast_1d(ids).astype(int).flatten()
         if only_degree is not None:
             only_degree = np.asarray(only_degree, dtype=int)
@@ -1646,12 +1709,45 @@ class VGraph:
                 yield self.__class__.NODE_ACCESSOR_TYPE(self, i)
 
     def branch(self, branch_id: int, /) -> VGraphBranch:
+        """Create a reference to a given branch of the graph.
+
+        Parameters
+        ----------
+        branch_id : int
+            The index of the branch.
+
+        Returns
+        -------
+        VGraphBranch
+            A reference to the branch.
+        """
         assert 0 <= branch_id < self.branches_count, f"Branch index {branch_id} is out of range."
         return self.__class__.BRANCH_ACCESSOR_TYPE(self, branch_id)
 
     def branches(
         self, ids: Optional[int | npt.ArrayLike[int]] = None, /, *, only_terminal=False, dynamic_iterator: bool = False
     ) -> Generator[VGraphBranch]:
+        """Iterate over the branches of a graph, encapsulated in :class:`VGraphBranch` objects.
+
+        Parameters
+        ----------
+        ids : int or npt.ArrayLike[int], optional
+            The indexes of the branches to iterate over. If None, iterate over all branches.
+
+        only_terminal : bool, optional
+            If True, iterate only over the terminal branches.
+
+        dynamic_iterator : bool, optional
+            If True, iterate over all the branches present in the graph when this method is called.
+            All branches added during the iteration will be ignored. Branches reindexed during the iteration will be visited in their original order at the time of the call. Deleted branches will not be visited.
+
+            Enable this option if you plan to modify the graph during the iteration. If you only plan to read the graph, disable this option for better performance.
+
+        Returns
+        -------
+        Generator[VVGraphBranch]
+            A generator that yields branches.
+        """  # noqa: E501
         branches_ids = range(self.branches_count) if ids is None else np.atleast_1d(ids).astype(int).flatten()
         if only_terminal:
             branches_ids = np.intersect1d(branches_ids, self.endpoints_branches())

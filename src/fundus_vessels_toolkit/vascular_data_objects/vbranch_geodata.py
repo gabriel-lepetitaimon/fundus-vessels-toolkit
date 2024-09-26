@@ -429,7 +429,7 @@ class VBranchGeoField(Enum):
     TANGENTS = VBranchGeoDescriptor("TANGENTS", VBranchTangents)
 
     #: The calibre of the branch at each skeleton point.
-    CALIBRES = VBranchGeoDescriptor("CALIBRE", VBranchCurveData)
+    CALIBRES = VBranchGeoDescriptor("CALIBRES", VBranchCurveData)
 
     #: The position of the left and right boundaries of the branch.
     BOUNDARIES = VBranchGeoDescriptor("BOUNDARIES", VBranchCurveData)

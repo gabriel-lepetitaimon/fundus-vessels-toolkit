@@ -44,11 +44,11 @@ class FundusAVSegToBiomarkers:
 
     def tree_to_biomarkers(self, tree: VTree) -> Dict[str, pd.DataFrame]:
         from ..vparameters.bifurcations import parametrize_bifurcations
-        from ..vparameters.branches import tortuosity_parameters
+        from ..vparameters.branches import parametrize_branches
 
         return {
             "bifurcations": parametrize_bifurcations(tree),
-            "branches": tortuosity_parameters(tree.geometric_data()),
+            "branches": parametrize_branches(tree),
         }
 
     def inspect_bifurcations(self, fundus_data: FundusData):
@@ -91,3 +91,53 @@ class FundusAVSegToBiomarkers:
         )
 
         return trees, bifuractions_data
+
+    def inspect_branches(self, fundus_data: FundusData):
+        import plotly.graph_objects as go
+        from IPython.display import display
+        from ipywidgets import GridBox, Layout
+
+        from ..vparameters.branches import parametrize_branches
+
+        trees = self.to_av_trees(fundus_data)
+        widgets = []
+        branch_infos = []
+        for i, tree in enumerate(trees):
+            branch_info = parametrize_branches(tree)
+            branch_infos.append(branch_info)
+
+            # Draw the image view
+            view = fundus_data.draw()
+            view["graph"] = tree.jppype_layer(edge_map=True, boundaries=True, node_labels=True, edge_labels=True)
+
+            # Draw the table
+            branch_info["calibre"] = (
+                branch_info["mean_calibre"].round(1).astype(str) + "±" + branch_info["std_calibre"].round(1).astype(str)
+            )
+            branch_info.drop(columns=["std_calibre", "mean_calibre"], inplace=True)
+            for col in ("mean_curvature", "τHart", "τGrisan"):
+                branch_info[col] = branch_info[col].astype(float).apply("{:.2e}".format)
+
+            for col in ("n_curvatures_roots",):
+                branch_info[col] = branch_info[col].astype(int)
+
+            cols = list(branch_info.columns)
+            cols.remove("calibre")
+            cols.insert(1, "calibre")
+
+            table = go.FigureWidget()
+            table.add_table(
+                header=dict(values=cols),
+                cells=dict(values=[branch_info[col] for col in cols]),
+            )
+
+            widgets.extend([table, view])
+
+        display(
+            GridBox(
+                widgets,
+                layout=Layout(grid_template_columns="repeat(2, 1fr)", grid_template_rows="repeat(600px, 1fr)"),
+            )
+        )
+
+        return trees, branch_infos

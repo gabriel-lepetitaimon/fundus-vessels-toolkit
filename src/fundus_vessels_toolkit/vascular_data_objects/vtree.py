@@ -93,7 +93,7 @@ class VTreeBranch(VGraphBranch):
         dir: Optional[bool] = None,
     ):
         super().__init__(graph, id, nodes_id)
-        self._dir = dir if dir is not None else graph.branch_dirs[id]
+        self._dir = dir if dir is not None else graph.branch_dirs(id)
         self._children_branches_id = None
 
     @property
@@ -212,7 +212,7 @@ class VTreeBranch(VGraphBranch):
     ) -> np.ndarray | Dict[str, np.ndarray]:
         geodata = self.graph.geometric_data()
         succ_id = self.successors_ids
-        succ_dirs = self.graph.branch_dirs[succ_id]
+        succ_dirs = self.graph.branch_dirs(succ_id)
         return geodata.tip_data(attrs, succ_id, first_tip=~succ_dirs)
 
 
@@ -271,7 +271,7 @@ class VTree(VGraph):
 
         #: The direction of the branches.
         #: Each element correspond to a branch, if True the branch is directed from its first node to its second.
-        self.branch_dirs = branch_dirs
+        self._branch_dirs = branch_dirs
 
         super().__init__(
             branch_list,
@@ -305,7 +305,7 @@ class VTree(VGraph):
         return VTree(
             self.branches_list.copy(),
             self.branch_tree.copy(),
-            self.branch_dirs.copy() if self.branch_dirs is not None else None,
+            self._branch_dirs.copy() if self._branch_dirs is not None else None,
             self.geometric_data.copy(),
             nodes_attr=self.nodes_attr.copy() if self.nodes_attr is not None else None,
             branches_attr=self.branches_attr.copy() if self.branches_attr is not None else None,
@@ -341,6 +341,11 @@ class VTree(VGraph):
     ####################################################################################################################
     #  === TREE BRANCHES PROPERTIES ===
     ####################################################################################################################
+    def branch_dirs(self, branch_ids: int | npt.ArrayLike[int]) -> np.ndarray:
+        if self._branch_dirs is None:
+            return True if np.isscalar(branch_ids) else np.ones(len(branch_ids), dtype=bool)
+        return self._branch_dirs[branch_ids]
+
     def root_branches_ids(self) -> np.ndarray:
         """Return the indexes of the root branches.
 
@@ -359,10 +364,10 @@ class VTree(VGraph):
         npt.NDArray[np.int_]
             The list of branches of the tree.
         """
-        if self.branch_dirs is None:
-            return self.branches_list
+        if self._branch_dirs is None:
+            return self.branch_list
 
-        dirs = self.branch_dirs
+        dirs = self._branch_dirs
         branch_list = self.branch_list.copy()
         branch_list[dirs] = branch_list[dirs][:, ::-1]
         return branch_list
@@ -457,8 +462,8 @@ class VTree(VGraph):
         """
         branch_id, is_single = as_1d_array(branch_id, dtype=int)
         heads = self.branch_list[branch_id]
-        if self.branch_dirs is not None:
-            heads = heads[:, np.where(self.branch_dirs[branch_id], 1, 0)]
+        if self._branch_dirs is not None:
+            heads = heads[:, np.where(self._branch_dirs[branch_id], 1, 0)]
         return heads[0] if is_single else heads
 
     def branch_tail(self, branch_id: int | npt.ArrayLike[int]) -> int | npt.NDArray[np.int_]:
@@ -476,8 +481,8 @@ class VTree(VGraph):
         """
         branch_id, is_single = as_1d_array(branch_id, dtype=int)
         tails = self.branch_list[branch_id]
-        if self.branch_dirs is not None:
-            tails = tails[:, np.where(self.branch_dirs[branch_id], 0, 1)]
+        if self._branch_dirs is not None:
+            tails = tails[:, np.where(self._branch_dirs[branch_id], 0, 1)]
         return tails[0] if is_single else tails
 
     def walk(
@@ -527,8 +532,8 @@ class VTree(VGraph):
         """
         root_branches = np.argwhere(self.branch_tree == -1).flatten()
         root_nodes = self.branch_list[root_branches]
-        if self.branch_dirs is not None:
-            root_nodes = root_nodes[:, np.where(self.branch_dirs[root_branches], 0, 1)]
+        if self._branch_dirs is not None:
+            root_nodes = root_nodes[:, np.where(self._branch_dirs[root_branches], 0, 1)]
         return np.unique(root_nodes)
 
     def node_incoming_branches(self, node_id: int | npt.ArrayLike[int]) -> npt.NDArray[np.int_]:
@@ -702,7 +707,8 @@ class VTree(VGraph):
 
         super().reindex_branches(indexes, inverse_lookup=False)
         self.branch_tree = self.branch_tree[indexes]
-        self.branch_dirs = self.branch_dirs[indexes]
+        if self._branch_dirs is not None:
+            self._branch_dirs = self._branch_dirs[indexes]
 
         indexes = add_empty_to_lookup(indexes, increment_index=False)
         self.branch_tree = indexes[self.branch_tree + 1]
@@ -739,27 +745,28 @@ class VTree(VGraph):
         VTree
             The modified tree.
         """
-        if self.branch_dirs is None:
+        if self._branch_dirs is None:
             return self
-        return self.flip_branches_direction(np.argwhere(self.branch_dirs).flatten())
+        return self.flip_branches_direction(np.argwhere(~self._branch_dirs).flatten())
 
     def flip_branches_direction(self, branches_id: int | Iterable[int]) -> VTree:
         super().flip_branches_direction(branches_id)
 
-        if self.branch_dirs is None:
+        if self._branch_dirs is None:
             dirs = np.ones(self.branches_count, dtype=bool)
             dirs[branches_id] = False
-            self.branch_dirs = dirs
+            self._branch_dirs = dirs
         else:
-            self.branch_dirs[branches_id] = ~self.branch_dirs[branches_id]
-            if self.branch_dirs.all():
-                self.branch_dirs = None
+            self._branch_dirs[branches_id] = ~self._branch_dirs[branches_id]
+            if self._branch_dirs.all():
+                self._branch_dirs = None
 
     def _delete_branches(self, branch_indexes: npt.NDArray[np.int_], update_refs: bool = True) -> npt.NDArray[np.int_]:
         branches_reindex = super()._delete_branches(branch_indexes, update_refs=update_refs)
-        branches_reindex = add_empty_to_lookup(branches_reindex, increment_index=False)
-        self.branch_tree = branches_reindex[np.delete(self.branch_tree, branch_indexes) + 1]
-        self.branch_dirs = np.delete(self.branch_dirs, branch_indexes)
+        reindex = add_empty_to_lookup(branches_reindex, increment_index=False)
+        self.branch_tree = reindex[np.delete(self.branch_tree, branch_indexes) + 1]
+        if self._branch_dirs is not None:
+            self._branch_dirs = np.delete(self._branch_dirs, branch_indexes)
         return branches_reindex
 
     def delete_branches(
@@ -857,10 +864,19 @@ class VTree(VGraph):
             nodes = nodes[(self.node_indegree(nodes) == 1) & (self.node_outdegree(nodes) == 1)]
 
         tree = self.copy() if not inplace else self
+
+        # === Flip the branches to match the tree structure ===
+        # Necessary to reindex branches correctly in branch_tree
+        # (otherwise, using the reindexing code underneath, a branch can be its own parent)
+        tree.flip_branches_to_tree_dir()
         branch_tree = tree.branch_tree
+
+        # === Fuse the node in the graph and geometrical data ===
         branch_reindex, del_branch = tree._fuse_nodes(
             nodes, quiet_invalid_node=quiet_invalid_node, incident_branches=incident_branches
         )
+
+        # === Redirect the branch ancestors ===
         branch_reindex = add_empty_to_lookup(branch_reindex, increment_index=False)
         tree.branch_tree = np.delete(branch_reindex[branch_tree + 1], del_branch)
         return tree
@@ -944,9 +960,30 @@ class VTree(VGraph):
     def branches(
         self, ids: Optional[int | npt.ArrayLike[int]] = None, /, *, only_terminal=False, dynamic_iterator: bool = False
     ) -> Generator[VTreeBranch]:
+        """Iterate over the branches of a tree, encapsulated in :class:`VTreeBranch` objects.
+
+        Parameters
+        ----------
+        ids : int or npt.ArrayLike[int], optional
+            The indexes of the branches to iterate over. If None, iterate over all branches.
+
+        only_terminal : bool, optional
+            If True, iterate only over the terminal branches.
+
+        dynamic_iterator : bool, optional
+            If True, iterate over all the branches present in the ytrr when this method is called.
+            All branches added during the iteration will be ignored. Branches reindexed during the iteration will be visited in their original order at the time of the call. Deleted branches will not be visited.
+
+            Enable this option if you plan to modify the tree during the iteration. If you only plan to read the tree, disable this option for better performance.
+
+        Returns
+        -------
+        Generator[VTreeBranch]
+            A generator that yields branches.
+        """  # noqa: E501
         return super().branches(ids, only_terminal=only_terminal, dynamic_iterator=dynamic_iterator)
 
-    def branch(self, branch_id: int, /) -> VGraphBranch:
+    def branch(self, branch_id: int, /) -> VTreeBranch:
         return super().branch(branch_id)
 
     def root_branches(self) -> Generator[VTreeBranch]:
@@ -984,9 +1021,8 @@ class VTree(VGraph):
         while stack:
             branch_id = stack.pop() if depth_first else stack.pop(0)
             branch_children = self.branch_successors(branch_id)
-            branch = VTreeBranch(
-                self, branch_id, dir=self.branch_dirs[branch_id], nodes_id=self.branches_list[branch_id]
-            )
+            branch_dir = self._branch_dirs[branch_id] if self._branch_dirs is not None else True
+            branch = VTreeBranch(self, branch_id, dir=branch_dir, nodes_id=self.branches_list[branch_id])
             branch._children_branches_id = branch_children
             yield branch
             stack.extend(branch_children)
@@ -1052,14 +1088,14 @@ class VTree(VGraph):
             If provided, only iterate over the nodes with the given outdegree.
 
         dynamic_iterator : bool, optional
-            If True, iterate over all the current node of the tree except those deleted during the iteration.
-            All nodes added during the iteration will be ignored. Nodes reindexed during the iteration will be visited in the order of their old index.
+            If True, iterate over all the branches present in the ytrr when this method is called.
+            All branches added during the iteration will be ignored. Branches reindexed during the iteration will be visited in their original order at the time of the call. Deleted branches will not be visited.
 
-            Enable this option if you plan to modify the tree during the iteration.
+            Enable this option if you plan to modify the tree during the iteration. If you only plan to read the tree, disable this option for better performance.
 
         Yields
         ------
-        Generator[NODE_ACCESSOR_TYPE]
+        Generator[VTreeNode]
             The nodes of the tree as :class:`VTreeNode` objects.
         """  # noqa: E501
         # Filter nodes by outdegree

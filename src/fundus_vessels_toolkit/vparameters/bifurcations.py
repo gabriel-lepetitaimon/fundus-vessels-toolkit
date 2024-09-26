@@ -31,8 +31,22 @@ def bifurcations_biomarkers(d0, d1, d2, θ1, θ2) -> dict:
 def parametrize_bifurcations(
     vtree: VTree, *, calibre_tip=VBranchGeoData.Fields.TIPS_CALIBRE, tangent_tip=VBranchGeoData.Fields.TIPS_TANGENT
 ) -> pd.DataFrame:
-    """
-    Extract parameters of bifurcations from a VTree.
+    """Extract parameters and biomarkers from the bifurcations of a VTree.
+
+    The parameters extracted are:
+    - node: the node id of the bifurcation.
+    - branch0: the id of the parent branch.
+    - branch1: the id of the secondary branch.
+    - branch2: the id of the tertiary branch.
+    - d0: the calibre of the parent branch.
+    - d1: the calibre of the secondary branch.
+    - d2: the calibre of the tertiary branch.
+    - θ1: the angle between the parent and secondary branch.
+    - θ2: the angle between the parent and tertiary branch.
+    - θ_branching: the sum of the angles
+    - θ_assymetry: the difference of the angles
+    - assymetry_ratio
+    - branching_coefficient
 
     Parameters
     ----------
@@ -108,7 +122,7 @@ def parametrize_bifurcations(
         ):
             d2 = tertiary_calibre
             θ2 = np.rad2deg(modulo_pi(np.arctan2(*head_tangent) - np.arctan2(*tertiary_tangent)))
-            thetas = (θ1, -θ2) if abs(θ1) > abs(θ2) else (-θ1, θ2)
+            thetas = (θ1, -θ2) if (abs(θ1) > abs(θ2)) ^ (θ1 < 0) else (-θ1, θ2)
             bifurcations.append(
                 (branch.head_id, branch.id, secondary_branch.id, tertiary_branch.id, d0, d1, d2, *thetas)
             )

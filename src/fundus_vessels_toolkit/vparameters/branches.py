@@ -1,39 +1,102 @@
+from typing import Dict
+
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
-from ..vascular_data_objects import VBranchGeoData, VGeometricData
+from ..vascular_data_objects import VBranchGeoData, VGraph
 
 
-def tortuosity_parameters(geodata: VGeometricData):
-    branches_tortuosities = []
+def parametrize_branches(vgraph: VGraph) -> pd.DataFrame:
+    """Extract parameters and biomarkers from the branches of a VGraph.
 
-    curves = geodata.branch_curve()
-    ids = [curve is not None and len(curve > 5) for curve in curves]
-    curves = [curve for id, (curve, valid) in enumerate(zip(curves, ids, strict=True)) if valid]
-    ids = np.argwhere(ids).flatten()
+    The parameters extracted are:
+    - mean_calibre: the mean calibre of the branch.
+    - std_calibre: the standard deviation of the calibres of the branch.
+    - mean_curvature: the mean curvature of the branch.
+    - τHart: the Hart tortuosity of the branch.
+    - τGrisan: the Grisan tortuosity of the branch.
+    - n_curvatures_roots: the number of roots of the branch curvature.
 
-    curvatures = [_.data for _ in geodata.branch_data(VBranchGeoData.Fields.CURVATURES, ids)]
+    Parameters
+    ----------
+    vgraph : VGraph
+        The VGraph to analyze.
 
-    def chord(curve):
-        return np.linalg.norm(curve[0] - curve[-1])
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing the parameters of the branches.
+    """
+    branches_params = []
 
-    def arc(curve):
-        return np.sum(np.linalg.norm(np.diff(curve, axis=0), axis=1))
+    for branch in vgraph.branches():
+        if branch.arc_length() < 5:
+            continue
 
-    for id, curve, curvature in zip(ids, curves, curvatures, strict=True):
-        curvatures_root = np.argwhere(np.sign(curvature[1:]) != np.sign(curvature[:-1])).flatten()
-        n = len(curvatures_root)
-        Lc = arc(curve)
-        Lx = chord(curve)
-        Lci = [arc(_) for _ in np.split(curve, curvatures_root) if len(_) > 1]
-        Lxi = [chord(_) for _ in np.split(curve, curvatures_root) if len(_) > 1]
+        # === Get the calibres and curvature data for this branch ===
+        calibres = branch.geodata(VBranchGeoData.Fields.CALIBRES)
+        curvature = branch.geodata(VBranchGeoData.Fields.CURVATURES)
 
-        tortuosities = dict(
-            branch_id=id,
-            τHart=Lc / Lx - 1,
-            n_curvatures_roots=len(curvatures_root),
-            τGrisan=(n - 1) / Lc * np.sum([lci / lxi - 1 for lci, lxi in zip(Lci, Lxi)]),
+        if calibres is None or curvature is None:
+            continue
+        calibres = calibres.data
+        curvature = curvature.data
+
+        # === Compute parameters and biomarkers ===
+        mean_calibre = np.mean(calibres)
+        std_calibre = np.std(calibres)
+        mean_curvature = np.mean(curvature)
+
+        tortuosities = compute_tortuosity(branch.curve(), curvature)
+
+        branches_params.append(
+            {
+                "branch": branch.id,
+                "mean_calibre": mean_calibre,
+                "std_calibre": std_calibre,
+                "mean_curvature": mean_curvature,
+                **tortuosities,
+            }
         )
-        branches_tortuosities.append(tortuosities)
 
-    return pd.DataFrame(branches_tortuosities).set_index("branch_id")
+    return pd.DataFrame(branches_params)
+
+
+def compute_tortuosity(curve: npt.NDArray[np.float_], curvature: npt.NDArray[np.float_]) -> Dict[str, float]:
+    """Compute the tortuosity of a branch.
+
+    Parameters
+    ----------
+    curve : npt.NDArray[np.float_]
+        The skeleton of the branch as a 2D array of shape (n, 2).
+
+    curvature : npt.NDArray[np.float_]
+        The curvature of the branch as a 1D array of shape (n,).
+
+    Returns
+    -------
+    pd.DataFrame
+        _description_
+    """
+
+    curvatures_root = np.argwhere(np.sign(curvature[1:]) != np.sign(curvature[:-1])).flatten()
+    n = len(curvatures_root)
+    Lc = arc(curve)
+    Lx = chord(curve)
+    Lci = [arc(_) for _ in np.split(curve, curvatures_root) if len(_) > 1]
+    Lxi = [chord(_) for _ in np.split(curve, curvatures_root) if len(_) > 1]
+
+    return {
+        "τHart": Lc / Lx - 1,
+        "τGrisan": (n - 1) / Lc * np.sum([lci / lxi - 1 for lci, lxi in zip(Lci, Lxi, strict=True)]),
+        "n_curvatures_roots": len(curvatures_root),
+    }
+
+
+def chord(curve: np.ndarray):
+    return np.linalg.norm(curve[0] - curve[-1])
+
+
+def arc(curve: np.ndarray):
+    return np.sum(np.linalg.norm(np.diff(curve, axis=0), axis=1))
