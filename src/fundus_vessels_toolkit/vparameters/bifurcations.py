@@ -1,3 +1,5 @@
+from typing import Dict, List, Optional
+
 import numpy as np
 import pandas as pd
 
@@ -6,7 +8,7 @@ from ..utils.math import modulo_pi
 from ..vascular_data_objects import VBranchGeoData, VTree
 
 
-def bifurcations_biomarkers(d0, d1, d2, θ1, θ2) -> dict:
+def bifurcations_biomarkers(d0, d1, d2, θ1, θ2, *, as_dict=True) -> Dict[str, float] | List[float]:
     """
     Compute bifurcation biomarkers from the calibres and angles of its branches.
 
@@ -20,16 +22,28 @@ def bifurcations_biomarkers(d0, d1, d2, θ1, θ2) -> dict:
     pd.DataFrame
         A DataFrame containing the parameters of the bifurcations.
     """
-    d = {}
-    d["θ_branching"] = θ1 + θ2
-    d["θ_assymetry"] = θ1 - θ2
-    d["assymetry_ratio"] = d2**2 / d1**2
-    d["branching_coefficient"] = (d1 + d2) ** 2 / d0**2
-    return d
+    θ_branching = θ1 + θ2
+    θ_assymetry = abs(θ1 - θ2)
+    assymetry_ratio = d2**2 / d1**2
+    branching_coefficient = (d1 + d2) ** 2 / d0**2
+
+    if as_dict:
+        return {
+            "θ_branching": θ_branching,
+            "θ_assymetry": θ_assymetry,
+            "assymetry_ratio": assymetry_ratio,
+            "branching_coefficient": branching_coefficient,
+        }
+    return [θ_branching, θ_assymetry, assymetry_ratio, branching_coefficient]
 
 
 def parametrize_bifurcations(
-    vtree: VTree, *, calibre_tip=VBranchGeoData.Fields.TIPS_CALIBRE, tangent_tip=VBranchGeoData.Fields.TIPS_TANGENT
+    vtree: VTree,
+    *,
+    calibre_tip=VBranchGeoData.Fields.TIPS_CALIBRE,
+    tangent_tip=VBranchGeoData.Fields.TIPS_TANGENT,
+    strahler_field: Optional[str] = "strahler",
+    branch_rank_field: Optional[str] = "rank",
 ) -> pd.DataFrame:
     """Extract parameters and biomarkers from the bifurcations of a VTree.
 
@@ -38,6 +52,7 @@ def parametrize_bifurcations(
     - branch0: the id of the parent branch.
     - branch1: the id of the secondary branch.
     - branch2: the id of the tertiary branch.
+    - (strahler): the Strahler number of the parent branch.
     - d0: the calibre of the parent branch.
     - d1: the calibre of the secondary branch.
     - d2: the calibre of the tertiary branch.
@@ -59,63 +74,94 @@ def parametrize_bifurcations(
     tangent: str
         The field of the VBranchGeoData containing the tangents. Use the standard 'TIPS_TANGENT' field by default.
 
+    strahler_field: str
+        The branch attribute containing the Strahler numbers (if the attribute is empty, computes it).
+
+        If None, the Strahler numbers are not returned.
+
+    branch_rank_field: str
+        The branch attribute containing the rank of the branches (if the attribute is empty, computes it).
+
+        If None, the ranks are not returned.
+
     Returns
     -------
     pd.DataFrame
         A DataFrame containing the parameters of the bifurcations
-    """
+    """  # noqa: E501
 
+    gdata = vtree.geometric_data()
     bifurcations = []
 
-    for branch in vtree.branches():
+    if strahler_field is not None and strahler_field not in vtree.branches_attr:
+        assign_strahler_number(vtree, field=strahler_field)
+
+    if branch_rank_field is not None and branch_rank_field not in vtree.branches_attr:
+        vtree.branches_attr[branch_rank_field] = 1
+
+    for branch in vtree.walk_branches():
+        if branch_rank_field is not None:
+            branch_rank = branch.attr[branch_rank_field]
+
+        n_successors = branch.n_successors
         if branch.n_successors < 2:
+            if n_successors == 1:
+                branch.successor(0).attr[branch_rank_field] = branch_rank
             continue
 
         # === Get the calibres and tangents data for this branch ===
-        head_data = branch.head_tip_geodata([calibre_tip, tangent_tip])
-        head_tangent = head_data.get(tangent_tip, np.zeros(2, dtype=float))
+        head_data = branch.head_tip_geodata([calibre_tip, tangent_tip], geodata=gdata)
+        head_tangent = -head_data.get(tangent_tip, np.zeros(2, dtype=float))
         head_calibre = head_data.get(calibre_tip, np.nan)
 
-        if np.isnan(head_tangent).any() or np.sum(head_tangent) == 0 or np.isnan(head_calibre):
-            continue
+        if np.isnan(head_tangent).any() or np.sum(head_tangent) == 0:
+            head_tangent = np.diff(gdata.nodes_coord(list(branch.directed_nodes_id)), axis=0)[0]
+            head_tangent /= np.linalg.norm(head_tangent)
 
-        # === Get the calibres and tangents data for this branch ===
-        successors_data = branch.successors_tip_geodata([calibre_tip, tangent_tip])
+        # === Get the calibres and tangents data for its successors ===
+        successors_data = branch.successors_tip_geodata([calibre_tip, tangent_tip], geodata=gdata)
         tertiary_branches = list(branch.successors())
-        tertiary_tangents = list(successors_data[tangent_tip])
         tertiary_calibres = list(successors_data[calibre_tip])
+        tertiary_tangents = list(successors_data[tangent_tip])
 
-        # === Find the largest successor branch ===
+        for i, ter_branch in enumerate(tertiary_branches):
+            if np.isnan(tertiary_tangents[i]).any() or np.sum(tertiary_tangents[i]) == 0:
+                # If the tangent is not available, fallback to the difference of nodes coordinates
+                tertiary_tangents[i] = np.diff(gdata.nodes_coord(list(ter_branch.directed_nodes_id)), axis=0)[0]
+                tertiary_tangents[i] /= np.linalg.norm(tertiary_tangents[i])
+
+        # === Select the secondary branch (main successor) ===
         second_branch_i = 0
-        secondary_calibre = 0
-        i = 0
-        while i < len(tertiary_branches):
-            calibre = tertiary_calibres[i]
-            if np.isnan(tertiary_tangents[i]).any() or np.sum(tertiary_tangents[i]) == 0 or np.isnan(calibre):
-                # Ignore branches with invalid tip data
-                del tertiary_branches[i]
-                del tertiary_tangents[i]
-                del tertiary_calibres[i]
-            else:
-                # Search for the largest calibre
-                if secondary_calibre < calibre:
-                    secondary_calibre = calibre
-                    second_branch_i = i
-                i += 1
+        if not np.any(np.isnan(tertiary_calibres)):
+            # If the calibres are available, select the one with the highest calibre
+            second_branch_i = np.argmax(tertiary_calibres)
+            # Check that it is at least 1.5px larger than any other tertiary branches
+            if not np.all(tertiary_calibres[second_branch_i] - 1.5 > np.delete(tertiary_calibres, second_branch_i)):
+                # If not, select the one with the closest angle to the parent branch
+                second_branch_i = np.argmax([np.dot(head_tangent, t) for t in tertiary_tangents])
 
-        # === Check if there is still enough successors ===
-        if len(tertiary_branches) < 2:
-            continue
+        else:
+            # If the calibres are not available, select the one with the closest angle to the parent branch
+            second_branch_i = np.argmax([np.dot(head_tangent, t) for t in tertiary_tangents])
 
         # === Prepare the secondary and tertiary branches data ===
         secondary_branch = tertiary_branches.pop(second_branch_i)
         secondary_tangent = tertiary_tangents.pop(second_branch_i)
         secondary_calibre = tertiary_calibres.pop(second_branch_i)
 
+        # === Assign branch ranks to successors ===
+        secondary_branch.attr[branch_rank_field] = (
+            branch_rank
+            if np.isnan([secondary_calibre, head_calibre]).any() or secondary_calibre > head_calibre * 0.75
+            else branch_rank + 1
+        )
+        for ter_branch in tertiary_branches:
+            ter_branch.attr[branch_rank_field] = branch_rank + 1
+
         # === Compute secondary branch parameters ===
         d0 = head_calibre
         d1 = secondary_calibre
-        α0 = np.arctan2(*(-head_tangent))
+        α0 = np.arctan2(*head_tangent)
         α1 = np.arctan2(*secondary_tangent)
         θ1 = np.rad2deg(modulo_pi(α1 - α0))
 
@@ -130,15 +176,49 @@ def parametrize_bifurcations(
                 thetas = (θ1, -θ2) if θ1 > 0 else (-θ1, θ2)
             else:
                 thetas = (-θ1, θ2) if θ2 > 0 else (θ1, -θ2)
-            bifurcations.append(
-                (branch.head_id, branch.id, secondary_branch.id, tertiary_branch.id, d0, d1, d2, *thetas)
-            )
+            infos = [branch.head_id, branch.id, secondary_branch.id, tertiary_branch.id]
+            if strahler_field is not None:
+                infos.append(branch.attr[strahler_field])
+            if branch_rank_field is not None:
+                infos.append(branch_rank)
+            params = [d0, d1, d2, *thetas]
+            biomarkers = bifurcations_biomarkers(*params, as_dict=False)
+            bifurcations.append(infos + params + biomarkers)
 
     # === Compute the bifurcation parameters ===
-    parameters = pd.DataFrame(
-        bifurcations, columns=["node", "branch0", "branch1", "branch2", "d0", "d1", "d2", "θ1", "θ2"]
-    )
-    biomarkers = parameters.apply(
-        lambda x: bifurcations_biomarkers(x["d0"], x["d1"], x["d2"], x["θ1"], x["θ2"]), axis=1
-    )
-    return pd.concat([parameters, pd.DataFrame(biomarkers.tolist(), index=parameters.index)], axis=1)
+    columns = ["node", "branch0", "branch1", "branch2"]
+    if strahler_field is not None:
+        columns.append(strahler_field)
+    if branch_rank_field is not None:
+        columns.append(branch_rank_field)
+    columns += ["d0", "d1", "d2", "θ1", "θ2"]
+    columns.extend(bifurcations_biomarkers(*((1,) * 5), as_dict=True).keys())
+    return pd.DataFrame(bifurcations, columns=columns)
+
+
+def assign_strahler_number(vtree: VTree, field: str = "strahler") -> VTree:
+    """
+    Assign Strahler numbers to the branches of a VTree.
+
+    Parameters
+    ----------
+    vtree:
+        The VTree to analyze.
+
+    field:
+        The field of the VBranchGeoData to store the Strahler numbers.
+
+    Returns
+    -------
+    VTree
+        The VTree with the Strahler numbers assigned.
+    """
+    vtree.branches_attr[field] = 1
+    reverse_depth_order = np.array(list(vtree.walk(depth_first=True)), dtype=int)[::-1]
+    for branch in vtree.branches(reverse_depth_order):
+        if branch.has_successors:
+            strahlers = sorted([s.attr[field] for s in branch.successors()], reverse=True)
+            if len(strahlers) == 1 or strahlers[0] != strahlers[-1]:
+                branch.attr[field] = strahlers[0]
+            else:
+                branch.attr[field] = strahlers[0] + 1

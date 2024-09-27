@@ -286,7 +286,7 @@ class VGeometricData:
         return np.arange(self.nodes_count) if self._nodes_id is None else self._nodes_id
 
     def _graph_to_internal_nodes_index(
-        self, index: npt.ArrayLike, graph_indexing=True, *, index_sorted=False, sort_index=True, check_valid=False
+        self, index: npt.ArrayLike, graph_indexing=True, *, index_sorted=False, sort_index=False, check_valid=False
     ) -> npt.NDArray[np.int_]:
         """Convert the index of the nodes in the graph to their index in the internal representation."""
         index = np.array(index, copy=True, dtype=np.int32)
@@ -1407,20 +1407,30 @@ class VGeometricData:
         if show_only is not None and not show_only.any():
             return LayerQuiver(np.empty((0, 2)), np.empty((0, 2)), self.domain, "view_sqrt" if normalize else "scene")
 
+        branch_list = self.parent_graph.branch_list
+
         arrows_p = []
         arrows_v = []
         curves = self.branch_curve()
         tangents = self.branch_data(tangents)
-        for i, (curve, tangent) in enumerate(zip(curves, tangents, strict=True)):
+        for i, curve, tangent in zip(self.branches_id, curves, tangents, strict=True):
             if show_only is not None and not show_only[i].any():
                 continue
-            if curve is None or len(curve) == 0 or tangent is None or len(tangent.data) == 0:
-                continue
-            tangent = tangent.data
-            tail_p = curve[0]
-            head_p = curve[-1]
-            tail_t = -tangent[0]
-            head_t = tangent[-1]
+            if curve is None or len(curve) <= 1 or (curve[0] == curve[-1]).all():
+                tail_p, head_p = self.nodes_coord(branch_list[i])
+            else:
+                tail_p = curve[0]
+                head_p = curve[-1]
+
+            if tangent is None or np.isnan(tangent.data).any() or np.sum(tangent.data) == 0:
+                tail_t = tail_p - head_p
+                tail_t /= np.linalg.norm(tail_t)
+                head_t = -tail_t
+            else:
+                tangent = tangent.data
+                tail_t = -tangent[0]
+                head_t = tangent[-1]
+
             if invert_direction is not None:
                 if invert_direction[i, 0]:
                     tail_t = -tail_t

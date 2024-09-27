@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from fundus_vessels_toolkit.utils.math import as_1d_array
-
 __all__ = ["VTree"]
 
 from typing import Dict, Generator, Iterable, List, Optional, Tuple, overload
@@ -11,6 +9,7 @@ import numpy.typing as npt
 import pandas as pd
 
 from ..utils.lookup_array import add_empty_to_lookup, complete_lookup, invert_complete_lookup
+from ..utils.math import as_1d_array
 from ..utils.tree import has_cycle
 from .vgeometric_data import VBranchGeoDataKey, VGeometricData
 from .vgraph import VGraph, VGraphBranch, VGraphNode
@@ -185,6 +184,18 @@ class VTreeBranch(VGraphBranch):
             self._update_children()
         return (VTreeBranch(self.graph, i) for i in self._children_branches_id)
 
+    def successor(self, index: int) -> VTreeBranch:
+        """Return the direct successor of the branch at the given index."""
+        assert self.is_valid, "The branch was removed from the tree."
+        if self._children_branches_id is None:
+            self._update_children()
+        try:
+            return VTreeBranch(self.graph, self._children_branches_id[index])
+        except IndexError:
+            raise IndexError(
+                f"Index {index} out of range for branch {self.id} with {self.n_successors} successors."
+            ) from None
+
     def walk(self, *, depth_first=False, dynamic=False) -> Generator[VTreeBranch]:
         """Create a walker object to traverse the successors of the branch.
 
@@ -202,15 +213,22 @@ class VTreeBranch(VGraphBranch):
 
     # __ GeoAttr Accessor __
     def head_tip_geodata(
-        self, attrs: Optional[VBranchGeoDataKey | List[VBranchGeoDataKey]] = None
+        self,
+        attrs: Optional[VBranchGeoDataKey | List[VBranchGeoDataKey]] = None,
+        geodata: Optional[VGeometricData | int] = None,
     ) -> np.ndarray | Dict[str, np.ndarray]:
-        geodata = self.graph.geometric_data()
+        if not isinstance(geodata, VGeometricData):
+            geodata = self.graph.geometric_data(0 if geodata is None else geodata)
         return geodata.tip_data(attrs, self._id, first_tip=not self._dir)
 
     def successors_tip_geodata(
-        self, attrs: Optional[VBranchGeoDataKey | List[VBranchGeoDataKey]] = None
+        self,
+        attrs: Optional[VBranchGeoDataKey | List[VBranchGeoDataKey]] = None,
+        geodata: Optional[VGeometricData | int] = None,
     ) -> np.ndarray | Dict[str, np.ndarray]:
-        geodata = self.graph.geometric_data()
+        if not isinstance(geodata, VGeometricData):
+            geodata = self.graph.geometric_data(0 if geodata is None else geodata)
+
         succ_id = self.successors_ids
         succ_dirs = self.graph.branch_dirs(succ_id)
         return geodata.tip_data(attrs, succ_id, first_tip=succ_dirs)
@@ -1048,12 +1066,12 @@ class VTree(VGraph):
                 yield b
             return
 
-        stack = self.root_branches_ids() if branch_id is None else [branch_id]
+        stack = list(self.root_branches_ids()) if branch_id is None else [branch_id]
         while stack:
             branch_id = stack.pop() if depth_first else stack.pop(0)
             branch_children = self.branch_successors(branch_id)
             branch_dir = self._branch_dirs[branch_id] if self._branch_dirs is not None else True
-            branch = VTreeBranch(self, branch_id, dir=branch_dir, nodes_id=self.branches_list[branch_id])
+            branch = VTreeBranch(self, branch_id, dir=branch_dir, nodes_id=self.branch_list[branch_id])
             branch._children_branches_id = branch_children
             yield branch
             stack.extend(branch_children)
