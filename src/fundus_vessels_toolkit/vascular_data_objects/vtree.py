@@ -4,13 +4,13 @@ from fundus_vessels_toolkit.utils.math import as_1d_array
 
 __all__ = ["VTree"]
 
-from typing import Dict, Generator, Iterable, List, Optional, Tuple
+from typing import Dict, Generator, Iterable, List, Optional, Tuple, overload
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from ..utils.lookup_array import add_empty_to_lookup, complete_lookup, create_removal_lookup, invert_complete_lookup
+from ..utils.lookup_array import add_empty_to_lookup, complete_lookup, invert_complete_lookup
 from ..utils.tree import has_cycle
 from .vgeometric_data import VBranchGeoDataKey, VGeometricData
 from .vgraph import VGraph, VGraphBranch, VGraphNode
@@ -93,7 +93,7 @@ class VTreeBranch(VGraphBranch):
         dir: Optional[bool] = None,
     ):
         super().__init__(graph, id, nodes_id)
-        self._dir = dir if dir is not None else graph.branch_dirs(id)
+        self._dir = dir if dir is not None else bool(graph.branch_dirs(id))
         self._children_branches_id = None
 
     @property
@@ -205,7 +205,7 @@ class VTreeBranch(VGraphBranch):
         self, attrs: Optional[VBranchGeoDataKey | List[VBranchGeoDataKey]] = None
     ) -> np.ndarray | Dict[str, np.ndarray]:
         geodata = self.graph.geometric_data()
-        return geodata.tip_data(attrs, self._id, first_tip=self._dir)
+        return geodata.tip_data(attrs, self._id, first_tip=not self._dir)
 
     def successors_tip_geodata(
         self, attrs: Optional[VBranchGeoDataKey | List[VBranchGeoDataKey]] = None
@@ -213,7 +213,7 @@ class VTreeBranch(VGraphBranch):
         geodata = self.graph.geometric_data()
         succ_id = self.successors_ids
         succ_dirs = self.graph.branch_dirs(succ_id)
-        return geodata.tip_data(attrs, succ_id, first_tip=~succ_dirs)
+        return geodata.tip_data(attrs, succ_id, first_tip=succ_dirs)
 
 
 ########################################################################################################################
@@ -341,7 +341,26 @@ class VTree(VGraph):
     ####################################################################################################################
     #  === TREE BRANCHES PROPERTIES ===
     ####################################################################################################################
-    def branch_dirs(self, branch_ids: int | npt.ArrayLike[int]) -> np.ndarray:
+    @overload
+    def branch_dirs(self, branch_ids: int) -> np.bool_: ...
+    @overload
+    def branch_dirs(self, branch_ids: npt.ArrayLike[int]) -> np.ndarray[np.bool_]: ...
+    def branch_dirs(self, branch_ids: int | npt.ArrayLike[int]) -> np.bool_ | np.ndarray:
+        """Return the direction of the given branch(es).
+
+        If ``True``, the tail node is the first of  ``tree.branch_list[branch_ids]`` and the head node is the second.
+        Otherwise, the head node is the first and the tail node is the second.
+
+        Parameters
+        ----------
+        branch_ids : int | npt.ArrayLike[int]
+            The index of the branch(es).
+
+        Returns
+        -------
+        np.bool_ | np.ndarray
+            The direction of the branch(es).
+        """
         if self._branch_dirs is None:
             return True if np.isscalar(branch_ids) else np.ones(len(branch_ids), dtype=bool)
         return self._branch_dirs[branch_ids]

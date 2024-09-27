@@ -50,18 +50,19 @@ def parametrize_bifurcations(
 
     Parameters
     ----------
-    vtree:
+    vtree: VTree
         The VTree to analyze.
 
-    calibre:
-        The field of the VBranchGeoData containing the calibres.
+    calibre: str
+        The field of the VBranchGeoData containing the calibres. Use the standard 'TIPS_CALIBRE' field by default.
 
-    tangent:
-        The field of the VBranchGeoData containing the tangents.
+    tangent: str
+        The field of the VBranchGeoData containing the tangents. Use the standard 'TIPS_TANGENT' field by default.
 
     Returns
     -------
-
+    pd.DataFrame
+        A DataFrame containing the parameters of the bifurcations
     """
 
     bifurcations = []
@@ -114,15 +115,21 @@ def parametrize_bifurcations(
         # === Compute secondary branch parameters ===
         d0 = head_calibre
         d1 = secondary_calibre
-        θ1 = np.rad2deg(modulo_pi(np.arctan2(*head_tangent) - np.arctan2(*secondary_tangent)))
+        α0 = np.arctan2(*(-head_tangent))
+        α1 = np.arctan2(*secondary_tangent)
+        θ1 = np.rad2deg(modulo_pi(α1 - α0))
 
         # === For each bifurcation at this node compute parameters ===
         for tertiary_branch, tertiary_tangent, tertiary_calibre in zip(
             tertiary_branches, tertiary_tangents, tertiary_calibres, strict=True
         ):
+            α2 = np.arctan2(*tertiary_tangent)
             d2 = tertiary_calibre
-            θ2 = np.rad2deg(modulo_pi(np.arctan2(*head_tangent) - np.arctan2(*tertiary_tangent)))
-            thetas = (θ1, -θ2) if (abs(θ1) > abs(θ2)) ^ (θ1 < 0) else (-θ1, θ2)
+            θ2 = np.rad2deg(modulo_pi(α2 - α0))
+            if abs(θ1) > abs(θ2):
+                thetas = (θ1, -θ2) if θ1 > 0 else (-θ1, θ2)
+            else:
+                thetas = (-θ1, θ2) if θ2 > 0 else (θ1, -θ2)
             bifurcations.append(
                 (branch.head_id, branch.id, secondary_branch.id, tertiary_branch.id, d0, d1, d2, *thetas)
             )
