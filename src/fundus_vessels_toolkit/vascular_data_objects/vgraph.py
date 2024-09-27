@@ -1449,7 +1449,7 @@ class VGraph:
     ) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]:
         """Fuse nodes connected to exactly two branches. (See :meth:`fuse_nodes` for the public method)
         This method operates inplace and returns a lookup table to reindex the branches and the indexes of the deleted branches.
-        """
+        """  # noqa: E501
         first_last_merged_branches = []
         reconnected_nodes = []
 
@@ -1465,6 +1465,7 @@ class VGraph:
 
         # 2. For each group of consecutive branches flip them if needed and merge them
         branches_to_delete = []
+        flip_main_branch = []
         for branches in consecutive_branches:
             flip_branches = np.zeros(len(branches), dtype=bool)
 
@@ -1475,8 +1476,10 @@ class VGraph:
                 nNext = n0
                 n0 = n1
                 flip_branches[0] = True
+                flip_main_branch.append(True)
             else:
                 nNext = n1
+                flip_main_branch.append(False)
 
             # For each branch, check that its consecutive to the previous one and store the next node
             for i, b in enumerate(branches[1:]):
@@ -1520,13 +1523,14 @@ class VGraph:
                     node.clear_incident_branch_cache()
 
         # 4. Remove the branches and the fused nodes
-        branch_reindex = self._delete_branches(branches_to_delete)
+        del_lookup = self._delete_branches(branches_to_delete)
         fused_nodes = np.array(list(branch_by_fused_nodes.keys()))
         self._delete_nodes(fused_nodes)
 
-        for branches in consecutive_branches:
-            branch_reindex[branches[1:]] = branch_reindex[branches[0]]
-        return branch_reindex, np.array(branches_to_delete, dtype=int)
+        for c in consecutive_branches:
+            del_lookup[c[1:]] = del_lookup[c[0]]
+
+        return consecutive_branches, flip_main_branch, del_lookup, np.array(branches_to_delete, dtype=int)
 
     def merge_nodes(
         self,

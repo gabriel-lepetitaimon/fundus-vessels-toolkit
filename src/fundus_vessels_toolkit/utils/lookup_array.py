@@ -138,25 +138,27 @@ def create_removal_lookup(
 ) -> np.ndarray:
     """Create a lookup table to reorder index after having removed elements from an array.
 
-    Example:
-    --------
-    Consider a lookup table of 6 elements where the 2nd, 5th and 6th elements are removed:
-    >>> removed_mask = np.array([False, True, False, False, True, True])
-    >>> create_removal_lookup(removed_mask)
-    array([0, 1, 1, 2, 2, 2])
-
     Parameters
     ----------
     removed_mask : np.ndarray
         A boolean mask specifying which indexes were removed.
 
     replace_value : Optional[int], optional
-        The value to replace the removed elements. If None, the removed elements are replaced by the previous non-deleted index.
+        The value to replace the removed elements.
+
+        If None, the removed elements are replaced by the previous non-deleted index.
 
     Returns
     -------
     np.ndarray
         A 1D array of the same length as the input array containing the new index of each element.
+
+    Example:
+    --------
+    Consider a lookup table of 6 elements where the 2nd, 5th and 6th elements are removed:
+    >>> removed_mask = np.array([False, True, False, False, True, True])
+    >>> create_removal_lookup(removed_mask)
+    array([0, 1, 1, 2, 2, 2])
     """  # noqa: E501
     removed_mask = np.asarray(removed_mask)
     if length is not None:

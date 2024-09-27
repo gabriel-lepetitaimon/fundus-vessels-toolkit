@@ -10,7 +10,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from ..utils.lookup_array import add_empty_to_lookup, complete_lookup, invert_complete_lookup
+from ..utils.lookup_array import add_empty_to_lookup, complete_lookup, create_removal_lookup, invert_complete_lookup
 from ..utils.tree import has_cycle
 from .vgeometric_data import VBranchGeoDataKey, VGeometricData
 from .vgraph import VGraph, VGraphBranch, VGraphNode
@@ -868,17 +868,29 @@ class VTree(VGraph):
         # === Flip the branches to match the tree structure ===
         # Necessary to reindex branches correctly in branch_tree
         # (otherwise, using the reindexing code underneath, a branch can be its own parent)
-        tree.flip_branches_to_tree_dir()
+        # tree.flip_branches_to_tree_dir()
         branch_tree = tree.branch_tree
+        branch_rank = invert_complete_lookup(np.array(list(self.walk(depth_first=False)), dtype=int))
 
         # === Fuse the node in the graph and geometrical data ===
-        branch_reindex, del_branch = tree._fuse_nodes(
+        merged_branch, flip_branch, del_lookup, del_branch = tree._fuse_nodes(
             nodes, quiet_invalid_node=quiet_invalid_node, incident_branches=incident_branches
         )
 
-        # === Redirect the branch ancestors ===
-        branch_reindex = add_empty_to_lookup(branch_reindex, increment_index=False)
-        tree.branch_tree = np.delete(branch_reindex[branch_tree + 1], del_branch)
+        # === Redirect the branch ancestors and direction===
+        ancestors_lookup = np.arange(branch_tree.size)
+        for branches, flip in zip(merged_branch, flip_branch, strict=True):
+            b0 = np.argmin(branch_rank[branches])  # Select the lower ancestor of all merged branches
+            ancestors_lookup[branches[:b0]] = branches[b0]
+            ancestors_lookup[branches[b0:]] = branches[b0]
+            if flip:
+                main_branch = del_lookup[branches[b0]]
+                tree._branch_dirs[main_branch] = ~tree._branch_dirs[main_branch]
+        branch_tree = branch_tree[ancestors_lookup]
+
+        # === Apply branch deletion to branch tree ===
+        del_lookup = add_empty_to_lookup(del_lookup, increment_index=False)
+        tree.branch_tree = np.delete(del_lookup[branch_tree + 1], del_branch)
         return tree
 
     def merge_nodes(self, nodes: npt.NDArray[np.int_], *, inplace=False) -> VTree:
