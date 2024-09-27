@@ -68,7 +68,7 @@ def assign_av_label(
             if len(av_splits) > 1:
                 splits = [int(_[1]) for _ in list(av_splits.keys())[:-1]]
                 _, new_ids = graph.split_branch(branch.id, split_curve_id=splits, inplace=True, return_branch_ids=True)
-                graph.branches_attr[av_attr].iloc[new_ids] = list(av_splits.values())
+                graph.branches_attr[av_attr, new_ids] = list(av_splits.values())
             else:
                 branch.attr[av_attr] = AVLabel.BOTH
 
