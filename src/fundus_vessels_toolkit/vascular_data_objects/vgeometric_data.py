@@ -1395,20 +1395,48 @@ class VGeometricData:
         )
 
     def jppype_branches_tips_tangents(
-        self, tangents: VBranchGeoDataKey = VBranchGeoData.Fields.TANGENTS, scaling=1, normalize=False
+        self,
+        tangents: VBranchGeoDataKey = VBranchGeoData.Fields.TANGENTS,
+        scaling=1,
+        normalize=False,
+        invert_direction: Optional[npt.NDArray[np.bool_]] = None,
+        show_only: Optional[npt.NDArray[np.bool_]] = None,
     ):
         from jppype.layers import LayerQuiver
+
+        if show_only is not None and not show_only.any():
+            return LayerQuiver(np.empty((0, 2)), np.empty((0, 2)), self.domain, "view_sqrt" if normalize else "scene")
 
         arrows_p = []
         arrows_v = []
         curves = self.branch_curve()
         tangents = self.branch_data(tangents)
-        for curve, tangent in zip(curves, tangents, strict=True):
+        for i, (curve, tangent) in enumerate(zip(curves, tangents, strict=True)):
+            if show_only is not None and not show_only[i].any():
+                continue
             if curve is None or len(curve) == 0 or tangent is None or len(tangent.data) == 0:
                 continue
             tangent = tangent.data
-            arrows_p.extend([curve[0], -curve[-1]])
-            arrows_v.extend([tangent[0], tangent[-1]])
+            tail_p = curve[0]
+            head_p = curve[-1]
+            tail_t = -tangent[0]
+            head_t = tangent[-1]
+            if invert_direction is not None:
+                if invert_direction[i, 0]:
+                    tail_t = -tail_t
+                if invert_direction[i, 1]:
+                    head_t = -head_t
+
+            if show_only is not None:
+                if show_only[i, 0]:
+                    arrows_p.append(tail_p)
+                    arrows_v.append(tail_t)
+                if show_only[i, 1]:
+                    arrows_p.append(head_p)
+                    arrows_v.append(head_t)
+            else:
+                arrows_p.extend([tail_p, head_p])
+                arrows_v.extend([tail_t, head_t])
 
         return LayerQuiver(
             np.stack(arrows_p), np.stack(arrows_v) * scaling, self.domain, "view_sqrt" if normalize else "scene"

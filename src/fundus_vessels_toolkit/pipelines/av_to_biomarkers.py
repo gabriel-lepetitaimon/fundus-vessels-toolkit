@@ -51,7 +51,7 @@ class FundusAVSegToBiomarkers:
             "branches": parametrize_branches(tree),
         }
 
-    def inspect_bifurcations(self, fundus_data: FundusData):
+    def inspect_bifurcations(self, fundus_data: FundusData, *, show_tangents=True):
         import plotly.graph_objects as go
         from IPython.display import display
         from ipywidgets import GridBox, Layout
@@ -68,6 +68,18 @@ class FundusAVSegToBiomarkers:
             # Draw the image view
             view = fundus_data.draw()
             view["graph"] = tree.jppype_layer(edge_map=True, boundaries=True, node_labels=True, edge_labels=True)
+            if show_tangents:
+                show = np.zeros((tree.branches_count, 2), dtype=bool)
+                invert = np.zeros((tree.branches_count, 2), dtype=bool)
+                b0, b1, b2 = [bifurcations[_].to_numpy() for _ in ("branch0", "branch1", "branch2")]
+                show[b0, np.where(tree.branch_dirs(b0), 1, 0)] = True
+                show[b1, np.where(tree.branch_dirs(b1), 0, 1)] = True
+                show[b2, np.where(tree.branch_dirs(b2), 0, 1)] = True
+                invert[b1, np.where(tree.branch_dirs(b1), 0, 1)] = True
+                invert[b2, np.where(tree.branch_dirs(b2), 0, 1)] = True
+                view["tangents"] = tree.geometric_data().jppype_branches_tips_tangents(
+                    show_only=show, invert_direction=invert, scaling=10
+                )
 
             # Draw the table
             cols = list(bifurcations.columns)
