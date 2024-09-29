@@ -1634,7 +1634,7 @@ class VGraph:
             self._delete_nodes(nodes_to_remove, update_refs=False)
 
         # 6. Update branches references
-        if self._branches_refs:
+        if self._branches_refs and updated_branches:
             updated_branches = np.unique(np.concatenate(updated_branches, dtype=int))
             for branch in self._branches_refs:
                 if branch._id in updated_branches:
