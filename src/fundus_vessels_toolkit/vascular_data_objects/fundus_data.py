@@ -404,14 +404,13 @@ class FundusData:
     #    === VISUALISATION TOOLS ===
     ####################################################################################################################
     def draw(self, labels_opacity=0.5, *, view=None):
-        from jppype import View2D  # , View2dGroup
+        from jppype import Mosaic, View2D
 
-        # if isinstance(view, View2dGroup):
-        #     for v in view.views:
-        #         self.draw(labels_opacity, view=v)
-        #     return view
-        # elif view is None:
-        if view is None:
+        if isinstance(view, Mosaic):
+            for v in view.views:
+                self.draw(labels_opacity, view=v)
+            return view
+        elif view is None:
             view = View2D()
         view.add_image(self._fundus, "fundus")
 
