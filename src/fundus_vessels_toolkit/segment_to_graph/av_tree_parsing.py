@@ -68,7 +68,8 @@ def assign_av_label(
             if len(av_splits) > 1:
                 splits = [int(_[1]) for _ in list(av_splits.keys())[:-1]]
                 _, new_ids = graph.split_branch(branch.id, split_curve_id=splits, inplace=True, return_branch_ids=True)
-                graph.branches_attr[av_attr, new_ids] = list(av_splits.values())
+                for new_id, new_value in zip(new_ids, av_splits.values(), strict=True):
+                    graph.branches_attr[av_attr, new_id] = new_value
             else:
                 branch.attr[av_attr] = AVLabel.BOTH
 
@@ -168,7 +169,7 @@ def simplify_av_graph(
         if (
             branch.arc_length() > 30
             and branch.attr["av"] == AVLabel.UNK
-            and all(node.attr["av"] == AVLabel.UNK for node in branch.nodes)
+            and all(node.attr["av"] == AVLabel.UNK for node in branch.nodes())
         ):
             branch_to_fuse.append(branch)
 
@@ -181,31 +182,11 @@ def av_split(graph: VGraph, *, av_attr: str = "av") -> Tuple[VGraph, VGraph]:
     a_graph = graph.delete_nodes(n_attr.index[n_attr[av_attr] == AVLabel.VEI].to_numpy(), inplace=False)
     v_graph = graph.delete_nodes(n_attr.index[n_attr[av_attr] == AVLabel.ART].to_numpy(), inplace=False)
 
-    a_graph.delete_branches([b.id for b in a_graph.branches() if b.attr[av_attr] == AVLabel.VEI], inplace=True)
-    # a_graph.delete_branches(
-    #    [b.id for b in a_graph.branches(only_terminal=True) if b.attr["av"] == AVLabel.UNK], inplace=True
-    # )
+    b_attr = a_graph.branches_attr
+    a_graph.delete_branches(b_attr.index[b_attr[av_attr] == AVLabel.VEI].to_numpy(), inplace=True)
+    b_attr = v_graph.branches_attr
+    v_graph.delete_branches(b_attr.index[b_attr[av_attr] == AVLabel.ART].to_numpy(), inplace=True)
 
-    v_graph.delete_branches([b.id for b in v_graph.branches() if b.attr["av"] == AVLabel.ART], inplace=True)
-    # v_graph.delete_branches(
-    #    [b.id for b in v_graph.branches(only_terminal=True) if b.attr["av"] == AVLabel.UNK], inplace=True
-    # )
-
-    # if simplify:
-
-    #     def fuse_passing_nodes(graph: VGraph, artery: bool):
-    #         own_label = 1 if artery else 2
-    #         nodes_to_fuse = []
-    #         for n in graph.nodes():
-    #             if n.degree == 2 and all(b.attr["av"] in (0, own_label) for b in n.branches):
-
-    #                 nodes_to_fuse.append(n.id)
-    #                 for b in n.branches:
-    #                     b.attr["av"] = own_label
-    #         graph.fuse_nodes(nodes_to_fuse, inplace=True)
-
-    #     fuse_passing_nodes(a_graph, artery=True)
-    #     fuse_passing_nodes(v_graph, artery=False)
     return a_graph, v_graph
 
 
@@ -349,7 +330,7 @@ def vgraph_to_vtree(
 
 
 def clean_vtree(vtree: VTree, *, av_attr: str = "av") -> VTree:
-    # === Remove terminal with unknown type ===
+    # === Remove terminal branches with unknown type ===
     while to_delete := [b.id for b in vtree.branches() if not b.has_successors and b.attr[av_attr] == AVLabel.UNK]:
         vtree.delete_branches(to_delete, inplace=True)
 
