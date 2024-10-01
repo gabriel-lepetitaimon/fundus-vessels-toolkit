@@ -97,7 +97,7 @@ class FundusAVSegToBiomarkers:
                 show[b0, np.where(tree.branch_dirs(b0), 1, 0)] = True
                 show[b1, np.where(tree.branch_dirs(b1), 0, 1)] = True
                 show[b2, np.where(tree.branch_dirs(b2), 0, 1)] = True
-                invert[b0, np.where(tree.branch_dirs(b0), 0, 1)] = True
+                invert[b0, np.where(tree.branch_dirs(b0), 1, 0)] = True
                 # invert[b2, np.where(tree.branch_dirs(b2), 0, 1)] = True
                 view["tangents"] = tree.geometric_data().jppype_branches_tips_tangents(
                     show_only=show, invert_direction=invert, scaling=10

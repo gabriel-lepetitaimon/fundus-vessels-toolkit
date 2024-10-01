@@ -365,7 +365,7 @@ class VBranchTipsTangents(VBranchTipsData):
         return not np.all(np.isnan(self.data) | (self.data == 0))
 
     def flip(self, ctx: BranchGeoDataEditContext) -> VBranchTangents:
-        self.data = -np.flip(self.data, axis=0)
+        self.data = np.flip(self.data, axis=0)  # No need to negate tangent tips are oriented in opposite direction
         return self
 
 

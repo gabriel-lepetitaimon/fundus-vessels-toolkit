@@ -1428,14 +1428,18 @@ class VGeometricData:
                 tail_p = curve[0]
                 head_p = curve[-1]
 
-            if tangent is None or np.isnan(tangent.data).any() or np.sum(tangent.data) == 0:
-                tail_t = (tail_p - head_p).astype(float)
-                tail_t /= np.linalg.norm(tail_t)
+            tail_to_head = (head_p - tail_p).astype(float)
+            tail_to_head /= np.linalg.norm(tail_to_head)
+            if tangent is None:
+                tail_t = tail_to_head
                 head_t = -tail_t
             else:
                 tangent = tangent.data
-                tail_t = tangent[0]
-                head_t = tangent[-1]
+                tail_t, head_t = tangent[0], tangent[-1]
+                if np.isnan(tail_t).any() or np.sum(tail_t) == 0:
+                    tail_t = tail_to_head
+                if np.isnan(head_t).any() or np.sum(head_t) == 0:
+                    head_t = -tail_to_head
 
             if invert_direction is not None:
                 if invert_direction[i, 0]:

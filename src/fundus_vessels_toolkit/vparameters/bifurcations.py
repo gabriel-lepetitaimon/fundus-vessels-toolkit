@@ -116,7 +116,7 @@ def parametrize_bifurcations(
 
         # === Get the calibres and tangents data for this branch ===
         head_data = branch.head_tip_geodata([calibre_tip, tangent_tip], geodata=gdata)
-        head_tangent = head_data.get(tangent_tip, np.zeros(2, dtype=float))
+        head_tangent = -head_data.get(tangent_tip, np.zeros(2, dtype=float))
         head_calibre = head_data.get(calibre_tip, np.nan)
 
         if np.isnan(head_tangent).any() or np.sum(head_tangent) == 0:

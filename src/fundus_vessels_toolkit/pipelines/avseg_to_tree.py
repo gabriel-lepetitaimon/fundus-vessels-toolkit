@@ -377,7 +377,8 @@ class NaiveAVSegToTree(AVSegToTreeBase):
         from ..segment_to_graph.av_tree_parsing import clean_vtree, vgraph_to_vtree
 
         tree = vgraph_to_vtree(graph, od_pos)
-        return clean_vtree(tree)
+        tree = clean_vtree(tree)
+        return tree
 
     # --- Utility methods ---
     def to_vgraph(
