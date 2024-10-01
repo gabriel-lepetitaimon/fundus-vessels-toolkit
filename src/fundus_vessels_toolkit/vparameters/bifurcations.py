@@ -5,7 +5,7 @@ import pandas as pd
 
 from ..utils.graph.measures import extract_bifurcations_parameters as extract_bifurcations_parameters
 from ..utils.math import modulo_pi
-from ..vascular_data_objects import VBranchGeoData, VTree
+from ..vascular_data_objects import FundusData, VBranchGeoData, VTree
 
 
 def bifurcations_biomarkers(d0, d1, d2, θ1, θ2, *, as_dict=True) -> Dict[str, float] | List[float]:
@@ -44,6 +44,7 @@ def parametrize_bifurcations(
     tangent_tip=VBranchGeoData.Fields.TIPS_TANGENT,
     strahler_field: Optional[str] = "strahler",
     branch_rank_field: Optional[str] = "rank",
+    fundus_data: Optional[FundusData] = None,
 ) -> pd.DataFrame:
     """Extract parameters and biomarkers from the bifurcations of a VTree.
 
@@ -91,27 +92,31 @@ def parametrize_bifurcations(
     """  # noqa: E501
 
     gdata = vtree.geometric_data()
+    nodes_yx = gdata.nodes_coord()
     bifurcations = []
+    bifurcations_yx = []
 
     if strahler_field is not None and strahler_field not in vtree.branches_attr:
         assign_strahler_number(vtree, field=strahler_field)
 
     if branch_rank_field is not None and branch_rank_field not in vtree.branches_attr:
         vtree.branches_attr[branch_rank_field] = 1
+        vtree.nodes_attr[branch_rank_field] = 0
 
     for branch in vtree.walk_branches():
         if branch_rank_field is not None:
             branch_rank = branch.attr[branch_rank_field]
+            branch.head_node().attr[branch_rank_field] = branch_rank
 
         n_successors = branch.n_successors
         if branch.n_successors < 2:
-            if n_successors == 1:
+            if branch_rank_field is not None and n_successors == 1:
                 branch.successor(0).attr[branch_rank_field] = branch_rank
             continue
 
         # === Get the calibres and tangents data for this branch ===
         head_data = branch.head_tip_geodata([calibre_tip, tangent_tip], geodata=gdata)
-        head_tangent = -head_data.get(tangent_tip, np.zeros(2, dtype=float))
+        head_tangent = head_data.get(tangent_tip, np.zeros(2, dtype=float))
         head_calibre = head_data.get(calibre_tip, np.nan)
 
         if np.isnan(head_tangent).any() or np.sum(head_tangent) == 0:
@@ -182,6 +187,7 @@ def parametrize_bifurcations(
             if branch_rank_field is not None:
                 infos.append(branch_rank)
             params = [d0, d1, d2, *thetas]
+            bifurcations_yx.append(nodes_yx[branch.head_id])
             biomarkers = bifurcations_biomarkers(*params, as_dict=False)
             bifurcations.append(infos + params + biomarkers)
 
@@ -193,7 +199,15 @@ def parametrize_bifurcations(
         columns.append(branch_rank_field)
     columns += ["d0", "d1", "d2", "θ1", "θ2"]
     columns.extend(bifurcations_biomarkers(*((1,) * 5), as_dict=True).keys())
-    return pd.DataFrame(bifurcations, columns=columns)
+    df = pd.DataFrame(bifurcations, columns=columns)
+
+    if fundus_data is not None:
+        if fundus_data.has_macula:
+            df.insert(4, "dist_macula", fundus_data.macula_center.distance(bifurcations_yx))
+        if fundus_data.has_od:
+            df.insert(4, "dist_od", fundus_data.od_center.distance(bifurcations_yx))
+
+    return df
 
 
 def assign_strahler_number(vtree: VTree, field: str = "strahler") -> VTree:
@@ -213,6 +227,7 @@ def assign_strahler_number(vtree: VTree, field: str = "strahler") -> VTree:
     VTree
         The VTree with the Strahler numbers assigned.
     """
+    vtree.nodes_attr[field] = 1
     vtree.branches_attr[field] = 1
     reverse_depth_order = np.array(list(vtree.walk(depth_first=True)), dtype=int)[::-1]
     for branch in vtree.branches(reverse_depth_order):
@@ -222,3 +237,4 @@ def assign_strahler_number(vtree: VTree, field: str = "strahler") -> VTree:
                 branch.attr[field] = strahlers[0]
             else:
                 branch.attr[field] = strahlers[0] + 1
+        branch.tail_node().attr[field] = branch.attr[field]

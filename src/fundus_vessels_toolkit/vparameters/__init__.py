@@ -1,2 +1,2 @@
 from .bifurcations import bifurcations_biomarkers
-from .branches import compute_tortuosity
+from .branches import branch_tortuosity
