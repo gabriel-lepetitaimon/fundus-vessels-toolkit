@@ -1,12 +1,11 @@
 import warnings
-from typing import Iterable, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import networkx as nx
 import numpy as np
 import numpy.typing as npt
 
 from ..binary_mask import index_to_mask
-from ..geometric import Point, Rect
 from ..lookup_array import (
     add_empty_to_lookup,
     apply_lookup,

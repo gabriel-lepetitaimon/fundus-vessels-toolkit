@@ -12,18 +12,20 @@
  *  - the width of the branches
  */
 std::tuple<std::vector<CurveTangents>, std::vector<Scalars>, std::vector<IntPointPairs>, std::vector<Scalars>,
-           std::vector<BSpline>>
+           std::vector<Sizes>, std::vector<BSpline>>
 extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAcc<bool>& segmentation,
                           std::map<std::string, double> options, bool assume_contiguous) {
     // --- Parse Options ---
     bool adaptative_tangent = get_if_exists(options, "adaptative_tangent", 1.0) > 0;
-    float bspline_targetSqrError = pow(get_if_exists(options, "bspline_target_error", 0.0), 2);
-    float bspline_KpercentileThreshold = get_if_exists(options, "bspline_K_percentile_threshold", 0.1);
+    float bspline_targetSqrError = pow(get_if_exists(options, "bspline_target_error", 0.0), 3);
+    float curv_roots_percentileThreshold = get_if_exists(options, "curvature_roots_percentile_threshold", 0.1);
 
     bool return_calibre = get_if_exists(options, "return_calibre", 1.0) > 0;
     bool return_boundaries = get_if_exists(options, "return_boundaries", 0.0) > 0;
     bool return_curvature = get_if_exists(options, "return_curvature", 0.0) > 0;
+    bool return_curvature_roots = get_if_exists(options, "return_curvature_roots", 1.0) > 0;
     bool extract_bspline = get_if_exists(options, "extract_bspline", 1.0) > 0;
+    float bspline_max_gap = get_if_exists(options, "bspline_max_gap", 2.0);
 
     // --- Prepare result vectors ---
     auto nCurves = branch_curves.size();
@@ -32,8 +34,12 @@ extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAcc<
     if (return_calibre) branchesCalibre.resize(nCurves);
     std::vector<IntPointPairs> branchesBoundaries;
     if (return_boundaries) branchesBoundaries.resize(nCurves);
+
     std::vector<Scalars> branchesCurvature;
-    if (return_curvature) branchesCurvature.resize(nCurves);
+    branchesCurvature.resize(nCurves);
+    std::vector<Sizes> branchesCurvatureRoots;
+    branchesCurvatureRoots.resize(nCurves);
+
     std::vector<BSpline> branchesBSpline;
     if (extract_bspline) branchesBSpline.resize(nCurves);
 
@@ -47,7 +53,12 @@ extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAcc<
         // Initialize the returned vectors
         std::vector<Point> tmpTangents;
         auto& tangents = branchesTangents[curveI];
+        auto& branchCurvature = branchesCurvature[curveI];
+        auto& branchCurvatureRoots = branchesCurvatureRoots[curveI];
+
         tangents.resize(curve.size());
+        branchCurvature.reserve(curve.size());
+        branchCurvatureRoots.reserve(16);
         if (return_calibre) branchesCalibre[curveI].resize(curve.size());
         if (return_boundaries) branchesBoundaries[curveI].resize(curve.size());
 
@@ -85,27 +96,46 @@ extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAcc<
             }
 
             // Compute the curvature of the curve
-            if (return_curvature) {
+            if (return_curvature || return_curvature_roots || extract_bspline) {
                 auto const& curvatures = tangents_to_curvature(tangents, true, 5, start, end);
-                branchesCurvature[curveI].insert(branchesCurvature[curveI].end(), curvatures.begin(), curvatures.end());
-                branchesCurvature[curveI].push_back(0);
+                branchCurvature.insert(branchCurvature.end(), curvatures.begin(), curvatures.end());
+                branchCurvature.push_back(0);
 
-                // Compute the BSpline using the already computed curvature
-                if (extract_bspline) {
-                    auto& bspline = branchesBSpline[curveI];
-                    auto const& bspline_curve = bspline_regression(curve, tangents, curvatures, bspline_targetSqrError,
-                                                                   bspline_KpercentileThreshold, start, end);
-                    bspline.insert(bspline.end(), bspline_curve.begin(), bspline_curve.end());
-                }
-            } else if (extract_bspline) {  // Compute the BSpline of the curve
-                auto& bspline = branchesBSpline[curveI];
-                auto const& bspline_curve = bspline_regression(curve, tangents, bspline_targetSqrError,
-                                                               bspline_KpercentileThreshold, start, end);
-                bspline.insert(bspline.end(), bspline_curve.begin(), bspline_curve.end());
+                auto const& inflections_roots =
+                    curve_inflections_points(curvatures, curv_roots_percentileThreshold, start);
+                branchCurvatureRoots.insert(branchCurvatureRoots.end(), inflections_roots.begin(),
+                                            inflections_roots.end());
+            }
+        }
+
+        if (extract_bspline) {
+            // Merge contiguous curves if the gap is small enough
+            std::list<SizePair> mergedStartEnd;
+            Point previousEndP;
+            for (auto const& [start, end] : contiguousCurvesStartEnd) {
+                Point startP = curve[start];
+                if (mergedStartEnd.empty() || distance(startP, previousEndP) > bspline_max_gap)
+                    mergedStartEnd.push_back({start, end});
+                else
+                    mergedStartEnd.back()[1] = end;
+                previousEndP = curve[end - 1];
+            }
+
+            // Compute the BSpline over the merged contiguous curves using the already computed inflections roots
+            for (auto const& [start, end] : mergedStartEnd) {
+                auto const& bspline_curve =
+                    bspline_regression(curve, tangents, branchCurvatureRoots, bspline_targetSqrError, start, end);
+                branchesBSpline[curveI].insert(branchesBSpline[curveI].end(), bspline_curve.begin(),
+                                               bspline_curve.end());
             }
         }
     }
-    return std::make_tuple(branchesTangents, branchesCalibre, branchesBoundaries, branchesCurvature, branchesBSpline);
+
+    if (!return_curvature) branchesCurvature.clear();
+    if (!return_curvature_roots) branchesCurvatureRoots.clear();
+
+    return std::make_tuple(branchesTangents, branchesCalibre, branchesBoundaries, branchesCurvature,
+                           branchesCurvatureRoots, branchesBSpline);
 }
 
 BSpline bspline_regression(const CurveYX& curve, const CurveTangents& tangents, double targetSqrError,
@@ -127,6 +157,20 @@ BSpline bspline_regression(const CurveYX& curve, const CurveTangents& tangents, 
     if (KpercentileThreshold > 0 && maxError > targetSqrError) {
         const std::vector<std::size_t>& splitCandidate =
             curve_inflections_points(curvatures, KpercentileThreshold, start);
+        return iterative_fit_bspline(curve, tangents, bezier, u, sqrErrors, splitCandidate, targetSqrError, start,
+                                     end - 1);
+    } else
+        return {bezier};
+}
+
+BSpline bspline_regression(const CurveYX& curve, const CurveTangents& tangents,
+                           const std::vector<std::size_t>& splitCandidate, double targetSqrError, std::size_t start,
+                           std::size_t end) {
+    if (curve.size() < 2) return {};
+    if (end == 0) end = curve.size();
+
+    auto const& [bezier, maxError, sqrErrors, u] = fit_bezier(curve, tangents, targetSqrError, start, end - 1);
+    if (maxError > targetSqrError) {
         return iterative_fit_bspline(curve, tangents, bezier, u, sqrErrors, splitCandidate, targetSqrError, start,
                                      end - 1);
     } else

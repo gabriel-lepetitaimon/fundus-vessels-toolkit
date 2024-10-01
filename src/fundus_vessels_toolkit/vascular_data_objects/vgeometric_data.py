@@ -1033,10 +1033,16 @@ class VGeometricData:
         bspline = [VBranchGeoData.BSpline(b) if b is not None else None for b in bspline]
         self.set_branch_data(name, bspline, branch_id, graph_indexing=graph_indexing, no_check=no_check)
 
+    @overload
+    def branch_bspline(self, branch_id: int, name: VBranchGeoDataKey = VBranchGeoData.Fields.BSPLINE) -> BSpline: ...
+    @overload
+    def branch_bspline(
+        self, branch_id: Optional[npt.NDArray[np.int32]] = None, name: VBranchGeoDataKey = VBranchGeoData.Fields.BSPLINE
+    ) -> List[BSpline]: ...
     def branch_bspline(
         self,
-        name: VBranchGeoDataKey = VBranchGeoData.Fields.BSPLINE,
         branch_id: Optional[int | npt.NDArray[np.int32]] = None,
+        name: VBranchGeoDataKey = VBranchGeoData.Fields.BSPLINE,
     ) -> BSpline | List[BSpline]:
         """Return the BSpline representation of a branch.
 
@@ -1207,6 +1213,7 @@ class VGeometricData:
             self._branches_curve[branch0] = np.concatenate(branches_curve)
 
         ctx = self._geodata_edit_ctx(branch0)
+        ctx = ctx.set_info(curves=branches_curve)
         for attr_name, attr_data in self._branch_data_dict.items():
             if attr_data[branch0] is not None:
                 attr_data[branch0] = attr_data[branch0].merge(
@@ -1301,11 +1308,10 @@ class VGeometricData:
         internal_ids = self._graph_to_internal_branches_index(ids)
 
         for branch_id in internal_ids:
+            ctx = self._geodata_edit_ctx(branch_id)
             self._branches_curve[branch_id] = np.flip(self.branch_curve(branch_id), axis=0)
-            for attr_data in self._branch_data_dict.values():
-                branch_attr = attr_data[branch_id]
-                if branch_attr is not None:
-                    attr_data[branch_id] = branch_attr.flip()
+            for attr_name, attr in self.list_branch_data(branch_id, graph_indexing=False).items():
+                self._branch_data_dict[attr_name][branch_id] = attr.flip(ctx.set_name(attr_name))
 
     def clear_branches_gdata(self, ids: int | Iterable[int]) -> None:
         ids, _ = as_1d_array(ids)
@@ -1375,7 +1381,7 @@ class VGeometricData:
 
         points = []
         tangents = []
-        bsplines = self.branch_bspline(bspline_name)
+        bsplines = self.branch_bspline(name=bspline_name)
         for bspline in bsplines:
             if bspline is None or not len(bspline):
                 continue
@@ -1396,7 +1402,7 @@ class VGeometricData:
 
     def jppype_branches_tips_tangents(
         self,
-        tangents: VBranchGeoDataKey = VBranchGeoData.Fields.TANGENTS,
+        tangents: VBranchGeoDataKey = VBranchGeoData.Fields.TIPS_TANGENT,
         scaling=1,
         normalize=False,
         invert_direction: Optional[npt.NDArray[np.bool_]] = None,
@@ -1423,12 +1429,12 @@ class VGeometricData:
                 head_p = curve[-1]
 
             if tangent is None or np.isnan(tangent.data).any() or np.sum(tangent.data) == 0:
-                tail_t = tail_p - head_p
+                tail_t = (tail_p - head_p).astype(float)
                 tail_t /= np.linalg.norm(tail_t)
                 head_t = -tail_t
             else:
                 tangent = tangent.data
-                tail_t = -tangent[0]
+                tail_t = tangent[0]
                 head_t = tangent[-1]
 
             if invert_direction is not None:

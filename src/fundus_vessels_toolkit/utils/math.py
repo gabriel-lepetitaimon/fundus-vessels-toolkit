@@ -1,6 +1,8 @@
+import itertools
 from typing import Any, Dict, Tuple
 
 import numpy as np
+import numpy.typing as npt
 
 
 def ensure_superior_multiple(x, m=32):
@@ -102,35 +104,81 @@ def np_find_sorted(keys: Any, array: np.ndarray, assume_keys_sorted=False) -> in
             return np.concatenate([(-1,) * k0, id, (-1,) * (len(keys) - k1)])
 
 
-def quantified_roots(x, threshold=0):
+def quantified_roots(
+    x: npt.NDArray[np.float_], threshold: float = 0, percentil_threshold: bool = False, medfilt_size: int = 5
+):
+    """Find the roots of a noisy signal.
+
+    Below ``-threshold`` the signal values are considered negative, above ``threshold`` they are considered positive, in between they are considered zero.
+    The returned roots are the indexes where the signal changes from negative to positive or vice versa, or the indexes at the middle of the intervals where the signal is zero.
+
+    Parameters
+    ----------
+    x : npt.NDArray[np.float_]
+        The signal to analyze.
+
+    threshold : int, optional
+        The threshold to consider the signal as positive or negative, by default 0
+        If ``percentil_threshold`` is True, the threshold is ``np.percentile(np.abs(x), threshold * 100)``.
+
+    percentil_threshold : bool, optional
+        If True, the threshold is a percentile of the absolute values of the signal, by default False.
+
+    medfilt_size : int, optional
+        The size of the median filter to apply to the quantified signal, by default 5.
+
+    Returns
+    -------
+    np.ndarray
+        The indexes of the roots.
+    """  # noqa: E501
     from scipy.signal import medfilt
 
+    if len(x) <= 1:
+        return np.array([])
+
+    if percentil_threshold:
+        threshold = np.percentile(np.abs(x), threshold * 100)
+
     x_quant = np.digitize(x, [-threshold, threshold]) - 1
-    x_quant = medfilt(x_quant * 1, 5)
+    if len(x) > medfilt_size:
+        x_quant = medfilt(x_quant * 1, medfilt_size)
 
-    root_intervals = []
+    x_change = np.argwhere(np.diff(x_quant) != 0).flatten() + 1
+    roots = []
+    for i0, i1 in itertools.pairwise([0] + list(x_change) + [len(x_quant) - 1]):
+        if i0 == i1 and i0 != len(x_quant) - 1:
+            continue
+        if x_quant[i0] == 0:
+            roots.append((i1 + i0) // 2)
+        elif i1 < len(x_quant) and x_quant[i1] != 0:
+            roots.append(i1 - 1)
 
-    # Search first non-zero value
-    i = 0
-    while i < len(x_quant) and x_quant[i] == 0:
-        i += 1
+    # LEGACY
+    # root_intervals = []
+    # # Search first non-zero value
+    # i = 0
+    # while i < len(x_quant) - 1 and x_quant[i] == 0:
+    #     i += 1
+    # if i > 0:
+    #     root_intervals.append((0, i - 1))
 
-    last_x = x_quant[i]
-    while i < len(x_quant) - 1:
-        next_x = x_quant[i + 1]
-        if next_x == 0:
-            for j in range(i + 1, len(x_quant)):
-                next_x = x_quant[j]
-                if next_x != 0:
-                    break
-            root_intervals.append((i, j))
-            i = j
-        elif last_x != next_x:
-            root_intervals.append((i, i))
-        last_x = next_x
-        i += 1
+    # last_x = x_quant[i]
+    # while i < len(x_quant) - 1:
+    #     next_x = x_quant[i + 1]
+    #     if next_x == 0:
+    #         for j in range(i + 1, len(x_quant)):
+    #             next_x = x_quant[j]
+    #             if next_x != 0:
+    #                 break
+    #         root_intervals.append((i, j))
+    #         i = j
+    #     elif last_x != next_x:
+    #         root_intervals.append((i, i))
+    #     last_x = next_x
+    #     i += 1
 
-    roots = [(start + end) // 2 for start, end in root_intervals]
+    # roots = [(start + end + 1) // 2 for start, end in root_intervals]
 
     return np.array(roots).astype(int)
 

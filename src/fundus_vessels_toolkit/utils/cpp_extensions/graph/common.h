@@ -29,6 +29,7 @@ using IntPair = std::array<int, 2>;
 using UIntPair = std::array<unsigned int, 2>;
 using FloatPair = std::array<float, 2>;
 using SizePair = std::array<std::size_t, 2>;
+using Sizes = std::vector<std::size_t>;
 using Scalars = std::vector<float>;
 
 template <typename T>

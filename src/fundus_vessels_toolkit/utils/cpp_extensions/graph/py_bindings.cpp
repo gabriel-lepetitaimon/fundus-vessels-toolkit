@@ -95,7 +95,7 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_curves(
     std::map<std::string, double> options = {}) {
     auto const &seg_acc = segmentation.accessor<bool, 2>();
     auto const &curves = tensors_to_curves(branch_curves);
-    auto const &[tangents, calibres, boundaries, curvatures, bsplines] =
+    auto const &[tangents, calibres, boundaries, curvatures, curv_roots, bsplines] =
         extract_branches_geometry(curves, seg_acc, options);
 
     // --- Convert to tensor ---
@@ -104,6 +104,7 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_curves(
     if (calibres.size() > 0) out.push_back(vectors_to_tensors(calibres));
     if (boundaries.size() > 0) out.push_back(vectors_to_tensors(boundaries));
     if (curvatures.size() > 0) out.push_back(vectors_to_tensors(curvatures));
+    if (curv_roots.size() > 0) out.push_back(vectors_to_tensors(curv_roots));
     if (bsplines.size() > 0) out.push_back(bsplines_to_tensor(bsplines));
 
     return out;
@@ -140,7 +141,7 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_skeleton(
     }
 
     // --- Extract branches geometry ---
-    auto const &[tangents, calibres, boundaries, curvatures, bsplines] =
+    auto const &[tangents, calibres, boundaries, curvatures, curv_roots, bsplines] =
         extract_branches_geometry(curves, seg_acc, options, true);
 
     // --- Convert to tensor ---
@@ -150,6 +151,7 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_skeleton(
     if (calibres.size() > 0) out.push_back(vectors_to_tensors(calibres));
     if (boundaries.size() > 0) out.push_back(vectors_to_tensors(boundaries));
     if (curvatures.size() > 0) out.push_back(vectors_to_tensors(curvatures));
+    if (curv_roots.size() > 0) out.push_back(vectors_to_tensors(curv_roots));
     if (bsplines.size() > 0) out.push_back(bsplines_to_tensor(bsplines));
 
     return out;
