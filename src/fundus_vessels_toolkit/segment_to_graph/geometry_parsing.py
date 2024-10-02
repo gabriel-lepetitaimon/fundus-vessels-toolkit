@@ -124,7 +124,7 @@ def derive_tips_geometry_from_curve_geometry(
 
         tips_calibre = []
         # Fetch the branch calibres
-        branches_calibres = gdata.branch_data(VBranchGeoData.Fields.CALIBRES, graph_indexing=False)
+        branches_calibres = gdata.branch_data(VBranchGeoData.Fields.CALIBRES, graph_index=False)
         # Compute the mean of the branch calibre at the tips
         for branch_calibres in branches_calibres:
             if branch_calibres:
@@ -133,7 +133,7 @@ def derive_tips_geometry_from_curve_geometry(
             else:
                 tips_calibre.append(None)
         # Store the tips calibre back as TERMINATION_CALIBRE
-        gdata.set_branch_data(VBranchGeoData.Fields.TIPS_CALIBRE, tips_calibre, graph_indexing=False, no_check=True)
+        gdata.set_branch_data(VBranchGeoData.Fields.TIPS_CALIBRE, tips_calibre, graph_index=False, no_check=True)
 
     # === Tangents ===
     if tangent is None:
@@ -154,27 +154,27 @@ def derive_tips_geometry_from_curve_geometry(
         else:
             if tangent is True:
                 tangent = 10
-            branches_tangents = gdata.branch_data(VBranchGeoData.Fields.TANGENTS, graph_indexing=False)
+            branches_tangents = gdata.branch_data(VBranchGeoData.Fields.TANGENTS, graph_index=False)
             for branch_tangent in branches_tangents:
                 if branch_tangent:
                     d = branch_tangent.data
                     tips_tangents.append(np.stack(d[:tangent].mean(axis=0), -d[-tangent:].mean(axis=0)))
                 else:
                     tips_tangents.append(None)
-        gdata.set_branch_data(VBranchGeoData.Fields.TIPS_TANGENT, tips_tangents, graph_indexing=False, no_check=True)
+        gdata.set_branch_data(VBranchGeoData.Fields.TIPS_TANGENT, tips_tangents, graph_index=False, no_check=True)
 
     # === Boundaries ===
     if boundaries is None and gdata.has_branch_data(VBranchGeoData.Fields.BOUNDARIES):
         boundaries = True
     if boundaries:
         tips_bounds = []
-        branches_bounds = gdata.branch_data(VBranchGeoData.Fields.BOUNDARIES, graph_indexing=False)
+        branches_bounds = gdata.branch_data(VBranchGeoData.Fields.BOUNDARIES, graph_index=False)
         for branch_bounds in branches_bounds:
             if branch_bounds:
                 d = branch_bounds.data
                 tips_bounds.append(np.array([d[0], d[-1]]))
             else:
                 tips_bounds.append(None)
-        gdata.set_branch_data(VBranchGeoData.Fields.TIPS_BOUNDARIES, tips_bounds, graph_indexing=False, no_check=True)
+        gdata.set_branch_data(VBranchGeoData.Fields.TIPS_BOUNDARIES, tips_bounds, graph_index=False, no_check=True)
 
     return vgraph
