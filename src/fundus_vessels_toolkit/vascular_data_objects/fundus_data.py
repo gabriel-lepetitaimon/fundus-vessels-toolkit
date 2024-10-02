@@ -32,6 +32,37 @@ class AVLabel(IntEnum):
     #: Unknown
     UNK = 4
 
+    @staticmethod
+    def select_label(
+        artery: Optional[bool] = None, vein: Optional[bool] = None, unknown: Optional[bool] = None
+    ) -> Tuple[Self, ...]:
+        """Select the label corresponding to the given conditions.
+
+        Parameters
+        ----------
+        artery : bool, optional
+            If True, the label is an artery.
+        vein : bool, optional
+            If True, the label is a vein.
+        unkown : bool, optional
+            If True, the label is unknown.
+
+        Returns
+        -------
+        Tuple[AVLabel, ...]
+            The labels corresponding to the given conditions.
+        """
+        if all(not v for v in (artery, vein, unknown)):
+            return (AVLabel.ART, AVLabel.VEI, AVLabel.BOTH, AVLabel.UNK)
+        labels = set()
+        if artery is True:
+            labels.update((AVLabel.ART, AVLabel.BOTH))
+        if vein is True:
+            labels.update((AVLabel.VEI, AVLabel.BOTH))
+        if unknown is True:
+            labels.add(AVLabel.UNK)
+        return tuple(labels)
+
 
 class FundusData:
     def __init__(

@@ -52,9 +52,11 @@ def extract_branch_geometry(
     return_calibre: bool = True,
     return_boundaries: bool = False,
     return_curvature: bool = False,
+    return_curvature_roots: bool = False,
     extract_bspline: bool = True,
-    bspline_target_error: float = 10,
-    bspline_K_percentile_threshold: float = 0.15,
+    curvature_roots_percentile_threshold: float = 0.1,
+    bspline_target_error: float = 3,
+    bspline_max_gap: float = 2,
 ) -> tuple[list[torch.Tensor], ...]:
     """Track branches from a labels map and extract their geometry.
 
@@ -79,14 +81,20 @@ def extract_branch_geometry(
     return_curvature : bool, optional
         If True, the output will contain the curvature of the branches. By default False.
 
+    return_curvature_roots : bool, optional
+        If True, the output will contain the curvature roots of the branches. By default False.
+
     extract_bspline : bool, optional
         If True, the output will contain the bspline interpolation of the branches. By default True.
 
     bspline_target_error : float, optional
         The maximum error allowed for the bspline interpolation. By default 10.
 
-    bspline_K_threshold : float, optional
-        The threshold on the curvature for the bspline interpolation. By default 0.15.
+    bspline_max_gap : float, optional
+        The maximum gap (in pixels) between two points of the skeleton above which the bspline is necessarily split. By default 2.
+
+    curvature_roots_percentile_threshold : float, optional
+        The percentile of the curvature values used to threshold the curvature roots. By default 0.15.
 
     Returns
     -------
@@ -96,18 +104,20 @@ def extract_branch_geometry(
     - a 2D tensor of shape (n, 2) containing the tangent vectors at each branch point.
     - a 2D tensor of shape (n,) containing the branch width (or calibre) at each branch point.
 
-    """
+    """  # noqa: E501
     options = dict(
         adaptative_tangent=adaptative_tangent,
         return_calibre=return_calibre,
         return_boundaries=return_boundaries,
         return_curvature=return_curvature,
+        return_curvature_roots=return_curvature_roots,
         extract_bspline=extract_bspline,
         bspline_target_error=bspline_target_error,
-        bspline_K_percentile_threshold=bspline_K_percentile_threshold,
+        bspline_max_gap=bspline_max_gap,
+        curvature_roots_percentile_threshold=curvature_roots_percentile_threshold,
     )
 
-    assert 0 <= bspline_K_percentile_threshold <= 1, "bspline_K_percentile_threshold must be in (0, 1)"
+    assert 0 <= curvature_roots_percentile_threshold <= 1, "curvature_roots_percentile_threshold must be in (0, 1)"
     assert bspline_target_error >= 0, "bspline_target_error must be positive"
 
     branch_curves = [curve.cpu().int() for curve in branch_curves]

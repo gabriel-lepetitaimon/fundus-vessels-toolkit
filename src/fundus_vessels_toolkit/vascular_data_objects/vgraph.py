@@ -76,10 +76,12 @@ class VGraphNode:
             raise RuntimeError("The node has been removed from the graph.")
         return DFSetterAccessor(self.__graph._nodes_attr, self._id)
 
-    def coord(self, geo_data=0) -> Point:
+    def coord(self, geodata: Optional[VGeometricData | int] = None) -> Point:
         if not self.is_valid():
             raise RuntimeError("The node has been removed from the graph.")
-        return Point(*self.__graph.geometric_data(geo_data).nodes_coord(self._id))
+        if not isinstance(geodata, VGeometricData):
+            geodata = self.graph.geometric_data(0 if geodata is None else geodata)
+        return Point(*geodata.nodes_coord(self._id))
 
     #  __ INCIDENT BRANCHES __
     def _update_incident_branches_cache(self):
@@ -194,7 +196,7 @@ class VGraphBranch:
     def attr(self) -> DFSetterAccessor:
         return DFSetterAccessor(self.__graph._branches_attr, self._id)
 
-    def curve(self, geo_data=0) -> npt.NDArray[np.int_]:
+    def curve(self, geodata: Optional[VGeometricData | int] = None) -> npt.NDArray[np.int_]:
         """Return the indexes of the pixels forming the curve of the branch as a 2D array of shape (n, 2).
 
         This method is a shortcut to :meth:`VGeometricData.branch_curve`.
@@ -209,10 +211,14 @@ class VGraphBranch:
         np.ndarray
             The indexes of the pixels forming the curve of the branch.
         """
-        return self.__graph.geometric_data(geo_data).branch_curve(self._id)
+        if not isinstance(geodata, VGeometricData):
+            geodata = self.graph.geometric_data(0 if geodata is None else geodata)
+        return geodata.branch_curve(self._id)
 
-    def bspline(self, geo_data=0) -> BSpline:
-        return self.__graph.geometric_data(geo_data).branch_bspline(self._id)
+    def bspline(self, geodata: Optional[VGeometricData | int] = None) -> BSpline:
+        if not isinstance(geodata, VGeometricData):
+            geodata = self.graph.geometric_data(0 if geodata is None else geodata)
+        return geodata.branch_bspline(self._id)
 
     def geodata(self, attr_name: VBranchGeoDataKey, geo_data=0) -> VBranchGeoData.Base | Dict[str, VBranchGeoData.Base]:
         """Access the geometric data of the branch.
@@ -233,12 +239,14 @@ class VGraphBranch:
         """
         return self.__graph.geometric_data(geo_data).branch_data(attr_name, self._id)
 
-    def node_to_node_length(self, geo_data=0) -> float:
-        yx1, yx2 = self.__graph.geometric_data(geo_data).nodes_coord(self._nodes_id)
+    def node_to_node_length(self, geodata: Optional[VGeometricData | int] = None) -> float:
+        if not isinstance(geodata, VGeometricData):
+            geodata = self.graph.geometric_data(0 if geodata is None else geodata)
+        yx1, yx2 = geodata.nodes_coord(self._nodes_id)
         return np.linalg.norm(yx1 - yx2)
 
-    def arc_length(self, geo_data=0) -> float:
-        return len(self.curve(geo_data))
+    def arc_length(self, geodata: Optional[VGeometricData | int] = None) -> float:
+        return len(self.curve(geodata))
 
 
 ########################################################################################################################

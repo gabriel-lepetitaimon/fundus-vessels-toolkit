@@ -283,6 +283,7 @@ def vgraph_to_vtree(
                 successors = list_direct_successors(branch)
                 affiliate(branch, successors)
                 continue
+            ancestors = np.array(ancestors, dtype=int)
 
             # 3'. Otherwise, list all incident branches of the node and remove the ancestors
             successors_id_dirs = list_adjacent_branches(node)
@@ -305,9 +306,9 @@ def vgraph_to_vtree(
             succ_tangents = tangents[len(ancestors) :]
             cos_angles = np.sum(succ_tangents[:, None, :] * acst_tangents[None, :, :], axis=-1)
             best_ancestor = np.argmax(cos_angles, axis=1)
-            for succ, acst in zip(successors, ancestors[best_ancestor], strict=True):
+            for succ, succ_dir, acst in zip(successors, succ_dirs, ancestors[best_ancestor], strict=True):
                 branch_tree[succ] = acst
-                branch_dirs[succ] = succ_dirs[succ]
+                branch_dirs[succ] = succ_dir
                 stack.append(succ)
                 visited_branches[succ] = True
 
@@ -331,8 +332,9 @@ def vgraph_to_vtree(
 
 def clean_vtree(vtree: VTree, *, av_attr: str = "av") -> VTree:
     # === Remove terminal branches with unknown type ===
-    while to_delete := [b.id for b in vtree.branches() if not b.has_successors and b.attr[av_attr] == AVLabel.UNK]:
-        vtree.delete_branches(to_delete, inplace=True)
+    if av_attr in vtree.branches_attr:
+        while to_delete := [b.id for b in vtree.branches() if not b.has_successors and b.attr[av_attr] == AVLabel.UNK]:
+            vtree.delete_branches(to_delete, inplace=True)
 
     # === Remove passing nodes ===
     indegrees = vtree.node_indegree()

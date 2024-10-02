@@ -114,7 +114,7 @@ float largest_node_calibre(const int nodeId, const GraphAdjList &adjacency, cons
  *              === BRANCH_GEOMETRY.CPP ===
  **************************************************************************************/
 std::tuple<std::vector<CurveTangents>, std::vector<Scalars>, std::vector<IntPointPairs>, std::vector<Scalars>,
-           std::vector<BSpline>>
+           std::vector<Sizes>, std::vector<BSpline>>
 extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAcc<bool> &segmentation,
                           std::map<std::string, double> options = {}, bool assume_contiguous = false);
 
@@ -124,6 +124,10 @@ BSpline bspline_regression(const CurveYX &curve, const CurveTangents &tangents, 
 
 BSpline bspline_regression(const CurveYX &curve, const CurveTangents &tangents, double bspline_max_error,
                            const float K_threshold = 0.15, std::size_t start = 0, std::size_t end = 0);
+
+BSpline bspline_regression(const CurveYX &curve, const CurveTangents &tangents,
+                           const std::vector<std::size_t> &splitCandidate, double targetSqrError, std::size_t start = 0,
+                           std::size_t end = 0);
 
 BSpline iterative_fit_bspline(const CurveYX &d, const std::vector<Point> &tangents, const BezierCurve &bezier,
                               const std::vector<double> &u, const std::vector<double> &bezierSqrErrors,

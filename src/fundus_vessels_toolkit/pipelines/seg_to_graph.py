@@ -196,7 +196,9 @@ class SegToGraph:
             inplace=inplace,
         )
 
-    def populate_geometry(self, graph: VGraph, vessels_segmentation: npt.NDArray[np.bool_] | torch.Tensor):
+    def populate_geometry(
+        self, graph: VGraph, vessels_segmentation: npt.NDArray[np.bool_] | torch.Tensor, inplace=False
+    ):
         from ..segment_to_graph.geometry_parsing import populate_geometry
 
         return populate_geometry(
@@ -204,6 +206,7 @@ class SegToGraph:
             vessels_segmentation,
             adaptative_tangents=self.adaptative_tangents,
             bspline_target_error=self.bspline_target_error,
+            inplace=inplace,
         )
 
     # --- Utility methods ---

@@ -88,7 +88,7 @@ def junction_incident_branches_descriptor(
         incident_calibre: List[np.ndarray] = []
 
         # Read the bezier cubic curve and calibres of incident branches to the junction
-        bsplines: List[BSpline] = geo_data.branch_bspline(bspline_name, branches)
+        bsplines: List[BSpline] = geo_data.branch_bspline(branches, name=bspline_name)
         for branch_id, is_outgoing, bspline in zip(branches, are_outgoing, bsplines, strict=True):
             if len(bspline) == 0 or (len(bspline) == 1 and bspline[0].chord_length() < 20):
                 p0_id, p1_id = vgraph.branch_list[branch_id]

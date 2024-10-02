@@ -226,6 +226,14 @@ class BSpline(tuple[BezierCubic]):
         t1 = self[-1].c1 - self[-1].p1
         return (t0.normalized(), t1.normalized()) if normalize else (t0, t1)
 
+    def chord_length(self) -> float:
+        if len(self) == 0:
+            return 0
+        return np.linalg.norm(self[0].p0 - self[-1].p1)
+
+    def arc_length(self, fast_approximation=False):
+        return sum(curve.arc_length(fast_approximation) for curve in self)
+
 
 @autocast_torch
 def fit_bezier_cubic(

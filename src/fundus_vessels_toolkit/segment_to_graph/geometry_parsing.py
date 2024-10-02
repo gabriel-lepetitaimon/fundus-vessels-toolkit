@@ -11,7 +11,7 @@ def populate_geometry(
     vessel_segmentation: Optional[np.ndarray | FundusData] = None,
     *,
     adaptative_tangents=False,
-    bspline_target_error: float = 3,
+    bspline_target_error: float = 2,
     populate_tip_geodata: bool = True,
     inplace: bool = False,
 ) -> VGraph:
@@ -58,14 +58,16 @@ def populate_geometry(
     elif isinstance(vessel_segmentation, FundusData):
         vessel_segmentation = vessel_segmentation.vessels
 
-    tangents, calibres, boundaries, curvatures, bsplines = extract_branch_geometry(
+    tangents, calibres, boundaries, curvatures, curv_roots, bsplines = extract_branch_geometry(
         geo_data.branch_curve(),
         vessel_segmentation,
         adaptative_tangent=adaptative_tangents,
         bspline_target_error=bspline_target_error,
+        bspline_max_gap=7,
         return_boundaries=True,
-        return_curvature=True,
         return_calibre=True,
+        return_curvature=True,
+        return_curvature_roots=True,
         extract_bspline=True,
     )
     geo_data.set_branch_data(VBranchGeoData.Fields.TANGENTS, tangents)
@@ -73,6 +75,7 @@ def populate_geometry(
     geo_data.set_branch_data(VBranchGeoData.Fields.CALIBRES, calibres)
     geo_data.set_branch_data(VBranchGeoData.Fields.BOUNDARIES, boundaries)
     geo_data.set_branch_data(VBranchGeoData.Fields.CURVATURES, curvatures)
+    geo_data.set_branch_data(VBranchGeoData.Fields.CURVATURE_ROOTS, curv_roots)
 
     if populate_geometry:
         derive_tips_geometry_from_curve_geometry(vgraph, inplace=True)
@@ -142,13 +145,12 @@ def derive_tips_geometry_from_curve_geometry(
     if tangent:
         tips_tangents = []
         if tangent == "bspline":
-            branches_bsplines = gdata.branch_data(VBranchGeoData.Fields.BSPLINE, graph_indexing=False)
-            for branch_bspline in branches_bsplines:
+            branches_bsplines = gdata.branch_bspline(name=VBranchGeoData.Fields.BSPLINE)
+            for i, branch_bspline in enumerate(branches_bsplines):
                 if branch_bspline:
-                    bspline = branch_bspline.data
-                    tips_tangents.append(np.array(bspline.tips_tangents(normalize=True)))
+                    tips_tangents.append(np.array(branch_bspline.tips_tangents(normalize=True), dtype=float))
                 else:
-                    tips_tangents.append(np.zeros((2, 2)))
+                    tips_tangents.append(np.zeros((2, 2), dtype=float))
         else:
             if tangent is True:
                 tangent = 10
@@ -156,7 +158,7 @@ def derive_tips_geometry_from_curve_geometry(
             for branch_tangent in branches_tangents:
                 if branch_tangent:
                     d = branch_tangent.data
-                    tips_tangents.append(np.stack(d[:tangent].mean(axis=0), d[-tangent:].mean(axis=0)))
+                    tips_tangents.append(np.stack(d[:tangent].mean(axis=0), -d[-tangent:].mean(axis=0)))
                 else:
                     tips_tangents.append(None)
         gdata.set_branch_data(VBranchGeoData.Fields.TIPS_TANGENT, tips_tangents, graph_indexing=False, no_check=True)
