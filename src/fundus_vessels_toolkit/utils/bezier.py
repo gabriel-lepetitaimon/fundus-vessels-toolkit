@@ -53,10 +53,10 @@ class BezierCubic(NamedTuple):
             bezier = self.to_array()
             return np.sum(np.linalg.norm(q(bezier, u[1:]) - q(bezier, u[:-1]), axis=1))
 
-    def parametrize(self, yx_points: np.ndarray, error=2) -> np.array:
+    def parametrize(self, yx_points: np.ndarray, error=2, max_iteration=20) -> np.array:
         bezier = self.to_array()
         u = chordLengthParameterize(yx_points)
-        for i in range(20):
+        for _ in range(max_iteration):
             u = reparameterize(bezier, yx_points, u)
             maxError, splitPoint = computeMaxError(yx_points, bezier, u)
             if maxError < error**2:
@@ -123,6 +123,20 @@ class BezierCubic(NamedTuple):
         if not relative:
             v = v.normalized()
         return self.p1 + v * d
+
+    def is_curvature_constant(self) -> bool:
+        c0_elevation = (self.p1 - self.p0).cross(self.c0 - self.p0, normalize=True)
+        c1_elevation = -(self.p0 - self.p1).cross(self.c1 - self.p1, normalize=True)
+        return np.isclose(c0_elevation, c1_elevation) or np.sign(c1_elevation) == np.sign(c0_elevation)
+
+    def split(self, t=0.5) -> BSpline:
+        p01 = self.p0 + (self.c0 - self.p0) * t
+        p12 = self.c0 + (self.c1 - self.c0) * t
+        p23 = self.c1 + (self.p1 - self.c1) * t
+        p012 = p01 + (p12 - p01) * t
+        p123 = p12 + (p23 - p12) * t
+        p0123 = p012 + (p123 - p012) * t
+        return BSpline((BezierCubic(self.p0, p01, p012, p0123), BezierCubic(p0123, p123, p23, self.p1)))
 
 
 class BSpline(tuple[BezierCubic]):
@@ -230,6 +244,18 @@ class BSpline(tuple[BezierCubic]):
         if len(self) == 0:
             return 0
         return np.linalg.norm(self[0].p0 - self[-1].p1)
+
+    def ensure_constant_curvature(self) -> BSpline:
+        if all(curve.is_curvature_constant() for curve in self):
+            return self
+
+        bcubics = []
+        for bezier in self:
+            if bezier.is_curvature_constant():
+                bcubics.append(bezier)
+            else:
+                bcubics.extend(bezier.split(0.5))
+        return BSpline(bcubics)
 
     def arc_length(self, fast_approximation=False):
         return sum(curve.arc_length(fast_approximation) for curve in self)

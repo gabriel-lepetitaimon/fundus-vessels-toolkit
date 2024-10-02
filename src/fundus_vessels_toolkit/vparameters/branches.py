@@ -161,6 +161,8 @@ def branch_bspline_tortuosity(bspline: BSpline, as_dict=True) -> Dict[str, float
         A dictionary or list containing the tortuosity biomarkers.
     """
 
+    bspline = bspline.ensure_constant_curvature()
+
     n = len(bspline)
     Lci = [_.arc_length() for _ in bspline]
     Lxi = [_.chord_length() for _ in bspline]

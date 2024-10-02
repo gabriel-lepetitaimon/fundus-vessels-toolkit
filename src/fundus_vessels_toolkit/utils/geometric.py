@@ -434,6 +434,12 @@ class Point(NamedTuple):
         norm = self.norm
         return Point.origin() if norm == 0 else self / norm
 
+    def cross(self, other: Point, normalize=False) -> float:
+        if normalize:
+            self = self.normalized()
+            other = other.normalized()
+        return self.x * other.y - self.y * other.x
+
 
 def distance_matrix(points_coord: np.ndarray):
     """
