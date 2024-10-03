@@ -7,6 +7,7 @@ import torch
 from ..utils.cpp_extensions.graph_cpp import detect_skeleton_nodes as detect_skeleton_nodes_cpp
 from ..utils.cpp_extensions.graph_cpp import parse_skeleton as parse_skeleton_cpp
 from ..utils.cpp_extensions.graph_cpp import parse_skeleton_with_cleanup as parse_skeleton_with_cleanup_cpp
+from ..utils.lookup_array import create_removal_lookup
 from ..utils.torch import autocast_torch
 from ..vascular_data_objects import FundusData, VBranchGeoData, VGeometricData, VGraph
 
@@ -84,6 +85,14 @@ def skeleton_to_vgraph(
     )
     branch_list, nodes_yx, branches_curve = outs[1:4]
     labels = outs[0]
+    
+    branch_list = branch_list.numpy()
+    nodes_indexes = np.unique(branch_list)
+    if len(nodes_indexes) != len(nodes_yx):
+        orphan_nodes = np.setdiff1d(np.arange(len(nodes_indexes)), nodes_indexes)
+        del_lookup = create_removal_lookup(orphan_nodes, length=len(nodes_yx))
+        branch_list = del_lookup[branch_list]
+        nodes_yx = np.delete(nodes_yx, orphan_nodes, axis=0)
 
     geo_data = VGeometricData(
         nodes_coord=nodes_yx.numpy(),
@@ -101,7 +110,7 @@ def skeleton_to_vgraph(
         geo_data.set_branch_data(VBranchGeoData.Fields.TIPS_CALIBRE, calibres)
         geo_data.set_branch_data(VBranchGeoData.Fields.TIPS_BOUNDARIES, boundaries)
 
-    return VGraph(branch_list.numpy(), geo_data)
+    return VGraph(branch_list, geo_data, nodes_count=len(nodes_yx))
 
 
 @autocast_torch
