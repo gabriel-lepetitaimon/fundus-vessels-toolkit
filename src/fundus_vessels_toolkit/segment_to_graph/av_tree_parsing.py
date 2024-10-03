@@ -328,18 +328,3 @@ def vgraph_to_vtree(
         vtree.reindex_branches(new_order, inverse_lookup=True)
 
     return vtree
-
-
-def clean_vtree(vtree: VTree, *, av_attr: str = "av") -> VTree:
-    # === Remove terminal branches with unknown type ===
-    if av_attr in vtree.branches_attr:
-        while to_delete := [b.id for b in vtree.branches() if not b.has_successors and b.attr[av_attr] == AVLabel.UNK]:
-            vtree.delete_branches(to_delete, inplace=True)
-
-    # === Remove passing nodes ===
-    indegrees = vtree.node_indegree()
-    outdegrees = vtree.node_outdegree()
-    passing_nodes = np.argwhere((indegrees == 1) & (outdegrees == 1)).flatten()
-    vtree.fuse_nodes(passing_nodes, quiet_invalid_node=False, inplace=True)
-
-    return vtree

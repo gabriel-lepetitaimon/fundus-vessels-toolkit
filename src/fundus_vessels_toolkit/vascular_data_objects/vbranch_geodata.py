@@ -410,7 +410,9 @@ class VBranchBSpline(VBranchGeoDataBase):
         return self
 
     def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
-        raise NotImplementedError
+        return [
+            VBranchBSpline(bspline) for bspline in self.data.split(splits_point[1:-1], return_individual_bspline=True)
+        ]
 
     def __repr__(self) -> str:
         return f"VBranchBSpline({self.data})"

@@ -286,14 +286,14 @@ class VGeometricData:
         return np.arange(self.nodes_count) if self._nodes_id is None else self._nodes_id
 
     def _graph_to_internal_nodes_index(
-        self, index: npt.ArrayLike, graph_indexing=True, *, index_sorted=False, sort_index=False, check_valid=False
+        self, index: npt.ArrayLike, graph_index=True, *, index_sorted=False, sort_index=False, check_valid=False
     ) -> npt.NDArray[np.int_]:
         """Convert the index of the nodes in the graph to their index in the internal representation."""
         index = np.array(index, copy=True, dtype=np.int32)
         if not index_sorted and sort_index:
             index.sort()
             index_sorted = True
-        if graph_indexing and self._nodes_id is not None:
+        if graph_index and self._nodes_id is not None:
             internal_index = np_find_sorted(index, self._nodes_id, assume_keys_sorted=index_sorted)
             assert check_valid or np.all(internal_index >= 0), f"Nodes {index[internal_index < 0]} not found."
             return internal_index
@@ -302,7 +302,7 @@ class VGeometricData:
             return index
 
     def nodes_coord(
-        self, ids: Optional[int | npt.NDArray[np.int32]] = None, *, graph_indexing=True, apply_domain=False
+        self, ids: Optional[int | npt.NDArray[np.int32]] = None, *, graph_index=True, apply_domain=False
     ) -> Point | np.ndarray:
         """Return the coordinates of the nodes in the graph."""
 
@@ -312,7 +312,7 @@ class VGeometricData:
         ids, is_single = as_1d_array(ids)
 
         if isinstance(ids, np.ndarray):
-            internal_id = self._graph_to_internal_nodes_index(ids, graph_indexing=graph_indexing)
+            internal_id = self._graph_to_internal_nodes_index(ids, graph_index=graph_index)
             coord = self._nodes_coord[internal_id]
             if apply_domain:
                 coord += np.array(self.domain.top_left)[None, :]
@@ -350,7 +350,7 @@ class VGeometricData:
             return index
 
     def branch_curve(
-        self, ids: Optional[int | npt.NDArray[np.int32]] = None, *, graph_indexing=True
+        self, ids: Optional[int | npt.NDArray[np.int32]] = None, *, graph_index=True
     ) -> npt.NDArray[np.int_] | List[npt.NDArray[np.int_]]:
         """Return the coordinates of the pixels that compose the branches of the graph.
 
@@ -371,7 +371,7 @@ class VGeometricData:
         ids, is_single = as_1d_array(ids)
 
         if isinstance(ids, np.ndarray):
-            internal_id = self._graph_to_internal_branches_index(ids, graph_index=graph_indexing, check_valid=False)
+            internal_id = self._graph_to_internal_branches_index(ids, graph_index=graph_index, check_valid=False)
             if is_single:
                 return self._branches_curve[internal_id[0]] if internal_id[0] >= 0 else self.EMPTY_CURVE
             return [self._branches_curve[i] if i >= 0 else self.EMPTY_CURVE for i in internal_id]
@@ -380,7 +380,7 @@ class VGeometricData:
             raise TypeError("Invalid type for branches index.")
 
     def branch_midpoint(
-        self, ids: Optional[int | npt.NDArray[np.int32]] = None, p=0.5, *, graph_indexing=True
+        self, ids: Optional[int | npt.NDArray[np.int32]] = None, p=0.5, *, graph_index=True
     ) -> Point | None | List[Point | None]:
         """Return the coordinates of a point from each branch skeleton.
 
@@ -410,7 +410,7 @@ class VGeometricData:
         ids, is_single = as_1d_array(ids)
 
         if isinstance(ids, np.ndarray):
-            internal_id = self._graph_to_internal_branches_index(ids, graph_index=graph_indexing, check_valid=False)
+            internal_id = self._graph_to_internal_branches_index(ids, graph_index=graph_index, check_valid=False)
 
             if is_single:
                 return mid_point(self._branches_curve[internal_id[0]]) if internal_id[0] >= 0 else None
@@ -425,7 +425,7 @@ class VGeometricData:
             attr_name=attr_name,
             branch_id=internal_branch_id,
             curve=self._branches_curve[internal_branch_id],
-            geodata_attrs=self.list_branch_data(internal_branch_id, graph_indexing=False),
+            geodata_attrs=self.list_branch_data(internal_branch_id, graph_index=False),
         )
 
     ####################################################################################################################
@@ -565,7 +565,7 @@ class VGeometricData:
     ####################################################################################################################
     #  === BRANCH GEOMETRIC ATTRIBUTES ===
     ####################################################################################################################
-    def list_branch_data(self, branch_id: int, *, graph_indexing=True) -> Dict[str, VBranchGeoData.Base]:
+    def list_branch_data(self, branch_id: int, *, graph_index=True) -> Dict[str, VBranchGeoData.Base]:
         """Return the attributes of a branch.
 
         Parameters
@@ -578,7 +578,7 @@ class VGeometricData:
         Dict[str, VBranchGeoAttr]
             The attributes of the branch. The keys are the attribute names and the values are the attribute values.
         """
-        if graph_indexing:
+        if graph_index:
             internal_id = self._graph_to_internal_branches_index(branch_id, graph_index=True, check_valid=False)
         else:
             internal_id = branch_id
@@ -597,25 +597,23 @@ class VGeometricData:
             return False
 
     @overload
-    def branch_data(
-        self, attr_name: VBranchGeoDataKey, branch_id: int, *, graph_indexing=True
-    ) -> VBranchGeoData.Base: ...
+    def branch_data(self, attr_name: VBranchGeoDataKey, branch_id: int, *, graph_index=True) -> VBranchGeoData.Base: ...
     @overload
     def branch_data(
-        self, attr_name: VBranchGeoDataKey, branch_id: Optional[npt.ArrayLike[int]] = None, *, graph_indexing=True
+        self, attr_name: VBranchGeoDataKey, branch_id: Optional[npt.ArrayLike[int]] = None, *, graph_index=True
     ) -> List[VBranchGeoData.Base]: ...
     @overload
-    def branch_data(self, *, branch_id: int, graph_indexing=True) -> Dict[str, VBranchGeoData.Base]: ...
+    def branch_data(self, *, branch_id: int, graph_index=True) -> Dict[str, VBranchGeoData.Base]: ...
     @overload
     def branch_data(
-        self, *, branch_id: Optional[npt.ArrayLike[int]] = None, graph_indexing=True
+        self, *, branch_id: Optional[npt.ArrayLike[int]] = None, graph_index=True
     ) -> Dict[str, List[VBranchGeoData.Base]]: ...
     def branch_data(
         self,
         attr_name: VBranchGeoDataKey = None,
         branch_id: Optional[int | npt.NDArray[np.int32]] = None,
         *,
-        graph_indexing=True,
+        graph_index=True,
     ) -> (
         VBranchGeoData.Base
         | List[VBranchGeoData.Base]
@@ -638,9 +636,7 @@ class VGeometricData:
             The attribute of the branch.
         """
         if attr_name is None:
-            return (
-                self._branch_data_dict if branch_id is None else self.list_branch_data(branch_id, graph_indexing=True)
-            )
+            return self._branch_data_dict if branch_id is None else self.list_branch_data(branch_id, graph_index=True)
 
         attr = self._fetch_branch_data(attr_name)
         if branch_id is None:
@@ -648,7 +644,7 @@ class VGeometricData:
 
         branch_id, is_single = as_1d_array(branch_id)
 
-        internal_id = self._graph_to_internal_branches_index(branch_id, graph_index=graph_indexing, check_valid=False)
+        internal_id = self._graph_to_internal_branches_index(branch_id, graph_index=graph_index, check_valid=False)
         if is_single:
             return attr[internal_id[0]] if internal_id[0] >= 0 else None
         return [attr[i] if i >= 0 else None for i in internal_id]
@@ -735,7 +731,7 @@ class VGeometricData:
             return data[0] if is_single else np.stack(data)
 
         else:
-            curves = self.branch_curve(branch_ids, graph_indexing=False)
+            curves = self.branch_curve(branch_ids, graph_index=False)
             out = {attr: [] for attr in attrs}
 
             nan = np.array([np.nan, np.nan], dtype=np.float32)
@@ -839,7 +835,7 @@ class VGeometricData:
             return out[0] if is_single else out
 
         else:
-            curves = [self.branch_curve(bids, graph_indexing=False) for bids in branch_ids]
+            curves = [self.branch_curve(bids, graph_index=False) for bids in branch_ids]
             out = {"branches": branch_ids} | {attr: [] for attr in attrs}
             nan = np.array([np.nan, np.nan], dtype=np.float32)
             out["yx"] = [
@@ -861,7 +857,7 @@ class VGeometricData:
         attr_data: VBranchGeoDataLike | List[Optional[VBranchGeoDataLike]],
         branch_id: Optional[int | npt.NDArray[np.int32]] = None,
         *,
-        graph_indexing=True,
+        graph_index=True,
         no_check=False,
     ) -> None:
         """Set a geometric attribute of one or more branch.
@@ -876,7 +872,7 @@ class VGeometricData:
             The id of the branch(es), by default None
         version : Optional[str], optional
             The version of the attribute, by default ''
-        graph_indexing : bool, optional
+        graph_index : bool, optional
             Whether the branch_id is indexed according to the graph (True) or to the internal representation (False), by default True.
         no_check : bool, optional
             If True, do not check the validity of the attribute data, by default False
@@ -889,7 +885,7 @@ class VGeometricData:
         if branch_id is None:
             branch_id = np.arange(self.branches_count)
         else:
-            branch_id = self._graph_to_internal_branches_index(branch_id, graph_indexing=graph_indexing)
+            branch_id = self._graph_to_internal_branches_index(branch_id, graph_index=graph_index)
 
         # Check: attr_data
         if isinstance(attr_data, VBranchGeoData.Base):
@@ -1003,10 +999,10 @@ class VGeometricData:
     def set_branch_bspline(
         self,
         bspline: BSpline | npt.NDArray[np.float32] | List[BSpline | npt.NDArray[np.float32]],
-        name: VBranchGeoDataKey = VBranchGeoData.Fields.BSPLINE,
         branch_id: Optional[int | npt.NDArray[np.int32]] = None,
+        name: VBranchGeoDataKey = VBranchGeoData.Fields.BSPLINE,
         *,
-        graph_indexing=True,
+        graph_index=True,
         no_check=False,
     ) -> None:
         """Set a BSpline representation of one or more branch.
@@ -1022,7 +1018,7 @@ class VGeometricData:
         branch_id : Optional[int  |  npt.NDArray[np.int32]], optional
             The id of the branch(es), by default None
 
-        graph_indexing : bool, optional
+        graph_index : bool, optional
             Whether the branch_id is indexed according to the graph (True) or to the internal representation (False), by default True.
 
         no_check : bool, optional
@@ -1031,7 +1027,7 @@ class VGeometricData:
         if isinstance(bspline, BSpline) or (isinstance(bspline, np.ndarray) and bspline.ndim == 1):
             bspline = [bspline]
         bspline = [VBranchGeoData.BSpline(b) if b is not None else None for b in bspline]
-        self.set_branch_data(name, bspline, branch_id, graph_indexing=graph_indexing, no_check=no_check)
+        self.set_branch_data(name, bspline, branch_id, graph_index=graph_index, no_check=no_check)
 
     @overload
     def branch_bspline(self, branch_id: int, name: VBranchGeoDataKey = VBranchGeoData.Fields.BSPLINE) -> BSpline: ...
@@ -1108,7 +1104,7 @@ class VGeometricData:
             self._nodes_id = reorder_array(self._nodes_id, new_node_index)
             self._sort_internal_nodes_index()
 
-    def _drop_nodes(self, node_ids: Iterable[int], *, graph_indexing=True):
+    def _drop_nodes(self, node_ids: Iterable[int], *, graph_index=True):
         """Remove nodes from the graph.
 
         Parameters
@@ -1119,11 +1115,11 @@ class VGeometricData:
         if self._nodes_id is None:
             self._nodes_coord = np.delete(self._nodes_coord, node_ids, axis=0)
         else:
-            internal_ids = self._graph_to_internal_nodes_index(node_ids, graph_indexing=graph_indexing)
+            internal_ids = self._graph_to_internal_nodes_index(node_ids, graph_index=graph_index)
             self._nodes_id = np.delete(self._nodes_id, internal_ids)
             self._nodes_coord = np.delete(self._nodes_coord, internal_ids, axis=0)
 
-    def _merge_nodes(self, cluster: Iterable[int], weight: Iterable[float] = None, *, graph_indexing=True):
+    def _merge_nodes(self, cluster: Iterable[int], weight: Iterable[float] = None, *, graph_index=True):
         """Merge the nodes of a cluster into a single node.
 
         Parameters
@@ -1137,7 +1133,7 @@ class VGeometricData:
             weight = np.asarray(weight, dtype=float)
 
         cluster = np.asarray(cluster)
-        cluster = self._graph_to_internal_nodes_index(cluster, graph_indexing, sort_index=True, check_valid=False)
+        cluster = self._graph_to_internal_nodes_index(cluster, graph_index, sort_index=True, check_valid=False)
         weight = weight[cluster >= 0]
         cluster = cluster[cluster >= 0]
 
@@ -1147,7 +1143,7 @@ class VGeometricData:
         else:
             weight /= weight_total
 
-        new_node = np.sum(weight[:, None] * self.nodes_coord(cluster, graph_indexing=False), axis=0)
+        new_node = np.sum(weight[:, None] * self.nodes_coord(cluster, graph_index=False), axis=0)
         self._nodes_coord[cluster[0]] = new_node
 
     def _sort_internal_branches_index(self) -> None:
@@ -1191,7 +1187,7 @@ class VGeometricData:
                 }
             self._sort_internal_branches_index()
 
-    def _merge_branches(self, consecutive_branches: Iterable[int], *, graph_indexing=True):
+    def _merge_branches(self, consecutive_branches: Iterable[int], *, graph_index=True):
         """Merge consecutive branches into a single branch.
 
         Parameters
@@ -1199,16 +1195,16 @@ class VGeometricData:
         consecutive_branches : np.ndarray
             The indices of the branches to merge.
 
-        graph_indexing : bool, optional
+        graph_index : bool, optional
             Whether the branch_id is indexed according to the graph (True) or to the internal representation (False), by default True.
         """  # noqa: E501
-        if graph_indexing:
+        if graph_index:
             consecutive_branches = self._graph_to_internal_branches_index(consecutive_branches, sort_index=False)
 
         branch0 = consecutive_branches[0]
         next_branches = consecutive_branches[1:]
 
-        branches_curve = [b for b in self.branch_curve(consecutive_branches, graph_indexing=False) if b is not None]
+        branches_curve = [b for b in self.branch_curve(consecutive_branches, graph_index=False) if b is not None]
         if len(branches_curve):
             self._branches_curve[branch0] = np.concatenate(branches_curve)
 
@@ -1253,7 +1249,7 @@ class VGeometricData:
         ), f"Invalid number of new node ids. (Got {len(new_node_ids)} but expected {len(splits_positions)})"
 
         internal_id = int(self._graph_to_internal_branches_index(branch_id))
-        curve = self.branch_curve(internal_id, graph_indexing=False)
+        curve = self.branch_curve(internal_id, graph_index=False)
         if curve is None:
             return
 
@@ -1261,7 +1257,7 @@ class VGeometricData:
         #: The indexes in the curve where it should be splitted (including the start and last index of the curve)
         splits_id = [0]
         #: The split points in the curve (including the start and end of the curve)
-        splits_point = [curve[0]]
+        splits_point = [Point.from_array(curve[0])]
         if splits_positions.ndim == 1:
             for split_pos in splits_positions:
                 splits_id.append(int(split_pos))
@@ -1271,7 +1267,7 @@ class VGeometricData:
                 splits_id.append(int(np.argmin(np.linalg.norm(curve - split_pos, axis=1))))
                 splits_point.append(Point.from_array(split_pos))
         splits_id.append(len(curve))
-        splits_point.append(curve[-1])
+        splits_point.append(Point.from_array(curve[-1]))
 
         # === Split the curve and add new curves ===
         new_curves = [curve[start_id:end_id] for start_id, end_id in itertools.pairwise(splits_id)]
@@ -1287,8 +1283,8 @@ class VGeometricData:
 
         # === Split the branch geo data ===
         ctx = self._geodata_edit_ctx(internal_id)
-        for attr_name, attr in self.list_branch_data(internal_id, graph_indexing=False).items():
-            branch_attrs = attr.split(split_pos, splits_id, ctx.set_name(attr_name))
+        for attr_name, attr in self.list_branch_data(internal_id, graph_index=False).items():
+            branch_attrs = attr.split(splits_point, splits_id, ctx.set_name(attr_name))
             assert len(branch_attrs) == len(new_branch_ids) + 1, "Invalid number of attributes after split."
             self._branch_data_dict[attr_name][internal_id] = branch_attrs[0]
             self._branch_data_dict[attr_name] += branch_attrs[1:]
@@ -1310,7 +1306,7 @@ class VGeometricData:
         for branch_id in internal_ids:
             ctx = self._geodata_edit_ctx(branch_id)
             self._branches_curve[branch_id] = np.flip(self.branch_curve(branch_id), axis=0)
-            for attr_name, attr in self.list_branch_data(branch_id, graph_indexing=False).items():
+            for attr_name, attr in self.list_branch_data(branch_id, graph_index=False).items():
                 self._branch_data_dict[attr_name][branch_id] = attr.flip(ctx.set_name(attr_name))
 
     def clear_branches_gdata(self, ids: int | Iterable[int]) -> None:
