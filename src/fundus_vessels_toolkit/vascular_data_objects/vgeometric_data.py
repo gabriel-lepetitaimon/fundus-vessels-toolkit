@@ -419,6 +419,47 @@ class VGeometricData:
         else:
             raise TypeError("Invalid type for branches index.")
 
+    def branch_closest_index(
+        self, points: npt.ArrayLike[float], branch_ids: Optional[int | npt.NDArray[np.int32]] = None
+    ) -> npt.NDArray[float]:
+        """Return the closest point(s) on the branch(es) to a set of point(s).
+
+        Parameters
+        ----------
+        points : np.ndarray
+            The coordinates of the point(s) as a 2D array of shape (N, 2).
+
+        branch_ids : Optional[int | np.ndarray], optional
+            The id of the branch(es), by default None
+
+        Returns
+        -------
+        np.ndarray
+            The index of the closest point on the branch(es) to the input point(s).
+
+            - If ``branch_ids`` is a scalar, the output is a 1D array of shape (N) containing the indexes of the closest points on the branch.
+            - If ``branch_ids`` is an iterable of int, the output is a 2D array of shape (len(ids), N,) containing the indexes of the closest points on each branch.
+        """  # noqa: E501
+        points = np.atleast_2d(points)
+
+        def closest_index(curve, points):
+            if curve is None or curve.shape[0] == 0:
+                return np.full(points.shape, np.nan)
+            distances = np.linalg.norm(curve[:, None, :] - points[None, :, :], axis=2)
+            return np.argmin(distances, axis=0)
+
+        if branch_ids is None:
+            branch_ids = range(self.branches_count)
+            is_single = False
+        else:
+            branch_ids, is_single = as_1d_array(branch_ids)
+
+        branches_closest_index = []
+        for i in branch_ids:
+            branches_closest_index.append(closest_index(self._branches_curve[i], points))
+
+        return branches_closest_index[0] if is_single else np.stack(branches_closest_index)
+
     def _geodata_edit_ctx(self, internal_branch_id: int, attr_name: str = "") -> BranchGeoDataEditContext:
         """Return the context of a branch."""
         return BranchGeoDataEditContext(
@@ -1187,6 +1228,20 @@ class VGeometricData:
                 }
             self._sort_internal_branches_index()
 
+    def _append_empty_branches(self, n: int):
+        """Append empty branches to the graph geometry data.
+
+        Parameters
+        ----------
+        n : int
+            The number of branches to add.
+        """
+        if self._branches_id is None:
+            self._branches_curve += [None] * n
+
+            for attr in self._branch_data_dict.values():
+                attr += [None] * n
+
     def _merge_branches(self, consecutive_branches: Iterable[int], *, graph_index=True):
         """Merge consecutive branches into a single branch.
 
@@ -1212,9 +1267,11 @@ class VGeometricData:
         ctx = ctx.set_info(curves=branches_curve)
         for attr_name, attr_data in self._branch_data_dict.items():
             if attr_data[branch0] is not None:
-                attr_data[branch0] = attr_data[branch0].merge(
-                    [attr_data[branch_id] for branch_id in next_branches], ctx.set_name(attr_name)
-                )
+                attr_datas = [attr_data[branch_id] for branch_id in next_branches if attr_data[branch_id] is not None]
+                if len(attr_datas) == 1:
+                    attr_data[branch0] = attr_datas[0]
+                elif len(attr_datas) > 1:
+                    attr_data[branch0] = attr_datas[0].merge(attr_datas[1:], ctx.set_name(attr_name))
 
     def _split_branch(
         self, branch_id: int, splits_positions: npt.NDArray, new_branch_ids: List[int], new_node_ids: List[int]
@@ -1265,7 +1322,7 @@ class VGeometricData:
         elif splits_positions.ndim == 2:
             for split_pos in splits_positions:
                 splits_id.append(int(np.argmin(np.linalg.norm(curve - split_pos, axis=1))))
-                splits_point.append(Point.from_array(split_pos))
+                splits_point.append(Point.from_array(curve[splits_id[-1]]))
         splits_id.append(len(curve))
         splits_point.append(Point.from_array(curve[-1]))
 

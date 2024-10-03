@@ -146,29 +146,6 @@ class VBranchGeoDataBase(ABC, metaclass=MetaVBranchGeoDataBase):
         raise NotImplementedError
 
 
-# def edit_after(geodata_type: Type[VBranchGeoDataBase] | str):
-#     """Decorator signaling that the edition of this geodata type should be done optimally after having edited another geodata type.
-
-#     Parameters
-#     ----------
-#     geodata_type : Type[VBranchGeoDataBase] | str
-#         The type of the geometrical data to optimally edit before this one.
-
-#     Returns
-#     -------
-#     Callable
-#         A wrapper function marking the decorated function with an attribute `_execute_after` containing the geodata type.
-#     """  # noqa: E501
-
-#     geodata_type = VBranchGeoData.geodata_type(geodata_type)
-
-#     def wrapper(f):
-#         f._execute_after = geodata_type
-#         return f
-
-#     return wrapper
-
-
 ####################################################################################################
 class VBranchCurveData(VBranchGeoDataBase):
     """``VBranchCurveData`` is a class that stores the parametric data of a vascular graph."""
@@ -410,9 +387,7 @@ class VBranchBSpline(VBranchGeoDataBase):
         return self
 
     def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
-        return [
-            VBranchBSpline(bspline) for bspline in self.data.split(splits_point[1:-1], return_individual_bspline=True)
-        ]
+        return [VBranchBSpline(bspline) for bspline in self.data.split_into_multiple_bsplines(splits_point[1:-1])]
 
     def __repr__(self) -> str:
         return f"VBranchBSpline({self.data})"
@@ -532,6 +507,10 @@ class VBranchGeoData:
     Base = VBranchGeoDataBase
     Descriptor = VBranchGeoDescriptor
     Fields = VBranchGeoField
+
+    Dict = VBranchGeoDict
+    DataLike = VBranchGeoDataLike
+    Key = VBranchGeoDataKey
 
     BSpline = VBranchBSpline
     Curve = VBranchCurveData

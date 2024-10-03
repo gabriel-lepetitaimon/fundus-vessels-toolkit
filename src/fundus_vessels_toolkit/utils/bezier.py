@@ -8,6 +8,7 @@ import torch
 
 from .geometric import Point
 from .graph.measures import curve_tangent
+from .math import intercept_segment
 from .torch import autocast_torch
 
 
@@ -113,7 +114,6 @@ class BezierCubic(NamedTuple):
 
         yx_points = np.atleast_2d(yx_points).astype(float)
         assert yx_points.ndim == 2 and yx_points.shape[1] == 2, "yx_points must be a 2D array of shape (n, 2)"
-        n = len(yx_points)
 
         # Compute projection on the trapezoid defined by (p0, c0, c1, p1)
         p0, c0, c1, p1 = self.to_array()
@@ -153,6 +153,7 @@ class BezierCubic(NamedTuple):
                 maxError, splitPoint = computeMaxError(yx_points, bezier, u)
                 if maxError < 2**2:
                     break
+            u = np.clip(u, 0, 1)
 
             proj = self.evaluate(u)
             out = (proj,)
@@ -162,6 +163,63 @@ class BezierCubic(NamedTuple):
             if return_u:
                 out = out + (u,)
             return proj if len(out) == 1 else out
+
+    def intercept(
+        self, origins: npt.ArrayLike, tangents: npt.ArrayLike, fast_approximation=False, half_line=True
+    ) -> npt.NDArray[np.float64]:
+        """Compute the intercept of the Bezier curve with a set of lines defined by their origins and tangents.
+
+        Parameters
+        ----------
+        origins : np.array
+            The origins of the lines as a (n, 2) array.
+
+        tangents : np.array
+            The tangents of the lines as a (n, 2) array.
+
+        fast_approximation : bool, optional
+            If True, use a fast approximation by intercepting the trapezoid defined by the control points instead of the true bezier curve, by default False.
+
+        half_line : bool, optional
+            If True, the intercept may only be on the half-line defined by the origin and the tangent, by default True.
+
+        Returns
+        -------
+        np.array
+            The intercept of the Bezier curve with the lines as a (n, 2) array. If the intercept does not exist, the point is set to NaN.
+        """  # noqa: E501
+        origins = np.atleast_2d(origins).astype(float)
+        tangents = np.atleast_2d(tangents).astype(float)
+
+        assert origins.ndim == 2 and origins.shape[1] == 2, "origins must be a 2D array of shape (n, 2)"
+        assert tangents.ndim == 2 and tangents.shape[1] == 2, "tangents must be a 2D array of shape (n, 2)"
+
+        # Compute the intercept of the Bezier curve with the trapezoid defined by (p0, c0, c1, p1)
+        p0, c0, c1, p1 = self.to_array()
+        n = max(round(self.arc_length(fast_approximation=True) / 30), 1)
+        segment = q((p0, c0, c1, p1), np.linspace(0, 1, n + 1, endpoint=True))
+        intercepts = intercept_segment(
+            segment[:-1], segment[1:], origins, origins + tangents, b1_bound=False, b0_bound=half_line
+        )
+
+        # Find the closest intercept to the origin
+        dist = np.linalg.norm(intercepts - origins[None, :, :], axis=-1)
+        closest_segment = np.full(len(origins), -1, dtype=int)
+        intercept = np.full((len(origins), 2), np.nan)
+
+        no_intercept = np.isnan(dist).all(axis=0)
+        if np.any(~no_intercept):
+            closest_segment[~no_intercept] = np.nanargmin(dist[:, ~no_intercept], axis=0)
+            intercept[~no_intercept] = np.take_along_axis(
+                intercepts[:, ~no_intercept], closest_segment[None, ~no_intercept, None], axis=0
+            ).squeeze(axis=0)
+
+            if not fast_approximation:
+                # Project the approximative intercept on the Bezier curve
+                # TODO: Compute an exact intercept instead of a projection
+                intercept[~no_intercept] = self.projection(intercept[~no_intercept], fast_approximation=True)
+
+        return intercept
 
     def evaluate(self, t: float):
         return q(self.to_array(), t)
@@ -335,6 +393,37 @@ class BSpline(tuple[BezierCubic]):
 
         return filling
 
+    def extend_bpsline(self, start: Optional[Point] = None, end: Optional[Point] = None, *, smoothing=0.2) -> BSpline:
+        extended = []
+        if len(self) == 0:
+            if start is not None and end is not None:
+                extended.append(BezierCubic(start, start, end, end))
+            return BSpline(extended)
+
+        if start is not None:
+            p_start = self[0].p0
+            start_c = self[0].c0_sym(-start.distance(p_start) * smoothing, relative=False) if smoothing else p_start
+            extended.append(BezierCubic(start, start, start_c, p_start))
+
+        for prev, next in zip(self[:-1], self[1:], strict=True):
+            if prev.p1 == next.p0:
+                extended.append(prev)
+            else:
+                if smoothing:
+                    dist = prev.p1.distance(next.p0)
+                    prev_c = prev.c1_sym(-dist * smoothing, relative=False)
+                    next_c = next.c0_sym(-dist * smoothing, relative=False)
+                else:
+                    prev_c, next_c = prev.p1, next.p0
+                extended.append(BezierCubic(prev.p1, prev_c, next_c, next.p0))
+        extended.append(self[-1])
+        if end is not None:
+            p_last = self[-1].p1
+            last_c = self[-1].c1_sym(-end.distance(p_last) * smoothing, relative=False) if smoothing else p_last
+            extended.append(BezierCubic(p_last, last_c, end, end))
+
+        return BSpline(extended)
+
     def tips_tangents(self, normalize=True) -> Tuple[Point, Point]:
         t0 = self[0].c0 - self[0].p0
         t1 = self[-1].c1 - self[-1].p1
@@ -363,36 +452,127 @@ class BSpline(tuple[BezierCubic]):
     def parametrize(yx_points: np.ndarray, error=2, max_iteration=20) -> np.array:
         pass
 
-    @overload
-    def split(self, split_coord: npt.ArrayLike[float], return_individual_bspline: Literal[True]) -> List[BSpline]: ...
-    @overload
-    def split(self, split_coord: npt.ArrayLike[float], return_individual_bspline: Literal[False]) -> BSpline: ...
-    def split(self, split_coord: npt.ArrayLike[float], return_individual_bspline=False) -> List[BSpline] | BSpline:
-        split_coord = np.atleast_2d(split_coord).astype(float)
-        assert split_coord.ndim == 2 and split_coord.shape[1] == 2, "split_coord must be a 2D array of shape (n, 2)"
-        n_split = split_coord.shape[0]
+    def projection(
+        self, yx_points: np.ndarray, fast_approximation=False, return_dist=False, return_u=False
+    ) -> np.ndarray | Tuple[np.ndarray, ...]:
+        """Project a set of points on the Bezier curve.
+
+        Parameters
+        ----------
+        yx_points : np.ndarray
+            The points to project on the Bezier curve.
+        fast_approximation : bool, optional
+            If True, use a fast approximation by projecting the points on the trapezoid defined by the control points, by default False.
+        return_dist : bool, optional
+            If True, also return the distance between the projected points and the original points, by default False.
+        return_u : bool, optional
+            If True, also return the parameter u of the projected points on the Bezier curve, by default False
+
+        Returns
+        -------
+        projected_points : np.ndarray
+            The projected points on the Bezier curve as a (n, 2) array.
+
+        distance : np.ndarray
+            If return_dist is True, also return the distance between the projected points and the original points as a (n,) array.
+
+        u : np.ndarray
+            If return_u is True, also return the parameter u of the projected points on the Bezier curve as a (n,) array. ``floor(u)`` is the index of the Bezier curve in the BSpline, and ``u - floor(u)`` is the relative position on the Bezier curve.
+
+        """  # noqa: E501
+        yx_points = np.atleast_2d(yx_points).astype(float)
+        assert yx_points.ndim == 2 and yx_points.shape[1] == 2, "split_coord must be a 2D array of shape (n, 2)"
+        n_split = yx_points.shape[0]
 
         if len(self) == 0:
-            return [BSpline() for _ in range(n_split)] if return_individual_bspline else self
+            out = (np.full(n_split, np.nan),)
+            if return_dist:
+                out = out + (np.full(n_split, np.nan),)
+            if return_u:
+                out = out + (np.full(n_split, np.nan),)
+            return out[0] if len(out) == 1 else out
 
         # === Find the closest bezier curve for each split point ===
         closest_points, dist, u = zip(
             *[
-                bezier.projection(split_coord, return_distance=True, return_u=True, fast_approximation=True)
+                bezier.projection(yx_points, return_distance=True, return_u=True, fast_approximation=fast_approximation)
                 for bezier in self
             ],
             strict=True,
         )
         if len(self) == 1:
-            closest_points = list(closest_points)[0]
-            u = list(u)[0]
-            closest_bezier = np.full(n_split, 0)
+            out = (list(closest_points)[0],)
+            if return_dist:
+                out = out + (list(dist)[0],)
+            if return_u:
+                out = out + (list(u)[0],)
+            return out[0] if len(out) == 1 else out
         else:
             closest_bezier = np.argmin(list(dist), axis=0)
-            u = np.take_along_axis(np.array(u), closest_bezier[None, :], axis=0).squeeze(axis=0)
-            closest_points = np.take_along_axis(
-                np.array(closest_points), closest_bezier[None, :, None], axis=0
-            ).squeeze(axis=0)
+            out = (np.take_along_axis(np.array(closest_points), closest_bezier[None, :, None], axis=0).squeeze(axis=0),)
+            if return_dist:
+                out = out + (np.take_along_axis(np.array(dist), closest_bezier[None, :], axis=0).squeeze(axis=0),)
+            if return_u:
+                u = np.take_along_axis(np.array(u), closest_bezier[None, :], axis=0).squeeze(axis=0)
+                u += closest_bezier
+                out = out + (u,)
+
+            return out[0] if len(out) == 1 else out
+
+    def intercept(
+        self, origins: npt.ArrayLike, tangents: npt.ArrayLike, fast_approximation=False, half_line=True
+    ) -> np.ndarray:
+        """Compute the intercept of the Bezier curve with a set of lines defined by their origins and tangents.
+
+        Parameters
+        ----------
+        origins : np.array
+            The origins of the lines as a (n, 2) array.
+
+        tangents : np.array
+            The tangents of the lines as a (n, 2) array.
+
+        fast_approximation : bool, optional
+            If True, use a fast approximation by intercepting the trapezoid defined by the control points instead of the true bezier curve, by default False.
+
+        Returns
+        -------
+        np.array
+            The intercept of the Bezier curve with the lines as a (n, 2) array. If the intercept does not exist, the point is set to NaN.
+        """  # noqa: E501
+        origins = np.atleast_2d(origins).astype(float)
+        intercept = np.full((len(origins), 2), np.nan)
+        if len(self) == 0:
+            return intercept
+
+        intercepts = np.stack([curve.intercept(origins, tangents, fast_approximation, half_line) for curve in self])
+
+        if len(self) == 1:
+            return intercepts[0]
+        no_intercept = np.isnan(intercepts).any(axis=2).all(axis=0)
+        if np.all(no_intercept):
+            return intercept
+
+        # Find the closest intercept to the origin
+        dist = np.linalg.norm(intercepts - origins[None, :, :], axis=2)
+        intercept[~no_intercept] = np.take_along_axis(
+            intercepts[:, ~no_intercept], np.nanargmin(dist[:, ~no_intercept], axis=0)[None, :, None], axis=0
+        ).squeeze(axis=0)
+
+        return intercept
+
+    def split_into_multiple_bsplines(
+        self, split_coord: Optional[npt.ArrayLike[float]] = None, u: Optional[npt.ArrayLike[float]] = None
+    ) -> List[BSpline]:
+        if split_coord is None and u is None:
+            raise ValueError("Either split_coord or u must be provided")
+        if u is None:
+            _, u = self.projection(split_coord, return_u=True, fast_approximation=False)
+
+        closest_bezier = np.floor(u).astype(int)
+        u = u - closest_bezier
+        closest_bezier[u == 0] -= 1
+        u[u == 0] = 1
 
         # === Split the closest bezier curve at the closest point ===
         beziers = [[]]
@@ -402,25 +582,27 @@ class BSpline(tuple[BezierCubic]):
                 continue
 
             # Select the split points and their parameter u for the current bezier curve
-            split_points, split_u = split_coord[closest_bezier == i], u[closest_bezier == i]
+            # split_points, split_u = split_coord[closest_bezier == i], u[closest_bezier == i]
+            split_u = u[closest_bezier == i]
 
             # Remove points that are at the extremities of the bezier curve
             p0_points, p1_points = np.isclose(split_u, 0), np.isclose(split_u, 1)
             not_extremities = ~(p0_points | p1_points)
-            split_points, split_u = split_points[not_extremities], split_u[not_extremities]
+            # split_points, split_u = split_points[not_extremities], split_u[not_extremities]
+            split_u = split_u[not_extremities]
 
             # Refine the parameter u and remove any additional extremities
-            split_u = np.clip(np.sort(bezier.parametrize(split_points, initial_u=split_u)), 0, 1)
-            p0_points, p1_points = np.isclose(split_u, 0), np.isclose(split_u, 1)
-            not_extremities = ~(p0_points | p1_points)
-            split_points, split_u = split_points[not_extremities], split_u[not_extremities]
+            # split_u = np.clip(np.sort(bezier.parametrize(split_points, initial_u=split_u)), 0, 1)
+            # p0_points, p1_points = np.isclose(split_u, 0), np.isclose(split_u, 1)
+            # not_extremities = ~(p0_points | p1_points)
+            # split_points, split_u = split_points[not_extremities], split_u[not_extremities]
 
             # Create empty segment for any points before the bezier curve
             for _ in range(np.sum(p0_points)):
                 beziers.append([])
 
             # Split the bezier curve at the split points
-            if len(split_points):
+            if len(split_u):
                 acc_t = 0
                 for t in split_u:
                     b0, bezier = bezier.split((t - acc_t) / (1 - acc_t))
@@ -437,7 +619,12 @@ class BSpline(tuple[BezierCubic]):
             for _ in range(np.sum(p1_points)):
                 beziers.append([])
 
-        return [BSpline(_) for _ in beziers] if return_individual_bspline else BSpline(sum(beziers, []))
+        return [BSpline(_) for _ in beziers]
+
+    def split(
+        self, split_coord: Optional[npt.ArrayLike[float]] = None, u: Optional[npt.ArrayLike[float]] = None
+    ) -> BSpline:
+        return sum(self.split_into_multiple_bsplines(split_coord, u), BezierCubic())
 
 
 @autocast_torch

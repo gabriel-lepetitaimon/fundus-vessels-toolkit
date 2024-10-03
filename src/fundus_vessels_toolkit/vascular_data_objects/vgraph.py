@@ -1271,6 +1271,37 @@ class VGraph:
 
         return graph
 
+    def add_branches(self, branch_nodes: npt.ArrayLike[int], *, inplace=True):
+        """Add branches to the graph.
+
+        Parameters
+        ----------
+        branch_nodes : npt.ArrayLike[int]
+            A 2D array of shape (N, 2) containing the indexes of the nodes connected by the new branches.
+
+        inplace : bool, optional
+            If True (by default), the graph is modified in place. Otherwise, a new graph is returned.
+        Returns
+        -------
+        VGraph
+            The modified graph.
+        """
+        graph = self if inplace else self.copy()
+
+        branch_nodes = np.atleast_2d(branch_nodes).astype(int)
+        assert branch_nodes.shape[1] == 2, "branch_nodes must be a 2D array of shape (N, 2)."
+        assert np.all(np.logical_and(branch_nodes >= 0, branch_nodes < graph.nodes_count)), "Invalid node indexes."
+
+        graph._branch_list = np.concatenate((graph._branch_list, branch_nodes), axis=0)
+        new_df = pd.DataFrame(index=pd.RangeIndex(graph.branches_count), columns=graph._branches_attr.columns)
+        new_df.loc[: graph.branches_count] = graph._branches_attr
+        graph._branches_attr = new_df
+
+        for gdata in graph._geometric_data:
+            gdata._append_empty_branches(len(branch_nodes))
+
+        return graph
+
     def split_branch(
         self,
         branchID: int,
@@ -1278,6 +1309,7 @@ class VGraph:
         *,
         split_curve_id: Optional[int | Iterable[int]] = None,
         return_branch_ids=False,
+        return_node_ids=False,
         inplace=False,
     ) -> VGraph | Tuple[VGraph, npt.NDArray[np.int_]]:
         """Split a branch into two branches by adding a new node near the given coordinates.
@@ -1301,16 +1333,27 @@ class VGraph:
         # === Check coordinates or index of the splits ===
         if split_coord is not None:
             split_coord = np.asarray(split_coord)
-            single_split = split_coord.ndim == 1
-            if single_split:
+            if split_coord.ndim == 1:  # Single split
                 split_coord = split_coord[None]
             assert split_coord.ndim == 2 and split_coord.shape[1] == 2, "split_coord must be a 2D array of shape (N, 2)"
+            if len(split_coord) > 1:
+                # Sort the splits by their position on the branch curve
+                split_curve_id = self.geometric_data().branch_closest_index(split_coord, branchID)
+                split_order = np.argsort(split_curve_id)
+                split_coord = split_coord[split_order]
+            else:
+                split_order = np.zeros(1, dtype=int)
         elif split_curve_id is not None:
             split_coord = np.asarray(split_curve_id)
-            single_split = split_coord.ndim == 0
-            if single_split:
+            if split_coord.ndim == 0:  # Single split
                 split_coord = split_coord[None]
             assert split_coord.ndim == 1, "split_curve_id must be a 1D array."
+            if len(split_coord) > 1:
+                # Sort the splits by their position on the branch curve
+                split_order = np.argsort(split_coord)
+                split_coord = split_coord[split_order]
+            else:
+                split_order = np.zeros(1, dtype=int)
         else:
             raise ValueError("Either split_coord or split_curve_id must be provided.")
         assert len(split_coord) > 0, "At least one split coordinate must be provided."
@@ -1351,7 +1394,13 @@ class VGraph:
             if branch._id == branchID:
                 branch._nodes_id = graph._branch_list[branchID]
 
-        return graph if not return_branch_ids else graph, [branchID] + new_branchIds
+        out = [graph]
+        if return_branch_ids:
+            out.append([branchID] + [new_branchIds[_] for _ in split_order])
+        if return_node_ids:
+            out.append([new_nodeIds[_] for _ in split_order])
+
+        return out if len(out) > 1 else out[0]
 
     def bridge_nodes(self, node_pairs: npt.NDArray, *, fuse_nodes=False, no_check=False, inplace=False) -> VGraph:
         """Fuse pairs of endpoints nodes by linking them together.

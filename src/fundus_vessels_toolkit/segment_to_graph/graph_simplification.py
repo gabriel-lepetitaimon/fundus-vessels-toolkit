@@ -14,7 +14,7 @@ __all__ = [
 ]
 
 from dataclasses import dataclass
-from typing import List, Literal, Mapping, Optional, TypeAlias
+from typing import List, Literal, Mapping, Optional, Tuple, TypeAlias
 
 import networkx as nx
 import numpy as np
@@ -33,7 +33,7 @@ from ..utils.graph.branch_by_nodes import (
 from ..utils.graph.branch_by_nodes import merge_equivalent_branches as merge_equivalent_branches_legacy
 from ..utils.graph.branch_by_nodes import merge_nodes_by_distance as merge_nodes_by_distance_legacy
 from ..utils.graph.branch_by_nodes import reduce_clusters as reduce_clusters_legacy
-from ..utils.lookup_array import apply_lookup, apply_lookup_on_coordinates
+from ..utils.lookup_array import apply_lookup, apply_lookup_on_coordinates, create_removal_lookup
 from ..vascular_data_objects import VBranchGeoData, VGraph
 
 
@@ -67,6 +67,7 @@ def simplify_graph(
     nodes_merge_distance: NodeMergeDistanceParam = True,
     iterative_nodes_merge: bool = True,
     max_cycles_length: float = 0,
+    passing_node_min_angle: float = 120,
     simplify_topology: SimplifyTopology = "node",
     *,
     inplace=False,
@@ -177,7 +178,7 @@ def simplify_graph(
         remove_orphan_branches(vessel_graph, min_orphan_branches_length, inplace=True)
 
     if simplify_topology in ("node", "both"):
-        simplify_passing_nodes(vessel_graph, inplace=True)
+        simplify_passing_nodes(vessel_graph, min_angle=passing_node_min_angle, inplace=True)
 
     return vessel_graph
 
@@ -490,7 +491,7 @@ def simplify_passing_nodes(
         incident_branches = np.stack(d["branches"])
         t = np.stack(d[VBranchGeoData.Fields.TIPS_TANGENT])
         cos = np.sum(t[..., 0] * t[..., 1], axis=1)
-        fuseable_nodes = cos >= np.cos(np.deg2rad(min_angle))
+        fuseable_nodes = cos <= np.cos(np.deg2rad(min_angle))
         nodes_to_fuse = nodes_to_fuse[fuseable_nodes]
         incident_branches = incident_branches[fuseable_nodes]
 
@@ -513,6 +514,198 @@ def simplify_passing_nodes(
         return vessel_graph.fuse_nodes(
             nodes_to_fuse, inplace=inplace, quiet_invalid_node=True, incident_branches=incident_branches
         )
+    return vessel_graph
+
+
+def find_endpoints_branches_intercept(
+    vessel_graph: VGraph,
+    max_distance: float = 100,
+    intercept_snapping_distance: float = 30,
+    tangent: VBranchGeoData.Key | npt.NDArray[np.float64] = VBranchGeoData.Fields.TIPS_TANGENT,
+    bspline: VBranchGeoData.Key = VBranchGeoData.Fields.BSPLINE,
+) -> Tuple[npt.NDArray[int], npt.NDArray[int], npt.NDArray[np.float64]]:
+    """
+    Find candidates for reconnecting endpoints to their closest branch in the direction of their tangent.
+
+    Parameters
+    ----------
+    vessel_graph: VGraph
+        The vasculature graph.
+
+    max_distance: float
+        The maximum distance between an endpoint and the point of intercept on a branch.
+
+    snap_intercept_distance: float
+        The maximum distance between two point of intercept on the same branch. If two intercepts are closer than this distance, they are merged together.
+
+    tangent: VBranchGeoData.Key | npt.NDArray[np.float64]
+        The tangent field to use to find the intercepts.
+
+    bspline: VBranchGeoData.Key
+        The bspline field to use to find the intercepts.
+
+    Returns
+    -------
+    new_edges: npt.NDArray[np.int]
+        An (E, 2) array where each row contains the indices of two nodes that can be reconnected together.
+        Those nodes are either nodes from the graph (at least on is an existing endpoint), but may also be new nodes defined by the following two arrays.
+
+    new_nodes: npt.NDArray[np.int]
+        An (n, 2) array where each row contains the index of a new node and the index of the branch it's situated on.
+
+    new_nodes_yx: npt.NDArray[np.float64]
+        An (n, 2) array containing the coordinates of the new nodes defined in ``new_nodes``.
+
+    """  # noqa: E501
+    endpoints = vessel_graph.endpoints_nodes()
+    endpoints_branches = np.array(vessel_graph.incident_branches_individual(endpoints)).flatten()
+    gdata = vessel_graph.geometric_data()
+    nodes_yx = gdata.nodes_coord()
+    n_nodes = len(nodes_yx)
+    endpoints_yx = nodes_yx[endpoints]
+    branch_list = vessel_graph.branch_list
+
+    if not isinstance(tangent, np.ndarray):
+        endpoints_t = -np.stack(gdata.tip_data_around_node(tangent, endpoints)).squeeze(1)
+    else:
+        endpoints_t = tangent
+
+    # === Intercept all branches with the endpoints tangents ===
+    bsplines = gdata.branch_bspline(name=bspline)
+    intercepts = [
+        bspline.extend_bpsline(*[Point.from_array(_) for _ in nodes_yx[branch]]).intercept(
+            endpoints_yx, endpoints_t, fast_approximation=True
+        )
+        for branch, bspline in zip(branch_list, bsplines, strict=True)
+    ]
+    intercepts = np.stack(intercepts)  #: (nBranch, nEndpoint, 2)
+    intercepts[endpoints_branches, np.arange(len(endpoints))] = np.nan
+
+    # === Ignore endpoints that have no intercept with any branch ===
+    no_intercept = np.isnan(intercepts).any(axis=2).all(axis=0)
+    if np.all(no_intercept):
+        return np.empty((0, 2), dtype=int), np.empty((0, 2), dtype=int), np.empty((0, 2), dtype=np.float64)
+    endpoints = endpoints[~no_intercept]
+    intercepts = intercepts[:, ~no_intercept]
+    endpoints_yx = endpoints_yx[~no_intercept]
+
+    # === Ignore endpoints that are too far from their intercept ===
+    dist = np.linalg.norm(intercepts - endpoints_yx[None, :, :], axis=2)
+    nearest_branches = np.nanargmin(dist, axis=0)
+    intercept = np.take_along_axis(intercepts, nearest_branches[None, :, None], axis=0).squeeze(axis=0)
+    dist = np.take_along_axis(dist, nearest_branches[None, :], axis=0).squeeze(axis=0)
+
+    no_intercept = dist > max_distance
+    if np.all(no_intercept):
+        return np.empty((0, 2), dtype=int), np.empty((0, 2), dtype=int), np.empty((0, 2), dtype=np.float64)
+    endpoints = endpoints[~no_intercept]  #: (nInterceptedEndpoint,)
+    intercept = intercept[~no_intercept]  #: (nInterceptedEndpoint, 2)
+    nearest_branches = nearest_branches[~no_intercept]  #: (nInterceptedEndpoint,)
+
+    # === Redirect intercept points that are near branch tips to existing nodes ===
+    dist_to_branch_tips = np.linalg.norm(intercept[:, None, :] - nodes_yx[branch_list[nearest_branches]], axis=2)
+    closest_tip = np.argmin(dist_to_branch_tips, axis=1)
+    dist_to_closest_tip = np.take_along_axis(dist_to_branch_tips, closest_tip[:, None], axis=1).squeeze(axis=1)
+    closest_tip = branch_list[nearest_branches, closest_tip]
+    redirect_to_tip = dist_to_closest_tip <= intercept_snapping_distance * 0.66
+
+    new_edges = []
+    if np.any(redirect_to_tip):
+        new_edges = np.sort(np.stack((endpoints[redirect_to_tip], closest_tip[redirect_to_tip]), axis=1), axis=1)
+        new_edges = np.unique(new_edges, axis=0)
+        redirected_endpoints = np.isin(endpoints, new_edges.flatten())
+        if np.all(redirected_endpoints):
+            return np.array(new_edges, dtype=int), np.empty((0, 2), dtype=int), np.empty((0, 2), dtype=np.float64)
+        endpoints = endpoints[~redirected_endpoints]
+        intercept = intercept[~redirected_endpoints]
+        nearest_branches = nearest_branches[~redirected_endpoints]
+
+    # === Merge intercept points of the same branches that are too close to each other ===
+    new_intercept_nodes_id = np.arange(n_nodes, n_nodes + len(endpoints))
+    new_intercept_edges = np.array([endpoints, new_intercept_nodes_id], dtype=int).T
+    new_intercept_nodes = np.array([new_intercept_nodes_id, nearest_branches], dtype=int).T
+
+    branches, branches_inv, branches_count = np.unique(nearest_branches, return_inverse=True, return_counts=True)
+    if intercept_snapping_distance > 0 and np.any(branches_count > 1):
+        intercept_merge_lookup = np.arange(len(endpoints))
+        intercept_to_remove = []
+        for i, (branch, count) in enumerate(zip(branches, branches_count, strict=True)):
+            if count <= 1:
+                continue
+            inter_i = np.argwhere(branches_inv == i).flatten()
+            clusters = cluster_by_distance(intercept[inter_i], intercept_snapping_distance, iterative=True)
+            for cluster in clusters:
+                if len(cluster) > 1:
+                    cluster = np.sort(cluster)
+                    cluster_id = inter_i[cluster]
+                    intercept_merge_lookup[cluster_id[1:]] = cluster_id[0]
+                    intercept_to_remove.extend(cluster_id[1:])
+                    intercept[cluster_id[0]] = np.mean(intercept[cluster_id], axis=0)
+
+        if len(intercept_to_remove):
+            del_lookup = create_removal_lookup(intercept_to_remove, length=len(endpoints))
+            intercept_merge_lookup = del_lookup[intercept_merge_lookup]
+
+            intercept = np.delete(intercept, intercept_to_remove, axis=0)
+            new_intercept_nodes = np.delete(new_intercept_nodes, intercept_to_remove, axis=0)
+            new_intercept_nodes[:, 0] = intercept_merge_lookup[new_intercept_nodes[:, 0]]
+            new_intercept_edges[:, 1] = intercept_merge_lookup[new_intercept_edges[:, 1]]
+
+    return np.concatenate((new_edges, new_intercept_edges), axis=0), new_intercept_nodes, intercept
+
+
+def reconnect_endpoints(
+    vessel_graph: VGraph,
+    max_distance: float = 100,
+    intercept_snapping_distance: float = 30,
+    tangent: VBranchGeoData.Key | npt.NDArray[np.float64] = VBranchGeoData.Fields.TIPS_TANGENT,
+    bspline: VBranchGeoData.Key = VBranchGeoData.Fields.BSPLINE,
+    inplace=False,
+) -> VGraph:
+    """
+    Reconnect endpoints to their closest branch in the direction of their tangent.
+
+    Parameters
+    ----------
+    vessel_graph : VGraph
+        The vasculature graph.
+    max_distance : float, optional
+        The maximum distance between an endpoint and the point of intercept on a branch, by default 100
+    intercept_snapping_distance : float, optional
+        The maximum distance between two point of intercept on the same branch. If two intercepts are closer than this distance, they are merged together, by default 30
+    tangent : VBranchGeoData.Key | npt.NDArray[np.float64], optional
+        The tangent field to use to find the intercepts, by default VBranchGeoData.Fields.TIPS_TANGENT
+    bspline : VBranchGeoData.Key, optional
+        The bspline field to use to find the intercepts, by default VBranchGeoData.Fields.BSPLINE
+    inplace : bool, optional
+        If True, modify the graph in place, by default False
+    Returns
+    -------
+    VGraph
+        The modified graph with the endpoints reconnected.
+    """  # noqa: E501
+    new_edges, new_nodes, new_nodes_yx = find_endpoints_branches_intercept(
+        vessel_graph,
+        max_distance=max_distance,
+        intercept_snapping_distance=intercept_snapping_distance,
+        tangent=tangent,
+        bspline=bspline,
+    )
+    vessel_graph = vessel_graph.copy() if not inplace else vessel_graph
+
+    if len(new_nodes):
+        branch, inv = np.unique(new_nodes[:, 1], return_inverse=True)
+        lookup = np.arange(np.max(new_nodes[:, 0]) + 1)
+        for i, b in enumerate(branch):
+            nodes = new_nodes[inv == i, 0]
+            split_yx = new_nodes_yx[inv == i]
+            vessel_graph, new_nodes_id = vessel_graph.split_branch(b, split_yx, return_node_ids=True, inplace=True)
+            lookup[nodes] = new_nodes_id
+        new_edges[:, 1] = lookup[new_edges[:, 1]]
+
+    if len(new_edges):
+        vessel_graph.add_branches(new_edges, inplace=True)
+
     return vessel_graph
 
 

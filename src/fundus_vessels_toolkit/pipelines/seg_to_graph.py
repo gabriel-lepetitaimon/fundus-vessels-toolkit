@@ -253,10 +253,10 @@ class FundusVesselSegToGraph(SegToGraph):
         self._max_vessel_diameter = diameter
 
         self.min_orphan_branch_length = diameter * 1.5
-        self.clean_branches_tips = diameter * 1.5
+        self.clean_branches_tips = diameter / 2
         self.nodes_merge_distance = NodeMergeDistances(junction=diameter * 2 / 3, tip=diameter, node=0)
         self.merge_small_cycles = diameter
-        self.max_spurs_length = diameter * 1.5
+        self.max_spurs_length = diameter
 
     @property
     def prevent_node_simplification_on_borders(self):
