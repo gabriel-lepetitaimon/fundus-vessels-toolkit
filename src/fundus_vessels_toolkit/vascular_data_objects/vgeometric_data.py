@@ -1257,7 +1257,6 @@ class VGeometricData:
             consecutive_branches = self._graph_to_internal_branches_index(consecutive_branches, sort_index=False)
 
         branch0 = consecutive_branches[0]
-        next_branches = consecutive_branches[1:]
 
         branches_curve = [b for b in self.branch_curve(consecutive_branches, graph_index=False) if b is not None]
         if len(branches_curve):
@@ -1266,12 +1265,11 @@ class VGeometricData:
         ctx = self._geodata_edit_ctx(branch0)
         ctx = ctx.set_info(curves=branches_curve)
         for attr_name, attr_data in self._branch_data_dict.items():
+            attr_type = self._branches_attrs_descriptors[attr_name].geo_type
             if attr_data[branch0] is not None:
-                attr_datas = [attr_data[branch_id] for branch_id in next_branches if attr_data[branch_id] is not None]
-                if len(attr_datas) == 1:
-                    attr_data[branch0] = attr_datas[0]
-                elif len(attr_datas) > 1:
-                    attr_data[branch0] = attr_datas[0].merge(attr_datas[1:], ctx.set_name(attr_name))
+                attr_data[branch0] = attr_type.merge(
+                    [attr_data[branch_id] for branch_id in consecutive_branches], ctx.set_name(attr_name)
+                )
 
     def _split_branch(
         self, branch_id: int, splits_positions: npt.NDArray, new_branch_ids: List[int], new_node_ids: List[int]

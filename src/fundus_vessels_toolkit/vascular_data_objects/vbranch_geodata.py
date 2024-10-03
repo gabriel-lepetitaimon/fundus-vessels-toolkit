@@ -87,9 +87,10 @@ class VBranchGeoDataBase(ABC, metaclass=MetaVBranchGeoDataBase):
         """
         pass
 
+    @classmethod
     @abstractmethod
-    def merge(self, others: List[Self], ctx: BranchGeoDataEditContext) -> Self:
-        """Merge the parametric data with another parametric data.
+    def merge(cls, others: List[Self], ctx: BranchGeoDataEditContext) -> Self:
+        """Merge the parametric data .
 
         Parameters
         ----------
@@ -166,9 +167,11 @@ class VBranchCurveData(VBranchGeoDataBase):
     def is_empty(self) -> bool:
         return not len(self.data)
 
-    def merge(self, others: List[VBranchCurveData], ctx: BranchGeoDataEditContext) -> VBranchCurveData:
-        self.data = np.concatenate([self.data] + [_.data for _ in others], axis=0)
-        return self
+    @classmethod
+    def merge(cls, others: List[VBranchCurveData], ctx: BranchGeoDataEditContext) -> VBranchCurveData:
+        if all(_ is None for _ in others):
+            raise ValueError("Cannot merge empty data.")
+        return cls(np.concatenate([_.data for _ in others if _ is not None], axis=0))
 
     def flip(self, ctx: BranchGeoDataEditContext) -> VBranchCurveData:
         self.data = np.flip(self.data, axis=0)
@@ -196,12 +199,15 @@ class VBranchCurveIndex(VBranchGeoDataBase):
     def is_empty(self) -> bool:
         return not len(self.data)
 
-    def merge(self, others: List[VBranchCurveData], ctx: BranchGeoDataEditContext) -> VBranchCurveData:
+    @classmethod
+    def merge(cls, others: List[VBranchCurveData], ctx: BranchGeoDataEditContext) -> VBranchCurveData:
+        if all(_ is None for _ in others):
+            raise ValueError("Cannot merge empty data.")
         curves_start_index = np.cumsum([0] + [curve.shape[0] for curve in ctx.info["curves"][:-1]])
-        self.data = np.concatenate(
-            [d.data + start for d, start in zip([self] + others, curves_start_index, strict=True)], axis=0
+        data = np.concatenate(
+            [d.data + start for d, start in zip(others, curves_start_index, strict=True) if d is not None], axis=0
         )
-        return self
+        return cls(data)
 
     def flip(self, ctx: BranchGeoDataEditContext) -> VBranchCurveData:
         self.data = np.flip(ctx.curve.shape[0] - self.data, axis=0)
@@ -240,9 +246,11 @@ class VBranchTangents(VBranchGeoDataBase):
     def is_empty(self) -> bool:
         return not len(self.data)
 
-    def merge(self, others: List[VBranchTangents], ctx: BranchGeoDataEditContext) -> VBranchTangents:
-        self.data = np.concatenate([self.data] + [_.data for _ in others], axis=0)
-        return self
+    @classmethod
+    def merge(cls, others: List[VBranchTangents], ctx: BranchGeoDataEditContext) -> VBranchTangents:
+        if all(_ is None for _ in others):
+            raise ValueError("Cannot merge empty data.")
+        return cls(np.concatenate([_.data for _ in others if _ is not None], axis=0))
 
     def flip(self, ctx: BranchGeoDataEditContext) -> VBranchTangents:
         self.data = -np.flip(self.data, axis=0)
@@ -286,9 +294,16 @@ class VBranchTipsData(VBranchGeoDataBase):
     def is_empty(self) -> bool:
         return not np.all(np.isnan(self.data))
 
-    def merge(self, others: List[VBranchTipsData], ctx: BranchGeoDataEditContext) -> VBranchTipsData:
-        self.data = np.array([self.data[0], others[-1].data[1] if others[-1] is not None else self.empty_data()])
-        return self
+    @classmethod
+    def merge(cls, others: List[VBranchTipsData], ctx: BranchGeoDataEditContext) -> VBranchTipsData:
+        if all(_ is None for _ in others):
+            return cls.create_empty()
+        return cls(
+            [
+                others[0].data[0] if others[0] is not None else cls.empty_data(),
+                others[-1].data[1] if others[-1] is not None else cls.empty_data(),
+            ]
+        )
 
     def flip(self, ctx: BranchGeoDataEditContext) -> VBranchTangents:
         self.data = np.flip(self.data, axis=0)
@@ -377,10 +392,13 @@ class VBranchBSpline(VBranchGeoDataBase):
     def is_empty(self) -> bool:
         return not len(self.data)
 
-    def merge(self, others: List[VBranchBSpline], ctx: BranchGeoDataEditContext) -> VBranchBSpline:
+    @classmethod
+    def merge(cls, others: List[VBranchBSpline], ctx: BranchGeoDataEditContext) -> VBranchBSpline:
+        bspline = BSpline()
         for other in others:
-            self.data += other.data
-        return self
+            if other is not None:
+                bspline += other.data
+        return cls(bspline)
 
     def flip(self, ctx: BranchGeoDataEditContext) -> VBranchBSpline:
         self.data = self.data.flip()

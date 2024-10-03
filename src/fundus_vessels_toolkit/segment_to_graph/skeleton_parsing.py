@@ -1,3 +1,4 @@
+import warnings
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -85,11 +86,16 @@ def skeleton_to_vgraph(
     )
     branch_list, nodes_yx, branches_curve = outs[1:4]
     labels = outs[0]
-    
+
     branch_list = branch_list.numpy()
     nodes_indexes = np.unique(branch_list)
     if len(nodes_indexes) != len(nodes_yx):
         orphan_nodes = np.setdiff1d(np.arange(len(nodes_indexes)), nodes_indexes)
+        warnings.warn(
+            f"Nodes {orphan_nodes} are not connected to any branch and will be ignored."
+            "This is however an abnormal behavior as they should have been removed already.",
+            stacklevel=2,
+        )
         del_lookup = create_removal_lookup(orphan_nodes, length=len(nodes_yx))
         branch_list = del_lookup[branch_list]
         nodes_yx = np.delete(nodes_yx, orphan_nodes, axis=0)
