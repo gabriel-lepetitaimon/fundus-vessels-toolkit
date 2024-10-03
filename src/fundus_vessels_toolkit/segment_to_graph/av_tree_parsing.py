@@ -295,7 +295,7 @@ def naive_vgraph_to_vtree(
             # 4'. For each successor, determine the best ancestor base on branch direction
             adjacent_branches = np.concatenate([ancestors, successors])
             adjacent_dirs = np.concatenate([~acst_dirs, succ_dirs])
-            adjacent_nodes = branch_list[adjacent_branches][:, 1 - adjacent_dirs]
+            adjacent_nodes = branch_list[adjacent_branches][np.arange(len(adjacent_branches)), adjacent_dirs]
             tangents = graph.geometric_data().tip_data(
                 VBranchGeoData.Fields.TIPS_TANGENT, adjacent_branches, first_tip=adjacent_dirs
             )
