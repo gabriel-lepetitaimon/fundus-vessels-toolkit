@@ -243,9 +243,9 @@ class AVSegToTree(AVSegToTreeBase):
         )
 
     def split_av_graph(self, graph: VGraph, av_attr: Optional[str] = None) -> Tuple[VGraph, VGraph]:
-        from ..segment_to_graph.av_tree_parsing import av_split
+        from ..segment_to_graph.av_tree_parsing import naive_av_split
 
-        return av_split(graph, av_attr=if_none(av_attr, "av"))
+        return naive_av_split(graph, av_attr=if_none(av_attr, "av"))
 
     def populate_geometry(self, graph: VGraph, fundus: FundusData, inplace: bool = False) -> VGraph:
         from ..segment_to_graph.geometry_parsing import populate_geometry
@@ -259,10 +259,10 @@ class AVSegToTree(AVSegToTreeBase):
         )
 
     def vgraph_to_vtree(self, graph: VGraph, od_pos: Point) -> VTree:
-        from ..segment_to_graph.av_tree_parsing import clean_vtree, simplify_av_graph, vgraph_to_vtree
+        from ..segment_to_graph.av_tree_parsing import clean_vtree, simplify_av_graph, naive_vgraph_to_vtree
 
         graph = simplify_av_graph(graph, inplace=False)
-        tree = vgraph_to_vtree(graph, od_pos)
+        tree = naive_vgraph_to_vtree(graph, od_pos)
         return clean_vtree(tree)
 
     # --- Utility methods ---
@@ -374,10 +374,10 @@ class NaiveAVSegToTree(AVSegToTreeBase):
         return vgraph
 
     def vgraph_to_vtree(self, graph: VGraph, od_pos: Point) -> VTree:
-        from ..segment_to_graph.av_tree_parsing import vgraph_to_vtree
+        from ..segment_to_graph.av_tree_parsing import naive_vgraph_to_vtree
         from ..segment_to_graph.tree_simplification import clean_vtree
 
-        tree = vgraph_to_vtree(graph, od_pos)
+        tree = naive_vgraph_to_vtree(graph, od_pos)
         tree = clean_vtree(tree)
         return tree
 

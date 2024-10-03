@@ -177,7 +177,7 @@ def simplify_av_graph(
     return graph
 
 
-def av_split(graph: VGraph, *, av_attr: str = "av") -> Tuple[VGraph, VGraph]:
+def naive_av_split(graph: VGraph, *, av_attr: str = "av") -> Tuple[VGraph, VGraph]:
     n_attr = graph.nodes_attr
     a_graph = graph.delete_nodes(n_attr.index[n_attr[av_attr] == AVLabel.VEI].to_numpy(), inplace=False)
     v_graph = graph.delete_nodes(n_attr.index[n_attr[av_attr] == AVLabel.ART].to_numpy(), inplace=False)
@@ -190,7 +190,7 @@ def av_split(graph: VGraph, *, av_attr: str = "av") -> Tuple[VGraph, VGraph]:
     return a_graph, v_graph
 
 
-def vgraph_to_vtree(
+def naive_vgraph_to_vtree(
     graph: VGraph, root_pos: Point, reorder_nodes: bool = False, reorder_branches: bool = False
 ) -> VTree:
     # === Prepare graph ===
@@ -328,3 +328,43 @@ def vgraph_to_vtree(
         vtree.reindex_branches(new_order, inverse_lookup=True)
 
     return vtree
+
+
+def build_line_digraph(
+    graph: VGraph, od_yx: Point, macula_yx: Point
+) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.float64]]:
+    """Build a directed line graph storing the probabilities that a branch is the parent of another branch.
+
+    Parameters
+    ----------
+    graph : VGraph
+        _description_
+
+    Returns
+    -------
+    Tuple[npt.NDArray[np.int_], npt.NDArray[np.float64]]
+        Two arrays describing the directed line graph.
+
+        The first array is its edge list of shape (n_edges, 3) where each row store the index of the parent branch, the index of the child branches and the index of the node connecting them.
+
+        The second array of shape (n_edges,) stores, for each directed edge, the probabilities of the parent branch being the parent of the child branch.
+    """  # noqa: E501
+    edge_list = []
+    edge_probs = []
+
+    for node in graph.nodes(dynamic_iterator=True):
+        node_degree = node.degree
+        if node_degree == 1:
+            # === LEAF NODES ===
+            # 1. Add connection to root branch
+            od_dist = node.coord().distance(od_yx)
+            edge_list.append([-1, node.branches_ids[0], node.id])
+
+            # 2. Search for potential connection to branch
+
+        elif node_degree == 2:
+            # === PASSING NODES ===
+            pass
+        else:
+            # === BRANCHING / JUNCTION NODES ===
+            pass
