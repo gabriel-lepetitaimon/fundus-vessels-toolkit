@@ -291,7 +291,7 @@ FUNDUS_SEG_TO_GRAPH = SegToGraph(
     min_terminal_branch_length=4,
     min_terminal_branch_calibre_ratio=1,
     max_spurs_length=30,
-    nodes_merge_distance=False,
+    nodes_merge_distance=NodeMergeDistances(junction=20, tip=0, node=0),
     min_orphan_branch_length=30,
     clean_branches_tips=30,
     merge_small_cycles=20,
