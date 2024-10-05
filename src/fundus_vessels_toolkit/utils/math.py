@@ -331,3 +331,9 @@ def intercept_segment(
         if b1_bound:
             out[u > 1] = np.nan
     return out
+
+
+def sigmoid(x, antisymmetric=False):
+    if antisymmetric:
+        return 2 / (1 + np.exp(-x)) - 1
+    return 1 / (1 + np.exp(-x))

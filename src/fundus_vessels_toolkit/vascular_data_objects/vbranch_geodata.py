@@ -73,6 +73,10 @@ class VBranchGeoDataBase(ABC, metaclass=MetaVBranchGeoDataBase):
         """
         return ""
 
+    def copy(self) -> Self:
+        """Return a copy of the attribute data."""
+        pass
+
     def __bool__(self) -> bool:
         return not self.is_empty()
 
@@ -155,6 +159,9 @@ class VBranchCurveData(VBranchGeoDataBase):
         super().__init__()
         self.data = data
 
+    def copy(self) -> Self:
+        return self.__class__(self.data)
+
     def is_invalid(self, ctx: BranchGeoDataEditContext) -> str:
         curve = ctx.curve
         if self.data.shape[0] != curve.shape[0]:
@@ -189,6 +196,9 @@ class VBranchCurveIndex(VBranchGeoDataBase):
         super().__init__()
         self.data = np.atleast_1d(data).astype(int)
         assert self.data.ndim == 1, "Branch curve index data must be a 1D array."
+
+    def copy(self) -> Self:
+        return self.__class__(self.data)
 
     def is_invalid(self, ctx: BranchGeoDataEditContext) -> str:
         self.data = np.sort(self.data.copy())
@@ -234,6 +244,9 @@ class VBranchTangents(VBranchGeoDataBase):
         assert data.ndim == 2 and data.shape[1] == 2, "Tangents must be a 2D array with 2 columns."
         self.data = data
 
+    def copy(self) -> Self:
+        return self.__class__(self.data)
+
     def is_invalid(self, ctx: BranchGeoDataEditContext) -> str:
         curve = ctx.curve
         if self.data.shape[0] != curve.shape[0]:
@@ -272,6 +285,9 @@ class VBranchTipsData(VBranchGeoDataBase):
             data.shape == expected_shape
         ), f"{self.__class__.__qualname__} data shape must be {expected_shape} but {data.shape} was provided."
         self.data = data
+
+    def copy(self) -> Self:
+        return self.__class__(self.data)
 
     @classmethod
     @abstractmethod
@@ -370,6 +386,9 @@ class VBranchBSpline(VBranchGeoDataBase):
         if not isinstance(data, BSpline):
             data = BSpline.from_array(data)
         self.data: BSpline = data
+
+    def copy(self) -> Self:
+        return self.__class__(self.data)
 
     def is_invalid(self, ctx: BranchGeoDataEditContext) -> str:
         curve = ctx.curve

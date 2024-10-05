@@ -176,6 +176,8 @@ class AVSegToTree(AVSegToTreeBase):
         vessel_skeleton = self.skeletonize(fundus.vessels)
         graph = self.skel_to_vgraph(vessel_skeleton, fundus.vessels)
         self.assign_av_labels(graph, fundus.av, inplace=True)
+        if self.simplification_enabled:
+            self.simplify_av_graph(graph, inplace=True)
         graphs = self.split_av_graph(graph)
         trees = []
         for g in graphs:
@@ -242,6 +244,15 @@ class AVSegToTree(AVSegToTreeBase):
             inplace=inplace,
         )
 
+    def simplify_av_graph(self, graph: VGraph, inplace: bool = False) -> VGraph:
+        from ..segment_to_graph.av_tree_parsing import simplify_av_graph
+
+        return simplify_av_graph(
+            graph,
+            av_attr="av",
+            inplace=inplace,
+        )
+
     def split_av_graph(self, graph: VGraph, av_attr: Optional[str] = None) -> Tuple[VGraph, VGraph]:
         from ..segment_to_graph.av_tree_parsing import naive_av_split
 
@@ -259,9 +270,9 @@ class AVSegToTree(AVSegToTreeBase):
         )
 
     def vgraph_to_vtree(self, graph: VGraph, od_pos: Point) -> VTree:
-        from ..segment_to_graph.av_tree_parsing import clean_vtree, simplify_av_graph, naive_vgraph_to_vtree
+        from ..segment_to_graph.av_tree_parsing import naive_vgraph_to_vtree, simplify_av_graph
+        from ..segment_to_graph.tree_simplification import clean_vtree
 
-        graph = simplify_av_graph(graph, inplace=False)
         tree = naive_vgraph_to_vtree(graph, od_pos)
         return clean_vtree(tree)
 
@@ -273,6 +284,7 @@ class AVSegToTree(AVSegToTreeBase):
         *,
         av: Optional[npt.NDArray[np.int_] | torch.Tensor | str | Path] = None,
         od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
+        simplify: Optional[bool] = None,
         populate_geometry: Optional[bool] = None,
     ) -> VGraph:
         fundus = self.prepare_data(fundus, av=av, od=od)
@@ -280,6 +292,8 @@ class AVSegToTree(AVSegToTreeBase):
         vessel_skeleton = self.skeletonize(fundus.vessels)
         graph = self.skel_to_vgraph(vessel_skeleton, fundus)
         self.assign_av_labels(graph, fundus, inplace=True)
+        if if_none(simplify, self.simplification_enabled):
+            self.simplify_av_graph(graph, inplace=True)
         if if_none(populate_geometry, self.geometry_parsing_enabled):
             self.populate_geometry(graph, fundus, inplace=True)
         return graph

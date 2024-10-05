@@ -763,12 +763,12 @@ class VGeometricData:
 
         if attr_single:
             attr_data = self._branch_data_dict[attrs[0]]
-            data = [attr_data[_] for _ in branch_ids]
+            data = [attr_data[_].data for _ in branch_ids]
             if first_tip is not None:
                 if type(first_tip) in (bool, np.bool_):
-                    data = [d.data[0] for d in data] if first_tip else [d.data[1] for d in data]
+                    data = [d[0] for d in data] if first_tip else [d[1] for d in data]
                 else:
-                    data = [d.data[0 if first else 1] for d, first in zip(data, first_tip, strict=True)]
+                    data = [d[0 if first else 1] for d, first in zip(data, first_tip, strict=True)]
             return data[0] if is_single else np.stack(data)
 
         else:
@@ -891,6 +891,47 @@ class VGeometricData:
                     data = np.stack([bdata.data[0 if bdir else 1] for bdata, bdir in zip(data, bdirs, strict=True)])
                     out[attr].append(data)
             return {k: v[0] for k, v in out.items()} if is_single else out
+
+    def tips_tangent(
+        self,
+        branch_ids: Optional[int | npt.ArrayLike[int]] = None,
+        first_tip: Optional[bool | npt.ArrayLike[bool]] = None,
+        *,
+        infer_from_nodes_if_missing: bool = True,
+        attr: VBranchGeoDataKey = VBranchGeoData.Fields.TIPS_TANGENT,
+        graph_index=True,
+    ) -> np.ndarray:
+        """Return the tangent of the tips of the branches."""
+        tangents = self.tip_data(attr, branch_ids, first_tip, graph_index=graph_index)
+        if infer_from_nodes_if_missing:
+            assert (
+                self.parent_graph is not None
+            ), "The parent graph is not set, impossible to infer the branch directions."
+            branch_list = self.parent_graph.branch_list
+
+            first_tip_is_none = first_tip is None
+            if first_tip_is_none:
+                first_tip = np.tile([True, False], len(tangents))
+                tangents = tangents.reshape(-1, 2)
+            elif isinstance(first_tip, bool):
+                first_tip = np.full(len(tangents), first_tip)
+            else:
+                first_tip = np.atleast_1d(first_tip).astype(bool).flatten()
+
+            unknown_tangents: npt.NDArray[np.bool_] = np.isnan(tangents).any(axis=1) | np.all(tangents == 0, axis=1)
+            if unknown_tangents.any():
+                branch_ids = np.asarray(branch_ids) if branch_ids is not None else self.branches_id
+                unk_branches = branch_ids[unknown_tangents]
+                unk_first_tip: npt.NDArray[np.bool_] = first_tip[unknown_tangents]
+                nodes = self.nodes_coord(branch_list[unk_branches].flatten()).reshape(-1, 2, 2)
+                t = np.diff(nodes, axis=1).squeeze(1)
+                t = t / np.linalg.norm(t, axis=1)[:, None]
+                t[~unk_first_tip] *= -1
+                tangents[unknown_tangents] = t
+
+            if first_tip_is_none:
+                tangents = tangents.reshape(-1, 2, 2)
+        return tangents
 
     def set_branch_data(
         self,
@@ -1239,8 +1280,44 @@ class VGeometricData:
         if self._branches_id is None:
             self._branches_curve += [None] * n
 
+            for attr_name, attr in self._branch_data_dict.items():
+                attr_type = self._branches_attrs_descriptors[attr_name].geo_type
+                if issubclass(attr_type, VBranchGeoData.TipsData):
+                    attr += [attr_type.create_empty()] * n
+                else:
+                    attr += [None] * n
+
+    def _append_branch_duplicates(self, branches_id: npt.ArrayLike[int], new_branches_id: npt.ArrayLike[int]):
+        """Append duplicates of the branches to the graph geometry data.
+
+        Parameters
+        ----------
+        branches_id : npt.ArrayLike[int]
+            The ids of the branches to duplicate.
+        """
+        branches_id = np.atleast_1d(branches_id).flatten().astype(int)
+        new_branches_id = np.atleast_1d(new_branches_id).flatten().astype(int)
+        assert len(branches_id) == len(new_branches_id), "Invalid number of new branches ids."
+
+        if self._branches_id is None:
+            B = len(self._branches_curve)
+            assert (bmin := branches_id.min()) >= 0, f"Invalid branches index: {bmin}"
+            assert (bmax := branches_id.max()) < B, f"Invalid branches index: {bmax} (branches count: {B})"
+            unique_new_ids = np.unique(new_branches_id)
+            if (
+                len(unique_new_ids) != len(new_branches_id)
+                or unique_new_ids[0] != B
+                or unique_new_ids[-1] != B + len(new_branches_id) - 1
+            ):
+                # TODO: switch to sparse indexing
+                raise NotImplementedError("Invalid new branches ids.")
+            new_ids = new_branches_id - B
+            self._branches_curve += [self._branches_curve[branches_id[i]] for i in new_ids]
+
             for attr in self._branch_data_dict.values():
-                attr += [None] * n
+                attr += [attr[branches_id[i]].copy() for i in new_ids]
+        else:
+            raise NotImplementedError
 
     def _merge_branches(self, consecutive_branches: Iterable[int], *, graph_index=True):
         """Merge consecutive branches into a single branch.

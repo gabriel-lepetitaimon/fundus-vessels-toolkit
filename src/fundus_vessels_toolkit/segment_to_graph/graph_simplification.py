@@ -517,12 +517,88 @@ def simplify_passing_nodes(
     return vessel_graph
 
 
+def find_facing_endpoints(
+    vessel_graph: VGraph,
+    max_distance: float = 100,
+    max_angle: float = 30,
+    filter: Optional[Literal["closest", "exclusive"]] = "exclusive",
+    tangent: VBranchGeoData.Key = VBranchGeoData.Fields.TIPS_TANGENT,
+):
+    """
+    Find pairs of endpoints that are facing each other.
+
+    Parameters
+    ----------
+    vessel_graph: VGraph
+        The vasculature graph.
+
+    max_distance: float
+        The maximum distance between the two endpoints.
+
+    max_angle: float
+        The maximum angle between the two endpoints tangents.
+
+    exclusive: bool
+        If True, the endpoints are considered facing each other only if they are the closest to each other.
+
+    tangent: VBranchGeoData.Key | npt.NDArray[np.float64]
+        The tangent field to use to find the facing endpoints.
+
+    Returns
+    -------
+    facing_endpoints: npt.NDArray[np.int]
+        An (E, 2) array where each row contains the indices of two endpoints that are facing each other.
+    """  # noqa: E501
+    geodata = vessel_graph.geometric_data()
+
+    endp_branch, endp_mask = vessel_graph.endpoints_branches(return_endpoints_mask=True)
+    b, endp_tip_id = np.where(endp_mask)
+    endp_branch = endp_branch[b]
+    endp = vessel_graph.branch_list[endp_branch, endp_tip_id]
+    endp_first_tip = endp_tip_id == 0
+    endp_pos = geodata.nodes_coord()[endp]
+
+    dist = np.linalg.norm(endp_pos[:, None, :] - endp_pos[None, :, :], axis=2)
+    facing = dist <= max_distance
+    facing[np.diag_indices(len(endp))] = False
+
+    if max_angle > 0:
+        endp_tan = -geodata.tips_tangent(endp_branch, endp_first_tip)
+        endp_to_endp_dir = endp_pos[None, :, :] - endp_pos[:, None, :]  # (origin, destination, yx)
+        endp_to_endp_norm = np.linalg.norm(endp_to_endp_dir, axis=2)
+        endp_to_endp_dir[endp_to_endp_norm != 0] /= endp_to_endp_norm[endp_to_endp_norm != 0, None]
+        cos = np.sum(endp_to_endp_dir * endp_tan[:, None, :], axis=2)
+        facing &= cos >= np.cos(np.deg2rad(max_angle))
+        facing &= facing.T
+
+    endpoint_pairs = np.argwhere(facing)
+    if len(endpoint_pairs) == 0:
+        return np.empty((0, 2), dtype=int)
+
+    endpoint_pairs = endpoint_pairs[endpoint_pairs[:, 0] < endpoint_pairs[:, 1]]
+    if filter is not None:
+        pairs_dist = dist[tuple(endpoint_pairs.T)]
+        endpoint_pairs = endpoint_pairs[np.argsort(pairs_dist)]
+        unique_pairs = [endpoint_pairs[0]]
+        if filter == "exclusive":
+            for pair in endpoint_pairs[1:]:
+                if not np.isin(pair, unique_pairs).any():
+                    unique_pairs.append(pair)
+        else:
+            _, first_pos = np.unique(endpoint_pairs.flatten(), return_index=True)
+            first_pos = np.unique(first_pos // 2)
+            unique_pairs = endpoint_pairs[first_pos]
+        endpoint_pairs = np.array(unique_pairs, dtype=int)
+    return endp[endpoint_pairs]
+
+
 def find_endpoints_branches_intercept(
     vessel_graph: VGraph,
     max_distance: float = 100,
     intercept_snapping_distance: float = 30,
     tangent: VBranchGeoData.Key | npt.NDArray[np.float64] = VBranchGeoData.Fields.TIPS_TANGENT,
     bspline: VBranchGeoData.Key = VBranchGeoData.Fields.BSPLINE,
+    ignore_endpoints_to_endpoints: bool = False,
 ) -> Tuple[npt.NDArray[int], npt.NDArray[int], npt.NDArray[np.float64]]:
     """
     Find candidates for reconnecting endpoints to their closest branch in the direction of their tangent.
@@ -611,11 +687,25 @@ def find_endpoints_branches_intercept(
 
     new_edges = []
     if np.any(redirect_to_tip):
-        new_edges = np.sort(np.stack((endpoints[redirect_to_tip], closest_tip[redirect_to_tip]), axis=1), axis=1)
-        new_edges = np.unique(new_edges, axis=0)
-        redirected_endpoints = np.isin(endpoints, new_edges.flatten())
+        redirect_to_tip = np.argwhere(redirect_to_tip).flatten()
+        closest_tip_is_endpoints = np.isin(closest_tip[redirect_to_tip], endpoints)
+        redirect_to_node = redirect_to_tip[~closest_tip_is_endpoints]
+
+        new_edges = np.stack((endpoints[redirect_to_node], closest_tip[redirect_to_node]), axis=1)
+        redirected_endpoints = np.zeros(n_nodes, dtype=bool)
+        redirected_endpoints[new_edges[:, 0]] = True
+
+        if not ignore_endpoints_to_endpoints:
+            redirect_to_endp = redirect_to_tip[closest_tip_is_endpoints]
+            new_endp_edges = np.stack((endpoints[redirect_to_endp], closest_tip[redirect_to_endp]), axis=1)
+            new_endp_edges = np.unique(np.sort(new_endp_edges, axis=1), axis=0)
+            new_edges = np.concatenate((new_edges, new_endp_edges), axis=0)
+            redirected_endpoints[new_endp_edges.flatten()] = True
+
+        redirected_endpoints = redirected_endpoints[endpoints]
         if np.all(redirected_endpoints):
             return np.array(new_edges, dtype=int), np.empty((0, 2), dtype=int), np.empty((0, 2), dtype=np.float64)
+
         endpoints = endpoints[~redirected_endpoints]
         intercept = intercept[~redirected_endpoints]
         nearest_branches = nearest_branches[~redirected_endpoints]
@@ -658,6 +748,7 @@ def reconnect_endpoints(
     vessel_graph: VGraph,
     max_distance: float = 100,
     intercept_snapping_distance: float = 30,
+    max_angle: float = 30,
     tangent: VBranchGeoData.Key | npt.NDArray[np.float64] = VBranchGeoData.Fields.TIPS_TANGENT,
     bspline: VBranchGeoData.Key = VBranchGeoData.Fields.BSPLINE,
     inplace=False,
@@ -690,7 +781,12 @@ def reconnect_endpoints(
         intercept_snapping_distance=intercept_snapping_distance,
         tangent=tangent,
         bspline=bspline,
+        ignore_endpoints_to_endpoints=True,
     )
+    new_endpoints_edges = find_facing_endpoints(
+        vessel_graph, max_distance=max_distance, max_angle=max_angle, filter="exclusive", tangent=tangent
+    )
+    new_edges = np.concatenate((new_edges, new_endpoints_edges), axis=0)
     vessel_graph = vessel_graph.copy() if not inplace else vessel_graph
 
     if len(new_nodes):

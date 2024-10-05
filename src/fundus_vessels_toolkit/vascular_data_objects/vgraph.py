@@ -99,6 +99,14 @@ class VGraphNode:
             self._update_incident_branches_cache()
         return [int(_) for _ in self._ibranch_ids]
 
+    @property
+    def branches_first_node(self) -> List[bool]:
+        if not self.is_valid():
+            return []
+        if self._ibranch_ids is None:
+            self._update_incident_branches_cache()
+        return [bool(_) for _ in self._ibranch_dirs]
+
     def branches(self) -> Iterable[VGraphBranch]:
         """Return the branches incident to this node.
 
@@ -132,6 +140,41 @@ class VGraphNode:
         return (
             VGraphNode(self.__graph, self.__graph.branch_list[branch][1 if dir else 0])
             for branch, dir in zip(self._ibranch_ids, self._ibranch_dirs, strict=True)
+        )
+
+    @overload
+    def tips_geodata(self, attrs: VBranchGeoDataKey, geodata: Optional[VGeometricData | int] = None) -> np.ndarray: ...
+    @overload
+    def tips_geodata(
+        self, attrs: Optional[List[VBranchGeoDataKey]], geodata: Optional[VGeometricData | int] = None
+    ) -> Dict[str, np.ndarray]: ...
+    def tips_geodata(
+        self,
+        attrs: Optional[VBranchGeoDataKey | List[VBranchGeoDataKey]] = None,
+        geodata: Optional[VGeometricData | int] = None,
+    ) -> np.ndarray | Dict[str, np.ndarray]:
+        if not self.is_valid():
+            raise RuntimeError("The node has been removed from the graph.")
+        if self._ibranch_ids is None:
+            self._update_incident_branches_cache()
+        if not isinstance(geodata, VGeometricData):
+            geodata = self.__graph.geometric_data(0 if geodata is None else geodata)
+        return geodata.tip_data(attrs, self._ibranch_ids, self._ibranch_dirs)
+
+    def tips_tangent(
+        self, geodata: Optional[VGeometricData | int] = None, infer_from_nodes_if_missing=True
+    ) -> np.ndarray:
+        if not self.is_valid():
+            raise RuntimeError("The node has been removed from the graph.")
+        if self._ibranch_ids is None:
+            self._update_incident_branches_cache()
+        if not isinstance(geodata, VGeometricData):
+            geodata = self.__graph.geometric_data(0 if geodata is None else geodata)
+        return geodata.tips_tangent(
+            self._ibranch_ids,
+            self._ibranch_dirs,
+            attr=VBranchGeoData.Fields.TIPS_TANGENT,
+            infer_from_nodes_if_missing=infer_from_nodes_if_missing,
         )
 
 
@@ -775,24 +818,45 @@ class VGraph:
             nodes_id, nodes_count = np.unique(self._branch_list, return_counts=True)
             return nodes_id[nodes_count > 1]
 
-    def endpoints_branches(self, as_mask=False) -> npt.NDArray[np.int_]:
+    @overload
+    def endpoints_branches(
+        self, return_endpoints_mask: Literal[False] = False, as_mask=False
+    ) -> npt.NDArray[np.int_ | np.bool_]: ...
+    @overload
+    def endpoints_branches(
+        self, return_endpoints_mask: Literal[True], as_mask=False
+    ) -> Tuple[npt.NDArray[np.int_ | np.bool_], npt.NDArray[np.bool_]]: ...
+    def endpoints_branches(
+        self, return_endpoints_mask=False, as_mask=False
+    ) -> npt.NDArray[np.int_ | np.bool_] | Tuple[npt.NDArray[np.int_ | np.bool_], npt.NDArray[np.bool_]]:
         """Compute the indexes of the terminal branches in the graph.
 
         The terminal branches are the branches connected to a single node.
 
         Parameters
         ----------
+
+        return_endpoints_mask : bool, optional
+            If True, return a mask of the terminal branches instead of their indexes.
+
         as_mask : bool, optional
             If True, return a mask of the terminal branches instead of their indexes.
 
         Returns
         -------
-        np.ndarray
-            The indexes of the terminal branches.
-        """
+        endpoints_branches : npt.NDArray[np.int_ | np.bool_]
+            An array of length (B,) containing the indexes of the terminal branches (or a mask of the terminal branches if ``as_mask`` is True).
+
+        endpoints_mask : npt.NDArray[np.bool_]
+            If ``return_endpoints_mask`` is True, a 2D boolean array of shape (B, 2) where endpoints are True.
+        """  # noqa: E501
         endpoints_nodes = self.endpoints_nodes(as_mask=True)
-        endpoints_branches_mask = np.any(endpoints_nodes[self.branch_list], axis=1)
-        return endpoints_branches_mask if as_mask else np.argwhere(endpoints_branches_mask).flatten()
+        endpoints_mask = endpoints_nodes[self.branch_list]
+        endpoints_branches = np.any(endpoints_mask, axis=1)
+        if not as_mask:
+            endpoints_branches = np.argwhere(endpoints_branches).flatten()
+            endpoints_mask = endpoints_mask[endpoints_branches]
+        return (endpoints_branches, endpoints_mask) if return_endpoints_mask else endpoints_branches
 
         ## Legacy implementation (slower?)
         # _, branch_index, nodes_count = np.unique(self._branch_list, return_counts=True, return_index=True)
@@ -1271,7 +1335,9 @@ class VGraph:
 
         return graph
 
-    def add_branches(self, branch_nodes: npt.ArrayLike[int], *, inplace=True):
+    def add_branches(
+        self, branch_nodes: npt.ArrayLike[int], *, return_branch_id=False, inplace=True
+    ) -> VGraph | Tuple[VGraph, npt.NDArray[np.int_]]:
         """Add branches to the graph.
 
         Parameters
@@ -1293,14 +1359,57 @@ class VGraph:
         assert np.all(np.logical_and(branch_nodes >= 0, branch_nodes < graph.nodes_count)), "Invalid node indexes."
 
         graph._branch_list = np.concatenate((graph._branch_list, branch_nodes), axis=0)
-        new_df = pd.DataFrame(index=pd.RangeIndex(graph.branches_count), columns=graph._branches_attr.columns)
-        new_df.loc[: graph.branches_count] = graph._branches_attr
-        graph._branches_attr = new_df
+        graph._branches_attr = graph._branches_attr.reindex(pd.RangeIndex(graph.branches_count), copy=False)
 
         for gdata in graph._geometric_data:
             gdata._append_empty_branches(len(branch_nodes))
 
-        return graph
+        return (
+            graph
+            if not return_branch_id
+            else (graph, np.arange(graph.branches_count - len(branch_nodes), graph.branches_count))
+        )
+
+    def duplicate_branches(
+        self, branch_indexes: int | npt.ArrayLike[int], *, return_branch_id=False, inplace=True
+    ) -> VGraph | Tuple[VGraph, npt.NDArray[np.int_]]:
+        """Duplicate branches in the graph.
+
+        Parameters
+        ----------
+        branch_indexes : int or Iterable[int]
+            The indexes of the branches to duplicate.
+
+        return_branch_id : bool, optional
+            If True, return the indexes of the duplicated branches.
+
+        inplace : bool, optional
+            If True (by default), the graph is modified in place. Otherwise, a new graph is returned.
+
+        Returns
+        -------
+        VGraph
+            The modified graph.
+
+        new_branch_ids : np.ndarray
+            The indexes of the duplicated branches. Only returned if ``return_branch_id`` is True.
+        """
+        graph = self if inplace else self.copy()
+
+        branches_id = np.atleast_1d(branch_indexes).flatten().astype(int)
+        branch_nodes = graph._branch_list[branches_id]
+        oldB = graph.branches_count
+        newB = oldB + len(branches_id)
+        new_branches_id = np.arange(oldB, newB)
+
+        graph._branch_list = np.concatenate((graph._branch_list, branch_nodes), axis=0)
+        graph._branches_attr = graph._branches_attr.reindex(pd.RangeIndex(newB))
+        graph._branches_attr.iloc[oldB:] = graph._branches_attr.iloc[branches_id]
+
+        for gdata in graph._geometric_data:
+            gdata._append_branch_duplicates(branches_id, new_branches_id)
+
+        return graph if not return_branch_id else (graph, new_branches_id)
 
     def split_branch(
         self,
@@ -1371,16 +1480,13 @@ class VGraph:
             new_branches.append((nPrev, nNext))
         graph._branch_list = np.concatenate((graph._branch_list, new_branches), axis=0)
         # 2. ... in the branches attributes
-        new_df = pd.DataFrame(index=pd.RangeIndex(graph.branches_count), columns=graph._branches_attr.columns)
-        new_df.loc[: graph.branches_count] = graph._branches_attr
-        for i in new_branchIds:
-            new_df.loc[i] = graph._branches_attr.loc[branchID]
+        new_df = graph._branches_attr.reindex(pd.RangeIndex(graph.branches_count), copy=False)
+        new_df.iloc[new_branchIds] = new_df.iloc[branchID]
         graph._branches_attr = new_df
+
         # 3. ... in the nodes attributes
         graph._nodes_count += len(new_nodeIds)
-        new_df = pd.DataFrame(index=pd.RangeIndex(graph._nodes_count), columns=graph._nodes_attr.columns)
-        new_df.loc[: graph.nodes_count] = graph._nodes_attr
-        graph._nodes_attr = new_df
+        graph._nodes_attr = graph._nodes_attr.reindex(pd.RangeIndex(graph.nodes_count), copy=False)
 
         # === Split the branches in the geometric data ===
         for gdata in graph._geometric_data:

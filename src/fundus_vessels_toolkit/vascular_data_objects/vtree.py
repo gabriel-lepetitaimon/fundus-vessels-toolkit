@@ -340,6 +340,26 @@ class VTree(VGraph):
         copy=True,
         check=True,
     ) -> VTree:
+        """Create a tree from a graph.
+
+        Parameters
+        ----------
+        graph : VGraph
+            The graph to convert to a tree.
+        branch_tree : npt.NDArray[np.int_]
+            The tree structure of the branches as a 1D vector. Each element correspond to a branch and contains the index of the parent branch.
+        branch_dirs : npt.NDArray[np.bool_] | None
+            The direction of the branches. Each element correspond to a branch, if True the branch is directed from its first node to its second.
+        copy : bool, optional
+            If True, the graph is copied before conversion. By default: True.
+        check : bool, optional
+            If True, the integrity of the tree is checked after the conversion. By default: True.
+
+        Returns
+        -------
+        VTree
+            The tree created from the graph.
+        """  # noqa: E501
         if copy:
             graph = graph.copy()
         tree = cls(
@@ -483,6 +503,25 @@ class VTree(VGraph):
         branch_id, is_single = as_1d_array(branch_id, dtype=int)
         has_succ = np.any(branch_id[:, None] == self.branch_tree[None, :], axis=1)
         return has_succ[0] if is_single else has_succ
+
+    def subtrees_branch_labels(self) -> npt.NDArray[int]:
+        """Label each branch with a unique identifier of its subtree.
+
+        Returns
+        -------
+        np.ndarray
+            The labels of the subtrees.
+        """
+        labels = np.empty(self.branches_count, dtype=int)
+        set_branches = np.zeros(self.branches_count, dtype=bool)
+        for i, branch_id in enumerate(self.root_branches_ids()):
+            labels[branch_id] = i
+            succ = self.branch_successors(branch_id, max_depth=None)
+            labels[succ] = i
+            set_branches[branch_id] = True
+            set_branches[succ] = True
+        assert set_branches.all(), "Some branches were not assigned to a subtree."
+        return labels
 
     def branch_head(self, branch_id: int | npt.ArrayLike[int]) -> int | npt.NDArray[np.int_]:
         """Return the head node(s) of the given branch(es).
