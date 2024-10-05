@@ -92,7 +92,7 @@ def skeleton_to_vgraph(
     if len(nodes_indexes) != len(nodes_yx):
         orphan_nodes = np.setdiff1d(np.arange(len(nodes_indexes)), nodes_indexes)
         warnings.warn(
-            f"Nodes {orphan_nodes} are not connected to any branch and will be ignored."
+            f"Nodes {orphan_nodes} are not connected to any branch and will be ignored. "
             "This is however an abnormal behavior as they should have been removed already.",
             stacklevel=2,
         )

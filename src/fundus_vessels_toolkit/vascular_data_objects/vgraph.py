@@ -786,37 +786,65 @@ class VGraph:
                 nodes_count[loop_nodes] -= loops_count
             return nodes_count
 
-    def endpoints_nodes(self, as_mask=False) -> npt.NDArray[np.int_]:
+    @overload
+    def endpoints_nodes(self, as_mask: Literal[False] = False) -> npt.NDArray[np.int_]: ...
+    @overload
+    def endpoints_nodes(self, as_mask: Literal[True]) -> npt.NDArray[np.bool_]: ...
+    def endpoints_nodes(self, as_mask=False) -> npt.NDArray[np.int_ | np.bool_]:
         """Compute the indexes of the endpoints nodes in the graph.
 
         The endpoints nodes are the nodes connected to zero or one branch.
 
+        Parameters
+        ----------
+
         Returns
         -------
         np.ndarray
-            The indexes of the endpoint nodes.
-        """
-        if as_mask:
-            return np.bincount(self._branch_list.flatten(), minlength=self.nodes_count) <= 1
-        else:
-            nodes_id, nodes_count = np.unique(self._branch_list, return_counts=True)
-            return nodes_id[nodes_count <= 1]
+            The indexes of the endpoint nodes (or if ``as_mask`` is True, a boolean mask of shape (N,) where N is the number of nodes).
+        """  # noqa: E501
+        mask = np.bincount(self._branch_list.flatten(), minlength=self.nodes_count) <= 1
+        return mask if as_mask else np.argwhere(mask).flatten()
 
-    def non_endpoints_nodes(self, as_mask=False) -> npt.NDArray[np.int_]:
+    @overload
+    def non_endpoints_nodes(self, as_mask: Literal[False] = False) -> npt.NDArray[np.int_]: ...
+    @overload
+    def non_endpoints_nodes(self, as_mask: Literal[True]) -> npt.NDArray[np.bool_]: ...
+    def non_endpoints_nodes(self, as_mask=False) -> npt.NDArray[np.int_ | np.bool_]:
         """Compute the indexes of the non-endpoints nodes in the graph.
 
         The non-endpoints nodes are the nodes connected to at least two branches.
 
+        Parameters
+        ----------
+
         Returns
         -------
         np.ndarray
-            The indexes of the non-endpoints nodes.
-        """
-        if as_mask:
-            return np.bincount(self._branch_list.flatten(), minlength=self.nodes_count) > 1
-        else:
-            nodes_id, nodes_count = np.unique(self._branch_list, return_counts=True)
-            return nodes_id[nodes_count > 1]
+            The indexes of the non-endpoints nodes (or if ``as_mask`` is True, a boolean mask of shape (N,) where N is the number of nodes).
+        """  # noqa: E501
+        mask = np.bincount(self._branch_list.flatten(), minlength=self.nodes_count) > 1
+        return mask if as_mask else np.argwhere(mask).flatten()
+
+    @overload
+    def passing_nodes(self, as_mask: Literal[False] = False) -> npt.NDArray[np.int_]: ...
+    @overload
+    def passing_nodes(self, as_mask: Literal[True]) -> npt.NDArray[np.bool_]: ...
+    def passing_nodes(self, as_mask=False) -> npt.NDArray[np.int_ | np.bool_]:
+        """Return the indexes of the nodes that are connected to exactly two branches.
+
+        Parameters
+        ----------
+        as_mask : bool, optional
+            If True, return a mask of the passing nodes instead of their indexes.
+
+        Returns
+        -------
+        np.ndarray
+            The indexes of the passing nodes (or if ``as_mask`` is True, a boolean mask of shape (N,) where N is the number of nodes).
+        """  # noqa: E501
+        mask = np.bincount(self._branch_list.flatten(), minlength=self.nodes_count) == 2
+        return mask if as_mask else np.argwhere(mask).flatten()
 
     @overload
     def endpoints_branches(

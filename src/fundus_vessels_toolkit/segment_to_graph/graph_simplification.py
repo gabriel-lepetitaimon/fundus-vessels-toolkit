@@ -443,7 +443,7 @@ def remove_orphan_branches(vessel_graph: VGraph, min_length: float | bool = 0, i
 
 
 def simplify_passing_nodes(
-    vessel_graph: VGraph,
+    vgraph: VGraph,
     *,
     not_fusable: Optional[npt.ArrayLike] = None,
     min_angle: float = 0,
@@ -475,21 +475,21 @@ def simplify_passing_nodes(
         The modified graph with the nodes merged.
 
     """  # noqa: E501
-    incident_branches = None
 
     # === Get all nodes with degree 2 ===
-    nodes_to_fuse = np.argwhere(vessel_graph.nodes_degree() == 2).flatten()
+    nodes_to_fuse = vgraph.passing_nodes()
 
     if not_fusable is not None:
         # === Filter out nodes that should not be merged ===
         nodes_to_fuse = np.setdiff1d(nodes_to_fuse, not_fusable)
 
+    incident_branches = None
     if min_angle > 0:
         # === Filter out nodes with a too small angle between their two incident branches ===
-        geo_data = vessel_graph.geometric_data()
-        d = geo_data.tip_data_around_node([VBranchGeoData.Fields.TIPS_TANGENT], nodes_to_fuse)
-        incident_branches = np.stack(d["branches"])
-        t = np.stack(d[VBranchGeoData.Fields.TIPS_TANGENT])
+        geo_data = vgraph.geometric_data()
+        incident_branches, idirs = vgraph.incident_branches_individual(nodes_to_fuse, return_branch_direction=True)
+        incident_branches = np.stack(incident_branches)
+        t = np.stack([geo_data.tips_tangent(b, d) for b, d in zip(incident_branches, idirs, strict=True)])
         cos = np.sum(t[..., 0] * t[..., 1], axis=1)
         fuseable_nodes = cos <= np.cos(np.deg2rad(min_angle))
         nodes_to_fuse = nodes_to_fuse[fuseable_nodes]
@@ -499,22 +499,22 @@ def simplify_passing_nodes(
         # === Filter nodes which don't have the same label ===
         if isinstance(with_same_label, str):
             # Attempt to get the labels from the branches attributes
-            with_same_label = vessel_graph.branches_attr[with_same_label]
+            with_same_label = vgraph.branches_attr[with_same_label]
         with_same_label = np.asarray(with_same_label)
 
         if incident_branches is None:
             # Get the incident branches if not already computed
-            incident_branches = np.stack(vessel_graph.incident_branches_individual(nodes_to_fuse))
+            incident_branches = np.stack(vgraph.incident_branches_individual(nodes_to_fuse))
 
         same_label = with_same_label[incident_branches[:, 0]] == with_same_label[incident_branches[:, 1]]
         nodes_to_fuse = nodes_to_fuse[same_label]
         incident_branches = incident_branches[same_label]
 
     if len(nodes_to_fuse):
-        return vessel_graph.fuse_nodes(
+        return vgraph.fuse_nodes(
             nodes_to_fuse, inplace=inplace, quiet_invalid_node=True, incident_branches=incident_branches
         )
-    return vessel_graph
+    return vgraph
 
 
 def find_facing_endpoints(

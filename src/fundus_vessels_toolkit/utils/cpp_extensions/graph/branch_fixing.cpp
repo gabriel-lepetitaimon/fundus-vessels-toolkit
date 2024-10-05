@@ -28,7 +28,7 @@ std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_
         auto const &node_adjacency = adjacency[nodeID];
 
         if (node_adjacency.size() == 1) {
-            // ... its single branch ...
+            // ... its **single** branch ...
             const auto &edge = *node_adjacency.begin();
             const bool startSide = nodeID == edge.start;
             auto const &[tipIdx, tangent, calibre, boundL, boundR] = clean_branch_skeleton_tip(
@@ -38,8 +38,8 @@ std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_
             branches_tips[edge.id][startSide ? 0 : 1] = tipIdx;
             out[edge.id][startSide ? 0 : 1] = {tangent, calibre, boundL, boundR};
         } else {
-            //  ... all its incident branches...
-            // (if the node connect two branches, prevent the branch cleaning)
+            //  ... **all** its incident branches...
+            // (if the node connect exactly two branches, prevent the branch cleaning)
             int nodeMaxRemovedLength = node_adjacency.size() == 2 ? 0 : maxRemovedLength;
             auto const &tips_around_node = clean_branch_skeleton_around_node(
                 branchCurves, nodeID, node_adjacency, segmentation, nodeMaxRemovedLength, adaptativeTangent);
@@ -148,19 +148,21 @@ std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_ske
         auto is_branch_pixel_valid = [&](const IntPoint &p, const std::array<IntPoint, 2> &boundaries,
                                          const std::array<IntPoint, 2> &nextBoundaries, const Point &tangent,
                                          const Point &nextTangent, float calibre, float nextCalibre) {
+            // 1. Check if the boundaries are valid
             auto const &boundL = boundaries[0], boundR = boundaries[1];
             if (!boundL.is_valid() || !boundR.is_valid()) return false;
 
-            // Check if the skeleton is at the center of the boundaries
+            // 2. Check if the skeleton is at the center of the boundaries
             const float dL = distance(p, boundL), dR = distance(p, boundR);
             if (abs(dL - dR) > 1.42) return false;
 
-            // Check if the branch width is constant for this pixel and the next
+            // 3. Check if the branch width is constant for this pixel and the next
             if (abs(calibre - nextCalibre) > 1.42) return false;
 
+            // If the node is an endpoint (it should not), the previous conditions are enough to check its validity
             if (node_adjacency.size() == 1) return true;
 
-            // Check if the skeleton closest to the boundaries belong to the current branch
+            // 4. Check if the skeleton closest to the boundaries belong to the current branch
             auto isClosestToCurrentBranch = [&](const IntPoint &bound) {
                 float distToCurrentBranch = distance(p, bound);
                 for (auto [id, forward] : branchesInfos) {
@@ -259,16 +261,18 @@ std::tuple<int, Vector, float, IntPoint, IntPoint> clean_branch_skeleton_tip(con
     auto is_branch_pixel_valid = [&](const IntPoint &p, const std::array<IntPoint, 2> &boundaries,
                                      const std::array<IntPoint, 2> &nextBoundaries, const Point &tangent,
                                      const Point &nextTangent, float calibre, float nextCalibre) {
+        // 1. Check if the boundaries are valid
         auto const &boundL = boundaries[0], boundR = boundaries[1];
         if (!boundL.is_valid() || !boundR.is_valid()) return false;
 
-        // Check if the skeleton is too close to the boundaries
+        // 2. Check if the skeleton is too close to the boundaries
         if (calibre < endCalibre / 3) return false;
 
-        // Check if the skeleton is at the center of the boundaries
+        // 3. Check if the skeleton is at the center of the boundaries
         const float dL = distance(p, boundL), dR = distance(p, boundR);
         if (abs(dL - dR) > 1.42) return false;
 
+        // 4. Check if the branch width is constant for this pixel and the next
         if (abs(calibre - nextCalibre) > 1.42) return false;
 
         return true;

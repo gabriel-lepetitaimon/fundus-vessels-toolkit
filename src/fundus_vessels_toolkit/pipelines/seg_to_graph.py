@@ -35,9 +35,9 @@ class SegToGraph:
         nodes_merge_distance: NodeMergeDistanceParam = True,
         merge_small_cycles: float = 0,
         simplify_topology: SimplifyTopology = "node",
-        parse_geometry=False,
+        parse_geometry=True,
         adaptative_tangents=False,
-        bspline_target_error=3,
+        bspline_target_error=1.5,
     ):
         """
 
@@ -113,6 +113,8 @@ class SegToGraph:
     def __call__(
         self,
         vessel_mask: npt.NDArray[np.bool_] | torch.Tensor | str | Path,
+        simplify: Optional[bool] = None,
+        parse_geometry: Optional[bool] = None,
     ) -> VGraph:
         """
         Extract the graph of the skeleton from a binary image.
@@ -130,9 +132,9 @@ class SegToGraph:
         seg = self.img_to_seg(vessel_mask)
         skel = self.skeletonize(seg)
         graph = self.skel_to_vgraph(skel, vessel_mask)
-        if self.simplification_enabled:
+        if if_none(simplify, self.simplification_enabled):
             self.simplify(graph, inplace=True)
-        if self.geometry_parsing_enabled:
+        if if_none(parse_geometry, self.geometry_parsing_enabled):
             graph = self.populate_geometry(graph, vessel_mask)
         return graph
 
@@ -232,7 +234,7 @@ class FundusVesselSegToGraph(SegToGraph):
     Specialization of Seg2Graph for retinal vessels.
     """
 
-    def __init__(self, max_vessel_diameter=20, prevent_node_simplification_on_borders=35, parse_geometry=False):
+    def __init__(self, max_vessel_diameter=20, prevent_node_simplification_on_borders=35, parse_geometry=True):
         super(FundusVesselSegToGraph, self).__init__(
             fix_hollow=True,
             skeletonize_method="lee",

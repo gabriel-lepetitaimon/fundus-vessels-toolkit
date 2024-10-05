@@ -402,7 +402,8 @@ static const std::array<PointWithID, 8> CLOSE_NEIGHBORHOOD = {
  *
  * When tracking a branch the neighbor pixels (x) adjacent to the previous pixel (p) are by construction not part of the
  * branch. The most likely next pixels are the ones in the opposite direction of the previous pixel (p). (The fourth and
- * fifth neighbors should theoretically never be the next pixel if the skeleton is valid.) x 4 1
+ * fifth neighbors should theoretically never be the next pixel if the skeleton is valid.)
+ *      x 4 1
  *  ->  p c 0   (c is the current pixel and p is the previous pixel,
  *      x 5 2    in this example the neighbor id of c relative to p is 3.)
  */

@@ -901,9 +901,50 @@ class VGeometricData:
         attr: VBranchGeoDataKey = VBranchGeoData.Fields.TIPS_TANGENT,
         graph_index=True,
     ) -> np.ndarray:
-        """Return the tangent of the tips of the branches."""
-        tangents = self.tip_data(attr, branch_ids, first_tip, graph_index=graph_index)
-        if infer_from_nodes_if_missing:
+        """Return the tangent of the tips of the branches.
+
+        Parameters
+        ----------
+        branch_ids : Optional[int | np.ndarray], optional
+            The id of the branch(es), by default None
+
+        first_tip : Optional[bool | np.ndarray], optional
+            - If None, return the tangent of both tips of the branch(es).
+            - If True, return the tangent of the first tip of the branch(es).
+            - If False, return the tangent of the second tip of the branch(es).
+            - If an array of bool, return the tangent of the first or the second tip of each branch according to the value of the array.
+
+        infer_from_nodes_if_missing : bool, optional
+            If True, infer the branch directions from the nodes if the tangent is missing, by default True.
+
+            .. warning::
+                This option requires the parent graph to be set.
+
+        attr : str, optional
+            The name of the attribute to return, by default "TIPS_TANGENT"
+
+        graph_index : bool, optional
+            Whether the branch_id is indexed according to the graph (True) or to the internal representation (False), by default True.
+
+        Returns
+        -------
+        np.ndarray
+            The tangent of the tips of the branch(es).
+
+            - If first_tip is not None, the data is an array of shape (b, 2) where b is the length of ``branch_ids`` or (2, ) if ``branch_ids`` is a scalar.
+            - If first_tip is None, the data is an array of shape (b, 2, 2) where b is the length of ``branch_ids`` or (2, 2) if ``branch_ids`` is a scalar.
+        """  # noqa: E501
+        branches_id, is_single = as_1d_array(branch_ids) if branch_ids is not None else (None, False)
+
+        if self.has_branch_data(attr):
+            tangents = self.tip_data(attr, branch_ids, first_tip, graph_index=graph_index)
+            unknown_tangents: npt.NDArray[np.bool_] = np.isnan(tangents).any(axis=1) | np.all(tangents == 0, axis=1)
+        else:
+            B = len(branches_id) if branch_ids is not None else self.branches_count
+            tangents = np.empty((B, 2, 2) if first_tip is None else (B, 2))
+            unknown_tangents = np.ones(B, dtype=bool)
+
+        if unknown_tangents.any() and infer_from_nodes_if_missing:
             assert (
                 self.parent_graph is not None
             ), "The parent graph is not set, impossible to infer the branch directions."
@@ -931,7 +972,7 @@ class VGeometricData:
 
             if first_tip_is_none:
                 tangents = tangents.reshape(-1, 2, 2)
-        return tangents
+        return tangents[0] if is_single else tangents
 
     def set_branch_data(
         self,

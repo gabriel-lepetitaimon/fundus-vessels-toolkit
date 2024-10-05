@@ -2,7 +2,7 @@ from __future__ import annotations
 
 __all__ = ["VTree"]
 
-from typing import Dict, Generator, Iterable, List, Optional, Tuple, overload
+from typing import Dict, Generator, Iterable, List, Literal, Optional, Tuple, overload
 
 import numpy as np
 import numpy.typing as npt
@@ -744,15 +744,28 @@ class VTree(VGraph):
         succ_branches = np.concatenate([self.branch_successors(succ_branches, max_depth=max_depth), succ_branches])
         return np.unique(branch_list[succ_branches, 1])
 
-    def passing_nodes(self) -> np.ndarray:
-        """Return the indexes of the nodes that are connected to more than two branches.
+    @overload
+    def passing_nodes(self, as_mask: Literal[False] = False) -> npt.NDArray[np.int_]: ...
+    @overload
+    def passing_nodes(self, as_mask: Literal[True]) -> npt.NDArray[np.bool_]: ...
+    def passing_nodes(self, as_mask=False) -> npt.NDArray[np.int_ | np.bool_]:
+        """Return the indexes of the nodes that have exactly one incoming and one outgoing branch.
+
+        Parameters
+        ----------
+        as_mask : bool, optional
+            If True, return a boolean mask instead of the indexes. By default: False.
 
         Returns
         -------
-        np.ndarray
-            The indexes of the nodes that are connected to more than two branches.
-        """
-        return np.unique(self.branch_list.flatten())
+        npt.NDArray[np.int_ | np.bool_]
+            The indexes of the passing nodes (or if ``as_mask`` is True, a boolean mask of shape (N,) where N is the number of nodes).
+        """  # noqa: E501
+        branch_list = self.tree_branch_list()
+        incdeg = np.bincount(branch_list[:, 1], minlength=self.nodes_count)
+        outdeg = np.bincount(branch_list[:, 0], minlength=self.nodes_count)
+        mask = (incdeg == 1) & (outdeg == 1)
+        return np.where(mask)[0] if not as_mask else mask
 
     ####################################################################################################################
     #  === TREE MANIPULATION ===
