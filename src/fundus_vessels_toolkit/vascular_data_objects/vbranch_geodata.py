@@ -213,7 +213,9 @@ class VBranchCurveIndex(VBranchGeoDataBase):
     def merge(cls, others: List[VBranchCurveData], ctx: BranchGeoDataEditContext) -> VBranchCurveData:
         if all(_ is None for _ in others):
             raise ValueError("Cannot merge empty data.")
-        curves_start_index = np.cumsum([0] + [curve.shape[0] for curve in ctx.info["curves"][:-1]])
+        curves_start_index = np.cumsum(
+            [0] + [0 if curve is None else curve.shape[0] for curve in ctx.info["curves"][:-1]]
+        )
         data = np.concatenate(
             [d.data + start for d, start in zip(others, curves_start_index, strict=True) if d is not None], axis=0
         )

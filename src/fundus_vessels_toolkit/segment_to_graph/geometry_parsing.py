@@ -58,8 +58,11 @@ def populate_geometry(
     elif isinstance(vessel_segmentation, FundusData):
         vessel_segmentation = vessel_segmentation.vessels
 
+    curves = geo_data.branch_curve()
+    valid_curves_id = np.argwhere([c is not None and len(c) for c in curves]).flatten()
+    valid_curves = [curves[int(i)] for i in valid_curves_id]
     tangents, calibres, boundaries, curvatures, curv_roots, bsplines = extract_branch_geometry(
-        geo_data.branch_curve(),
+        valid_curves,
         vessel_segmentation,
         adaptative_tangent=adaptative_tangents,
         bspline_target_error=bspline_target_error,
@@ -70,12 +73,14 @@ def populate_geometry(
         return_curvature_roots=True,
         extract_bspline=True,
     )
-    geo_data.set_branch_data(VBranchGeoData.Fields.TANGENTS, tangents)
-    geo_data.set_branch_bspline(bsplines)
-    geo_data.set_branch_data(VBranchGeoData.Fields.CALIBRES, calibres)
-    geo_data.set_branch_data(VBranchGeoData.Fields.BOUNDARIES, boundaries)
-    geo_data.set_branch_data(VBranchGeoData.Fields.CURVATURES, curvatures)
-    geo_data.set_branch_data(VBranchGeoData.Fields.CURVATURE_ROOTS, curv_roots)
+    geo_data.set_branch_data(VBranchGeoData.Fields.TANGENTS, tangents, branch_id=valid_curves_id, graph_index=True)
+    geo_data.set_branch_bspline(bsplines, branch_id=valid_curves_id, graph_index=True)
+    geo_data.set_branch_data(VBranchGeoData.Fields.CALIBRES, calibres, branch_id=valid_curves_id, graph_index=True)
+    geo_data.set_branch_data(VBranchGeoData.Fields.BOUNDARIES, boundaries, branch_id=valid_curves_id, graph_index=True)
+    geo_data.set_branch_data(VBranchGeoData.Fields.CURVATURES, curvatures, branch_id=valid_curves_id, graph_index=True)
+    geo_data.set_branch_data(
+        VBranchGeoData.Fields.CURVATURE_ROOTS, curv_roots, branch_id=valid_curves_id, graph_index=True
+    )
 
     if populate_geometry:
         derive_tips_geometry_from_curve_geometry(vgraph, inplace=True)

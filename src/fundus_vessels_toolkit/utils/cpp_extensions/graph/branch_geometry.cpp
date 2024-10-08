@@ -48,10 +48,17 @@ extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAcc<
     for (std::size_t curveI = 0; curveI < nCurves; curveI++) {
         auto const& curve = branch_curves[curveI];
 
-        if (curve.size() < 2) continue;
+        if (curve.size() == 0) continue;
+        if (curve.size() == 1) {
+            branchesTangents[curveI] = {Point(0, 0)};
+            if (return_curvature) branchesCurvature[curveI] = {0};
+            if (return_calibre) branchesCalibre[curveI] = {INVALID_CALIBRE};
+            if (return_boundaries) branchesBoundaries[curveI] = {{curve[0], curve[0]}};
+            if (extract_bspline) branchesBSpline[curveI] = {BSpline({{curve[0], curve[0], curve[0], curve[0]}})};
+            continue;
+        }
 
         // Initialize the returned vectors
-        std::vector<Point> tmpTangents;
         auto& tangents = branchesTangents[curveI];
         auto& branchCurvature = branchesCurvature[curveI];
         auto& branchCurvatureRoots = branchesCurvatureRoots[curveI];

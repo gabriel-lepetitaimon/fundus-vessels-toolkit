@@ -1376,9 +1376,10 @@ class VGeometricData:
 
         branch0 = consecutive_branches[0]
 
-        branches_curve = [b for b in self.branch_curve(consecutive_branches, graph_index=False) if b is not None]
-        if len(branches_curve):
-            self._branches_curve[branch0] = np.concatenate(branches_curve)
+        branches_curve = self.branch_curve(consecutive_branches, graph_index=False)
+        not_none_branches_curve = [b for b in branches_curve if b is not None]
+        if len(not_none_branches_curve):
+            self._branches_curve[branch0] = np.concatenate(not_none_branches_curve)
 
         ctx = self._geodata_edit_ctx(branch0)
         ctx = ctx.set_info(curves=branches_curve)
@@ -1478,7 +1479,9 @@ class VGeometricData:
 
         for branch_id in internal_ids:
             ctx = self._geodata_edit_ctx(branch_id)
-            self._branches_curve[branch_id] = np.flip(self.branch_curve(branch_id), axis=0)
+            branch_curve = self._branches_curve[branch_id]
+            if branch_curve is not None:
+                self._branches_curve[branch_id] = np.flip(branch_curve, axis=0)
             for attr_name, attr in self.list_branch_data(branch_id, graph_index=False).items():
                 self._branch_data_dict[attr_name][branch_id] = attr.flip(ctx.set_name(attr_name))
 
@@ -1574,7 +1577,7 @@ class VGeometricData:
         tangents: VBranchGeoDataKey = VBranchGeoData.Fields.TIPS_TANGENT,
         scaling=1,
         normalize=False,
-        invert_direction: Optional[npt.NDArray[np.bool_]] = None,
+        invert_direction: Optional[bool | npt.NDArray[np.bool_]] = None,
         show_only: Optional[npt.NDArray[np.bool_]] = None,
     ):
         from jppype.layers import LayerQuiver
@@ -1610,11 +1613,15 @@ class VGeometricData:
                 if np.isnan(head_t).any() or np.sum(head_t) == 0:
                     head_t = -tail_to_head
 
-            if invert_direction is not None:
-                if invert_direction[i, 0]:
+            if invert_direction is not None and invert_direction is not False:
+                if invert_direction is True:
                     tail_t = -tail_t
-                if invert_direction[i, 1]:
                     head_t = -head_t
+                else:
+                    if invert_direction[i, 0]:
+                        tail_t = -tail_t
+                    if invert_direction[i, 1]:
+                        head_t = -head_t
 
             if show_only is not None:
                 if show_only[i, 0]:
