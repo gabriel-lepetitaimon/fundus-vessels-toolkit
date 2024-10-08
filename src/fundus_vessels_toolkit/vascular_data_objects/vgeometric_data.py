@@ -1319,7 +1319,7 @@ class VGeometricData:
             The number of branches to add.
         """
         if self._branches_id is None:
-            self._branches_curve += [None] * n
+            self._branches_curve += [self.EMPTY_CURVE] * n
 
             for attr_name, attr in self._branch_data_dict.items():
                 attr_type = self._branches_attrs_descriptors[attr_name].geo_type
