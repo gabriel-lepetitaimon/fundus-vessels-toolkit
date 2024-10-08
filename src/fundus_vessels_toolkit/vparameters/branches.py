@@ -99,8 +99,8 @@ TORTUOSITY_KEYS = ["τHart", "τGrisan", "τTrucco", "n_curvatures_roots"]
 
 
 def branch_tortuosity(
-    curve: npt.NDArray[np.float_],
-    curvature: npt.NDArray[np.float_],
+    curve: npt.NDArray[np.float64],
+    curvature: npt.NDArray[np.float64],
     curvature_roots: Optional[npt.NDArray[np.int_]] = None,
     as_dict=True,
 ) -> Dict[str, float] | List[float]:
@@ -108,10 +108,10 @@ def branch_tortuosity(
 
     Parameters
     ----------
-    curve : npt.NDArray[np.float_]
+    curve : npt.NDArray[np.float64]
         The skeleton of the branch as a 2D array of shape (n, 2).
 
-    curvature : npt.NDArray[np.float_]
+    curvature : npt.NDArray[np.float64]
         The curvature of the branch as a 1D array of shape (n,).
 
     Returns

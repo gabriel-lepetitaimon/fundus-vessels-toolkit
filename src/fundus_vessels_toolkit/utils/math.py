@@ -105,7 +105,7 @@ def np_find_sorted(keys: Any, array: np.ndarray, assume_keys_sorted=False) -> in
 
 
 def quantified_roots(
-    x: npt.NDArray[np.float_], threshold: float = 0, percentil_threshold: bool = False, medfilt_size: int = 5
+    x: npt.NDArray[np.float64], threshold: float = 0, percentil_threshold: bool = False, medfilt_size: int = 5
 ):
     """Find the roots of a noisy signal.
 
@@ -114,7 +114,7 @@ def quantified_roots(
 
     Parameters
     ----------
-    x : npt.NDArray[np.float_]
+    x : npt.NDArray[np.float64]
         The signal to analyze.
 
     threshold : int, optional
