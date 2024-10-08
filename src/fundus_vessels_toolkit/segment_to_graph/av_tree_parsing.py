@@ -1,5 +1,5 @@
 import itertools
-from logging import warning
+import warnings
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -198,7 +198,7 @@ def naive_vgraph_to_vtree(
     graph = graph.copy()
     loop_branches = graph.self_loop_branches()
     if len(loop_branches) > 0:
-        warning.warn("The graph contains self loop branches. They will be ignored.")
+        warnings.warn("The graph contains self loop branches. They will be ignored.", stacklevel=1)
         graph.delete_branches(loop_branches, inplace=True)
 
     nodes_coord = graph.nodes_coord()

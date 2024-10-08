@@ -1,4 +1,4 @@
-from logging import warning
+import warnings
 from typing import Dict, Mapping, Optional, Tuple, TypeVar
 
 import numpy as np
@@ -113,7 +113,7 @@ def complete_lookup(lookup: np.ndarray, max_index: int, assume_valid=False) -> n
     lookup = np.asarray(lookup, dtype=int)
     assert lookup.ndim == 1, f"lookup must be a 1D array. Got {lookup.ndim} dimensions."
     if len(lookup) == 0:
-        warning.warn("The lookup table is empty.")
+        warnings.warn("The lookup table is empty.", stacklevel=2)
         return np.arange(max_index + 1)
 
     assert len(lookup) <= max_index + 1, f"lookup must have less than {max_index+1} elements but has {lookup.shape[0]}."
