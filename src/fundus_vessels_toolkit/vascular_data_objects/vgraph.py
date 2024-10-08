@@ -722,6 +722,14 @@ class VGraph:
             if return_branch_direction:
                 return branch_ids, self._branch_list[branch_ids][:, 0] == node_idx
             return branch_ids
+        elif len(node_idx) == 0:
+            if individual_nodes:
+                return [], [] if return_branch_direction else []
+            return (
+                (np.empty((0,), dtype=int), np.empty((0,), dtype=bool))
+                if return_branch_direction
+                else np.empty((0,), dtype=int)
+            )
 
         # Multiple nodes
         node_idx = np.asarray(node_idx, dtype=int)
@@ -1971,6 +1979,7 @@ class VGraph:
         bspline=None,
         max_colored_node_id: Optional[int] = None,
         boundaries=None,
+        boundaries_only_tip=False,
     ):
         from jppype.layers import LayerGraph
         from jppype.utils.color import colormap_by_name
@@ -1990,7 +1999,7 @@ class VGraph:
         layer = LayerGraph(
             self.branch_list,
             self.nodes_coord() - np.array(domain.top_left)[None, :],
-            self.geometric_data().branches_label_map(calibre_attr=boundaries),
+            self.geometric_data().branches_label_map(calibre_attr=boundaries, only_tip=boundaries_only_tip),
         )
         layer.set_options(
             {

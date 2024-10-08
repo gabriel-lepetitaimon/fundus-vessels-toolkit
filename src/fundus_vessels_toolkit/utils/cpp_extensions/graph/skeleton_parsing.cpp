@@ -11,6 +11,9 @@ enum SkeletonRank {
     JUNCTION3 = 3,
     JUNCTION4 = 4,
     HOLLOW_CROSS = 5,
+
+    JUNCTION3bis = -3,
+    JUNCTION4Square = -4,
 };
 
 /**
@@ -37,7 +40,7 @@ SkeletonRank detect_skeleton_rank(const bool pixelValue, const uint8_t neighbors
         // -- 3 branches junctions --
         // Y shape
         if (hit(neighbors_rolled, 0b10100100)) {
-            if (miss(neighbors_rolled, 0b01010001) || miss(neighbors_rolled, 0b01001010))
+            if (miss(neighbors_rolled, 0b01010001) || miss(neighbors_rolled, 0b01010010))
                 return SkeletonRank::JUNCTION3;
         }
 
@@ -49,6 +52,39 @@ SkeletonRank detect_skeleton_rank(const bool pixelValue, const uint8_t neighbors
     if (hit_and_miss(neighbors, 0b10101010, 0b01010101) || hit_and_miss(neighbors, 0b01010101, 0b10101010) ||
         hit(neighbors, 0b00011100))
         return SkeletonRank::JUNCTION4;
+
+    return SkeletonRank::BRANCH;
+}
+
+SkeletonRank detect_skeleton_rank_debug(const bool pixelValue, const uint8_t neighbors) {
+    if (!pixelValue) {
+        return hit(neighbors, 0b01010101) ? SkeletonRank::HOLLOW_CROSS : SkeletonRank::NONE;
+    }
+
+    // -- Single endpoints --
+    if (neighbors == 0) return SkeletonRank::ENDPOINT;
+
+    for (int s = 0; s < 8; s++) {
+        const uint8_t neighbors_rolled = roll_neighbors(neighbors, s);
+
+        // -- Endpoints --
+        if (hit_and_miss(neighbors_rolled, 0b01000000, 0b00011111)) return SkeletonRank::ENDPOINT;
+
+        // -- 3 branches junctions --
+        // Y shape
+        if (hit(neighbors_rolled, 0b10100100)) {
+            if (miss(neighbors_rolled, 0b01010001)) return SkeletonRank::JUNCTION3;
+            if (miss(neighbors_rolled, 0b01011010)) return SkeletonRank::JUNCTION3bis;
+        }
+
+        // T shape
+        if (hit_and_miss(neighbors_rolled, 0b00010101, 0b01001010)) return SkeletonRank::JUNCTION3;
+    }
+
+    // -- 4 branches junctions --
+    if (hit_and_miss(neighbors, 0b10101010, 0b01010101) || hit_and_miss(neighbors, 0b01010101, 0b10101010))
+        return SkeletonRank::JUNCTION4;
+    if (hit(neighbors, 0b00011100)) return SkeletonRank::JUNCTION4Square;
 
     return SkeletonRank::BRANCH;
 }
@@ -153,6 +189,25 @@ torch::Tensor detect_skeleton_nodes(torch::Tensor skeleton, bool fix_hollow, boo
             }
         }
         if (singleEndpoint) parsed_accessor[p.y][p.x] = SkeletonRank::NONE;
+    }
+
+    return parsed_skeleton.index({torch::indexing::Slice(1, -1), torch::indexing::Slice(1, -1)});
+}
+
+torch::Tensor detect_skeleton_nodes_debug(torch::Tensor skeleton) {
+    skeleton = torch::constant_pad_nd(skeleton, {1, 1, 1, 1}, 0);
+    auto skeleton_accessor = skeleton.accessor<bool, 2>();
+    int H = skeleton.size(0), W = skeleton.size(1);
+
+    torch::Tensor parsed_skeleton = torch::zeros_like(skeleton, torch::kInt);
+    auto parsed_accessor = parsed_skeleton.accessor<int, 2>();
+
+#pragma omp parallel for collapse(2)
+    for (int y = 1; y < H - 1; y++) {
+        for (int x = 1; x < W - 1; x++) {
+            const uint8_t neighbors = get_neighborhood(skeleton_accessor, y, x);
+            parsed_accessor[y][x] = detect_skeleton_rank_debug((bool)skeleton_accessor[y][x], neighbors);
+        }
     }
 
     return parsed_skeleton.index({torch::indexing::Slice(1, -1), torch::indexing::Slice(1, -1)});

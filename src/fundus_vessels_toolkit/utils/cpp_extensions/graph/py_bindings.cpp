@@ -27,12 +27,14 @@ std::tuple<torch::Tensor, torch::Tensor, std::vector<torch::Tensor>, torch::Tens
 
     // --- Clean the branches tips ---
     double clean_branches_tips = get_if_exists(options, "clean_branches_tips", 0.);
+    double clean_terminal_branches_tips = get_if_exists(options, "clean_terminal_branches_tips", 0.);
     bool adaptativeTangent = get_if_exists(options, "adaptative_tangent", 1.) > 0;
     auto tangents_calibres_tensor = torch::empty({0}, torch::kFloat);
     if (clean_branches_tips > 0) {
         auto const &adj_list = edge_list_to_adjlist(edge_list, node_yx.size());
-        auto const tangents_calibres = clean_branches_skeleton(branches_curves, labels_acc, seg_acc, adj_list,
-                                                               clean_branches_tips, adaptativeTangent);
+        auto const tangents_calibres =
+            clean_branches_skeleton(branches_curves, labels_acc, seg_acc, adj_list, clean_branches_tips,
+                                    clean_terminal_branches_tips, adaptativeTangent);
         const long n_branches = (long)tangents_calibres.size();
         // Convert tip geometry to tensor
         tangents_calibres_tensor = torch::empty({n_branches, 2, 7}, torch::kFloat);
@@ -264,6 +266,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // === Skeleton.h ===
     m.def("detect_skeleton_nodes", &detect_skeleton_nodes, "Detect junctions and endpoints in a skeleton.");
+    m.def("detect_skeleton_nodes_debug", &detect_skeleton_nodes_debug, "Detect junctions and endpoints in a skeleton.");
 
     // === Branch.h ===
     m.def("find_branch_endpoints", &find_branch_endpoints, "Find the first and last endpoint of each branch.");

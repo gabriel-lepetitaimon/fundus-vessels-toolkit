@@ -472,7 +472,7 @@ class VGeometricData:
     ####################################################################################################################
     #  === COMPUTABLE GEOMETRIC PROPERTIES ===
     ####################################################################################################################
-    def branches_label_map(self, calibre_attr=None) -> npt.NDArray[np.int_]:
+    def branches_label_map(self, calibre_attr=None, only_tip=False) -> npt.NDArray[np.int_]:
         """Return a label map of the branches.
 
         Returns
@@ -519,7 +519,7 @@ class VGeometricData:
                     bounds = tip_boundaries.data.astype(np.int_)
                     if bounds.shape[0] == 0:
                         continue
-                    for boundL, boundR in bounds[::4]:
+                    for boundL, boundR in [bounds[0]] if only_tip else bounds[::4]:
                         lines += [(Point(*boundL), Point(*boundR), branch_id + 1)]
                     lines += [(Point(*bounds[-1, 0]), Point(*bounds[-1, 1]), branch_id + 1)]
 

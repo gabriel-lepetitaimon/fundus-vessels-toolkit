@@ -6,42 +6,25 @@ __all__ = [
     "remove_spurs",
     "simplify_passing_nodes",
     "simplify_graph",
-    "simplify_graph_legacy",
     "NodeSimplificationCallBack",
-    "NodeMergeDistances",
-    "NodeMergeDistanceParam",
+    "ReconnectEndpointsArg",
     "SimplifyTopology",
 ]
 
 from dataclasses import dataclass
-from typing import List, Literal, Mapping, Optional, Tuple, TypeAlias
+from typing import List, Literal, Optional, Tuple, TypeAlias
 
 import networkx as nx
 import numpy as np
 import numpy.typing as npt
 
+from fundus_vessels_toolkit.utils import if_none
+
 from ..utils.cluster import cluster_by_distance, iterative_reduce_clusters, reduce_clusters
+from ..utils.dataclass import UpdateableDataclass
 from ..utils.geometric import Point, distance_matrix
-from ..utils.graph.branch_by_nodes import (
-    branches_by_nodes_to_branch_list,
-    compute_is_endpoints,
-    delete_nodes,
-    fuse_nodes,
-    merge_nodes_clusters,
-    node_rank,
-)
-from ..utils.graph.branch_by_nodes import merge_equivalent_branches as merge_equivalent_branches_legacy
-from ..utils.graph.branch_by_nodes import merge_nodes_by_distance as merge_nodes_by_distance_legacy
-from ..utils.graph.branch_by_nodes import reduce_clusters as reduce_clusters_legacy
-from ..utils.lookup_array import apply_lookup, apply_lookup_on_coordinates, create_removal_lookup
+from ..utils.lookup_array import create_removal_lookup
 from ..vascular_data_objects import VBranchGeoData, VGraph
-
-
-@dataclass
-class NodeMergeDistances:
-    junction: float
-    tip: float
-    node: float
 
 
 class NodeSimplificationCallBack:
@@ -56,21 +39,47 @@ class NodeSimplificationCallBack:
         pass
 
 
-NodeMergeDistanceParam: TypeAlias = bool | float | NodeMergeDistances
 SimplifyTopology: TypeAlias = Literal["node", "branch", "both"] | None
+
+
+@dataclass
+class ReconnectEndpointsArg(UpdateableDataclass):
+    max_distance: float = 30
+    max_angle: float = 20
+    intercept_snapping_distance: float = 10
+    endpoints_to_endpoints_max_distance: Optional[float] = None
+    tangent: VBranchGeoData.Key | npt.NDArray[np.float64] = VBranchGeoData.Fields.TIPS_TANGENT
+    bspline: VBranchGeoData.Key = VBranchGeoData.Fields.BSPLINE
+
+
+@dataclass
+class GraphSimplifyArg(UpdateableDataclass):
+    """Arguments for the graph simplification.
+    See :func:`simplify_graph` for more details.
+    """
+
+    max_spurs_length: float = 0
+    reconnect_endpoints: bool | ReconnectEndpointsArg = False
+    max_cycles_length: float = 20
+    junctions_merge_distance: float = 20
+    min_orphan_branches_length: float = 30
+    simplify_topology: SimplifyTopology | bool = "node"
+    passing_node_min_angle: float = 110
 
 
 def simplify_graph(
     vessel_graph: VGraph,
-    max_spurs_length: float = 0,
-    min_orphan_branches_length: float = 0,
-    nodes_merge_distance: NodeMergeDistanceParam = True,
-    iterative_nodes_merge: bool = True,
-    max_cycles_length: float = 0,
-    passing_node_min_angle: float = 120,
-    simplify_topology: SimplifyTopology = "node",
+    arg: Optional[GraphSimplifyArg] = None,
+    /,
     *,
-    inplace=False,
+    max_spurs_length: Optional[float] = None,
+    reconnect_endpoints: Optional[bool | ReconnectEndpointsArg] = False,
+    max_cycles_length: Optional[float] = None,
+    junctions_merge_distance: Optional[float] = None,
+    min_orphan_branches_length: Optional[float] = None,
+    simplify_topology: Optional[SimplifyTopology] | None = None,
+    passing_node_min_angle: Optional[float] = None,
+    inplace: bool = False,
 ) -> VGraph:
     """
     Extract the naive vasculature graph from a vessel map.
@@ -88,24 +97,46 @@ def simplify_graph(
             The graph of the vasculature extracted from the vessel map.
 
         max_spurs_length:
-            If larger than 0, spurs (terminal branches) with a length smaller than this value are removed (disabled by default).
+            If larger than 0, spurs (terminal branches) with a length smaller than this value are removed.
 
-        min_orphan_branches_length:
-            If larger than 0, orphan branches (connected to no other branches) shorter than this value are removed (disabled by default).
+            Default is 0 (disabled).
 
-        nodes_merge_distance:
-            If larger than 0, nodes separated by less than this distance are merged (5√2/2 by default).
+        reconnect_endpoints:
+            If ``True`` or :class:`ReconnectEndpointsArg`, the endpoints are reconnected to their closest branch in the direction of their tangent or to the closest facing endpoints.
+
+            Default is ``False``.
 
         max_cycles_length:
             If larger than 0, cycles whose nodes are closer than this value from each other are merged (disabled by default).
 
+            Default is 20.
+
             .. note::
                 to limit computation time, only cycles with less than 5 nodes are considered.
 
+        junctions_merge_distance:
+            If larger than 0, nodes separated by less than this distance are merged.
+
+            Default is 20.
+
+        min_orphan_branches_length:
+            If larger than 0, orphan branches (connected to no other branches) shorter than this value are removed.
+
+            Default is 30.
+
         simplify_topology:
             - If ``'node'``, the graph is simplified by fusing nodes with degree 2 (connected to exactly 2 branches).
-            If ``'branch'``, the graph is simplified by merging equivalent branches (branches connecting the same junctions).
-            If ``'both'``, both simplifications are applied.
+            - If ``'branch'``, the graph is simplified by merging equivalent branches (branches connecting the same junctions).
+            - If ``'both'`` or ``True``, both simplifications are applied.
+
+            Default is ``'node'``.
+
+        passing_node_min_angle:
+            Under this minimum angle (in degrees) between the two branches connected to a passing node, the node is considered as a junction and is not removed.
+
+            Default is 110.
+
+            If simplify_topology does not include ``'node'``, this parameter is ignored.
 
     Returns
     -------
@@ -118,67 +149,52 @@ def simplify_graph(
         and the coordinates of the nodes as a tuple of (y, x) where y and x are vectors of length nNode.
 
     """  # noqa: E501
+    if arg is None:
+        arg = GraphSimplifyArg()
+    arg = arg.update(
+        max_spurs_length=max_spurs_length,
+        reconnect_endpoints=reconnect_endpoints,
+        max_cycles_length=max_cycles_length,
+        junctions_merge_distance=junctions_merge_distance,
+        min_orphan_branches_length=min_orphan_branches_length,
+        simplify_topology=simplify_topology,
+        passing_node_min_angle=passing_node_min_angle,
+    )
+
     if not inplace:
         vessel_graph = vessel_graph.copy()
 
-    if max_spurs_length > 0:
-        remove_spurs(vessel_graph, max_spurs_length, inplace=True)
+    if arg.max_spurs_length > 0:
+        remove_spurs(vessel_graph, arg.max_spurs_length, inplace=True)
 
-    if nodes_merge_distance is True:
-        nodes_merge_distance = 2.5 * np.sqrt(2)
-    if isinstance(nodes_merge_distance, Mapping):
-        junctions_merge_distance = nodes_merge_distance.get("junction", 0)
-        tips_merge_distance = nodes_merge_distance.get("tip", 0)
-        nodes_merge_distance = nodes_merge_distance.get("node", 0)
-    elif isinstance(nodes_merge_distance, NodeMergeDistances):
-        junctions_merge_distance = nodes_merge_distance.junction
-        tips_merge_distance = nodes_merge_distance.tip
-        nodes_merge_distance = nodes_merge_distance.node
+    if type(arg.reconnect_endpoints) is bool:
+        if arg.reconnect_endpoints:
+            vessel_graph = reconnect_endpoints(vessel_graph, inplace=True)
     else:
-        junctions_merge_distance = 0
-        tips_merge_distance = 0
+        vessel_graph = reconnect_endpoints(vessel_graph, arg.reconnect_endpoints, inplace=True)
 
-    if tips_merge_distance > 0:
+    if arg.max_cycles_length > 0:
+        merge_small_cycles(vessel_graph, arg.max_cycles_length, inplace=True)
+
+    if arg.junctions_merge_distance > 0:
         merge_nodes_by_distance(
             vessel_graph,
-            max_distance=tips_merge_distance,
-            nodes_type="endpoints",
-            only_connected_nodes=False,
-            inplace=True,
-            iterative_clustering=iterative_nodes_merge,
-        )
-
-    if max_cycles_length > 0:
-        merge_small_cycles(vessel_graph, max_cycles_length, inplace=True)
-
-    if junctions_merge_distance > 0:
-        merge_nodes_by_distance(
-            vessel_graph,
-            max_distance=junctions_merge_distance,
+            max_distance=arg.junctions_merge_distance,
             nodes_type="junction",
             only_connected_nodes=True,
+            iterative_clustering=True,
             inplace=True,
-            iterative_clustering=iterative_nodes_merge,
         )
 
-    if nodes_merge_distance > 0:
-        merge_nodes_by_distance(
-            vessel_graph,
-            max_distance=nodes_merge_distance,
-            nodes_type="all",
-            inplace=True,
-            iterative_clustering=iterative_nodes_merge,
-        )
-
-    if max_cycles_length > 0 or simplify_topology in ("branch", "both"):
-        max_nodes_distance = max_cycles_length if simplify_topology not in ("branch", "both") else None
+    if arg.max_cycles_length > 0 or arg.simplify_topology in ("branch", "both") or arg.simplify_topology is True:
+        max_nodes_distance = arg.max_cycles_length if arg.simplify_topology not in ("branch", "both") else None
         merge_equivalent_branches(vessel_graph, max_nodes_distance, inplace=True)
 
-    if min_orphan_branches_length > 0:
-        remove_orphan_branches(vessel_graph, min_orphan_branches_length, inplace=True)
+    if arg.min_orphan_branches_length > 0:
+        remove_orphan_branches(vessel_graph, arg.min_orphan_branches_length, inplace=True)
 
-    if simplify_topology in ("node", "both"):
-        simplify_passing_nodes(vessel_graph, min_angle=passing_node_min_angle, inplace=True)
+    if arg.simplify_topology in ("node", "both") or arg.simplify_topology is True:
+        simplify_passing_nodes(vessel_graph, min_angle=arg.passing_node_min_angle, inplace=True)
 
     return vessel_graph
 
@@ -483,6 +499,9 @@ def simplify_passing_nodes(
         # === Filter out nodes that should not be merged ===
         nodes_to_fuse = np.setdiff1d(nodes_to_fuse, not_fusable)
 
+    if len(nodes_to_fuse) == 0:
+        return vgraph
+
     incident_branches = None
     if min_angle > 0:
         # === Filter out nodes with a too small angle between their two incident branches ===
@@ -490,7 +509,7 @@ def simplify_passing_nodes(
         incident_branches, idirs = vgraph.incident_branches_individual(nodes_to_fuse, return_branch_direction=True)
         incident_branches = np.stack(incident_branches)
         t = np.stack([geo_data.tips_tangent(b, d) for b, d in zip(incident_branches, idirs, strict=True)])
-        cos = np.sum(t[..., 0] * t[..., 1], axis=1)
+        cos = np.sum(t[:, 1, :] * t[:, 0, :], axis=1)
         fuseable_nodes = cos <= np.cos(np.deg2rad(min_angle))
         nodes_to_fuse = nodes_to_fuse[fuseable_nodes]
         incident_branches = incident_branches[fuseable_nodes]
@@ -746,11 +765,15 @@ def find_endpoints_branches_intercept(
 
 def reconnect_endpoints(
     vessel_graph: VGraph,
-    max_distance: float = 100,
-    intercept_snapping_distance: float = 30,
-    max_angle: float = 30,
-    tangent: VBranchGeoData.Key | npt.NDArray[np.float64] = VBranchGeoData.Fields.TIPS_TANGENT,
-    bspline: VBranchGeoData.Key = VBranchGeoData.Fields.BSPLINE,
+    arg: Optional[ReconnectEndpointsArg] = None,
+    /,
+    *,
+    max_distance: Optional[float] = None,
+    endpoints_to_endpoints_max_distance: Optional[float] = None,
+    intercept_snapping_distance: Optional[float] = None,
+    max_angle: Optional[float] = None,
+    tangent: Optional[VBranchGeoData.Key | npt.NDArray[np.float64]] = None,
+    bspline: Optional[VBranchGeoData.Key] = None,
     inplace=False,
 ) -> VGraph:
     """
@@ -775,16 +798,32 @@ def reconnect_endpoints(
     VGraph
         The modified graph with the endpoints reconnected.
     """  # noqa: E501
-    new_edges, new_nodes, new_nodes_yx = find_endpoints_branches_intercept(
-        vessel_graph,
+
+    if arg is None:
+        arg = ReconnectEndpointsArg()
+    arg.update(
         max_distance=max_distance,
+        endpoints_to_endpoints_max_distance=endpoints_to_endpoints_max_distance,
         intercept_snapping_distance=intercept_snapping_distance,
+        max_angle=max_angle,
         tangent=tangent,
         bspline=bspline,
+    )
+
+    new_edges, new_nodes, new_nodes_yx = find_endpoints_branches_intercept(
+        vessel_graph,
+        max_distance=arg.max_distance,
+        intercept_snapping_distance=arg.intercept_snapping_distance,
+        tangent=arg.tangent,
+        bspline=arg.bspline,
         ignore_endpoints_to_endpoints=True,
     )
     new_endpoints_edges = find_facing_endpoints(
-        vessel_graph, max_distance=max_distance, max_angle=max_angle, filter="exclusive", tangent=tangent
+        vessel_graph,
+        max_distance=if_none(arg.endpoints_to_endpoints_max_distance, arg.max_distance),
+        max_angle=arg.max_angle,
+        filter="exclusive",
+        tangent=arg.tangent,
     )
     new_edges = np.concatenate((new_edges, new_endpoints_edges), axis=0)
     vessel_graph = vessel_graph.copy() if not inplace else vessel_graph
@@ -803,215 +842,3 @@ def reconnect_endpoints(
         vessel_graph.add_branches(new_edges, inplace=True)
 
     return vessel_graph
-
-
-def simplify_graph_legacy(
-    vessel_graph: VGraph,
-    max_spurs_distance: float = 0,
-    nodes_merge_distance: NodeMergeDistanceParam = True,
-    merge_small_cycles: float = 0,
-    simplify_topology: SimplifyTopology = "node",
-    node_simplification_criteria: Optional[NodeSimplificationCallBack] = None,
-) -> VGraph:
-    """
-    Extract the naive vasculature graph from a vessel map.
-    If return label is True, the label map of branches and nodes are also computed and returned.
-
-    Small topological corrections are applied to the graph:
-        - nodes too close to each other are merged (max distance=5√2/2 by default)
-        - cycles with small perimeter are merged (max size=15% of the image width by default)
-        - if simplify_topology is True, the graph is simplified by merging equivalent branches (branches connecting the same junctions)
-            and removing nodes with degree 2.
-
-    Parameters
-    ----------
-        vessel_graph:
-            The graph of the vasculature extracted from the vessel map.
-
-        return_label:
-            If True, return the label map of branches and nodes.
-
-        max_spurs_distance:
-            If larger than 0, spurs (terminal branches) with a length smaller than this value are removed (disabled by default).
-        nodes_merge_distance:
-            If larger than 0, nodes separated by less than this distance are merged (5√2/2 by default).
-
-        merge_small_cycles:
-            If larger than 0, cycles whose nodes are closer than this value from each other are merged (disabled by default).
-
-            .. note::
-                to limit computation time, only cycles with less than 5 nodes are considered.
-
-        simplify_topology:
-            - If ``'node'``, the graph is simplified by fusing nodes with degree 2 (connected to exactly 2 branches).
-            If ``'branch'``, the graph is simplified by merging equivalent branches (branches connecting the same junctions).
-            If ``'both'``, both simplifications are applied.
-
-    Returns
-    -------
-        The adjacency map of the graph. (Similar to an adjacency list but instead of being pair of node indices,
-            each row is a boolean vector with exactly 2 pixel set to True, corresponding to the 2 nodes connected by the branch.)
-        Shape: (nBranch, nNode) where nBranch and nNode are the number of branches and nodes (junctions or endpoints).
-
-        If return_label is True, also return the label map of branches
-            (where each branch of the skeleton is labeled by a unique integer corresponding to its index in the adjacency matrix)
-        and the coordinates of the nodes as a tuple of (y, x) where y and x are vectors of length nNode.
-
-    """  # noqa: E501
-    branches_by_nodes = vessel_graph.branches_by_nodes()
-    labeled_branches = vessel_graph.geometric_data().branches_label_map()
-    node_yx = vessel_graph.nodes_coord().astype(np.int)
-    node_y, node_x = node_yx.T
-
-    is_endpoint = compute_is_endpoints(branches_by_nodes)
-
-    branch_lookup = None
-    node_labels = (np.asarray([], dtype=np.int64),) * 3
-
-    if max_spurs_distance > 0:
-        # Remove spurs (terminal branches) shorter than max_spurs_distance
-        # - Identify terminal branches (branches connected to endpoints)
-        spurs_branches = np.any(branches_by_nodes[:, is_endpoint], axis=1)
-        # - Extract the two nodes (the first is probably a junction, the second is necessarily an endpoint) connected
-        #    by each terminal branch
-        spurs_junction, spurs_endpoint = branches_by_nodes_to_branch_list(branches_by_nodes[spurs_branches]).T
-        # - Discard branches whose first node is not a junction (branches connecting 2 endpoints)
-        single_branches = is_endpoint[spurs_junction]
-        spurs_junction = spurs_junction[~single_branches]
-        spurs_endpoint = spurs_endpoint[~single_branches]
-        # - Compute the distance between those nodes for each terminal branch
-        spurs_distance = np.linalg.norm(
-            (node_y[spurs_junction] - node_y[spurs_endpoint], node_x[spurs_junction] - node_x[spurs_endpoint]), axis=0
-        )
-        # - Select every endpoint connected to a terminal branch with a distance smaller than max_spurs_distance
-        node_to_delete = np.unique(
-            np.concatenate(
-                (
-                    spurs_junction[spurs_distance < max_spurs_distance],
-                    spurs_endpoint[spurs_distance < max_spurs_distance],
-                )
-            )
-        )
-        node_to_fuse = node_to_delete[~is_endpoint[node_to_delete]]
-        node_to_delete = node_to_delete[is_endpoint[node_to_delete]]
-        # - Delete those nodes
-        branches_by_nodes, branch_lookup2, nodes_mask = delete_nodes(branches_by_nodes, node_to_delete)
-        # - Apply the lookup tables on nodes and branches
-        branch_lookup = apply_lookup(branch_lookup, branch_lookup2)
-        node_y, node_x = node_y[nodes_mask], node_x[nodes_mask]
-        node_to_fuse = (np.cumsum(nodes_mask) - 1)[node_to_fuse]
-
-        # - Remove useless nodes
-        # node_to_fuse = node_to_fuse[node_rank(branches_by_nodes[:, node_to_fuse]) == 2]
-        # if np.any(node_to_fuse):
-        #    branches_by_nodes, branch_lookup2, nodes_mask, node_labels2 = fuse_nodes(
-        #        branches_by_nodes, node_to_fuse, (node_y, node_x)
-        #    )
-
-        #    branch_lookup = apply_lookup(branch_lookup, branch_lookup2)
-        #    node_labels = tuple(np.concatenate((n, n1)) for n, n1 in zip(node_labels, node_labels2, strict=True))
-        #    node_y, node_x = node_y[nodes_mask], node_x[nodes_mask]
-
-        is_endpoint = compute_is_endpoints(branches_by_nodes)
-
-    if nodes_merge_distance is True:
-        nodes_merge_distance = 2.5 * np.sqrt(2)
-    if isinstance(nodes_merge_distance, Mapping):
-        junctions_merge_distance = nodes_merge_distance.get("junction", 0)
-        tips_merge_distance = nodes_merge_distance.get("tip", 0)
-        nodes_merge_distance = nodes_merge_distance.get("node", 0)
-    else:
-        junctions_merge_distance = 0
-        tips_merge_distance = 0
-
-    if nodes_merge_distance > 0 or junctions_merge_distance > 0 or tips_merge_distance > 0:
-        # Merge nodes clusters smaller than nodes_merge_distance
-        distances = [
-            (~is_endpoint, junctions_merge_distance, True),  # distance only for junctions
-            (is_endpoint, tips_merge_distance, True),  # distance only for tips
-            (None, nodes_merge_distance, True),
-        ]  # distance for all nodes
-        branches_by_nodes, branch_lookup2, nodes_coord = merge_nodes_by_distance_legacy(
-            branches_by_nodes, (node_y, node_x), distances
-        )
-        # - Apply the lookup tables on nodes and branches
-        branch_lookup = apply_lookup(branch_lookup, branch_lookup2, node_labels[2])
-        node_y, node_x = nodes_coord
-        is_endpoint = compute_is_endpoints(branches_by_nodes)
-
-    if merge_small_cycles > 0:
-        # Merge small cycles
-        # - Identify cycles
-        nodes_coord = np.asarray((node_y, node_x)).T
-        nodes_adjacency_matrix = branches_by_nodes.T @ branches_by_nodes - np.eye(len(node_y))
-
-        cycles = [
-            _ for _ in nx.chordless_cycles(nx.from_numpy_array(nodes_adjacency_matrix), length_bound=4) if len(_) > 2
-        ]
-        # - Select chord whose maximum distance between two nodes is smaller than merge_small_cycles
-        cycles_max_dist = [distance_matrix(nodes_coord[cycle]).max() for cycle in cycles]
-        cycles = [
-            cycle for cycle, max_dist in zip(cycles, cycles_max_dist, strict=True) if max_dist < merge_small_cycles
-        ]
-
-        cycles = reduce_clusters_legacy(cycles)
-        # - Merge cycles
-        branches_by_nodes, branch_lookup_2, nodes_mask = merge_nodes_clusters(
-            branches_by_nodes, cycles, erase_branches=True
-        )
-        # - Apply the lookup tables on nodes and branches
-        node_y, node_x = apply_lookup_on_coordinates((node_y, node_x), nodes_mask)
-        branch_lookup = apply_lookup(branch_lookup, branch_lookup_2, node_labels[2])
-
-    if merge_small_cycles > 0 or simplify_topology in ("branch", "both"):
-        # Merge 2 branches cycles (branches that are connected to the same 2 nodes)
-        # - If simplify_topology is neither 'branch' nor 'both', limit the merge distance to half merge_small_cycles
-        max_nodes_distance = merge_small_cycles if simplify_topology not in ("branch", "both") else None
-        # - Merge equivalent branches
-        branches_by_nodes, branch_lookup_2 = merge_equivalent_branches_legacy(
-            branches_by_nodes,
-            max_nodes_distance=max_nodes_distance,
-            nodes_coordinates=(node_y, node_x),
-            remove_labels=True,
-        )
-        # - Apply the lookup tables on branches
-        branch_lookup = apply_lookup(branch_lookup, branch_lookup_2, node_labels[2])
-
-    if simplify_topology in ("node", "both"):
-        # Fuse nodes that are connected to only 2 branches
-        # - Identify nodes connected to only 2 branches
-        nodes_to_fuse = node_rank(branches_by_nodes) == 2
-
-        if node_simplification_criteria is not None:
-            nodes_to_fuse = node_simplification_criteria(
-                nodes_to_fuse, node_y, node_x, labeled_branches > 0, branches_by_nodes
-            )
-
-        if np.any(nodes_to_fuse):
-            # - Fuse nodes
-            branches_by_nodes, branch_lookup2, nodes_mask, node_labels2 = fuse_nodes(
-                branches_by_nodes, nodes_to_fuse, (node_y, node_x)
-            )
-            # - Apply the lookup tables on nodes and branches
-            branch_lookup = apply_lookup(branch_lookup, branch_lookup2, node_labels[2])
-            node_labels = tuple(np.concatenate((n, n1)) for n, n1 in zip(node_labels, node_labels2, strict=True))
-            node_y, node_x = node_y[nodes_mask], node_x[nodes_mask]
-
-        nodes_to_delete = node_rank(branches_by_nodes) == 0
-        if np.any(nodes_to_delete):
-            # - Delete nodes
-            branches_by_nodes, branch_lookup2, nodes_mask = delete_nodes(branches_by_nodes, nodes_to_delete)
-            # - Apply the lookup tables on nodes and branches
-            branch_lookup = apply_lookup(branch_lookup, branch_lookup2, node_labels[2])
-            node_y, node_x = node_y[nodes_mask], node_x[nodes_mask]
-
-    geo_data = vessel_graph.geometric_data().copy()
-    if branch_lookup is not None:
-        # Update branch labels
-        geo_data._reindex_branches(branch_lookup[1:] - 1)
-        labeled_branches = branch_lookup[labeled_branches]
-
-    labeled_branches[node_labels[0].astype(np.int64), node_labels[1].astype(np.int64)] = node_labels[2]
-    geo_data.node_coord = {i: Point(y, x) for i, (y, x) in enumerate(zip(node_y, node_x))}
-
-    return VGraph.from_branch_by_nodes(branches_by_nodes, geo_data)
