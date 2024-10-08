@@ -258,3 +258,82 @@ def as_1d_array(data: Any, *, dtype=None) -> Tuple[np.ndarray | None, bool]:
 
 def modulo_pi(x):
     return (x + np.pi) % (2 * np.pi) - np.pi
+
+
+def intercept_segment(
+    a0: npt.ArrayLike,
+    a1: npt.ArrayLike,
+    b0: npt.ArrayLike,
+    b1: npt.ArrayLike,
+    a0_bound=True,
+    a1_bound=True,
+    b0_bound=True,
+    b1_bound=True,
+) -> np.ndarray:
+    """
+    Return the intersection point of two segments a0-a1 and b0-b1.
+
+    Parameters
+    ----------
+    a0 : npt.ArrayLike
+        The first points of the first segments as an array of shape (Na, 2).
+
+    a1 : npt.ArrayLike
+        The second points of the first segments as an array of shape (Na, 2).
+
+    b0 : npt.ArrayLike
+        The first points of the second segments as an array of shape (Nb, 2).
+
+    b1 : npt.ArrayLike
+        The second points of the second segments as an array of shape (Nb, 2).
+
+    a0_bound : bool, optional
+        Whether the intersection point can't be beyond a0 on the first segment, by default True.
+
+    a1_bound : bool, optional
+        Whether the intersection point can't be beyond a1 on the first segment, by default True.
+
+    b0_bound : bool, optional
+        Whether the intersection point can't be beyond b0 on the second segment, by default True.
+
+    b1_bound : bool, optional
+        Whether the intersection point can't be beyond b1 on the second segment, by default True.
+
+    Returns
+    -------
+    np.ndarray
+        The intersection points as an array of shape (Na, Nb, 2).
+        If the segments do not intersect, the points are set to NaN.
+    """
+    ps = [np.atleast_2d(_).astype(float) for _ in [a0, a1, b0, b1]]
+    assert all(p.ndim == 2 and p.shape[1] == 2 for p in ps), "All points must 2D arrays of shape (N, 2)."
+    a0, a1, b0, b1 = ps
+    assert a0.shape[0] == a1.shape[0], "a0 and a1 must have the same number of points."
+    assert b0.shape[0] == b1.shape[0], "b0 and b1 must have the same number of points."
+
+    ya0, xa0 = a0.T[:, :, None]
+    ya1, xa1 = a1.T[:, :, None]
+    yb0, xb0 = b0.T[:, None, :]
+    yb1, xb1 = b1.T[:, None, :]
+
+    d = (xa1 - xa0) * (yb1 - yb0) - (ya1 - ya0) * (xb1 - xb0)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = ((ya0 - yb0) * (xb1 - xb0) - (xa0 - xb0) * (yb1 - yb0)) / d
+        u = ((ya0 - yb0) * (xa1 - xa0) - (xa0 - xb0) * (ya1 - ya0)) / d
+        out = np.stack([ya0 + t * (ya1 - ya0), xa0 + t * (xa1 - xa0)], axis=-1)
+        if a0_bound:
+            out[t < 0] = np.nan
+        if a1_bound:
+            out[t > 1] = np.nan
+        if b0_bound:
+            out[u < 0] = np.nan
+        if b1_bound:
+            out[u > 1] = np.nan
+    return out
+
+
+def sigmoid(x, antisymmetric=False):
+    if antisymmetric:
+        return 2 / (1 + np.exp(-x)) - 1
+    return 1 / (1 + np.exp(-x))

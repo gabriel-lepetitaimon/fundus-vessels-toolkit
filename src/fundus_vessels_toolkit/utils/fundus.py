@@ -78,6 +78,11 @@ def fundus_ROI(
             if not np.any(MASK_BORDER & hole_mask):
                 mask[hole_mask] = 1
 
+    # Take the largest connected component
+    _, labels, stats, _ = cv2().connectedComponentsWithStats(mask.astype(np.uint8), 4, cv2().CV_32S)
+    if stats.shape[0] >= 1:
+        mask = labels == (np.argmax(stats[1:, cv2().CC_STAT_AREA]) + 1)
+
     if smoothing_radius > 0:
         mask = (
             cv2.GaussianBlur(

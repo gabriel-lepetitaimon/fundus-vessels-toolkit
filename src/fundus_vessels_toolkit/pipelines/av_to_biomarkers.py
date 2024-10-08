@@ -9,12 +9,12 @@ import pandas as pd
 import torch
 
 from ..vascular_data_objects import FundusData, VTree
-from .avseg_to_tree import AVSegToTree, FundusAVSegToTree
+from .avseg_to_tree import AVSegToTreeBase
 
 
 class FundusAVSegToBiomarkers:
-    def __init__(self, avseg_to_tree: Optional[AVSegToTree] = None):
-        self.avseg_to_tree = avseg_to_tree if avseg_to_tree is not None else FundusAVSegToTree(20)
+    def __init__(self, avseg_to_tree: AVSegToTreeBase):
+        self.avseg_to_tree = avseg_to_tree
 
     def __call__(
         self,

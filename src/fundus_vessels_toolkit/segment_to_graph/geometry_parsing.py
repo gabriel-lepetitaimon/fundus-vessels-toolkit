@@ -86,9 +86,10 @@ def populate_geometry(
 def derive_tips_geometry_from_curve_geometry(
     vgraph: VGraph,
     *,
-    calibre: None | bool | float = None,
-    tangent: Literal["bspline"] | bool | float | None = None,
+    calibre: None | bool | int = None,
+    tangent: Literal["bspline"] | bool | int | None = None,
     boundaries: bool | None = None,
+    tangent_from_nodes: bool | int = True,
     inplace: bool = False,
 ) -> VGraph:
     """Derive the geometry of tips from the curve geometry of the branches.
@@ -99,8 +100,23 @@ def derive_tips_geometry_from_curve_geometry(
         The graph to derive the tips geometry from.
 
 
-    calibre : bool | float, optional
+    calibre : bool | int, optional
         If neither False nor null, derive ``TERMINATION_CALIBRE`` from ``CALIBRE``.
+        If True, average the calibre of the 10 points closest to the tips.
+        If a int, average the calibre of the n points closest to the tips.
+
+    tangent : Literal["bspline"] | bool | int | None, optional
+        If neither False nor null, derive ``TERMINATION_TANGENT`` from ``TANGENT``.
+        If True, average the tangent of the 10 points closest to the tips.
+        If a int, average the tangent of the n points closest to the tips.
+
+    boundaries : bool | None, optional
+        If neither False nor null, derive ``TERMINATION_BOUNDARIES`` from ``BOUNDARIES``.
+
+    tangent_from_nodes : bool | int, optional
+        If not False, when the tangent is not available, derive it from the nodes coordinates if the distance between the nodes is less than the value (30 px if True).
+
+
     inplace : bool, optional
         If True, the graph is modified in place, by default False.
 
@@ -108,7 +124,7 @@ def derive_tips_geometry_from_curve_geometry(
     -------
     VGraph
         The graph with the tips geometry set.
-    """
+    """  # noqa: E501
     if not inplace:
         vgraph = vgraph.copy()
         return derive_tips_geometry_from_curve_geometry(vgraph, inplace=True)
@@ -124,7 +140,7 @@ def derive_tips_geometry_from_curve_geometry(
 
         tips_calibre = []
         # Fetch the branch calibres
-        branches_calibres = gdata.branch_data(VBranchGeoData.Fields.CALIBRES, graph_indexing=False)
+        branches_calibres = gdata.branch_data(VBranchGeoData.Fields.CALIBRES, graph_index=False)
         # Compute the mean of the branch calibre at the tips
         for branch_calibres in branches_calibres:
             if branch_calibres:
@@ -133,7 +149,14 @@ def derive_tips_geometry_from_curve_geometry(
             else:
                 tips_calibre.append(None)
         # Store the tips calibre back as TERMINATION_CALIBRE
-        gdata.set_branch_data(VBranchGeoData.Fields.TIPS_CALIBRE, tips_calibre, graph_indexing=False, no_check=True)
+        gdata.set_branch_data(VBranchGeoData.Fields.TIPS_CALIBRE, tips_calibre, graph_index=False, no_check=True)
+
+    nodes_coord = gdata.nodes_coord()
+    branch_list = vgraph.branch_list
+    if tangent_from_nodes is True:
+        tangent_from_nodes = 30
+    elif tangent_from_nodes is False:
+        tangent_from_nodes = 0
 
     # === Tangents ===
     if tangent is None:
@@ -149,32 +172,44 @@ def derive_tips_geometry_from_curve_geometry(
             for i, branch_bspline in enumerate(branches_bsplines):
                 if branch_bspline:
                     tips_tangents.append(np.array(branch_bspline.tips_tangents(normalize=True), dtype=float))
+                elif (
+                    tangent_from_nodes
+                    and (dist := np.linalg.norm(u21 := np.subtract(*nodes_coord[branch_list[i]]))) < tangent_from_nodes
+                ):
+                    u21 = u21 / dist
+                    tips_tangents.append(np.array([-u21, u21], dtype=float))
                 else:
                     tips_tangents.append(np.zeros((2, 2), dtype=float))
         else:
             if tangent is True:
                 tangent = 10
-            branches_tangents = gdata.branch_data(VBranchGeoData.Fields.TANGENTS, graph_indexing=False)
+            branches_tangents = gdata.branch_data(VBranchGeoData.Fields.TANGENTS, graph_index=False)
             for branch_tangent in branches_tangents:
                 if branch_tangent:
                     d = branch_tangent.data
                     tips_tangents.append(np.stack(d[:tangent].mean(axis=0), -d[-tangent:].mean(axis=0)))
+                elif (
+                    tangent_from_nodes
+                    and (dist := np.linalg.norm(u21 := np.subtract(*nodes_coord[branch_list[i]]))) < tangent_from_nodes
+                ):
+                    u21 = u21 / dist
+                    tips_tangents.append(np.array([-u21, u21], dtype=float))
                 else:
                     tips_tangents.append(None)
-        gdata.set_branch_data(VBranchGeoData.Fields.TIPS_TANGENT, tips_tangents, graph_indexing=False, no_check=True)
+        gdata.set_branch_data(VBranchGeoData.Fields.TIPS_TANGENT, tips_tangents, graph_index=False, no_check=True)
 
     # === Boundaries ===
     if boundaries is None and gdata.has_branch_data(VBranchGeoData.Fields.BOUNDARIES):
         boundaries = True
     if boundaries:
         tips_bounds = []
-        branches_bounds = gdata.branch_data(VBranchGeoData.Fields.BOUNDARIES, graph_indexing=False)
+        branches_bounds = gdata.branch_data(VBranchGeoData.Fields.BOUNDARIES, graph_index=False)
         for branch_bounds in branches_bounds:
             if branch_bounds:
                 d = branch_bounds.data
                 tips_bounds.append(np.array([d[0], d[-1]]))
             else:
                 tips_bounds.append(None)
-        gdata.set_branch_data(VBranchGeoData.Fields.TIPS_BOUNDARIES, tips_bounds, graph_indexing=False, no_check=True)
+        gdata.set_branch_data(VBranchGeoData.Fields.TIPS_BOUNDARIES, tips_bounds, graph_index=False, no_check=True)
 
     return vgraph

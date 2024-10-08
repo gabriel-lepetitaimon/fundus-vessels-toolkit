@@ -27,25 +27,28 @@ std::tuple<torch::Tensor, torch::Tensor, std::vector<torch::Tensor>, torch::Tens
 
     // --- Clean the branches tips ---
     double clean_branches_tips = get_if_exists(options, "clean_branches_tips", 0.);
+    double clean_terminal_branches_tips = get_if_exists(options, "clean_terminal_branches_tips", 0.);
     bool adaptativeTangent = get_if_exists(options, "adaptative_tangent", 1.) > 0;
     auto tangents_calibres_tensor = torch::empty({0}, torch::kFloat);
     if (clean_branches_tips > 0) {
         auto const &adj_list = edge_list_to_adjlist(edge_list, node_yx.size());
-        auto const tangents_calibres = clean_branches_skeleton(branches_curves, labels_acc, seg_acc, adj_list,
-                                                               clean_branches_tips, adaptativeTangent);
+        auto const tangents_calibres =
+            clean_branches_skeleton(branches_curves, labels_acc, seg_acc, adj_list, clean_branches_tips,
+                                    clean_terminal_branches_tips, adaptativeTangent);
         const long n_branches = (long)tangents_calibres.size();
+        // Convert tip geometry to tensor
         tangents_calibres_tensor = torch::empty({n_branches, 2, 7}, torch::kFloat);
         auto accessor = tangents_calibres_tensor.accessor<float, 3>();
         for (int i = 0; i < n_branches; i++) {
             auto const &tc = tangents_calibres[i];
             for (int j = 0; j < 2; j++) {
-                accessor[i][j][0] = std::get<0>(tc[j]).y;
-                accessor[i][j][1] = std::get<0>(tc[j]).x;
-                accessor[i][j][2] = std::get<1>(tc[j]);
-                accessor[i][j][3] = std::get<2>(tc[j]).y;
-                accessor[i][j][4] = std::get<2>(tc[j]).x;
-                accessor[i][j][5] = std::get<3>(tc[j]).y;
-                accessor[i][j][6] = std::get<3>(tc[j]).x;
+                accessor[i][j][0] = std::get<0>(tc[j]).y;  // tangent.y
+                accessor[i][j][1] = std::get<0>(tc[j]).x;  // tangent.x
+                accessor[i][j][2] = std::get<1>(tc[j]);    // calibre
+                accessor[i][j][3] = std::get<2>(tc[j]).y;  // leftBoundary.y
+                accessor[i][j][4] = std::get<2>(tc[j]).x;  // leftBoundary.x
+                accessor[i][j][5] = std::get<3>(tc[j]).y;  // rightBoundary.y
+                accessor[i][j][6] = std::get<3>(tc[j]).x;  // rightBoundary.x
             }
         }
     }
@@ -263,6 +266,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // === Skeleton.h ===
     m.def("detect_skeleton_nodes", &detect_skeleton_nodes, "Detect junctions and endpoints in a skeleton.");
+    m.def("detect_skeleton_nodes_debug", &detect_skeleton_nodes_debug, "Detect junctions and endpoints in a skeleton.");
 
     // === Branch.h ===
     m.def("find_branch_endpoints", &find_branch_endpoints, "Find the first and last endpoint of each branch.");

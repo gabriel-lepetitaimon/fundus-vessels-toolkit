@@ -77,12 +77,11 @@ def cluster_by_distance(coords: List[Point] | np.ndarray, max_distance: int, ite
     Parameters
     ----------
     coords : List[Point] | np.ndarray
-        The coordinates to cluster.
+        The coordinates of the points to cluster.
 
 
     """
-    if isinstance(coords, list):
-        coords = np.asarray(coords, dtype=np.int32)
+    coords = np.atleast_2d(coords).astype(int)
     distance = np.linalg.norm(coords[:, None] - coords, axis=-1)
     close_points = np.argwhere((distance <= max_distance))
     close_points = close_points[close_points[:, 0] < close_points[:, 1]]

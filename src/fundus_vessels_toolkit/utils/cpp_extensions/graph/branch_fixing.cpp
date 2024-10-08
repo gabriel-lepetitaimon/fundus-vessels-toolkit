@@ -12,15 +12,18 @@
  * @param segmentation An accessor to a 2D tensor of shape (H, W) containing the vessels binary segmentation.
  * @param adjacency The adjacency list of the vessels graph.
  * @param maxRemovedLength The maximum number of pixels to remove from the branch.
+ * @param maxRemovedLengthEnd The maximum number of pixels to remove from the branch tips connected to endpoints.
  * @param adaptativeTangent A boolean indicating if the tangent smoothing should be scaled by the branch calibre.
  *
  * @return A list of pairs of vectors and floats representing the tangent and the calibre of the branches tips.
  */
 std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_branches_skeleton(
     std::vector<CurveYX> &branchCurves, Tensor2DAcc<int> &branchesLabelMap, const Tensor2DAcc<bool> &segmentation,
-    const GraphAdjList &adjacency, const int maxRemovedLength, bool adaptativeTangent) {
+    const GraphAdjList &adjacency, int maxRemovedLength, int maxRemovedLengthEnd, bool adaptativeTangent) {
     std::vector<IntPair> branches_tips(branchCurves.size(), {0, 0});
     std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> out(branchCurves.size());
+
+    if (maxRemovedLengthEnd < 0) maxRemovedLengthEnd = maxRemovedLength;
 
 #pragma omp parallel for
     for (int nodeID = 0; nodeID < (int)adjacency.size(); nodeID++) {
@@ -28,18 +31,18 @@ std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_
         auto const &node_adjacency = adjacency[nodeID];
 
         if (node_adjacency.size() == 1) {
-            // ... its single branch ...
+            // ... its **single** branch ...
             const auto &edge = *node_adjacency.begin();
             const bool startSide = nodeID == edge.start;
             auto const &[tipIdx, tangent, calibre, boundL, boundR] = clean_branch_skeleton_tip(
-                branchCurves, edge.id, startSide, segmentation, maxRemovedLength, adaptativeTangent);
+                branchCurves, edge.id, startSide, segmentation, maxRemovedLengthEnd, adaptativeTangent);
 
             // ... and store the tip indexes, in order to clean them later.
             branches_tips[edge.id][startSide ? 0 : 1] = tipIdx;
-            out[edge.id][startSide ? 0 : 1] = {tangent, calibre, boundL, boundR};
+            out[edge.id][startSide ? 0 : 1] = {startSide ? tangent : -tangent, calibre, boundL, boundR};
         } else {
-            //  ... all its incident branches...
-            // (if the node connect two branches, prevent the branch cleaning)
+            //  ... **all** its incident branches...
+            // (if the node connect exactly two branches, prevent the branch cleaning)
             int nodeMaxRemovedLength = node_adjacency.size() == 2 ? 0 : maxRemovedLength;
             auto const &tips_around_node = clean_branch_skeleton_around_node(
                 branchCurves, nodeID, node_adjacency, segmentation, nodeMaxRemovedLength, adaptativeTangent);
@@ -48,9 +51,14 @@ std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_
             int i = 0;
             for (auto const &edge : node_adjacency) {
                 auto const &[tipIdx, tangent, calibre, boundL, boundR] = tips_around_node[i];
-                if (nodeID == edge.start) branches_tips[edge.id][0] = tipIdx;
-                if (nodeID == edge.end) branches_tips[edge.id][1] = tipIdx + 1;
-                out[edge.id][nodeID == edge.start ? 0 : 1] = {tangent, calibre, boundL, boundR};
+                if (nodeID == edge.start) {
+                    branches_tips[edge.id][0] = tipIdx;
+                    out[edge.id][0] = {tangent, calibre, boundL, boundR};
+                }
+                if (nodeID == edge.end) {
+                    branches_tips[edge.id][1] = tipIdx;  // TODO:  check why there was a +1 here...
+                    out[edge.id][1] = {-tangent, calibre, boundL, boundR};
+                }
                 i++;
             }
         }
@@ -105,8 +113,8 @@ std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_
  *
  */
 std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_skeleton_around_node(
-    const std::vector<CurveYX> &branchCurves, const int nodeID, const std::set<Edge> &node_adjacency,
-    const Tensor2DAcc<bool> &segmentation, const int maxRemovedLength, bool adaptativeTangent = false) {
+    const std::vector<CurveYX> &branchCurves, int nodeID, const std::set<Edge> &node_adjacency,
+    const Tensor2DAcc<bool> &segmentation, int maxRemovedLength, bool adaptativeTangent = false) {
     // === Preparation ==
     // Read branches id and side
     std::vector<std::tuple<int, bool>> branchesInfos;
@@ -148,19 +156,21 @@ std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_ske
         auto is_branch_pixel_valid = [&](const IntPoint &p, const std::array<IntPoint, 2> &boundaries,
                                          const std::array<IntPoint, 2> &nextBoundaries, const Point &tangent,
                                          const Point &nextTangent, float calibre, float nextCalibre) {
+            // 1. Check if the boundaries are valid
             auto const &boundL = boundaries[0], boundR = boundaries[1];
             if (!boundL.is_valid() || !boundR.is_valid()) return false;
 
-            // Check if the skeleton is at the center of the boundaries
+            // 2. Check if the skeleton is at the center of the boundaries
             const float dL = distance(p, boundL), dR = distance(p, boundR);
             if (abs(dL - dR) > 1.42) return false;
 
-            // Check if the branch width is constant for this pixel and the next
+            // 3. Check if the branch width is constant for this pixel and the next
             if (abs(calibre - nextCalibre) > 1.42) return false;
 
+            // If the node is an endpoint (it should not), the previous conditions are enough to check its validity
             if (node_adjacency.size() == 1) return true;
 
-            // Check if the skeleton closest to the boundaries belong to the current branch
+            // 4. Check if the skeleton closest to the boundaries belong to the current branch
             auto isClosestToCurrentBranch = [&](const IntPoint &bound) {
                 float distToCurrentBranch = distance(p, bound);
                 for (auto [id, forward] : branchesInfos) {
@@ -237,9 +247,9 @@ std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_ske
  *
  */
 std::tuple<int, Vector, float, IntPoint, IntPoint> clean_branch_skeleton_tip(const std::vector<CurveYX> &branchCurves,
-                                                                             const int branchID, const bool startTip,
+                                                                             int branchID, bool startTip,
                                                                              const Tensor2DAcc<bool> &segmentation,
-                                                                             const int maxRemovedLength,
+                                                                             int maxRemovedLength,
                                                                              bool adaptativeTangent = false) {
     const CurveYX &curveYX = branchCurves[branchID];
     const int start = startTip ? 0 : curveYX.size() - 1;
@@ -259,16 +269,18 @@ std::tuple<int, Vector, float, IntPoint, IntPoint> clean_branch_skeleton_tip(con
     auto is_branch_pixel_valid = [&](const IntPoint &p, const std::array<IntPoint, 2> &boundaries,
                                      const std::array<IntPoint, 2> &nextBoundaries, const Point &tangent,
                                      const Point &nextTangent, float calibre, float nextCalibre) {
+        // 1. Check if the boundaries are valid
         auto const &boundL = boundaries[0], boundR = boundaries[1];
         if (!boundL.is_valid() || !boundR.is_valid()) return false;
 
-        // Check if the skeleton is too close to the boundaries
+        // 2. Check if the skeleton is too close to the boundaries
         if (calibre < endCalibre / 3) return false;
 
-        // Check if the skeleton is at the center of the boundaries
+        // 3. Check if the skeleton is at the center of the boundaries
         const float dL = distance(p, boundL), dR = distance(p, boundR);
         if (abs(dL - dR) > 1.42) return false;
 
+        // 4. Check if the branch width is constant for this pixel and the next
         if (abs(calibre - nextCalibre) > 1.42) return false;
 
         return true;

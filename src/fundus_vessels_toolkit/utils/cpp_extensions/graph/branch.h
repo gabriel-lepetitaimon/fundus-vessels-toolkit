@@ -90,15 +90,18 @@ std::list<SizePair> splitInContiguousCurves(const CurveYX &curve);
  **************************************************************************************/
 std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_branches_skeleton(
     std::vector<CurveYX> &branchCurves, Tensor2DAcc<int> &branchesLabelMap, const Tensor2DAcc<bool> &segmentation,
-    const GraphAdjList &adjacency, const int maxRemovedLength, bool adaptativeTangent = false);
+    const GraphAdjList &adjacency, int maxRemovedLengthNode, int maxRemovedLengthEnd = -1,
+    bool adaptativeTangent = false);
 
 std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_skeleton_around_node(
-    const std::vector<CurveYX> &branchCurves, const int nodeID, const std::set<Edge> &node_adjacency,
-    const Tensor2DAcc<bool> &segmentation, const int maxRemovedLength, bool adaptativeTangent);
+    const std::vector<CurveYX> &branchCurves, int nodeID, const std::set<Edge> &node_adjacency,
+    const Tensor2DAcc<bool> &segmentation, int maxRemovedLength, bool adaptativeTangent);
 
-std::tuple<int, Vector, float, IntPoint, IntPoint> clean_branch_skeleton_tip(
-    const std::vector<CurveYX> &branchCurves, const int branchID, const bool startTermination,
-    const Tensor2DAcc<bool> &segmentation, const int maxRemovedLength, bool adaptativeTangent);
+std::tuple<int, Vector, float, IntPoint, IntPoint> clean_branch_skeleton_tip(const std::vector<CurveYX> &branchCurves,
+                                                                             int branchID, bool startTermination,
+                                                                             const Tensor2DAcc<bool> &segmentation,
+                                                                             int maxRemovedLength,
+                                                                             bool adaptativeTangent);
 
 void remove_small_spurs(float min_length, EdgeList &edgeList, std::vector<CurveYX> &branchCurves,
                         std::vector<IntPoint> &nodeCoords, Tensor2DAcc<int> &labelMap);

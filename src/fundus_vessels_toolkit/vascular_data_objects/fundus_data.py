@@ -294,7 +294,7 @@ class FundusData:
             return seg, ABSENT
         if stats.shape[0] == 2:
             return seg, Point(*centroids[1][::-1])
-        largest_cc = np.argmax(stats[1:, cv2.CC_STAT_AREA]) + 1
+        largest_cc = np.argmax(stats[1:, cv2().CC_STAT_AREA]) + 1
         return labels == largest_cc, Point(*centroids[1][::-1])
 
     ####################################################################################################################

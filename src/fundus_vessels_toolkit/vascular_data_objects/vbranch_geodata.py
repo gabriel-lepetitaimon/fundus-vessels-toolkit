@@ -73,6 +73,10 @@ class VBranchGeoDataBase(ABC, metaclass=MetaVBranchGeoDataBase):
         """
         return ""
 
+    def copy(self) -> Self:
+        """Return a copy of the attribute data."""
+        pass
+
     def __bool__(self) -> bool:
         return not self.is_empty()
 
@@ -87,9 +91,10 @@ class VBranchGeoDataBase(ABC, metaclass=MetaVBranchGeoDataBase):
         """
         pass
 
+    @classmethod
     @abstractmethod
-    def merge(self, others: List[Self], ctx: BranchGeoDataEditContext) -> Self:
-        """Merge the parametric data with another parametric data.
+    def merge(cls, others: List[Self], ctx: BranchGeoDataEditContext) -> Self:
+        """Merge the parametric data .
 
         Parameters
         ----------
@@ -146,29 +151,6 @@ class VBranchGeoDataBase(ABC, metaclass=MetaVBranchGeoDataBase):
         raise NotImplementedError
 
 
-# def edit_after(geodata_type: Type[VBranchGeoDataBase] | str):
-#     """Decorator signaling that the edition of this geodata type should be done optimally after having edited another geodata type.
-
-#     Parameters
-#     ----------
-#     geodata_type : Type[VBranchGeoDataBase] | str
-#         The type of the geometrical data to optimally edit before this one.
-
-#     Returns
-#     -------
-#     Callable
-#         A wrapper function marking the decorated function with an attribute `_execute_after` containing the geodata type.
-#     """  # noqa: E501
-
-#     geodata_type = VBranchGeoData.geodata_type(geodata_type)
-
-#     def wrapper(f):
-#         f._execute_after = geodata_type
-#         return f
-
-#     return wrapper
-
-
 ####################################################################################################
 class VBranchCurveData(VBranchGeoDataBase):
     """``VBranchCurveData`` is a class that stores the parametric data of a vascular graph."""
@@ -176,6 +158,9 @@ class VBranchCurveData(VBranchGeoDataBase):
     def __init__(self, data: np.ndarray) -> None:
         super().__init__()
         self.data = data
+
+    def copy(self) -> Self:
+        return self.__class__(self.data)
 
     def is_invalid(self, ctx: BranchGeoDataEditContext) -> str:
         curve = ctx.curve
@@ -189,9 +174,11 @@ class VBranchCurveData(VBranchGeoDataBase):
     def is_empty(self) -> bool:
         return not len(self.data)
 
-    def merge(self, others: List[VBranchCurveData], ctx: BranchGeoDataEditContext) -> VBranchCurveData:
-        self.data = np.concatenate([self.data] + [_.data for _ in others], axis=0)
-        return self
+    @classmethod
+    def merge(cls, others: List[VBranchCurveData], ctx: BranchGeoDataEditContext) -> VBranchCurveData:
+        if all(_ is None for _ in others):
+            raise ValueError("Cannot merge empty data.")
+        return cls(np.concatenate([_.data for _ in others if _ is not None], axis=0))
 
     def flip(self, ctx: BranchGeoDataEditContext) -> VBranchCurveData:
         self.data = np.flip(self.data, axis=0)
@@ -210,6 +197,9 @@ class VBranchCurveIndex(VBranchGeoDataBase):
         self.data = np.atleast_1d(data).astype(int)
         assert self.data.ndim == 1, "Branch curve index data must be a 1D array."
 
+    def copy(self) -> Self:
+        return self.__class__(self.data)
+
     def is_invalid(self, ctx: BranchGeoDataEditContext) -> str:
         self.data = np.sort(self.data.copy())
         if len(self.data) and (self.data.max() >= ctx.curve.shape[0] or self.data.min() < 0):
@@ -219,12 +209,15 @@ class VBranchCurveIndex(VBranchGeoDataBase):
     def is_empty(self) -> bool:
         return not len(self.data)
 
-    def merge(self, others: List[VBranchCurveData], ctx: BranchGeoDataEditContext) -> VBranchCurveData:
+    @classmethod
+    def merge(cls, others: List[VBranchCurveData], ctx: BranchGeoDataEditContext) -> VBranchCurveData:
+        if all(_ is None for _ in others):
+            raise ValueError("Cannot merge empty data.")
         curves_start_index = np.cumsum([0] + [curve.shape[0] for curve in ctx.info["curves"][:-1]])
-        self.data = np.concatenate(
-            [d.data + start for d, start in zip([self] + others, curves_start_index, strict=True)], axis=0
+        data = np.concatenate(
+            [d.data + start for d, start in zip(others, curves_start_index, strict=True) if d is not None], axis=0
         )
-        return self
+        return cls(data)
 
     def flip(self, ctx: BranchGeoDataEditContext) -> VBranchCurveData:
         self.data = np.flip(ctx.curve.shape[0] - self.data, axis=0)
@@ -251,6 +244,9 @@ class VBranchTangents(VBranchGeoDataBase):
         assert data.ndim == 2 and data.shape[1] == 2, "Tangents must be a 2D array with 2 columns."
         self.data = data
 
+    def copy(self) -> Self:
+        return self.__class__(self.data)
+
     def is_invalid(self, ctx: BranchGeoDataEditContext) -> str:
         curve = ctx.curve
         if self.data.shape[0] != curve.shape[0]:
@@ -263,9 +259,11 @@ class VBranchTangents(VBranchGeoDataBase):
     def is_empty(self) -> bool:
         return not len(self.data)
 
-    def merge(self, others: List[VBranchTangents], ctx: BranchGeoDataEditContext) -> VBranchTangents:
-        self.data = np.concatenate([self.data] + [_.data for _ in others], axis=0)
-        return self
+    @classmethod
+    def merge(cls, others: List[VBranchTangents], ctx: BranchGeoDataEditContext) -> VBranchTangents:
+        if all(_ is None for _ in others):
+            raise ValueError("Cannot merge empty data.")
+        return cls(np.concatenate([_.data for _ in others if _ is not None], axis=0))
 
     def flip(self, ctx: BranchGeoDataEditContext) -> VBranchTangents:
         self.data = -np.flip(self.data, axis=0)
@@ -288,6 +286,9 @@ class VBranchTipsData(VBranchGeoDataBase):
         ), f"{self.__class__.__qualname__} data shape must be {expected_shape} but {data.shape} was provided."
         self.data = data
 
+    def copy(self) -> Self:
+        return self.__class__(self.data)
+
     @classmethod
     @abstractmethod
     def data_shape(cls) -> Tuple[int, ...]: ...
@@ -309,9 +310,16 @@ class VBranchTipsData(VBranchGeoDataBase):
     def is_empty(self) -> bool:
         return not np.all(np.isnan(self.data))
 
-    def merge(self, others: List[VBranchTipsData], ctx: BranchGeoDataEditContext) -> VBranchTipsData:
-        self.data = np.array([self.data[0], others[-1].data[1] if others[-1] is not None else self.empty_data()])
-        return self
+    @classmethod
+    def merge(cls, others: List[VBranchTipsData], ctx: BranchGeoDataEditContext) -> VBranchTipsData:
+        if all(_ is None for _ in others):
+            return cls.create_empty()
+        return cls(
+            [
+                others[0].data[0] if others[0] is not None else cls.empty_data(),
+                others[-1].data[1] if others[-1] is not None else cls.empty_data(),
+            ]
+        )
 
     def flip(self, ctx: BranchGeoDataEditContext) -> VBranchTangents:
         self.data = np.flip(self.data, axis=0)
@@ -379,6 +387,9 @@ class VBranchBSpline(VBranchGeoDataBase):
             data = BSpline.from_array(data)
         self.data: BSpline = data
 
+    def copy(self) -> Self:
+        return self.__class__(self.data)
+
     def is_invalid(self, ctx: BranchGeoDataEditContext) -> str:
         curve = ctx.curve
         if curve is None or not len(curve):
@@ -400,17 +411,20 @@ class VBranchBSpline(VBranchGeoDataBase):
     def is_empty(self) -> bool:
         return not len(self.data)
 
-    def merge(self, others: List[VBranchBSpline], ctx: BranchGeoDataEditContext) -> VBranchBSpline:
+    @classmethod
+    def merge(cls, others: List[VBranchBSpline], ctx: BranchGeoDataEditContext) -> VBranchBSpline:
+        bspline = BSpline()
         for other in others:
-            self.data += other.data
-        return self
+            if other is not None:
+                bspline += other.data
+        return cls(bspline)
 
     def flip(self, ctx: BranchGeoDataEditContext) -> VBranchBSpline:
         self.data = self.data.flip()
         return self
 
     def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
-        raise NotImplementedError
+        return [VBranchBSpline(bspline) for bspline in self.data.split_into_multiple_bsplines(splits_point[1:-1])]
 
     def __repr__(self) -> str:
         return f"VBranchBSpline({self.data})"
@@ -530,6 +544,10 @@ class VBranchGeoData:
     Base = VBranchGeoDataBase
     Descriptor = VBranchGeoDescriptor
     Fields = VBranchGeoField
+
+    Dict = VBranchGeoDict
+    DataLike = VBranchGeoDataLike
+    Key = VBranchGeoDataKey
 
     BSpline = VBranchBSpline
     Curve = VBranchCurveData
