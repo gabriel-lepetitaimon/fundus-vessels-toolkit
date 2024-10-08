@@ -300,7 +300,7 @@ FUNDUS_SEG_TO_GRAPH = SegToGraph(
     min_terminal_branch_calibre_ratio=1,
     simplify_graph_arg=GraphSimplifyArg(
         max_spurs_length=0,
-        reconnect_endpoints=False,
+        reconnect_endpoints=True,
         junctions_merge_distance=20,
         min_orphan_branches_length=30,
         max_cycles_length=20,
@@ -313,7 +313,7 @@ FUNDUS_SEG_TO_GRAPH = SegToGraph(
 class NaiveAVSegToTree(AVSegToTreeBase):
     def __init__(
         self,
-        segToGraph: SegToGraph = FUNDUS_SEG_TO_GRAPH,
+        segToGraph: Optional[SegToGraph] = None,
     ):
         """
 
@@ -323,7 +323,7 @@ class NaiveAVSegToTree(AVSegToTreeBase):
             The SegToGraph instance to use for the segmentation to graph step.
         """  # noqa: E501
         super(NaiveAVSegToTree, self).__init__()
-        self.segToGraph = segToGraph
+        self.segToGraph = if_none(segToGraph, FUNDUS_SEG_TO_GRAPH)
 
     def __call__(
         self,
@@ -378,6 +378,8 @@ class NaiveAVSegToTree(AVSegToTreeBase):
 
         vgraph = self.segToGraph.skel_to_vgraph(skel, vessels)
         if if_none(simplify, self.segToGraph.simplify_graph):
+            if self.segToGraph.simplify_graph_arg.reconnect_endpoints:
+                self.segToGraph.populate_geometry(vgraph, vessels, inplace=True)
             self.segToGraph.simplify(vgraph, inplace=True)
         if if_none(populate_geometry, self.segToGraph.populate_geometry):
             self.segToGraph.populate_geometry(vgraph, vessels, inplace=True)

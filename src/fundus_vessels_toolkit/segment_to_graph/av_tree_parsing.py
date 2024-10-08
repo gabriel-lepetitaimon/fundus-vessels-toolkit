@@ -268,7 +268,6 @@ def naive_vgraph_to_vtree(
 
             # 3. Otherwise, check if any of the children has already been visited
             if np.any(visited_branches[successors_ids]):
-                print("Cycle detected")
                 successors = successors[~visited_branches[successors_ids]]
 
             # 4. Remember the hierarchy of the branches and add the children to the stack
@@ -373,7 +372,7 @@ def build_line_digraph(
     # === Discover virtual branch to reconnect end nodes to adjacent branches or to other end nodes ===
     virtual_endp_edges = find_facing_endpoints(graph, max_distance=100, max_angle=30, filter="closest")
     virtual_edges, new_nodes, new_nodes_yx = find_endpoints_branches_intercept(
-        graph, max_distance=100, intercept_snapping_distance=20, ignore_endpoints_to_endpoints=True
+        graph, max_distance=100, intercept_snapping_distance=20, omit_endpoints_to_endpoints=True
     )
 
     # Insert any new nodes required by the virtual edges between end points and branches

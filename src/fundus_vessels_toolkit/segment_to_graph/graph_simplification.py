@@ -45,8 +45,8 @@ SimplifyTopology: TypeAlias = Literal["node", "branch", "both"] | None
 @dataclass
 class ReconnectEndpointsArg(UpdateableDataclass):
     max_distance: float = 30
-    max_angle: float = 20
-    intercept_snapping_distance: float = 10
+    max_angle: float = 30
+    intercept_snapping_distance: float = 20
     endpoints_to_endpoints_max_distance: Optional[float] = None
     tangent: VBranchGeoData.Key | npt.NDArray[np.float64] = VBranchGeoData.Fields.TIPS_TANGENT
     bspline: VBranchGeoData.Key = VBranchGeoData.Fields.BSPLINE
@@ -73,7 +73,7 @@ def simplify_graph(
     /,
     *,
     max_spurs_length: Optional[float] = None,
-    reconnect_endpoints: Optional[bool | ReconnectEndpointsArg] = False,
+    reconnect_endpoints: Optional[bool | ReconnectEndpointsArg] = None,
     max_cycles_length: Optional[float] = None,
     junctions_merge_distance: Optional[float] = None,
     min_orphan_branches_length: Optional[float] = None,
@@ -167,12 +167,6 @@ def simplify_graph(
     if arg.max_spurs_length > 0:
         remove_spurs(vessel_graph, arg.max_spurs_length, inplace=True)
 
-    if type(arg.reconnect_endpoints) is bool:
-        if arg.reconnect_endpoints:
-            vessel_graph = reconnect_endpoints(vessel_graph, inplace=True)
-    else:
-        vessel_graph = reconnect_endpoints(vessel_graph, arg.reconnect_endpoints, inplace=True)
-
     if arg.max_cycles_length > 0:
         merge_small_cycles(vessel_graph, arg.max_cycles_length, inplace=True)
 
@@ -185,6 +179,12 @@ def simplify_graph(
             iterative_clustering=True,
             inplace=True,
         )
+
+    if type(arg.reconnect_endpoints) is bool:
+        if arg.reconnect_endpoints:
+            vessel_graph = _reconnect_endpoints(vessel_graph, inplace=True)
+    else:
+        vessel_graph = _reconnect_endpoints(vessel_graph, arg.reconnect_endpoints, inplace=True)
 
     if arg.max_cycles_length > 0 or arg.simplify_topology in ("branch", "both") or arg.simplify_topology is True:
         max_nodes_distance = arg.max_cycles_length if arg.simplify_topology not in ("branch", "both") else None
@@ -615,9 +615,11 @@ def find_endpoints_branches_intercept(
     vessel_graph: VGraph,
     max_distance: float = 100,
     intercept_snapping_distance: float = 30,
+    *,
+    ignore_endpoints: Optional[npt.NDArray[int]] = None,
+    omit_endpoints_to_endpoints: bool = False,
     tangent: VBranchGeoData.Key | npt.NDArray[np.float64] = VBranchGeoData.Fields.TIPS_TANGENT,
     bspline: VBranchGeoData.Key = VBranchGeoData.Fields.BSPLINE,
-    ignore_endpoints_to_endpoints: bool = False,
 ) -> Tuple[npt.NDArray[int], npt.NDArray[int], npt.NDArray[np.float64]]:
     """
     Find candidates for reconnecting endpoints to their closest branch in the direction of their tangent.
@@ -653,6 +655,9 @@ def find_endpoints_branches_intercept(
 
     """  # noqa: E501
     endpoints = vessel_graph.endpoints_nodes()
+    if ignore_endpoints is not None:
+        endpoints = np.setdiff1d(endpoints, ignore_endpoints)
+
     endpoints_branches = np.array(vessel_graph.incident_branches_individual(endpoints)).flatten()
     gdata = vessel_graph.geometric_data()
     nodes_yx = gdata.nodes_coord()
@@ -666,7 +671,13 @@ def find_endpoints_branches_intercept(
         endpoints_t = tangent
 
     # === Intercept all branches with the endpoints tangents ===
-    bsplines = gdata.branch_bspline(name=bspline)
+    try:
+        bsplines = gdata.branch_bspline(name=bspline)
+    except KeyError:
+        raise ValueError(
+            f"Finding the intersection between endpoints tangents and branches require the '{bspline}' field.\n"
+            "Ensure that geometry data is populated on the provided graph."
+        ) from None
     intercepts = [
         bspline.extend_bpsline(*[Point.from_array(_) for _ in nodes_yx[branch]]).intercept(
             endpoints_yx, endpoints_t, fast_approximation=True
@@ -704,7 +715,7 @@ def find_endpoints_branches_intercept(
     closest_tip = branch_list[nearest_branches, closest_tip]
     redirect_to_tip = dist_to_closest_tip <= intercept_snapping_distance * 0.66
 
-    new_edges = []
+    new_edges = np.empty((0, 2), dtype=int)
     if np.any(redirect_to_tip):
         redirect_to_tip = np.argwhere(redirect_to_tip).flatten()
         closest_tip_is_endpoints = np.isin(closest_tip[redirect_to_tip], endpoints)
@@ -714,7 +725,7 @@ def find_endpoints_branches_intercept(
         redirected_endpoints = np.zeros(n_nodes, dtype=bool)
         redirected_endpoints[new_edges[:, 0]] = True
 
-        if not ignore_endpoints_to_endpoints:
+        if not omit_endpoints_to_endpoints:
             redirect_to_endp = redirect_to_tip[closest_tip_is_endpoints]
             new_endp_edges = np.stack((endpoints[redirect_to_endp], closest_tip[redirect_to_endp]), axis=1)
             new_endp_edges = np.unique(np.sort(new_endp_edges, axis=1), axis=0)
@@ -723,7 +734,7 @@ def find_endpoints_branches_intercept(
 
         redirected_endpoints = redirected_endpoints[endpoints]
         if np.all(redirected_endpoints):
-            return np.array(new_edges, dtype=int), np.empty((0, 2), dtype=int), np.empty((0, 2), dtype=np.float64)
+            return new_edges, np.empty((0, 2), dtype=int), np.empty((0, 2), dtype=np.float64)
 
         endpoints = endpoints[~redirected_endpoints]
         intercept = intercept[~redirected_endpoints]
@@ -738,10 +749,10 @@ def find_endpoints_branches_intercept(
     if intercept_snapping_distance > 0 and np.any(branches_count > 1):
         intercept_merge_lookup = np.arange(len(endpoints))
         intercept_to_remove = []
-        for i, (branch, count) in enumerate(zip(branches, branches_count, strict=True)):
+        for b, count in zip(branches, branches_count, strict=True):
             if count <= 1:
                 continue
-            inter_i = np.argwhere(branches_inv == i).flatten()
+            inter_i = np.argwhere(branches_inv == b).flatten()
             clusters = cluster_by_distance(intercept[inter_i], intercept_snapping_distance, iterative=True)
             for cluster in clusters:
                 if len(cluster) > 1:
@@ -810,14 +821,6 @@ def reconnect_endpoints(
         bspline=bspline,
     )
 
-    new_edges, new_nodes, new_nodes_yx = find_endpoints_branches_intercept(
-        vessel_graph,
-        max_distance=arg.max_distance,
-        intercept_snapping_distance=arg.intercept_snapping_distance,
-        tangent=arg.tangent,
-        bspline=arg.bspline,
-        ignore_endpoints_to_endpoints=True,
-    )
     new_endpoints_edges = find_facing_endpoints(
         vessel_graph,
         max_distance=if_none(arg.endpoints_to_endpoints_max_distance, arg.max_distance),
@@ -825,7 +828,17 @@ def reconnect_endpoints(
         filter="exclusive",
         tangent=arg.tangent,
     )
-    new_edges = np.concatenate((new_edges, new_endpoints_edges), axis=0)
+
+    new_edges, new_nodes, new_nodes_yx = find_endpoints_branches_intercept(
+        vessel_graph,
+        max_distance=arg.max_distance,
+        intercept_snapping_distance=arg.intercept_snapping_distance,
+        tangent=arg.tangent,
+        bspline=arg.bspline,
+        ignore_endpoints=new_endpoints_edges.flatten(),
+    )
+
+    new_edges = np.concatenate((new_endpoints_edges, new_edges), axis=0)
     vessel_graph = vessel_graph.copy() if not inplace else vessel_graph
 
     if len(new_nodes):
@@ -842,3 +855,6 @@ def reconnect_endpoints(
         vessel_graph.add_branches(new_edges, inplace=True)
 
     return vessel_graph
+
+
+_reconnect_endpoints = reconnect_endpoints
