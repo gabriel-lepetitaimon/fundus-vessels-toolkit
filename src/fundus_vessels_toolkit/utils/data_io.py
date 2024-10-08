@@ -104,7 +104,7 @@ def load_image(path: str | Path, binarize=False, resize=None, pad=None, cast_to_
         raise ValueError(f"Could not load image from {path}")
 
     if resize is not None:
-        img = cv2.resize(img, resize)
+        img = cv2.resize(img, (resize[1], resize[0]), interpolation=cv2.INTER_NEAREST)
 
     if binarize:
         img = img.mean(axis=2) > 127 if img.ndim == 3 else img > 127

@@ -77,6 +77,7 @@ class FundusData:
         *,
         name: Optional[str] = None,
         check: bool = True,
+        auto_resize: bool = False,
     ):
         shape = None
         if fundus is not None:
@@ -86,27 +87,29 @@ class FundusData:
             self._fundus = None
 
         if fundus_mask is not None:
-            self._fundus_mask = self.load_fundus_mask(fundus_mask, shape) if check else fundus_mask
+            self._fundus_mask = self.load_fundus_mask(fundus_mask, shape, auto_resize) if check else fundus_mask
             shape = self._fundus_mask.shape[:2]
         elif self._fundus is not None:
             self._fundus_mask = self.load_fundus_mask(self._fundus)
 
         #
         if vessels is not None:
-            self._vessels = self.load_vessels(vessels, shape) if check else vessels
+            self._vessels = self.load_vessels(vessels, shape, auto_resize) if check else vessels
             shape = self._vessels.shape[:2]
         else:
             self._vessels = None
         self._bin_vessels = None
 
         if od is not None:
-            self._od, self._od_center = self.load_od_macula(od, shape) if check else (od, None)
+            self._od, self._od_center = self.load_od_macula(od, shape, auto_resize) if check else (od, None)
             shape = self._od.shape[:2]
         else:
             self._od, self._od_center = None, None
 
         if macula is not None:
-            self._macula, self._macula_center = self.load_od_macula(macula, shape) if check else (macula, None)
+            self._macula, self._macula_center = (
+                self.load_od_macula(macula, shape, auto_resize) if check else (macula, None)
+            )
             shape = self._macula.shape[:2]
         else:
             self._macula, self._macula_center = None, None
@@ -175,9 +178,11 @@ class FundusData:
         return fundus
 
     @staticmethod
-    def load_fundus_mask(fundus_mask, shape: Optional[Tuple[int, int]] = None) -> npt.NDArray[np.bool_]:
+    def load_fundus_mask(
+        fundus_mask, shape: Optional[Tuple[int, int]] = None, auto_resize=False
+    ) -> npt.NDArray[np.bool_]:
         if isinstance(fundus_mask, (str, Path)):
-            fundus_mask = load_image(fundus_mask, cast_to_float=False)
+            fundus_mask = load_image(fundus_mask, cast_to_float=False, resize=shape if auto_resize else None)
         elif is_torch_tensor(fundus_mask):
             fundus_mask = fundus_mask.detach().cpu().numpy()
 
@@ -186,7 +191,7 @@ class FundusData:
             if fundus_mask.dtype != bool:
                 fundus_mask = fundus_mask > 127 if fundus_mask.dtype == np.uint8 else fundus_mask > 0.5
         elif fundus_mask.ndim == 3:
-            r_hist = np.histogram(fundus_mask[:, :, 0].flatten(), bins=127, range=(0, 255))[0]
+            r_hist = np.histogram(fundus_mask[:, :, 0].flatten(), bins=32, range=(0, 255))[0]
             if r_hist[0] + r_hist[-1] == np.prod(fundus_mask.shape[:2]):
                 # If the image is binary
                 return fundus_mask[:, :, 0] > 127
@@ -197,6 +202,8 @@ class FundusData:
                 fundus_mask = fundus_ROI(fundus_mask)
         else:
             raise ValueError("Invalid fundus mask")
+
+        fundus_mask = fundus_mask.astype(np.bool)
 
         if shape is not None and fundus_mask.shape != shape:
             H, W = shape
@@ -209,9 +216,9 @@ class FundusData:
         return fundus_mask
 
     @staticmethod
-    def load_vessels(vessels, shape=None) -> npt.NDArray[np.uint8]:
+    def load_vessels(vessels, shape=None, auto_resize=False) -> npt.NDArray[np.uint8]:
         if isinstance(vessels, (str, Path)):
-            vessels = load_image(vessels, cast_to_float=False)
+            vessels = load_image(vessels, cast_to_float=False, resize=shape if auto_resize else None)
         elif is_torch_tensor(vessels):
             vessels = vessels.detach().cpu().numpy()
 
@@ -219,7 +226,7 @@ class FundusData:
         if vessels.ndim == 3:
             # Check if the image is a binary image
             MAX = 255 if vessels.dtype == np.uint8 else 1
-            r_hist, _ = np.histogram(vessels[:, :, 0].flatten(), bins=127, range=(0, MAX))
+            r_hist, _ = np.histogram(vessels[:, :, 0].flatten(), bins=32, range=(0, MAX))
             assert r_hist[0] + r_hist[-1] == np.prod(vessels.shape[:2]), "Vessels map should be binary image"
             vessels = vessels > MAX / 2
 
@@ -251,17 +258,17 @@ class FundusData:
             h, w = vessels.shape
             assert (
                 abs(h - H) < H * 0.1 and abs(w - W) < W * 0.1
-            ), "The vessels map doesn't have the same shape as the fundus image."
+            ), f"The the vessels map shape {vessels.shape} differs from the fundus image shape {shape}."
             vessels = crop_pad_center(vessels, shape)
 
         return vessels
 
     @staticmethod
-    def load_od_macula(seg, shape=None) -> npt.NDArray[np.uint8]:
+    def load_od_macula(seg, shape=None, auto_resize=True) -> npt.NDArray[np.uint8]:
         from ..utils.safe_import import import_cv2 as cv2
 
         if isinstance(seg, (str, Path)):
-            seg = load_image(seg, cast_to_float=False)
+            seg = load_image(seg, cast_to_float=False, resize=shape if auto_resize else None)
         elif is_torch_tensor(seg):
             seg = seg.detach().cpu().numpy()
 
@@ -300,12 +307,6 @@ class FundusData:
     @property
     def has_name(self) -> bool:
         return self._name is not None
-
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            raise AttributeError("The name of the fundus image was not provided.")
-        return self._name
 
     @property
     def has_image(self) -> bool:

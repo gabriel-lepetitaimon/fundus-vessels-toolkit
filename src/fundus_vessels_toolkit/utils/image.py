@@ -1,7 +1,10 @@
+from typing import Tuple
+
 import numpy as np
+import numpy.typing as npt
 
 
-def crop_pad_center(img, shape):
+def crop_pad_center(img: npt.NDArray, shape: Tuple[int, ...]) -> npt.NDArray:
     H, W = img.shape[:2]
     h, w = shape[:2]
 
