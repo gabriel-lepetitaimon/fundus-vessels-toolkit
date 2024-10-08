@@ -368,6 +368,8 @@ def merge_small_cycles(vessel_graph: VGraph, max_cycle_size: float, inplace=Fals
     cycles = [_ for _ in nx.chordless_cycles(nx_graph, length_bound=4) if len(_) > 2]
     cycles_max_dist = [distance_matrix(nodes_coord[cycle]).max() for cycle in cycles]
     cycles = [cycle for cycle, max_dist in zip(cycles, cycles_max_dist, strict=True) if max_dist < max_cycle_size]
+    if len(cycles) == 0:
+        return vessel_graph
     cycles = reduce_clusters(cycles)
     return vessel_graph.merge_nodes(cycles, inplace=inplace)
 
