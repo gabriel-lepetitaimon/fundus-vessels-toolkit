@@ -609,7 +609,8 @@ class VTree(VGraph):
         root_branches = np.argwhere(self.branch_tree == -1).flatten()
         root_nodes = self.branch_list[root_branches]
         if self._branch_dirs is not None:
-            root_nodes = root_nodes[:, np.where(self._branch_dirs[root_branches], 0, 1)]
+            node_id = np.where(self._branch_dirs[root_branches], 0, 1)
+            root_nodes = np.take_along_axis(root_nodes, node_id[:][:, None], axis=1).squeeze(1)
         return np.unique(root_nodes)
 
     def node_incoming_branches(self, node_id: int | npt.ArrayLike[int]) -> npt.NDArray[np.int_]:
