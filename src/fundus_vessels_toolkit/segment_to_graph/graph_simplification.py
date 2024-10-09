@@ -190,11 +190,11 @@ def simplify_graph(
         max_nodes_distance = arg.max_cycles_length if arg.simplify_topology not in ("branch", "both") else None
         merge_equivalent_branches(vessel_graph, max_nodes_distance, inplace=True)
 
-    if arg.min_orphan_branches_length > 0:
-        remove_orphan_branches(vessel_graph, arg.min_orphan_branches_length, inplace=True)
-
     if arg.simplify_topology in ("node", "both") or arg.simplify_topology is True:
         simplify_passing_nodes(vessel_graph, min_angle=arg.passing_node_min_angle, inplace=True)
+
+    if arg.min_orphan_branches_length > 0:
+        remove_orphan_branches(vessel_graph, arg.min_orphan_branches_length, inplace=True)
 
     return vessel_graph
 
