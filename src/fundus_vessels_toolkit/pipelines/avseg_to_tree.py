@@ -34,7 +34,7 @@ class AVSegToTreeBase(metaclass=ABCMeta):
 
     def prepare_data(
         self,
-        fundus: FundusData,
+        fundus: FundusData | None,
         av: Optional[npt.NDArray[np.int_] | torch.Tensor | str | Path] = None,
         od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
     ) -> FundusData:
@@ -334,6 +334,8 @@ class NaiveAVSegToTree(AVSegToTreeBase):
         od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
     ) -> Tuple[VGraph, VGraph]:
         fundus = self.prepare_data(fundus, av=av, od=od)
+        if fundus.od_center is None:
+            raise NotImplementedError("Parsing tree of image without optic disc is not implemented.")
 
         av_skeleton = self.av_skeletonize(fundus.av)
 
@@ -343,18 +345,16 @@ class NaiveAVSegToTree(AVSegToTreeBase):
         ]
 
         trees = [self.vgraph_to_vtree(g, fundus.od_center) for g in graphs]
-        return trees
+        return trees[0], trees[1]
 
     # --- Intermediate steps ---
-    def av_skeletonize(
-        self, av: npt.NDArray[np.int_] | torch.Tensor | FundusData
-    ) -> npt.NDArray[np.bool_] | torch.Tensor:
+    def av_skeletonize(self, av: npt.NDArray | torch.Tensor | FundusData) -> npt.NDArray[np.bool_] | torch.Tensor:
         av = av.av if isinstance(av, FundusData) else av
         art = reduce(ior, (av == label for label in (AVLabel.ART, AVLabel.BOTH)))
         vei = reduce(ior, (av == label for label in (AVLabel.VEI, AVLabel.BOTH)))
         art_skel = self.segToGraph.skeletonize(art)
         vei_skel = self.segToGraph.skeletonize(vei)
-        skel = art_skel.astype(int)
+        skel = art_skel.astype(int) if isinstance(art_skel, np.ndarray) else art_skel.int()
         skel[art_skel > 0] = AVLabel.ART
         skel[vei_skel > 0] = AVLabel.VEI
         skel[(art_skel > 0) & (vei_skel > 0)] = AVLabel.BOTH
@@ -362,8 +362,8 @@ class NaiveAVSegToTree(AVSegToTreeBase):
 
     def skel_to_vgraph(
         self,
-        skeleton: npt.NDArray[np.int_] | torch.Tensor,
-        vessels: Optional[npt.NDArray[np.bool_] | torch.Tensor | FundusData] = None,
+        skeleton: npt.NDArray | torch.Tensor,
+        vessels: npt.NDArray | torch.Tensor | FundusData,
         artery: Optional[bool] = None,
         vein: Optional[bool] = None,
         unknown: Optional[bool] = None,
@@ -373,16 +373,16 @@ class NaiveAVSegToTree(AVSegToTreeBase):
         avlabel = AVLabel.select_label(artery=artery, vein=vein, unknown=unknown)
 
         skel = reduce(ior, (skeleton == label for label in avlabel))
-        vessels = vessels.av if isinstance(vessels, FundusData) else vessels
-        vessels = reduce(ior, (vessels == label for label in avlabel))
+        av = vessels.av if isinstance(vessels, FundusData) else vessels
+        av = reduce(ior, (av == label for label in avlabel))
 
-        vgraph = self.segToGraph.skel_to_vgraph(skel, vessels)
+        vgraph = self.segToGraph.skel_to_vgraph(skel, av)
         if if_none(simplify, self.segToGraph.simplify_graph):
             if self.segToGraph.simplify_graph_arg.reconnect_endpoints:
-                self.segToGraph.populate_geometry(vgraph, vessels, inplace=True)
+                self.segToGraph.populate_geometry(vgraph, av, inplace=True)
             self.segToGraph.simplify(vgraph, inplace=True)
         if if_none(populate_geometry, self.segToGraph.populate_geometry):
-            self.segToGraph.populate_geometry(vgraph, vessels, inplace=True)
+            self.segToGraph.populate_geometry(vgraph, av, inplace=True)
 
         return vgraph
 

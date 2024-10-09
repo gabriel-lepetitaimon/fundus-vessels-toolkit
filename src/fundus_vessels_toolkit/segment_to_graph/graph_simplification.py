@@ -618,11 +618,11 @@ def find_endpoints_branches_intercept(
     max_distance: float = 100,
     intercept_snapping_distance: float = 30,
     *,
-    ignore_endpoints: Optional[npt.NDArray[int]] = None,
+    ignore_endpoints: Optional[npt.NDArray[np.int_]] = None,
     omit_endpoints_to_endpoints: bool = False,
     tangent: VBranchGeoData.Key | npt.NDArray[np.float64] = VBranchGeoData.Fields.TIPS_TANGENT,
     bspline: VBranchGeoData.Key = VBranchGeoData.Fields.BSPLINE,
-) -> Tuple[npt.NDArray[int], npt.NDArray[int], npt.NDArray[np.float64]]:
+) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_], npt.NDArray[np.float64]]:
     """
     Find candidates for reconnecting endpoints to their closest branch in the direction of their tangent.
 
@@ -717,63 +717,69 @@ def find_endpoints_branches_intercept(
     closest_tip = branch_list[nearest_branches, closest_tip]
     redirect_to_tip = dist_to_closest_tip <= intercept_snapping_distance * 0.66
 
-    new_edges = np.empty((0, 2), dtype=int)
+    endp_to_tips_edges = np.empty((0, 2), dtype=int)
     if np.any(redirect_to_tip):
         redirect_to_tip = np.argwhere(redirect_to_tip).flatten()
         closest_tip_is_endpoints = np.isin(closest_tip[redirect_to_tip], endpoints)
         redirect_to_node = redirect_to_tip[~closest_tip_is_endpoints]
 
-        new_edges = np.stack((endpoints[redirect_to_node], closest_tip[redirect_to_node]), axis=1)
+        endp_to_tips_edges = np.stack((endpoints[redirect_to_node], closest_tip[redirect_to_node]), axis=1)
         redirected_endpoints = np.zeros(n_nodes, dtype=bool)
-        redirected_endpoints[new_edges[:, 0]] = True
+        redirected_endpoints[endp_to_tips_edges[:, 0]] = True
 
         if not omit_endpoints_to_endpoints:
             redirect_to_endp = redirect_to_tip[closest_tip_is_endpoints]
             new_endp_edges = np.stack((endpoints[redirect_to_endp], closest_tip[redirect_to_endp]), axis=1)
             new_endp_edges = np.unique(np.sort(new_endp_edges, axis=1), axis=0)
-            new_edges = np.concatenate((new_edges, new_endp_edges), axis=0)
+            endp_to_tips_edges = np.concatenate((endp_to_tips_edges, new_endp_edges), axis=0)
             redirected_endpoints[new_endp_edges.flatten()] = True
 
         redirected_endpoints = redirected_endpoints[endpoints]
         if np.all(redirected_endpoints):
-            return new_edges, np.empty((0, 2), dtype=int), np.empty((0, 2), dtype=np.float64)
+            return endp_to_tips_edges, np.empty((0, 2), dtype=int), np.empty((0, 2), dtype=np.float64)
 
         endpoints = endpoints[~redirected_endpoints]
         intercept = intercept[~redirected_endpoints]
         nearest_branches = nearest_branches[~redirected_endpoints]
 
     # === Merge intercept points of the same branches that are too close to each other ===
-    new_intercept_nodes_id = np.arange(n_nodes, n_nodes + len(endpoints))
-    new_intercept_edges = np.array([endpoints, new_intercept_nodes_id], dtype=int).T
+    #: The id of the new nodes
+    #:         (They will be shifted by the number of existing nodes at the end of the function)
+    new_intercept_nodes_id = np.arange(len(endpoints))
+
+    endp_to_intercept_nodes_edges = np.array([endpoints, new_intercept_nodes_id], dtype=int).T
     new_intercept_nodes = np.array([new_intercept_nodes_id, nearest_branches], dtype=int).T
 
     branches, branches_inv, branches_count = np.unique(nearest_branches, return_inverse=True, return_counts=True)
     if intercept_snapping_distance > 0 and np.any(branches_count > 1):
-        intercept_merge_lookup = np.arange(len(endpoints))
+        intercept_nodes_merge_lookup = np.arange(len(endpoints))
         intercept_to_remove = []
         for b, count in zip(branches, branches_count, strict=True):
             if count <= 1:
                 continue
-            inter_i = np.argwhere(branches_inv == b).flatten()
-            clusters = cluster_by_distance(intercept[inter_i], intercept_snapping_distance, iterative=True)
+            intercept_ids = np.argwhere(branches_inv == b).flatten()
+            clusters = cluster_by_distance(intercept[intercept_ids], intercept_snapping_distance, iterative=True)
             for cluster in clusters:
                 if len(cluster) > 1:
                     cluster = np.sort(cluster)
-                    cluster_id = inter_i[cluster]
-                    intercept_merge_lookup[cluster_id[1:]] = cluster_id[0]
-                    intercept_to_remove.extend(cluster_id[1:])
-                    intercept[cluster_id[0]] = np.mean(intercept[cluster_id], axis=0)
+                    cluster_ids = intercept_ids[cluster]
+                    intercept_nodes_merge_lookup[cluster_ids[1:]] = cluster_ids[0]
+                    intercept_to_remove.extend(cluster_ids[1:])
+                    intercept[cluster_ids[0]] = np.mean(intercept[cluster_ids], axis=0)
 
         if len(intercept_to_remove):
             del_lookup = create_removal_lookup(intercept_to_remove, length=len(endpoints))
-            intercept_merge_lookup = del_lookup[intercept_merge_lookup]
+            intercept_nodes_merge_lookup = del_lookup[intercept_nodes_merge_lookup]
 
             intercept = np.delete(intercept, intercept_to_remove, axis=0)
             new_intercept_nodes = np.delete(new_intercept_nodes, intercept_to_remove, axis=0)
-            new_intercept_nodes[:, 0] = intercept_merge_lookup[new_intercept_nodes[:, 0]]
-            new_intercept_edges[:, 1] = intercept_merge_lookup[new_intercept_edges[:, 1]]
+            new_intercept_nodes[:, 0] = intercept_nodes_merge_lookup[new_intercept_nodes[:, 0]]
+            endp_to_intercept_nodes_edges[:, 1] = intercept_nodes_merge_lookup[endp_to_intercept_nodes_edges[:, 1]]
 
-    return np.concatenate((new_edges, new_intercept_edges), axis=0), new_intercept_nodes, intercept
+    endp_to_intercept_nodes_edges[:, 1] += n_nodes
+    new_intercept_nodes[:, 0] += n_nodes
+
+    return np.concatenate((endp_to_tips_edges, endp_to_intercept_nodes_edges), axis=0), new_intercept_nodes, intercept
 
 
 def reconnect_endpoints(
@@ -840,7 +846,6 @@ def reconnect_endpoints(
         ignore_endpoints=new_endpoints_edges.flatten(),
     )
 
-    new_edges = np.concatenate((new_endpoints_edges, new_edges), axis=0)
     vessel_graph = vessel_graph.copy() if not inplace else vessel_graph
 
     if len(new_nodes):
@@ -855,6 +860,8 @@ def reconnect_endpoints(
 
     if len(new_edges):
         vessel_graph.add_branches(new_edges, inplace=True)
+    if len(new_endpoints_edges):
+        vessel_graph.add_branches(new_endpoints_edges, inplace=True)
 
     return vessel_graph
 

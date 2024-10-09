@@ -181,8 +181,11 @@ def derive_tips_geometry_from_curve_geometry(
                     tangent_from_nodes
                     and (dist := np.linalg.norm(u21 := np.subtract(*nodes_coord[branch_list[i]]))) < tangent_from_nodes
                 ):
-                    u21 = u21 / dist
-                    tips_tangents.append(np.array([-u21, u21], dtype=float))
+                    if dist < 1e-6:
+                        tips_tangents.append(np.zeros((2, 2), dtype=float))
+                    else:
+                        u21 = u21 / dist
+                        tips_tangents.append(np.array([-u21, u21], dtype=float))
                 else:
                     tips_tangents.append(np.zeros((2, 2), dtype=float))
         else:

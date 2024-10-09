@@ -1,4 +1,4 @@
-from typing import List, Set, Tuple
+from typing import Iterable, List, Set, Tuple
 
 import numpy as np
 import torch  # Required for cpp extension loading
@@ -11,13 +11,12 @@ from .geometric import Point
 from .torch import autocast_torch
 
 
-def reduce_clusters(clusters: List[Set[int]]) -> List[Set[int]]:
+def reduce_clusters(clusters: Iterable[Iterable[int]]) -> List[List[int]]:
     """
     Reduce the number of clusters by merging clusters that share at least one element.
     """
     clusters = [list(c) for c in clusters]
-    clusters = solve_clusters_cpp(clusters, True)
-    return [c for c in clusters if len(c) > 0]
+    return [c for c in solve_clusters_cpp(clusters, True) if len(c) > 0]
 
 
 @autocast_torch
@@ -70,7 +69,7 @@ def reduce_chains(chains: List[List[int]]) -> List[List[int]]:
     return chains
 
 
-def cluster_by_distance(coords: List[Point] | np.ndarray, max_distance: int, iterative=False) -> List[List[int]]:
+def cluster_by_distance(coords: List[Point] | np.ndarray, max_distance: float, iterative=False) -> List[List[int]]:
     """
     Cluster a set of coordinates by distance: all coordinates that are at most `max_distance` apart are in the same cluster.
 

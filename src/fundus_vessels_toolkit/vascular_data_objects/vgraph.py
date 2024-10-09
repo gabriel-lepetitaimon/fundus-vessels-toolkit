@@ -811,7 +811,7 @@ class VGraph:
         np.ndarray
             The indexes of the endpoint nodes (or if ``as_mask`` is True, a boolean mask of shape (N,) where N is the number of nodes).
         """  # noqa: E501
-        mask = np.bincount(self._branch_list.flatten(), minlength=self.nodes_count) <= 1
+        mask = np.bincount(self._branch_list.flatten(), minlength=self.nodes_count) == 1
         return mask if as_mask else np.argwhere(mask).flatten()
 
     @overload
@@ -1450,7 +1450,7 @@ class VGraph:
     def split_branch(
         self,
         branchID: int,
-        split_coord: Optional[Point | List[Point]] = None,
+        split_coord: Optional[Point | List[Point] | npt.ArrayLike] = None,
         *,
         split_curve_id: Optional[int | Iterable[int]] = None,
         return_branch_ids=False,

@@ -349,6 +349,12 @@ class VGeometricData:
             ), f"Invalid branch index {index}."
             return index
 
+    @overload
+    def branch_curve(self, ids: int, *, graph_index=True) -> npt.NDArray[np.int_]: ...
+    @overload
+    def branch_curve(
+        self, ids: Optional[npt.NDArray[np.int32]] = None, *, graph_index=True
+    ) -> List[npt.NDArray[np.int_]]: ...
     def branch_curve(
         self, ids: Optional[int | npt.NDArray[np.int32]] = None, *, graph_index=True
     ) -> npt.NDArray[np.int_] | List[npt.NDArray[np.int_]]:
