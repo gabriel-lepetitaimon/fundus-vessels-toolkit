@@ -72,7 +72,7 @@ Point Point::normalize() const {
 }
 
 double Point::dot(const Point& p) const { return y * p.y + x * p.x; }
-double Point::cos(const Point& p) const { return dot(p) / (norm() * p.norm()); }
+double Point::cosSim(const Point& p) const { return dot(p) / (norm() * p.norm()); }
 double Point::cross(const Point& p) const { return y * p.x - x * p.y; }
 double Point::squaredNorm() const { return y * y + x * x; }
 Point Point::positiveCoordinates() const { return Point(std::abs(y), std::abs(x)); }

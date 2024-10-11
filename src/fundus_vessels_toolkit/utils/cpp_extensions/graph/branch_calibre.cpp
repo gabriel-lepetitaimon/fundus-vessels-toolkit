@@ -2,9 +2,7 @@
 
 std::array<IntPoint, 2> fast_branch_boundaries(const CurveYX &curveYX, const std::size_t i,
                                                const Tensor2DAcc<bool> &segmentation, const Point &tangent) {
-    const IntPoint &p = curveYX[i];
-    const float tY = tangent.y, tX = tangent.x;
-    return {track_nearest_border(p, {-tX, tY}, segmentation), track_nearest_border(p, {tX, -tY}, segmentation)};
+    return track_nearest_edges(curveYX[i], tangent.rot90(), segmentation);
 }
 
 std::array<IntPoint, 2> fast_branch_boundaries(const CurveYX &curveYX, const std::size_t i,

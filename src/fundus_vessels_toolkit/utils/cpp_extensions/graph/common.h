@@ -124,7 +124,7 @@ struct Point {
 
     Point normalize() const;
     double dot(const Point& p) const;
-    double cos(const Point& p) const;
+    double cosSim(const Point& p) const;
     double cross(const Point& p) const;
     double squaredNorm() const;
     double norm() const;

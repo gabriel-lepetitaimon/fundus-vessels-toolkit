@@ -3,6 +3,7 @@
 #include "branch.h"
 #include "edit_distance.h"
 #include "graph.h"
+#include "ray_iterators.h"
 #include "skeleton.h"
 
 /*********************************************************************************************
@@ -246,6 +247,31 @@ std::tuple<torch::Tensor, double, torch::Tensor> fit_bezier_torch(const torch::T
     return {bspline_to_tensor(bezier), maxError, vector_to_tensor(u)};
 }
 
+torch::Tensor drawLine(std::array<int, 2> tip, std::array<float, 2> direction, int length) {
+    auto scene = torch::zeros({512, 512}, torch::kInt);
+    auto sceneAcc = scene.accessor<int, 2>();
+    auto iter = RayIterator(IntPoint(tip[0], tip[1]), Point(direction[0], direction[1]));
+    int i = 0;
+    while (++i < length) {
+        auto const &p = ++iter;
+        if (!p.is_inside(512, 512)) break;
+        sceneAcc[p.y][p.x] += 1;
+    }
+    return scene;
+}
+
+torch::Tensor drawCone(std::array<int, 2> tip, std::array<float, 2> direction, float angle, int length) {
+    auto scene = torch::zeros({512, 512}, torch::kInt);
+    auto sceneAcc = scene.accessor<int, 2>();
+    auto coneIter = ConeIterator(IntPoint(tip[0], tip[1]), Point(direction[0], direction[1]), angle);
+    while (true) {
+        auto const &p = ++coneIter;
+        if (!p.is_inside(512, 512) || coneIter.height() >= length) break;
+        sceneAcc[p.y][p.x] += 1;
+    }
+    return scene;
+}
+
 /**************************************************************************************
  *             === PYBIND11 BINDINGS ===
  **************************************************************************************/
@@ -274,4 +300,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // === EditDistance.h ===
     m.def("shortest_secondary_path", &shortest_secondary_path, "Compute the shortest path between two sets of nodes.");
     m.def("nodes_similarity", &nodes_similarity, "Compute the similarity between two sets of nodes.");
+
+    m.def("drawCone", &drawCone, "Draw a cone in a 2D image.");
+    m.def("drawLine", &drawLine, "Draw a line in a 2D image.");
 }

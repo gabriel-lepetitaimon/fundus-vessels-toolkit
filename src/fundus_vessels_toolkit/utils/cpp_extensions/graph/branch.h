@@ -77,8 +77,11 @@ std::vector<std::array<IntPoint, 2>> find_branch_endpoints(const torch::Tensor &
 std::vector<CurveYX> track_branches(const torch::Tensor &branch_labels, const torch::Tensor &node_yx,
                                     const torch::Tensor &branch_list);
 
-IntPoint track_nearest_border(const IntPoint &start, const Point &direction, const Tensor2DAcc<bool> &segmentation,
-                              int max_distance = 40);
+IntPoint track_nearest_edge(const IntPoint &start, const Point &direction, const Tensor2DAcc<bool> &segmentation,
+                            int max_distance = 40);
+
+std::array<IntPoint, 2> track_nearest_edges(const IntPoint &start, const Point &direction,
+                                            const Tensor2DAcc<bool> &segmentation, int max_distance = 40);
 
 std::tuple<int, float> findClosestPixel(const CurveYX &curve, const Point &p, int start, int end,
                                         bool findFirstLocalMinimum = false);

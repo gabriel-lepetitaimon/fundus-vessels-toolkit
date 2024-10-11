@@ -1,4 +1,5 @@
 #include "branch.h"
+#include "ray_iterators.h"
 
 /**
  * @brief Find the first and last endpoint of each branch.
@@ -173,8 +174,8 @@ std::vector<CurveYX> track_branches(const torch::Tensor &branch_labels, const to
  * @return The first point of the line for which the segmentation is false. If no such point is found, return
  * IntPoint::Invalid().
  */
-IntPoint track_nearest_border(const IntPoint &start, const Point &direction, const Tensor2DAcc<bool> &segmentation,
-                              int max_distance) {
+IntPoint track_nearest_edge(const IntPoint &start, const Point &direction, const Tensor2DAcc<bool> &segmentation,
+                            int max_distance) {
     if (direction.is_null()) return IntPoint::Invalid();
     const int H = segmentation.size(0), W = segmentation.size(1);
 
@@ -190,6 +191,109 @@ IntPoint track_nearest_border(const IntPoint &start, const Point &direction, con
     } while (i < max_distance && next.is_inside(H, W) && segmentation[next.y][next.x]);
     if (i == max_distance) return IntPoint::Invalid();
     return last;
+}
+
+/**
+ * @brief Track the first not-segmented pixels on two semi-infinite lines defined by a start point and a direction.
+ * The first line is tracked in the direction of the direction vector, while the second line is tracked in the opposite
+ * direction.
+ *
+ * @param start The start point of the line.
+ * @param direction The direction of the line.
+ * @param segmentation An accessor to a 2D tensor of shape (H, W) containing the binary segmentation.
+ * @param max_distance The maximum distance to track.
+ *
+ * @return The first point of the line for which the segmentation is false. If no such point is found, return
+ * IntPoint::Invalid().
+ */
+std::array<IntPoint, 2> track_nearest_edges(const IntPoint &start, const Point &direction,
+                                            const Tensor2DAcc<bool> &segmentation, int max_iter) {
+    if (direction.is_null()) return {{IntPoint::Invalid(), IntPoint::Invalid()}};
+    const int H = segmentation.size(0), W = segmentation.size(1);
+
+    RayIterator dIter, rIter;  // Direct iterator, reverse iterator
+    bool dSafe = true, rSafe = true;
+    if (direction.y >= 0) {                   // Direct: South
+        if (direction.x >= 0) {               // Direct:  West
+            if (direction.x > direction.y) {  // SWW
+                float delta = direction.y / direction.x;
+                dIter = RayIterator(start, delta, &RayIterator::iterSWW);
+                rIter = RayIterator(start, delta, &RayIterator::iterNEE);
+            } else {  // SSW
+                float delta = direction.x / direction.y;
+                dIter = RayIterator(start, delta, &RayIterator::iterSSW);
+                rIter = RayIterator(start, delta, &RayIterator::iterNNE);
+            }
+            dSafe = start.y + max_iter < H && start.x + max_iter < W;
+            rSafe = start.y >= max_iter && start.x >= max_iter;
+        } else {                               // Direct:  East
+            if (-direction.x > direction.y) {  // SEE
+                float delta = direction.y / direction.x;
+                dIter = RayIterator(start, delta, &RayIterator::iterSEE);
+                rIter = RayIterator(start, delta, &RayIterator::iterNWW);
+            } else {  // SSE
+                float delta = direction.x / direction.y;
+                dIter = RayIterator(start, delta, &RayIterator::iterSSE);
+                rIter = RayIterator(start, delta, &RayIterator::iterNNW);
+            }
+            dSafe = start.y + max_iter < H && start.x >= max_iter;
+            rSafe = start.y >= max_iter && start.x + max_iter < W;
+        }
+    } else {                                   // Direct: North
+        if (direction.x > 0) {                 // Direct:  West
+            if (direction.x > -direction.y) {  // NWW
+                float delta = direction.y / direction.x;
+                dIter = RayIterator(start, delta, &RayIterator::iterNWW);
+                rIter = RayIterator(start, delta, &RayIterator::iterSEE);
+            } else {  // NNW
+                float delta = direction.x / direction.y;
+                dIter = RayIterator(start, delta, &RayIterator::iterNNW);
+                rIter = RayIterator(start, delta, &RayIterator::iterSSE);
+            }
+            dSafe = start.y >= max_iter && start.x + max_iter < W;
+            rSafe = start.y + max_iter < H && start.x >= max_iter;
+        } else {                              // Direct:  East
+            if (direction.x < direction.y) {  // NEE
+                float delta = direction.y / direction.x;
+                dIter = RayIterator(start, delta, &RayIterator::iterNEE);
+                rIter = RayIterator(start, delta, &RayIterator::iterSWW);
+            } else {  // NNE
+                float delta = direction.x / direction.y;
+                dIter = RayIterator(start, delta, &RayIterator::iterNNE);
+                rIter = RayIterator(start, delta, &RayIterator::iterSSW);
+            }
+            dSafe = start.y >= max_iter && start.x >= max_iter;
+            rSafe = start.y + max_iter < H && start.x + max_iter < W;
+        }
+    }
+
+    IntPoint dBound = IntPoint::Invalid(), rBound = IntPoint::Invalid();
+
+    int i = 0;
+    IntPoint lastP = start;
+    do {
+        const IntPoint &p = ++dIter;
+        if (!segmentation[p.y][p.x]) {
+            dBound = lastP;
+            break;
+        } else if (!dSafe && !p.is_inside(H, W))
+            break;
+        lastP = p;
+    } while (++i < max_iter);
+
+    i = 0;
+    lastP = start;
+    do {
+        const IntPoint &p = ++rIter;
+        if (!segmentation[p.y][p.x]) {
+            dBound = lastP;
+            break;
+        } else if (!rSafe && !p.is_inside(H, W))
+            break;
+        lastP = p;
+    } while (++i < max_iter);
+
+    return {dBound, rBound};
 }
 
 /**
