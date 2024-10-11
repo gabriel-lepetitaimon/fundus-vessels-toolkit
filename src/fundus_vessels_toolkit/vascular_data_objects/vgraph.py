@@ -480,8 +480,8 @@ class VGraph:
         return VGraph(
             self._branch_list.copy(),
             [gdata.copy(None) for gdata in self._geometric_data],
-            self._nodes_attr.copy(),
-            self._branches_attr.copy(),
+            self._nodes_attr.copy() if self._nodes_attr is not None else None,
+            self._branches_attr.copy() if self._branches_attr is not None else None,
             self._nodes_count,
         )
 

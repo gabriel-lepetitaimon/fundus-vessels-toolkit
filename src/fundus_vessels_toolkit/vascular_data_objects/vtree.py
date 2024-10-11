@@ -285,7 +285,7 @@ class VTree(VGraph):
 
         #: The tree structure of the branches as a 1D vector.
         #: Each element correspond to a branch and contains the index of the parent branch.
-        self.branch_tree = branch_tree
+        self._branch_tree = branch_tree
 
         #: The direction of the branches.
         #: Each element correspond to a branch, if True the branch is directed from its first node to its second.
@@ -321,13 +321,13 @@ class VTree(VGraph):
     def copy(self) -> VTree:
         """Return a copy of the tree."""
         return VTree(
-            self.branches_list.copy(),
-            self.branch_tree.copy(),
+            self._branch_list.copy(),
+            self._branch_tree.copy(),
             self._branch_dirs.copy() if self._branch_dirs is not None else None,
-            self.geometric_data.copy(),
-            nodes_attr=self.nodes_attr.copy() if self.nodes_attr is not None else None,
-            branches_attr=self.branches_attr.copy() if self.branches_attr is not None else None,
-            nodes_count=self.nodes_count,
+            [gdata.copy(None) for gdata in self._geometric_data],
+            nodes_attr=self._nodes_attr.copy() if self.nodes_attr is not None else None,
+            branches_attr=self._branches_attr.copy() if self._branches_attr is not None else None,
+            nodes_count=self._nodes_count,
             check_integrity=False,
         )
 
@@ -379,6 +379,14 @@ class VTree(VGraph):
     ####################################################################################################################
     #  === TREE BRANCHES PROPERTIES ===
     ####################################################################################################################
+    @property
+    def branch_tree(self) -> npt.NDArray[np.int_]:
+        """The tree structure of the branches as a 1D vector.
+
+        Each element correspond to a branch and contains the index of the parent branch.
+        """
+        return self._branch_tree
+
     @overload
     def branch_dirs(self, branch_ids: int) -> np.bool_: ...
     @overload
