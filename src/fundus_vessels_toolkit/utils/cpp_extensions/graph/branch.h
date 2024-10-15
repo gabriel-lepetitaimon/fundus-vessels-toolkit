@@ -80,13 +80,19 @@ std::vector<CurveYX> track_branches(const torch::Tensor &branch_labels, const to
 IntPoint track_nearest_edge(const IntPoint &start, const Point &direction, const Tensor2DAcc<bool> &segmentation,
                             int max_distance = 40);
 
-std::array<IntPoint, 2> track_nearest_edges(const IntPoint &start, const Point &direction,
-                                            const Tensor2DAcc<bool> &segmentation, int max_distance = 40);
+std::tuple<int, float> find_closest_pixel(const CurveYX &curve, const Point &p, int start, int end,
+                                          bool findFirstLocalMinimum = false);
 
-std::tuple<int, float> findClosestPixel(const CurveYX &curve, const Point &p, int start, int end,
-                                        bool findFirstLocalMinimum = false);
+std::pair<torch::Tensor, torch::Tensor> find_closest_branches(const torch::Tensor &branch_labels,
+                                                              const torch::Tensor &points,
+                                                              const torch::Tensor &direction, float max_dist,
+                                                              float angle = 10);
 
-std::list<SizePair> splitInContiguousCurves(const CurveYX &curve);
+std::list<SizePair> split_contiguous_curves(const CurveYX &curve);
+
+torch::Tensor draw_branches_labels(const std::vector<torch::Tensor> &branchCurves, const torch::Tensor &out,
+                                   const torch::Tensor &nodeCoords = torch::empty({0, 2}, torch::kInt),
+                                   const torch::Tensor &branchList = torch::empty({0, 2}, torch::kInt));
 
 /**************************************************************************************
  *              === BRANCH_FIXING.CPP ===

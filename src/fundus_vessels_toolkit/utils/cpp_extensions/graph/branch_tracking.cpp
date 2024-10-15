@@ -194,109 +194,6 @@ IntPoint track_nearest_edge(const IntPoint &start, const Point &direction, const
 }
 
 /**
- * @brief Track the first not-segmented pixels on two semi-infinite lines defined by a start point and a direction.
- * The first line is tracked in the direction of the direction vector, while the second line is tracked in the opposite
- * direction.
- *
- * @param start The start point of the line.
- * @param direction The direction of the line.
- * @param segmentation An accessor to a 2D tensor of shape (H, W) containing the binary segmentation.
- * @param max_distance The maximum distance to track.
- *
- * @return The first point of the line for which the segmentation is false. If no such point is found, return
- * IntPoint::Invalid().
- */
-std::array<IntPoint, 2> track_nearest_edges(const IntPoint &start, const Point &direction,
-                                            const Tensor2DAcc<bool> &segmentation, int max_iter) {
-    if (direction.is_null()) return {{IntPoint::Invalid(), IntPoint::Invalid()}};
-    const int H = segmentation.size(0), W = segmentation.size(1);
-
-    RayIterator dIter, rIter;  // Direct iterator, reverse iterator
-    bool dSafe = true, rSafe = true;
-    if (direction.y >= 0) {                   // Direct: South
-        if (direction.x >= 0) {               // Direct:  West
-            if (direction.x > direction.y) {  // SWW
-                float delta = direction.y / direction.x;
-                dIter = RayIterator(start, delta, &RayIterator::iterSWW);
-                rIter = RayIterator(start, delta, &RayIterator::iterNEE);
-            } else {  // SSW
-                float delta = direction.x / direction.y;
-                dIter = RayIterator(start, delta, &RayIterator::iterSSW);
-                rIter = RayIterator(start, delta, &RayIterator::iterNNE);
-            }
-            dSafe = start.y + max_iter < H && start.x + max_iter < W;
-            rSafe = start.y >= max_iter && start.x >= max_iter;
-        } else {                               // Direct:  East
-            if (-direction.x > direction.y) {  // SEE
-                float delta = direction.y / direction.x;
-                dIter = RayIterator(start, delta, &RayIterator::iterSEE);
-                rIter = RayIterator(start, delta, &RayIterator::iterNWW);
-            } else {  // SSE
-                float delta = direction.x / direction.y;
-                dIter = RayIterator(start, delta, &RayIterator::iterSSE);
-                rIter = RayIterator(start, delta, &RayIterator::iterNNW);
-            }
-            dSafe = start.y + max_iter < H && start.x >= max_iter;
-            rSafe = start.y >= max_iter && start.x + max_iter < W;
-        }
-    } else {                                   // Direct: North
-        if (direction.x > 0) {                 // Direct:  West
-            if (direction.x > -direction.y) {  // NWW
-                float delta = direction.y / direction.x;
-                dIter = RayIterator(start, delta, &RayIterator::iterNWW);
-                rIter = RayIterator(start, delta, &RayIterator::iterSEE);
-            } else {  // NNW
-                float delta = direction.x / direction.y;
-                dIter = RayIterator(start, delta, &RayIterator::iterNNW);
-                rIter = RayIterator(start, delta, &RayIterator::iterSSE);
-            }
-            dSafe = start.y >= max_iter && start.x + max_iter < W;
-            rSafe = start.y + max_iter < H && start.x >= max_iter;
-        } else {                              // Direct:  East
-            if (direction.x < direction.y) {  // NEE
-                float delta = direction.y / direction.x;
-                dIter = RayIterator(start, delta, &RayIterator::iterNEE);
-                rIter = RayIterator(start, delta, &RayIterator::iterSWW);
-            } else {  // NNE
-                float delta = direction.x / direction.y;
-                dIter = RayIterator(start, delta, &RayIterator::iterNNE);
-                rIter = RayIterator(start, delta, &RayIterator::iterSSW);
-            }
-            dSafe = start.y >= max_iter && start.x >= max_iter;
-            rSafe = start.y + max_iter < H && start.x + max_iter < W;
-        }
-    }
-
-    IntPoint dBound = IntPoint::Invalid(), rBound = IntPoint::Invalid();
-
-    int i = 0;
-    IntPoint lastP = start;
-    do {
-        const IntPoint &p = ++dIter;
-        if (!segmentation[p.y][p.x]) {
-            dBound = lastP;
-            break;
-        } else if (!dSafe && !p.is_inside(H, W))
-            break;
-        lastP = p;
-    } while (++i < max_iter);
-
-    i = 0;
-    lastP = start;
-    do {
-        const IntPoint &p = ++rIter;
-        if (!segmentation[p.y][p.x]) {
-            dBound = lastP;
-            break;
-        } else if (!rSafe && !p.is_inside(H, W))
-            break;
-        lastP = p;
-    } while (++i < max_iter);
-
-    return {dBound, rBound};
-}
-
-/**
  * @brief Find the closest pixel to a point in a curve.
  *
  * This method returns the index of the closest pixel to a point in a curve.
@@ -310,8 +207,8 @@ std::array<IntPoint, 2> track_nearest_edges(const IntPoint &start, const Point &
  *
  * @return A tuple containing the index of the closest pixel and the distance to the point.
  */
-std::tuple<int, float> findClosestPixel(const CurveYX &curve, const Point &p, int start, int end,
-                                        bool findFirstLocalMinimum) {
+std::tuple<int, float> find_closest_pixel(const CurveYX &curve, const Point &p, int start, int end,
+                                          bool findFirstLocalMinimum) {
     const int inc = (start < end) ? 1 : -1;
     std::tuple<int, float> min_point = {0, distance(curve[start], p)};
     for (int i = start + inc; i != end; i += inc) {
@@ -325,6 +222,39 @@ std::tuple<int, float> findClosestPixel(const CurveYX &curve, const Point &p, in
     return min_point;
 }
 
+std::pair<torch::Tensor, torch::Tensor> find_closest_branches(const torch::Tensor &branch_labels,
+                                                              const torch::Tensor &points,
+                                                              const torch::Tensor &direction, float max_dist,
+                                                              float angle) {
+    TORCH_CHECK(points.ndimension() == 2 && points.size(1) == 2,
+                "Invalid argument points: should have a shape of (N, 2) instead of", points.sizes());
+    const std::size_t N = points.size(0);
+    TORCH_CHECK(direction.ndimension() == 2 && (std::size_t)direction.size(0) == N && direction.size(1) == 2,
+                "Invalid argument direction: should have a shape of (", N, ", 2) instead of", direction.sizes());
+
+    auto points_acc = points.accessor<int, 2>();
+    auto direction_acc = direction.accessor<float, 2>();
+    auto branch_labels_acc = branch_labels.accessor<int, 2>();
+    std::vector<std::pair<uint, IntPoint>> out(N);
+
+    auto branch = torch::empty({(long)N}, torch::kInt);
+    auto intercept = torch::empty({(long)N, 2}, torch::kInt);
+    auto branch_acc = branch.accessor<int, 1>();
+    auto intercept_acc = intercept.accessor<int, 2>();
+
+#pragma omp parallel for
+    for (std::size_t i = 0; i < N; i++) {
+        auto start = IntPoint(points_acc[i][0], points_acc[i][1]);
+        auto dir = Point(direction_acc[i][0], direction_acc[i][1]);
+        const auto &[b, p] = track_nearest_branch(start, dir, angle, max_dist, branch_labels_acc);
+        branch_acc[i] = b - 1;
+        intercept_acc[i][0] = p.y;
+        intercept_acc[i][1] = p.x;
+    }
+
+    return {branch, intercept};
+}
+
 /**
  * @brief Split a curve into contiguous curves.
  *
@@ -335,7 +265,7 @@ std::tuple<int, float> findClosestPixel(const CurveYX &curve, const Point &p, in
  * @return A list of contiguous curves.
  *
  */
-std::list<SizePair> splitInContiguousCurves(const CurveYX &curve) {
+std::list<SizePair> split_contiguous_curves(const CurveYX &curve) {
     if (curve.size() < 2) return {{0, curve.size()}};
 
     std::list<SizePair> curvesBoundaries;
@@ -350,4 +280,67 @@ std::list<SizePair> splitInContiguousCurves(const CurveYX &curve) {
     curvesBoundaries.push_back(SizePair{start, curve.size()});
 
     return curvesBoundaries;
+}
+
+/*
+ * @brief Draw the branches on a tensor.
+ *
+ * This method draws the branches on a tensor. The branches are represented by
+ * a list of curves and a list of nodes. The branches are drawn as a line
+ * between the nodes.
+ *
+ * @param branchCurves A list of uint tensor of shape (N, 2) representing the branch curves.
+ * @param shape The shape of the output tensor.
+ * @param nodeCoords A list of nodes coordinates.
+ * @param branchList A list of branches.
+ *
+ * @return A tensor with the branches drawn.
+ */
+torch::Tensor draw_branches_labels(const std::vector<torch::Tensor> &branchCurves, const torch::Tensor &out,
+                                   const torch::Tensor &nodeCoords, const torch::Tensor &branchList) {
+    const std::size_t B = branchCurves.size();
+    auto branchesLabels = out.accessor<int, 2>();
+
+    for (std::size_t b = 0; b < B; b++) {
+        const auto &curveT = branchCurves[b];
+        TORCH_CHECK(curveT.ndimension() == 2 && curveT.size(1) == 2, "Invalid argument branchCurves: branch ", b,
+                    " should have a shape of (N, 2) instead of ", curveT.sizes());
+        const auto &curve = curveT.accessor<int, 2>();
+        const std::size_t N = curve.size(0);
+        for (std::size_t i = 0; i < N; i++) branchesLabels[curve[i][0]][curve[i][1]] = b + 1;
+    }
+
+    if (nodeCoords.numel() == 0 || branchList.numel() == 0) return out;
+
+    TORCH_CHECK(branchList.ndimension() == 2 && branchList.size(1) == 2,
+                "Invalid argument branchList: should have a shape of (B, 2) instead of", branchList.sizes());
+    TORCH_CHECK(
+        nodeCoords.ndimension() == 2 && nodeCoords.size(1) == 2 && nodeCoords.size(0) >= branchList.max().item<int>(),
+        "Invalid argument branchList: should have a shape of (B, 2) instead of", branchList.sizes());
+    auto branchList_acc = branchList.accessor<int, 2>();
+    auto nodeCoords_acc = nodeCoords.accessor<int, 2>();
+
+    for (std::size_t b = 0; b < B; b++) {
+        const IntPoint start = {nodeCoords_acc[branchList_acc[b][0]][0], nodeCoords_acc[branchList_acc[b][0]][1]};
+        const IntPoint end = {nodeCoords_acc[branchList_acc[b][1]][0], nodeCoords_acc[branchList_acc[b][1]][1]};
+        const auto &curve = branchCurves[b].accessor<int, 2>();
+        if (curve.size(0) == 0) {
+            RayIterator ray(start, end - start);
+            while (++ray != end) branchesLabels[ray.y()][ray.x()] = b + 1;
+        } else {
+            const IntPoint p1 = {curve[0][0], curve[0][1]};
+            const IntPoint p2 = {curve[curve.size(0) - 1][0], curve[curve.size(0) - 1][1]};
+
+            if (p1 != start) {
+                RayIterator ray(start, p1 - start);
+                while (++ray != p1) branchesLabels[ray.y()][ray.x()] = b + 1;
+            }
+            if (p2 != end) {
+                RayIterator ray(end, p2 - end);
+                while (++ray != p2) branchesLabels[ray.y()][ray.x()] = b + 1;
+            }
+        }
+    }
+
+    return out;
 }

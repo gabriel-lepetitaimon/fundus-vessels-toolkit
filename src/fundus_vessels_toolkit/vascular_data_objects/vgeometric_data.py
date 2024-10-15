@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 from copy import copy, deepcopy
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, overload
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Tuple, overload
 from weakref import ref
 
 import numpy as np
@@ -478,7 +478,12 @@ class VGeometricData:
     ####################################################################################################################
     #  === COMPUTABLE GEOMETRIC PROPERTIES ===
     ####################################################################################################################
-    def branches_label_map(self, calibre_attr=None, only_tip=False) -> npt.NDArray[np.int_]:
+    def branches_label_map(
+        self,
+        calibre_attr=None,
+        only_tip=False,
+        connect_nodes: bool = False,
+    ) -> npt.NDArray[np.int_]:
         """Return a label map of the branches.
 
         Returns
@@ -486,17 +491,24 @@ class VGeometricData:
         np.ndarray
             An array of the same shape as the image where each pixel is labeled with the id of the branch it belongs to.
         """
-        domain_shape = np.asarray(self.domain.size)
-        branches_label_map = np.zeros(domain_shape, dtype=np.int_)
-        for branch_id, branch_curve in zip(self.branches_id, self._branches_curve, strict=True):
-            if branch_curve is None:
-                continue
-            branch_curve = branch_curve - np.array([self.domain.top, self.domain.left])
-            valid_branch_curve = np.all(
-                np.concatenate([branch_curve >= 0, branch_curve < domain_shape[None, :]], axis=1), axis=1
-            )
-            branch_curve = branch_curve[valid_branch_curve]
-            branches_label_map[branch_curve[:, 0], branch_curve[:, 1]] = branch_id + 1
+        import torch
+
+        from ..utils.cpp_extensions.graph_cpp import draw_branches_labels
+
+        domain_shape = self.domain.size
+        top_left = np.array([self.domain.top, self.domain.left])
+        curves = [
+            torch.empty((0, 2), dtype=int) if c is None else torch.from_numpy(c - top_left).int()
+            for c in self.branch_curve()
+        ]
+        branches_label_map = np.zeros(domain_shape, dtype=np.int32)
+        if connect_nodes:
+            nodes_coord = torch.from_numpy(self.nodes_coord(graph_index=False) - top_left).int()
+            branch_list = torch.from_numpy(self.parent_graph.branch_list).int()
+        else:
+            nodes_coord = torch.empty((0, 2), dtype=int)
+            branch_list = torch.empty((0, 2), dtype=int)
+        draw_branches_labels(curves, torch.from_numpy(branches_label_map), nodes_coord, branch_list)
 
         if calibre_attr is not None:
             from skimage.draw import line
@@ -940,13 +952,13 @@ class VGeometricData:
             - If first_tip is not None, the data is an array of shape (b, 2) where b is the length of ``branch_ids`` or (2, ) if ``branch_ids`` is a scalar.
             - If first_tip is None, the data is an array of shape (b, 2, 2) where b is the length of ``branch_ids`` or (2, 2) if ``branch_ids`` is a scalar.
         """  # noqa: E501
-        branches_id, is_single = as_1d_array(branch_ids) if branch_ids is not None else (None, False)
+        branch_ids, is_single = as_1d_array(branch_ids) if branch_ids is not None else (None, False)
 
         if self.has_branch_data(attr):
             tangents = self.tip_data(attr, branch_ids, first_tip, graph_index=graph_index)
             unknown_tangents: npt.NDArray[np.bool_] = np.isnan(tangents).any(axis=1) | np.all(tangents == 0, axis=1)
         else:
-            B = len(branches_id) if branch_ids is not None else self.branches_count
+            B = len(branch_ids) if branch_ids is not None else self.branches_count
             tangents = np.empty((B, 2, 2) if first_tip is None else (B, 2))
             unknown_tangents = np.ones(B, dtype=bool)
 
@@ -1584,10 +1596,12 @@ class VGeometricData:
         scaling=1,
         normalize=False,
         invert_direction: Optional[bool | npt.NDArray[np.bool_]] = None,
-        show_only: Optional[npt.NDArray[np.bool_]] = None,
+        show_only: Optional[npt.NDArray[np.bool_] | Literal["endpoints"]] = None,
     ):
         from jppype.layers import LayerQuiver
 
+        if isinstance(show_only, str) and show_only == "endpoints":
+            show_only = np.isin(self.parent_graph.branch_list, self.parent_graph.endpoints_nodes())
         if show_only is not None and not show_only.any():
             return LayerQuiver(np.empty((0, 2)), np.empty((0, 2)), self.domain, "view_sqrt" if normalize else "scene")
 

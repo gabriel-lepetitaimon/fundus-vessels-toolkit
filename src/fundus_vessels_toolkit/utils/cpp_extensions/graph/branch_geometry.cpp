@@ -71,7 +71,7 @@ extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAcc<
 
         // Split the branch curve into contiguous curves
         auto const& contiguousCurvesStartEnd =
-            assume_contiguous ? std::list<SizePair>({{0, curve.size()}}) : splitInContiguousCurves(curve);
+            assume_contiguous ? std::list<SizePair>({{0, curve.size()}}) : split_contiguous_curves(curve);
         for (auto const& [start, end] : contiguousCurvesStartEnd) {
             for (std::size_t i = start; i < end; i++) {
                 // Compute the tangent of the curve

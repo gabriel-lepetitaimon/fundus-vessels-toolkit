@@ -217,7 +217,7 @@ torch::Tensor fast_branch_calibre_torch(const torch::Tensor &curveYX, const torc
 torch::Tensor compute_curvature(const torch::Tensor &curveYX, const torch::Tensor &tangents) {
     const CurveYX &curve = tensor_to_curve(curveYX);
     const PointList &tangents_vec = tensor_to_pointList(tangents);
-    auto const &contiguousCurvesStartEnd = splitInContiguousCurves(curve);
+    auto const &contiguousCurvesStartEnd = split_contiguous_curves(curve);
 
     torch::Tensor curvatures_tensor = torch::empty({(long)curve.size()}, torch::kFloat);
 
@@ -296,6 +296,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // === Branch.h ===
     m.def("find_branch_endpoints", &find_branch_endpoints, "Find the first and last endpoint of each branch.");
+    m.def("find_closest_branches", &find_closest_branches, "Find the closest branches to a set of points.");
+    m.def("draw_branches_labels", &draw_branches_labels, "Draw the branches on a tensor.");
 
     // === EditDistance.h ===
     m.def("shortest_secondary_path", &shortest_secondary_path, "Compute the shortest path between two sets of nodes.");

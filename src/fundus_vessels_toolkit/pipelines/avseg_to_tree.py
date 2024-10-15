@@ -378,8 +378,6 @@ class NaiveAVSegToTree(AVSegToTreeBase):
 
         vgraph = self.segToGraph.skel_to_vgraph(skel, av)
         if if_none(simplify, self.segToGraph.simplify_graph):
-            if self.segToGraph.simplify_graph_arg.reconnect_endpoints:
-                self.segToGraph.populate_geometry(vgraph, av, inplace=True)
             self.segToGraph.simplify(vgraph, inplace=True)
         if if_none(populate_geometry, self.segToGraph.populate_geometry):
             self.segToGraph.populate_geometry(vgraph, av, inplace=True)

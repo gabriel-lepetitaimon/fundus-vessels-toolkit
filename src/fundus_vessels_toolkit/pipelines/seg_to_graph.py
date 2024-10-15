@@ -242,9 +242,9 @@ class FundusVesselSegToGraph(SegToGraph):
 
         self.simplify_graph_arg = GraphSimplifyArg(
             max_spurs_length=0,
-            reconnect_endpoints=ReconnectEndpointsArg(
-                max_distance=diameter * 2, max_angle=20, intercept_snapping_distance=diameter / 2
-            ),
+            # reconnect_endpoints=ReconnectEndpointsArg(
+            #    max_distance=diameter * 2, max_angle=20, intercept_snapping_distance=diameter / 2
+            # ),
             max_cycles_length=diameter,
             junctions_merge_distance=diameter * 2 / 3,
             min_orphan_branches_length=diameter * 1.5,

@@ -147,6 +147,8 @@ struct Point {
     }
 
     IntPoint toInt() const;
+    IntPoint floor() const;
+    IntPoint ceil() const;
     IntPair toIntPair() const;
     FloatPair toFloatPair() const;
 };

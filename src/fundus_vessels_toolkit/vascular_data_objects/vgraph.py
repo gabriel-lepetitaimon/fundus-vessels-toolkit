@@ -138,7 +138,7 @@ class VGraphNode:
         if self._ibranch_ids is None:
             self._update_incident_branches_cache()
         return (
-            VGraphNode(self.__graph, self.__graph.branch_list[branch][1 if dir else 0])
+            VGraphNode(self.__graph, self.__graph._branch_list[branch][1 if dir else 0])
             for branch, dir in zip(self._ibranch_ids, self._ibranch_dirs, strict=True)
         )
 
@@ -189,7 +189,7 @@ class VGraphBranch:
         self._id = id
         graph._branches_refs.add(self)
 
-        self._nodes_id = graph.branch_list[id] if nodes_id is None else nodes_id
+        self._nodes_id = graph._branch_list[id] if nodes_id is None else nodes_id
 
     def __repr__(self):
         return f"VGraphBranch({self._id})"
@@ -887,7 +887,7 @@ class VGraph:
             If ``return_endpoints_mask`` is True, a 2D boolean array of shape (B, 2) where endpoints are True.
         """  # noqa: E501
         endpoints_nodes = self.endpoints_nodes(as_mask=True)
-        endpoints_mask = endpoints_nodes[self.branch_list]
+        endpoints_mask = endpoints_nodes[self._branch_list]
         endpoints_branches = np.any(endpoints_mask, axis=1)
         if not as_mask:
             endpoints_branches = np.argwhere(endpoints_branches).flatten()
@@ -912,8 +912,8 @@ class VGraph:
             The indexes of the branches connected to a single node.
         """
         terminal_nodes = self.endpoints_nodes(as_mask=True)
-        orphan_branches_mask = np.all(terminal_nodes[self.branch_list], axis=1) | (
-            self.branch_list[:, 0] == self.branch_list[:, 1]
+        orphan_branches_mask = np.all(terminal_nodes[self._branch_list], axis=1) | (
+            self._branch_list[:, 0] == self._branch_list[:, 1]
         )
         return orphan_branches_mask if as_mask else np.argwhere(orphan_branches_mask).flatten()
 
@@ -930,7 +930,7 @@ class VGraph:
         np.ndarray
             The indexes of the self-loop branches.
         """
-        self_loop_mask = self.branch_list[:, 0] == self.branch_list[:, 1]
+        self_loop_mask = self._branch_list[:, 0] == self._branch_list[:, 1]
         return self_loop_mask if as_mask else np.argwhere(self_loop_mask).flatten()
 
     def nodes_connected_graphs(self) -> Tuple[npt.NDArray[np.int_]]:
@@ -941,7 +941,7 @@ class VGraph:
         np.ndarray
             An array of shape (N,) containing the index of the connected component of each node.
         """
-        return reduce_clusters(self.branch_list)
+        return reduce_clusters(self._branch_list)
 
     ####################################################################################################################
     #  === COMBINE GEOMETRIC DATA ===
@@ -982,11 +982,11 @@ class VGraph:
             An array of shape (B,) containing the length of the branches.
         """
         if ids is None:
-            branches = self.branch_list
+            branches = self._branch_list
         else:
             if isinstance(ids, int):
                 ids = [ids]
-            branches = self.branch_list[ids]
+            branches = self._branch_list[ids]
 
         return np.linalg.norm(self.nodes_coord()[branches[:, 0]] - self.nodes_coord()[branches[:, 1]], axis=1)
 
@@ -1837,7 +1837,7 @@ class VGraph:
             updated_branches = np.unique(np.concatenate(updated_branches, dtype=int))
             for branch in self._branches_refs:
                 if branch._id in updated_branches:
-                    branch._nodes_id = self.branch_list[branch._id]
+                    branch._nodes_id = self._branch_list[branch._id]
 
         return self
 
@@ -1997,7 +1997,7 @@ class VGraph:
         domain = self.geometric_data().domain
 
         layer = LayerGraph(
-            self.branch_list,
+            self._branch_list,
             self.nodes_coord() - np.array(domain.top_left)[None, :],
             self.geometric_data().branches_label_map(calibre_attr=boundaries, only_tip=boundaries_only_tip),
         )
@@ -2019,7 +2019,7 @@ class VGraph:
             bsplines_path = []
             filler_paths = []
             for i, d in enumerate(branches_geodata):
-                n1, n2 = [Point(*nodes_coord[_]) for _ in self.branch_list[i]]
+                n1, n2 = [Point(*nodes_coord[_]) for _ in self._branch_list[i]]
                 if isinstance(d, VBranchGeoData.BSpline):
                     bsplines_path.append(d.data.to_path())
                     filler_paths.append([_.to_path() for _ in d.data.filling_curves(n1, n2, smoothing=0.5)])
@@ -2056,7 +2056,7 @@ class VGraph:
             return [0, len(curve) - 1] if only_tips else np.arange(len(curve), step=4)
 
         out_map = np.zeros_like(segmentation, dtype=np.uint8)
-
+        #
         yx_curves = {k: curve for k, curve in enumerate(self.geometric_data().branch_curve()) if len(curve) > 1}
         boundaries = {id: branch_boundaries(curve, segmentation, eval_point(curve)) for id, curve in yx_curves.items()}
 

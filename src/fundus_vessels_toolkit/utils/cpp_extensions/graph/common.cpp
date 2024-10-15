@@ -100,6 +100,8 @@ bool Point::is_inside(const Point& p) const { return (x >= 0 && x < p.x && y >= 
 bool Point::is_null() const { return (x == 0 && y == 0); }
 
 IntPoint Point::toInt() const { return IntPoint((int)round(y), (int)round(x)); }
+IntPoint Point::floor() const { return IntPoint((int)std::floor(y), (int)std::floor(x)); }
+IntPoint Point::ceil() const { return IntPoint((int)std::ceil(y), (int)std::ceil(x)); }
 IntPair Point::toIntPair() const { return {(int)round(y), (int)round(x)}; }
 FloatPair Point::toFloatPair() const { return {(float)y, (float)x}; }
 

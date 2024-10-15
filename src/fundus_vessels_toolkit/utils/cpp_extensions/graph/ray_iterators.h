@@ -3,6 +3,15 @@
 
 #include "common.h"
 
+std::array<IntPoint, 2> track_nearest_edges(const IntPoint& start, const Point& direction,
+                                            const Tensor2DAcc<bool>& segmentation, int max_distance = 40);
+
+std::pair<uint, IntPoint> track_nearest_branch(const IntPoint& start, const Point& direction, float angle,
+                                               float max_dist, const Tensor2DAcc<int>& branchMap);
+/**********************************************************************************************************************
+ *            === RAY ITERATORS ===
+ **********************************************************************************************************************/
+
 enum class Octant { SWW = 0, SSW = 1, SSE = 2, SEE = 3, NEE = 4, NNE = 5, NNW = 6, NWW = 7 };
 
 class RayIterator {
@@ -16,6 +25,7 @@ class RayIterator {
     const IntPoint& operator*() const;
     const int& y() const;
     const int& x() const;
+    const float& delta() const;
     const Octant& octant() const;
 
     bool operator!=(const RayIterator& other);
@@ -32,9 +42,10 @@ class RayIterator {
 
     bool iter();
     IntPoint previousHalfStep() const;
+    IntPoint extrapolate(int step) const;
 
    private:
-    float delta;
+    float _delta;
     bool (RayIterator::*_iter)();
     Octant _octant;
 
@@ -48,15 +59,20 @@ class ConeIterator {
     const IntPoint& operator*() const;
 
     const IntPoint& operator++();
+    bool iter();
     const int& height() const;
+
+    const IntPoint& start() const;
+    const RayIterator& leftRay() const;
+    const Point& rightRayDirection() const;
 
    protected:
     bool beyondRightRay(const IntPoint& p);
 
    private:
-    IntPoint start;
-    Point rightRay;
-    RayIterator leftRayIter, transversalIter;
+    IntPoint _start;
+    Point _rightRay;
+    RayIterator _leftRayIter, transversalIter;
     bool interstice = false;
     int _height = 0;
 };

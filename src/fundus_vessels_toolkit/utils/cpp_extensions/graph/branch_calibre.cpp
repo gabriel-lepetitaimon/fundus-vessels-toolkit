@@ -1,4 +1,5 @@
 #include "branch.h"
+#include "ray_iterators.h"
 
 std::array<IntPoint, 2> fast_branch_boundaries(const CurveYX &curveYX, const std::size_t i,
                                                const Tensor2DAcc<bool> &segmentation, const Point &tangent) {

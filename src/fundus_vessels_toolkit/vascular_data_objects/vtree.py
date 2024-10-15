@@ -35,7 +35,7 @@ class VTreeNode(VGraphNode):
         self._outgoing_branches_id = self.graph.node_outgoing_branches(self.id)
         self._incoming_branches_id = self.graph.node_incoming_branches(self.id)
         self._ibranch_ids = np.concatenate([self._outgoing_branches_id, self._incoming_branches_id])
-        self._ibranch_dirs = self.graph.branch_list[self._ibranch_ids][:, 0] == self.id
+        self._ibranch_dirs = self.graph._branch_list[self._ibranch_ids][:, 0] == self.id
 
     def _clear_incident_branches_cache(self):
         self._outgoing_branches_id = None
@@ -419,7 +419,7 @@ class VTree(VGraph):
         np.ndarray
             The indexes of the root branches.
         """
-        return np.argwhere(self.branch_tree == -1).flatten()
+        return np.argwhere(self._branch_tree == -1).flatten()
 
     def tree_branch_list(self) -> npt.NDArray[np.int_]:
         """Return the list of branches of the tree.
@@ -430,10 +430,10 @@ class VTree(VGraph):
             The list of branches of the tree.
         """
         if self._branch_dirs is None:
-            return self.branch_list
+            return self._branch_list
 
         dirs = self._branch_dirs
-        branch_list = self.branch_list.copy()
+        branch_list = self._branch_list.copy()
         branch_list[dirs] = branch_list[dirs][:, ::-1]
         return branch_list
 
@@ -545,7 +545,7 @@ class VTree(VGraph):
             The indexes of the head nodes.
         """
         branch_id, is_single = as_1d_array(branch_id, dtype=int)
-        heads = self.branch_list[branch_id]
+        heads = self._branch_list[branch_id]
         if self._branch_dirs is not None:
             heads = heads[:, np.where(self._branch_dirs[branch_id], 1, 0)]
         return heads[0] if is_single else heads
@@ -564,7 +564,7 @@ class VTree(VGraph):
             The indexes of the tail nodes.
         """
         branch_id, is_single = as_1d_array(branch_id, dtype=int)
-        tails = self.branch_list[branch_id]
+        tails = self._branch_list[branch_id]
         if self._branch_dirs is not None:
             tails = tails[:, np.where(self._branch_dirs[branch_id], 0, 1)]
         return tails[0] if is_single else tails
@@ -614,8 +614,8 @@ class VTree(VGraph):
         np.ndarray
             The indexes of the root nodes.
         """
-        root_branches = np.argwhere(self.branch_tree == -1).flatten()
-        root_nodes = self.branch_list[root_branches]
+        root_branches = np.argwhere(self._branch_tree == -1).flatten()
+        root_nodes = self._branch_list[root_branches]
         if self._branch_dirs is not None:
             node_id = np.where(self._branch_dirs[root_branches], 0, 1)
             root_nodes = np.take_along_axis(root_nodes, node_id[:][:, None], axis=1).squeeze(1)
@@ -804,12 +804,12 @@ class VTree(VGraph):
             indexes = invert_complete_lookup(indexes)
 
         super().reindex_branches(indexes, inverse_lookup=False)
-        self.branch_tree = self.branch_tree[indexes]
+        self._branch_tree[indexes] = self._branch_tree
         if self._branch_dirs is not None:
-            self._branch_dirs = self._branch_dirs[indexes]
+            self._branch_dirs[indexes] = self._branch_dirs
 
         indexes = add_empty_to_lookup(indexes, increment_index=False)
-        self.branch_tree = indexes[self.branch_tree + 1]
+        self._branch_tree = indexes[self.branch_tree + 1]
         return self
 
     def reindex_nodes(self, indexes, inverse_lookup=False) -> VTree:
@@ -862,7 +862,7 @@ class VTree(VGraph):
     def _delete_branches(self, branch_indexes: npt.NDArray[np.int_], update_refs: bool = True) -> npt.NDArray[np.int_]:
         branches_reindex = super()._delete_branches(branch_indexes, update_refs=update_refs)
         reindex = add_empty_to_lookup(branches_reindex, increment_index=False)
-        self.branch_tree = reindex[np.delete(self.branch_tree, branch_indexes) + 1]
+        self._branch_tree = reindex[np.delete(self.branch_tree, branch_indexes) + 1]
         if self._branch_dirs is not None:
             self._branch_dirs = np.delete(self._branch_dirs, branch_indexes)
         return branches_reindex
@@ -988,7 +988,7 @@ class VTree(VGraph):
 
         # === Apply branch deletion to branch tree ===
         del_lookup = add_empty_to_lookup(del_lookup, increment_index=False)
-        tree.branch_tree = np.delete(del_lookup[branch_tree + 1], del_branch)
+        tree._branch_tree = np.delete(del_lookup[branch_tree + 1], del_branch)
         return tree
 
     def merge_nodes(self, nodes: npt.NDArray[np.int_], *, inplace=False) -> VTree:
@@ -1132,7 +1132,7 @@ class VTree(VGraph):
             branch_id = stack.pop() if depth_first else stack.pop(0)
             branch_children = self.branch_successors(branch_id)
             branch_dir = self._branch_dirs[branch_id] if self._branch_dirs is not None else True
-            branch = VTreeBranch(self, branch_id, dir=branch_dir, nodes_id=self.branch_list[branch_id])
+            branch = VTreeBranch(self, branch_id, dir=branch_dir, nodes_id=self._branch_list[branch_id])
             branch._children_branches_id = branch_children
             yield branch
             stack.extend(branch_children)
