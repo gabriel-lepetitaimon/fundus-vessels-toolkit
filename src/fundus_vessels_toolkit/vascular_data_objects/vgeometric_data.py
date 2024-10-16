@@ -386,7 +386,7 @@ class VGeometricData:
             raise TypeError("Invalid type for branches index.")
 
     def branch_midpoint(
-        self, ids: Optional[int | npt.NDArray[np.int32]] = None, p=0.5, *, graph_index=True
+        self, ids: Optional[int | npt.NDArray[np.int32]] = None, p=0.5, *, infer_from_nodes=True, graph_index=True
     ) -> Point | None | List[Point | None]:
         """Return the coordinates of a point from each branch skeleton.
 
@@ -398,6 +398,9 @@ class VGeometricData:
         p : float, optional
             The position of the midpoint on the branch. If p=0.5, the midpoint is the middle of the branch. If p=0, the midpoint is the first point of the branch. If p=1, the midpoint is the last point of the branch.
 
+        infer_from_nodes : bool, optional
+            If True, the midpoint is inferred from the nodes of the branch if the branch curve is not available. By default True.
+
         Returns
         -------
         np.ndarray | List[np.ndarray]
@@ -405,22 +408,29 @@ class VGeometricData:
             - If ``ids`` is an iterable of int: a list of such arrays.
         """  # noqa: E501
 
-        def mid_point(curve):
-            if curve is None or curve.shape[0] == 0:
+        def midpoint(internal_id: int) -> Point | None:
+            if internal_id < 0:
                 return None
-            return Point.from_array(curve[int(p * curve.shape[0])])
+            curve = self._branches_curve[internal_id]
+            if curve is None or curve.shape[0] == 0:
+                if not infer_from_nodes or self._parent_graph is None:
+                    return None
+                else:
+                    nodes = self.parent_graph.branch_list[internal_id]
+                    return Point.from_array(self.nodes_coord(nodes).mean(axis=0))
+            else:
+                return Point.from_array(curve[int(p * curve.shape[0])])
 
         if ids is None:
-            return [mid_point(c) for c in self._branches_curve]
+            return [midpoint(c) for c in range(self.branches_count)]
 
         ids, is_single = as_1d_array(ids)
-
         if isinstance(ids, np.ndarray):
-            internal_id = self._graph_to_internal_branches_index(ids, graph_index=graph_index, check_valid=False)
+            internal_ids = self._graph_to_internal_branches_index(ids, graph_index=graph_index, check_valid=False)
 
             if is_single:
-                return mid_point(self._branches_curve[internal_id[0]]) if internal_id[0] >= 0 else None
-            return [mid_point(self._branches_curve[i]) if i >= 0 else None for i in internal_id]
+                return midpoint(internal_ids[0])
+            return [midpoint(i) for i in internal_ids]
 
         else:
             raise TypeError("Invalid type for branches index.")
@@ -1374,7 +1384,7 @@ class VGeometricData:
             self._branches_curve += [self._branches_curve[branches_id[i]] for i in new_ids]
 
             for attr in self._branch_data_dict.values():
-                attr += [attr[branches_id[i]].copy() for i in new_ids]
+                attr += [attr_v.copy() if (attr_v := attr[branches_id[i]]) is not None else None for i in new_ids]
         else:
             raise NotImplementedError
 
@@ -1403,7 +1413,7 @@ class VGeometricData:
         ctx = ctx.set_info(curves=branches_curve)
         for attr_name, attr_data in self._branch_data_dict.items():
             attr_type = self._branches_attrs_descriptors[attr_name].geo_type
-            if attr_data[branch0] is not None:
+            if any(attr_data[b] is not None for b in consecutive_branches):
                 attr_data[branch0] = attr_type.merge(
                     [attr_data[branch_id] for branch_id in consecutive_branches], ctx.set_name(attr_name)
                 )
@@ -1442,27 +1452,38 @@ class VGeometricData:
 
         internal_id = int(self._graph_to_internal_branches_index(branch_id))
         curve = self.branch_curve(internal_id, graph_index=False)
-        if curve is None:
-            return
 
         # === Resolve the split positions ===
-        #: The indexes in the curve where it should be splitted (including the start and last index of the curve)
-        splits_id = [0]
-        #: The split points in the curve (including the start and end of the curve)
-        splits_point = [Point.from_array(curve[0])]
-        if splits_positions.ndim == 1:
-            for split_pos in splits_positions:
-                splits_id.append(int(split_pos))
-                splits_point.append(Point.from_array(curve[split_pos]))
-        elif splits_positions.ndim == 2:
-            for split_pos in splits_positions:
-                splits_id.append(int(np.argmin(np.linalg.norm(curve - split_pos, axis=1))))
-                splits_point.append(Point.from_array(curve[splits_id[-1]]))
-        splits_id.append(len(curve))
-        splits_point.append(Point.from_array(curve[-1]))
+        assert splits_positions.ndim in (1, 2), "Invalid shape for splits_positions."
+        n_splits = len(splits_positions)
+        if len(curve) == 0:
+            splits_id = np.zeros(n_splits + 2, dtype=int)
+            new_curves = [np.empty((0, 2), dtype=int) for _ in range(n_splits + 1)]
+
+            nodes = self.parent_graph.branch_list[branch_id]
+            n1, n2 = self.nodes_coord(nodes)
+            a = np.linspace(0, 1, n_splits + 2, endpoint=True)[:, None]
+            splits_point = a * n1[None, :] + (1 - a) * n2[None, :]
+
+        else:
+            #: The indexes in the curve where it should be splitted (including the start and last index of the curve)
+            splits_id = [0]
+            #: The split points in the curve (including the start and end of the curve)
+            splits_point = [Point.from_array(curve[0])]
+            if splits_positions.ndim == 1:
+                for split_pos in splits_positions:
+                    splits_id.append(int(split_pos))
+                    splits_point.append(Point.from_array(curve[split_pos]))
+            elif splits_positions.ndim == 2:
+                for split_pos in splits_positions:
+                    splits_id.append(int(np.argmin(np.linalg.norm(curve - split_pos, axis=1))))
+                    splits_point.append(Point.from_array(curve[splits_id[-1]]))
+            splits_id.append(len(curve))
+            splits_point.append(Point.from_array(curve[-1]))
+
+            new_curves = [curve[start_id:end_id] for start_id, end_id in itertools.pairwise(splits_id)]
 
         # === Split the curve and add new curves ===
-        new_curves = [curve[start_id:end_id] for start_id, end_id in itertools.pairwise(splits_id)]
         self._branches_curve[internal_id] = new_curves[0]
         self._branches_curve.extend(new_curves[1:])
         if self._branches_id is not None:
@@ -1475,11 +1496,15 @@ class VGeometricData:
 
         # === Split the branch geo data ===
         ctx = self._geodata_edit_ctx(internal_id)
-        for attr_name, attr in self.list_branch_data(internal_id, graph_index=False).items():
-            branch_attrs = attr.split(splits_point, splits_id, ctx.set_name(attr_name))
-            assert len(branch_attrs) == len(new_branch_ids) + 1, "Invalid number of attributes after split."
-            self._branch_data_dict[attr_name][internal_id] = branch_attrs[0]
-            self._branch_data_dict[attr_name] += branch_attrs[1:]
+        for attr_name, attr_data in self._branch_data_dict.items():
+            attr = attr_data[internal_id]
+            if attr is not None:
+                branch_attrs = attr.split(splits_point, splits_id, ctx.set_name(attr_name))
+                assert len(branch_attrs) == len(new_branch_ids) + 1, "Invalid number of attributes after split."
+                self._branch_data_dict[attr_name][internal_id] = branch_attrs[0]
+                self._branch_data_dict[attr_name].extend(branch_attrs[1:])
+            else:
+                self._branch_data_dict[attr_name].extend([None] * (n_splits + 1))
 
         self._sort_internal_branches_index()
         self._sort_internal_nodes_index()

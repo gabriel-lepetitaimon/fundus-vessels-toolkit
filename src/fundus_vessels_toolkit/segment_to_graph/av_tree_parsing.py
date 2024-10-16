@@ -6,6 +6,7 @@ import numpy as np
 import numpy.typing as npt
 import skimage.segmentation as sk_seg
 
+from ..utils.cluster import cluster_by_distance, reduce_clusters
 from ..utils.geometric import Point
 from ..utils.math import extract_splits, sigmoid
 from ..vascular_data_objects import AVLabel, FundusData, VBranchGeoData, VGraph, VGraphNode, VTree
@@ -24,15 +25,6 @@ def assign_av_label(
 ):
     if not inplace:
         graph = graph.copy()
-        return assign_av_label(
-            graph,
-            av_map=av_map,
-            ratio_threshold=ratio_threshold,
-            split_av_branch=split_av_branch,
-            av_attr=av_attr,
-            propagate_labels=propagate_labels,
-            inplace=inplace,
-        )
 
     if av_map is None:
         try:
@@ -42,72 +34,106 @@ def assign_av_label(
     elif isinstance(av_map, FundusData):
         av_map = av_map.av
 
-    branches_seg_map = sk_seg.expand_labels(graph.branches_label_map(), 10) * (av_map > 0)
-    graph.branches_attr[av_attr] = AVLabel.UNK
+    gdata = graph.geometric_data()
 
-    # === Label branches as arteries, veins or unknown (both) ===
+    # === Assign the AV label to each branch based on the AV map ===
+    graph.branches_attr[av_attr] = AVLabel.UNK
+    branches_av_attr = graph.branches_attr[av_attr]
     for branch in graph.branches():
         branch_curve = branch.curve()
-        node_to_node_length = branch.node_to_node_length()
-        if len(branch_curve) <= max(3, node_to_node_length * 0.35):
+        # node_to_node_length = branch.node_to_node_length()
+        if len(branch_curve) <= 2:
             continue
 
-        branch_seg = branches_seg_map == branch.id + 1
+        # 0. Check the AV labels under each pixel of the skeleton and boundaries of the branch
+        branch_skltn_av = av_map[branch_curve[:, 0], branch_curve[:, 1]]
+        bound = branch.geodata(VBranchGeoData.Fields.BOUNDARIES, gdata).data
+        branch_bound_av = av_map[bound[:, :, 0], bound[:, :, 1]]
+        branch_av = np.concatenate([branch_skltn_av[:, None], branch_bound_av], axis=1)
+        skel_is_art = np.any(branch_av == AVLabel.ART, axis=1)
+        skel_is_vei = np.any(branch_av == AVLabel.VEI, axis=1)
+        skel_is_both = np.any(branch_av == AVLabel.BOTH, axis=1)
+        branch_av = np.full(len(branch_curve), AVLabel.UNK, dtype=int)
+        branch_av[skel_is_art] = AVLabel.ART
+        branch_av[skel_is_vei] = AVLabel.VEI
+        branch_av[skel_is_both | (skel_is_art & skel_is_vei)] = AVLabel.BOTH
 
         # 1. Assign artery or vein label if its the label of at least ratio_threshold of the branch pixels
         #    (excluding background pixels)
-        _, n_art, n_vei, n_both, n_unk = np.bincount(av_map[branch_seg], minlength=5)[:5]
+        _, n_art, n_vei, n_both, n_unk = np.bincount(branch_av, minlength=5)[:5]
         n_threshold = (n_art + n_vei + n_both + n_unk) * ratio_threshold
         if n_art > n_threshold:
-            branch.attr[av_attr] = AVLabel.ART
+            branches_av_attr[branch.id] = AVLabel.ART
         elif n_vei > n_threshold:
-            branch.attr[av_attr] = AVLabel.VEI
+            branches_av_attr[branch.id] = AVLabel.VEI
 
         # 2. Attempt to split the branch into artery and veins sections
         elif split_av_branch and len(branch_curve) > 30:
-            av_splits = extract_splits(av_map[branch_curve[:, 0], branch_curve[:, 1]], medfilt_size=9)
+            av_splits = extract_splits(branch_av, medfilt_size=9)
             if len(av_splits) > 1:
                 splits = [int(_[1]) for _ in list(av_splits.keys())[:-1]]
                 _, new_ids = graph.split_branch(branch.id, split_curve_id=splits, inplace=True, return_branch_ids=True)
                 for new_id, new_value in zip(new_ids, av_splits.values(), strict=True):
-                    graph.branches_attr[av_attr, new_id] = new_value
+                    branches_av_attr[new_id] = new_value
             else:
-                branch.attr[av_attr] = AVLabel.BOTH
+                branches_av_attr[branch.id] = AVLabel.BOTH
 
         # 3. Otherwise, label the branch as both arteries and veins
         else:
-            branch.attr[av_attr] = AVLabel.BOTH
+            branches_av_attr[branch.id] = AVLabel.BOTH
+
+    # === Assign AV labels to nodes and propagate them through unknown passing nodes ===
+    propagate_av_labels(graph, av_attr=av_attr, only_label_nodes=not propagate_labels, inplace=True)
+
+    return graph
+
+
+def propagate_av_labels(
+    graph: VGraph, av_attr="av", *, only_label_nodes=False, passing_node_min_angle: float = 110, inplace=False
+):
+    if not inplace:
+        graph = graph.copy()
+
+    gdata = graph.geometric_data()
+    graph.nodes_attr[av_attr] = AVLabel.UNK
+    nodes_av_attr = graph.nodes_attr[av_attr]
+    branches_av_attr = graph.branches_attr[av_attr]
 
     propagated = True
-    graph.nodes_attr[av_attr] = AVLabel.UNK
     while propagated:
-        # === Propagate the labels from branches to nodes ===
         propagated = False
-        for node in graph.nodes():
-            if node.attr[av_attr] != AVLabel.UNK:
-                continue
+        for node in graph.nodes(nodes_av_attr == AVLabel.UNK):
             # List labels of the incident branches of the node
             n = node.degree
-            ibranches_av_count = np.bincount([ibranch.attr[av_attr] for ibranch in node.branches()], minlength=5)[1:5]
+            ibranches_av_count = np.bincount(branches_av_attr[node.branches_ids], minlength=5)[1:5]
             n_art, n_vei, n_both, n_unk = ibranches_av_count
 
             # 1. If all branches are arteries (resp. veins) color the node as artery (resp. vein)
             if n_art == n:
-                node.attr[av_attr] = AVLabel.ART
+                nodes_av_attr[node.id] = AVLabel.ART
             elif n_vei == n:
-                node.attr[av_attr] = AVLabel.VEI
+                nodes_av_attr[node.id] = AVLabel.VEI
             # 2. If some branches are arteries and some are veins or if any is both, color the node as both
             elif n_both > 0 or (n_art > 0 and n_vei > 0):
-                node.attr[av_attr] = AVLabel.BOTH
+                nodes_av_attr[node.id] = AVLabel.BOTH
 
-            # 3. If the node connect exactly two branches and one is unknown, propagate the label of the other branch
-            elif n == 2 and n_unk == 1:
+            # 3. If the node connect exactly two branches and one is unknown,
+            #     propagate the label of the known branch to the node and the other branch
+            elif not only_label_nodes and n == 2 and n_unk == 1:
+                if passing_node_min_angle > 0:
+                    # Check if the branches are forming an small angle
+                    tips_tangents = node.tips_tangent(gdata)
+                    if np.dot(tips_tangents[0], tips_tangents[1]) >= np.cos(np.deg2rad(passing_node_min_angle)):
+                        continue
                 if n_art > 0:
-                    node.attr[av_attr] = AVLabel.ART
+                    nodes_av_attr[node.id] = AVLabel.ART
+                    branches_av_attr[node.branches_ids] = AVLabel.ART
                 elif n_vei > 0:
-                    node.attr[av_attr] = AVLabel.VEI
+                    nodes_av_attr[node.id] = AVLabel.VEI
+                    branches_av_attr[node.branches_ids] = AVLabel.VEI
                 else:
-                    node.attr[av_attr] = AVLabel.BOTH
+                    nodes_av_attr[node.id] = AVLabel.BOTH
+                    branches_av_attr[node.branches_ids] = AVLabel.BOTH
             # 4. Otherwise, keep the node as unknown
             else:
                 continue
@@ -115,28 +141,57 @@ def assign_av_label(
             # In the case 1, 2, and 3 the label of the node has been propagated
             propagated = True
 
-        # === If necessary, propagate labels back from nodes to branches ===
-        if not propagate_labels or not propagated or AVLabel.UNK not in graph.branches_attr[av_attr]:
-            break
+        # If the propagation is disabled, return the after labelling the nodes
+        if only_label_nodes:
+            return graph
 
-        propagated = False
-        for branch in graph.branches():
-            if branch.attr[av_attr] != AVLabel.UNK:
-                continue
-
-            branch_nodes_av = list(np.unique([node.attr[av_attr] for node in branch.nodes()]))
-
-            # If both nodes of the branch are artery (resp. veins or both), propagate the label to the branch
-            if branch_nodes_av == [AVLabel.ART]:
-                branch.attr[av_attr] = AVLabel.ART
-            elif branch_nodes_av == [AVLabel.VEI]:
-                branch.attr[av_attr] = AVLabel.VEI
-            elif branch_nodes_av in ([AVLabel.ART, AVLabel.VEI], [AVLabel.BOTH]):
-                branch.attr[av_attr] = AVLabel.BOTH
+    # === Propagate AV labels to clusters of unknown branches ===
+    # Find clusters of unknown branches
+    unk_branches = graph.as_branches_ids(graph.branches_attr[av_attr] == AVLabel.UNK)
+    unk_clusters = []
+    solo_unk = []
+    incoming_av = {}
+    for branch in graph.branches(unk_branches):
+        solo = True
+        for adj in branch.adj_branches_ids():
+            if adj in unk_branches:
+                if adj > branch.id:
+                    unk_clusters.append([branch.id, adj])
+                solo = False
             else:
-                continue
+                incoming_av.setdefault(branch.id, []).append(graph.branches_attr[av_attr][adj])
+        if solo:
+            solo_unk.append([branch.id])
+    unk_clusters = reduce_clusters(unk_clusters)
 
-            propagated = True
+    # Attempt to label them based on the label of their incident branches and nodes
+    for cluster in unk_clusters + solo_unk:
+        # Fetch labels of the exterior nodes of the cluster
+        cluster_nodes = np.unique(graph.branch_list[cluster])
+        ext_nodes = cluster_nodes[np.isin(cluster_nodes, np.delete(graph.branch_list, cluster).flatten())]
+        ext_nodes_av = nodes_av_attr[ext_nodes]
+        n_art, n_vei, n_both, n_unk = np.bincount(ext_nodes_av, minlength=5)[1:5]
+        n = len(ext_nodes_av)
+
+        # Fetch labels of the incident branches of the cluster
+        cluster_av = sum((incoming_av.get(b, []) for b in cluster), [])
+        b_art, b_vei, b_both, b_unk = np.bincount(cluster_av, minlength=5)[1:5]
+        b = len(cluster_av)
+
+        cluster_label = AVLabel.UNK
+        # 1. If all exterior nodes or incident  branches are arteries (resp. veins):
+        #       => color the cluster as artery (resp. vein)
+        if n_art == n or b_art == b:
+            cluster_label = AVLabel.ART
+        elif n_vei == n or b_vei == b:
+            cluster_label = AVLabel.VEI
+        # 2. If all exterior nodes are both: color the cluster as both
+        elif n_both == n:
+            cluster_label = AVLabel.BOTH
+
+        # Assign the label to all branches and nodes of the cluster
+        branches_av_attr[cluster] = cluster_label
+        nodes_av_attr[cluster_nodes] = cluster_label
 
     return graph
 
@@ -144,37 +199,50 @@ def assign_av_label(
 def simplify_av_graph(
     graph: VGraph,
     av_attr="av",
+    *,
+    node_merge_distance: float = 15,
+    orphan_branch_min_length: float = 60,
+    passing_node_min_angle: float = 110,
+    propagate_labels=True,
     inplace=False,
 ):
     if not inplace:
         graph = graph.copy()
-        return simplify_av_graph(graph, av_attr, inplace=True)
 
-    geodata = graph.geometric_data()
+    # === Remove passing nodes of same type (pre-clustering) ===
+    simplify_passing_nodes(graph, min_angle=passing_node_min_angle, with_same_label=av_attr, inplace=True)
 
-    # === Remove geometry of branches with unknown type ===
-    geodata.clear_branches_gdata(
-        [
-            b.id
-            for b in graph.branches()
-            if (b.attr[av_attr] == AVLabel.UNK and b.arc_length() < 30) or b.attr[av_attr] == AVLabel.BOTH
-        ]
+    # === Remove small orphan branches ===
+    graph.delete_branches(
+        [b.id for b in graph.branches(filter="orphan") if b.node_to_node_length() < orphan_branch_min_length],
+        inplace=True,
     )
 
-    # === Remove passing nodes of same type ===
-    simplify_passing_nodes(graph, min_angle=100, with_same_label=av_attr, inplace=True)
+    geodata = graph.geometric_data()
+    nodes_av_attr = graph.nodes_attr[av_attr]
 
-    # === Merge all small branches that are connected to two nodes of unknown type ===
-    branch_to_fuse = []
-    for branch in graph.branches():
-        if (
-            branch.arc_length() > 30
-            and branch.attr["av"] == AVLabel.UNK
-            and all(node.attr["av"] == AVLabel.UNK for node in branch.nodes())
-        ):
-            branch_to_fuse.append(branch)
+    # === Merge all small branches that are connected to two nodes of the same type ===
+    nodes_clusters = []
+    for branch in graph.branches(filter="non-endpoint"):
+        if branch.node_to_node_length() < node_merge_distance:
+            n1, n2 = nodes_av_attr[list(branch.nodes_id)]
+            if n1 == n2:
+                nodes_clusters.append(branch.nodes_id)
+    nodes_clusters = cluster_by_distance(
+        geodata.nodes_coord(), node_merge_distance, edge_list=nodes_clusters, iterative=True
+    )
+    graph.merge_nodes(nodes_clusters, inplace=True, assume_reduced=True)
 
-    graph = graph.merge_nodes([branch.nodes_id for branch in branch_to_fuse], inplace=inplace)
+    # === Remove passing nodes of same type (post-clustering) ===
+    simplify_passing_nodes(graph, min_angle=passing_node_min_angle, with_same_label=av_attr, inplace=True)
+
+    # === Relabel unknown branches ===
+    if propagate_labels:
+        propagate_av_labels(graph, av_attr=av_attr, inplace=True)
+
+    # === Remove geometry of branches with both type ===
+    geodata.clear_branches_gdata(graph.as_branches_ids(graph.branches_attr[av_attr] == AVLabel.BOTH))
+
     return graph
 
 

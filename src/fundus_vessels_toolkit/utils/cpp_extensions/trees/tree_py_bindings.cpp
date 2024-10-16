@@ -4,7 +4,7 @@
 #include "disjoint_set.h"
 
 /*********************************************************************************************
- *             === SKELETON PARSING ===
+ *             === Tree ===
  *********************************************************************************************/
 bool has_cycle(torch::Tensor parent_list) {
     TORCH_CHECK(parent_list.dim() == 1, "Input tensor must be 1D.");

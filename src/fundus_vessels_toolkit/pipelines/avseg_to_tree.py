@@ -64,6 +64,82 @@ class AVSegToTreeBase(metaclass=ABCMeta):
     ) -> VGraph: ...
 
 
+class AVSegToTree(AVSegToTreeBase):
+    def __init__(
+        self,
+        segToGraph: Optional[SegToGraph] = None,
+    ):
+        """
+
+        Parameters
+        ----------
+        segToGraph: SegToGraph
+            The SegToGraph instance to use for the segmentation to graph step.
+        """
+
+        super(AVSegToTree, self).__init__()
+        self.segToGraph = if_none(segToGraph, FUNDUS_SEG_TO_GRAPH)
+
+    def __call__(
+        self,
+        fundus: Optional[FundusData] = None,
+        /,
+        *,
+        av: Optional[npt.NDArray[np.int_] | torch.Tensor | str | Path] = None,
+        od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
+    ) -> Tuple[VTree, VTree]:
+        fundus = self.prepare_data(fundus, av=av, od=od)
+        if fundus.od_center is None:
+            raise NotImplementedError("Parsing tree of image without optic disc is not implemented.")
+
+        graph = self.to_vgraph(fundus, populate_geometry=False, simplify=True)
+        trees = self.split_av_graph(graph)
+        return trees[0], trees[1]
+
+    # --- Intermediate steps ---
+    def assign_av_labels(
+        self,
+        graph: VGraph,
+        av_map: npt.NDArray[np.int_],
+        av_attr: Optional[str] = None,
+        *,
+        propagate_labels=True,
+        inplace: bool = False,
+    ) -> VGraph:
+        from ..segment_to_graph.av_tree_parsing import assign_av_label
+
+        return assign_av_label(
+            graph,
+            av_map=av_map,
+            ratio_threshold=0.8,
+            split_av_branch=True,
+            av_attr=if_none(av_attr, "av"),
+            propagate_labels=propagate_labels,
+            inplace=inplace,
+        )
+
+    def simplify_av_graph(self, graph: VGraph, inplace: bool = False) -> VGraph:
+        from ..segment_to_graph.av_tree_parsing import simplify_av_graph
+
+        return simplify_av_graph(
+            graph,
+            av_attr="av",
+            inplace=inplace,
+        )
+
+    # --- Utility methods ---
+    def to_vgraph(self, fundus=None, /, *, av=None, od=None, label_av=True, populate_geometry=None, simplify=None):
+        fundus = self.prepare_data(fundus, av=av, od=od)
+        graph = self.segToGraph(fundus.vessels, parse_geometry=populate_geometry, simplify=False)
+        if label_av:
+            self.assign_av_labels(graph, fundus.av, inplace=True)
+            if if_none(simplify, self.segToGraph.simplify_graph):
+                self.simplify_av_graph(graph, inplace=True)
+        elif if_none(simplify, self.segToGraph.simplify_graph):
+            self.segToGraph.simplify(graph, inplace=True)
+        return graph
+
+
 # class AVSegToTree(AVSegToTreeBase):
 #     def __init__(
 #         self,

@@ -1,8 +1,9 @@
-from typing import Iterable, List, Set, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 import numpy as np
 import torch  # Required for cpp extension loading
 
+from .cpp_extensions.clusters_cpp import iterative_cluster_by_distance as iterative_cluster_by_distance_cpp
 from .cpp_extensions.clusters_cpp import iterative_reduce_clusters as iterative_reduce_clusters_cpp
 from .cpp_extensions.clusters_cpp import remove_consecutive_duplicates as remove_consecutive_duplicates_cpp
 from .cpp_extensions.clusters_cpp import solve_1d_chains as solve_1d_chains_cpp
@@ -11,12 +12,28 @@ from .geometric import Point
 from .torch import autocast_torch
 
 
-def reduce_clusters(clusters: Iterable[Iterable[int]]) -> List[List[int]]:
+def reduce_clusters(clusters: Iterable[Iterable[int]], drop_singleton=True) -> List[List[int]]:
     """
     Reduce the number of clusters by merging clusters that share at least one element.
-    """
-    clusters = [list(c) for c in clusters]
-    return [c for c in solve_clusters_cpp(clusters, True) if len(c) > 0]
+
+    Parameters
+    ----------
+    clusters : Iterable[Iterable[int]]
+        The input clusters.
+
+    drop_singleton : bool, optional
+        Whether to drop clusters with only one element. By default True.
+
+        .. warning::
+            If ``drop_singleton`` is False, all indexes from 0 to max(clusters) will be returned, even those omitted in ``clusters``.
+
+    Returns
+    -------
+    List[List[int]]
+        The reduced clusters.
+    """  # noqa: E501
+    clusters = [[int(_) for _ in c] for c in clusters]
+    return [c for c in solve_clusters_cpp(clusters, drop_singleton) if len(c) > 0]
 
 
 @autocast_torch
@@ -69,7 +86,13 @@ def reduce_chains(chains: List[List[int]]) -> List[List[int]]:
     return chains
 
 
-def cluster_by_distance(coords: List[Point] | np.ndarray, max_distance: float, iterative=False) -> List[List[int]]:
+@autocast_torch
+def cluster_by_distance(
+    coords: torch.Tensor | List[Point],
+    max_distance: float,
+    edge_list: Optional[torch.Tensor | List[Tuple[int, int]]] = None,
+    iterative=False,
+) -> List[List[int]]:
     """
     Cluster a set of coordinates by distance: all coordinates that are at most `max_distance` apart are in the same cluster.
 
@@ -78,12 +101,43 @@ def cluster_by_distance(coords: List[Point] | np.ndarray, max_distance: float, i
     coords : List[Point] | np.ndarray
         The coordinates of the points to cluster.
 
+    max_distance : float
+        The maximum distance between points in the same cluster.
 
-    """
-    coords = np.atleast_2d(coords).astype(int)
-    distance = np.linalg.norm(coords[:, None] - coords, axis=-1)
-    close_points = np.argwhere((distance <= max_distance))
-    close_points = close_points[close_points[:, 0] < close_points[:, 1]]
+    edge_list : torch.Tensor | List[Tuple[int, int]], optional
+        The edge list of the graph. If not provided, it will be computed from the coordinates. By default None.
+
+    iterative : bool, optional
+        Whether to use the iterative algorithm: at each step the algorithm will merge the two closest clusters until the clusters are at least `max_distance` apart (according to their barycenter). By default False.
+
+    Returns
+    -------
+    List[List[int]]
+        The clusters.
+    """  # noqa: E501
+    if isinstance(coords, list):
+        coords = torch.tensor(coords)
+    assert coords.ndim == 2 and coords.shape[1] == 2, "Coordinates must be a 2D tensor of shape (n, 2)"
+    coords = coords.float()
+
+    if edge_list is not None:
+        if isinstance(edge_list, list):
+            edge_list = torch.tensor(edge_list)
+        assert edge_list.ndim == 2 and edge_list.shape[1] == 2, "Edge list must be a 2D tensor of shape (n, 2)"
+        edge_list = edge_list.int()
+
     if iterative:
-        return iterative_reduce_clusters(close_points, distance[close_points[:, 0], close_points[:, 1]], max_distance)
-    return reduce_clusters(close_points)
+        if edge_list is None:
+            edge_list = torch.empty(0, 2, dtype=torch.int32)
+        else:
+            edge_list = edge_list.cpu()
+        clusters = iterative_cluster_by_distance_cpp(coords.cpu(), max_distance, edge_list)
+        return [list(_) for _ in clusters]
+    else:
+        if edge_list is None:
+            dist = torch.cdist(coords, coords)
+            edge_list = torch.nonzero(dist <= max_distance, as_tuple=False)
+            edge_list = edge_list[edge_list[:, 0] < edge_list[:, 1]]
+        else:
+            edge_list = edge_list[torch.norm(coords[edge_list[:, 0]] - coords[edge_list[:, 1]], dim=1) <= max_distance]
+        return reduce_clusters(edge_list, drop_singleton=False)

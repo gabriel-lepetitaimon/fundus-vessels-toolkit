@@ -26,6 +26,9 @@ std::vector<std::set<int>> edges_to_adjacency_list(std::list<std::vector<int>> e
     return adjacency_list;
 }
 
+/*****************************************************************************
+ *                    === REDUCE CLUSTERS ===
+ *****************************************************************************/
 std::list<std::vector<int>> solve_clusters(std::list<std::vector<int>> edges_list, bool drop_singletons = true) {
     // Find number of nodes
     int n_nodes = 0;
@@ -247,6 +250,92 @@ std::list<std::vector<int>> iterative_reduce_clusters(const torch::Tensor &edgeL
     return nonEmptyClusters;
 }
 
+/*****************************************************************************
+ *                    === CLUSTERS BY DISTANCE ===
+ *****************************************************************************/
+typedef std::tuple<float, int, int> EdgeWithDistance;
+
+struct Point {
+    float y, x;
+};
+struct Cluster {
+    std::set<int> nodes;
+    Point pos;
+};
+
+float distance(const at::TensorAccessor<float, 1UL, at::DefaultPtrTraits, signed long> &p1,
+               const at::TensorAccessor<float, 1UL, at::DefaultPtrTraits, signed long> &p2) {
+    return sqrt(pow(p1[0] - p2[0], 2) + pow(p1[1] - p2[1], 2));
+}
+float distance(const Cluster &c1, const Cluster &c2) {
+    return sqrt(pow(c1.pos.x - c2.pos.x, 2) + pow(c1.pos.y - c2.pos.y, 2));
+}
+
+Cluster merge_clusters(const Cluster &c1, const Cluster &c2) {
+    Cluster merged;
+    int n1 = c1.nodes.size(), n2 = c2.nodes.size();
+    merged.nodes = c1.nodes;
+    merged.nodes.insert(c2.nodes.begin(), c2.nodes.end());
+    merged.pos.x = (c1.pos.x * n1 + c2.pos.x * n2) / (n1 + n2);
+    merged.pos.y = (c1.pos.y * n1 + c2.pos.y * n2) / (n1 + n2);
+    return merged;
+}
+
+std::list<std::set<int>> iterative_cluster_by_distance(torch::Tensor pos, float max_distance, torch::Tensor edge_list) {
+    TORCH_CHECK_VALUE(pos.dim() == 2 && pos.size(1) == 2, "Input tensor must be of shape (N, 2).");
+    auto const &pos_acc = pos.accessor<float, 2>();
+    int N = (int)pos.size(0);
+
+    TORCH_CHECK_VALUE(edge_list.dim() == 2 && edge_list.size(1) == 2, "Edge list must be of shape (E, 2).");
+
+    std::priority_queue<EdgeWithDistance, std::vector<EdgeWithDistance>, std::greater<EdgeWithDistance>> edges;
+    if (edge_list.size(0) == 0) {
+        for (int i = 0; i < N; i++) {
+            for (int j = i + 1; j < N; j++) {
+                float edge_dist = distance(pos_acc[i], pos_acc[j]);
+                if (edge_dist <= max_distance) edges.push({edge_dist, i, j});
+            }
+        }
+    } else {
+        auto const &edgeAccessor = edge_list.accessor<int, 2>();
+        for (int i = 0; i < edge_list.size(0); i++) {
+            int u = edgeAccessor[i][0], v = edgeAccessor[i][1];
+            if (u > v) std::swap(u, v);
+            float edge_dist = distance(pos_acc[u], pos_acc[v]);
+            if (edge_dist <= max_distance) edges.push({edge_dist, u, v});
+        }
+    }
+
+    std::list<Cluster> clusters;
+    for (int i = 0; i < N; i++) clusters.push_back({{i}, {pos_acc[i][0], pos_acc[i][1]}});
+
+    while (!edges.empty()) {
+        auto [dist, u, v] = edges.top();
+        edges.pop();
+
+        auto itU = clusters.begin(), itV = clusters.begin();
+        for (; itU != clusters.end(); itU++) {
+            if (itU->nodes.find(u) != itU->nodes.end()) break;
+        }
+        for (; itV != clusters.end(); itV++) {
+            if (itV->nodes.find(v) != itV->nodes.end()) break;
+        }
+        if (itU == itV) continue;
+
+        if (itU->nodes.size() < itV->nodes.size()) std::swap(itU, itV);
+        if (distance(*itU, *itV) > max_distance) continue;
+        *itU = merge_clusters(*itU, *itV);
+        clusters.erase(itV);
+    }
+
+    std::list<std::set<int>> clustersList;
+    for (auto const &cluster : clusters) clustersList.push_back(cluster.nodes);
+    return clustersList;
+}
+
+/*****************************************************************************
+ *                    === REDUCE CHAINS ===
+ *****************************************************************************/
 std::list<std::list<int>> solve_1d_chains(std::list<std::vector<int>> chains) {
     std::list<std::list<int>> solved_chains;
     for (auto chain : chains) {
@@ -363,6 +452,7 @@ std::vector<torch::Tensor> remove_consecutive_duplicates(const torch::Tensor &te
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("solve_clusters", &solve_clusters, "Solve clusters from edges list");
     m.def("iterative_reduce_clusters", &iterative_reduce_clusters, "Iteratively reduce clusters from edge list");
+    m.def("iterative_cluster_by_distance", &iterative_cluster_by_distance, "Iteratively cluster by distance");
     m.def("solve_1d_chains", &solve_1d_chains, "Solve 1D chains clusters from chains list");
     m.def("remove_consecutive_duplicates", &remove_consecutive_duplicates, "Remove consecutive duplicates from tensor");
 }
