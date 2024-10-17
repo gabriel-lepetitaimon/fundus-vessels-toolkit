@@ -464,6 +464,8 @@ class VTree(VGraph):
             active_branches = self.branch_tree[active_branches]
             ancestors.append(active_branches)
             depth += 1
+        if len(ancestors) == 0:
+            return np.empty(0, dtype=int)
         return np.unique(np.concatenate(ancestors))
 
     def branch_successors(
@@ -493,6 +495,8 @@ class VTree(VGraph):
             active_branches = np.argwhere(np.isin(self.branch_tree, active_branches)).flatten()
             successors.append(active_branches)
             depth += 1
+        if len(successors) == 0:
+            return np.empty(0, dtype=int)
         return np.unique(np.concatenate(successors))
 
     def branch_has_successors(self, branch_id: int | npt.ArrayLike[int]) -> bool | np.ndarray:
@@ -512,7 +516,7 @@ class VTree(VGraph):
         has_succ = np.any(branch_id[:, None] == self.branch_tree[None, :], axis=1)
         return has_succ[0] if is_single else has_succ
 
-    def subtrees_branch_labels(self) -> npt.NDArray[int]:
+    def subtrees_branch_labels(self) -> npt.NDArray[np.int_]:
         """Label each branch with a unique identifier of its subtree.
 
         Returns
@@ -1068,7 +1072,12 @@ class VTree(VGraph):
     BRANCH_ACCESSOR_TYPE = VTreeBranch
 
     def branches(
-        self, ids: Optional[int | npt.ArrayLike[int]] = None, /, *, only_terminal=False, dynamic_iterator: bool = False
+        self,
+        ids: Optional[int | npt.ArrayLike[int]] = None,
+        /,
+        *,
+        filter: Optional[Literal["orphan", "endpoint", "non-endpoint"]] = None,
+        dynamic_iterator: bool = False,
     ) -> Generator[VTreeBranch]:
         """Iterate over the branches of a tree, encapsulated in :class:`VTreeBranch` objects.
 
@@ -1077,8 +1086,13 @@ class VTree(VGraph):
         ids : int or npt.ArrayLike[int], optional
             The indexes of the branches to iterate over. If None, iterate over all branches.
 
-        only_terminal : bool, optional
-            If True, iterate only over the terminal branches.
+        filter : str, optional
+            Filter the branches to iterate over:
+
+            - "orphan": iterate over the branches that are not connected to any other branch.
+            - "endpoint": iterate over the branches that are connected to only one other branch.
+            - "non-endpoint": iterate over the branches that are connected to more than one other branch.
+
 
         dynamic_iterator : bool, optional
             If True, iterate over all the branches present in the ytrr when this method is called.
@@ -1091,7 +1105,7 @@ class VTree(VGraph):
         Generator[VTreeBranch]
             A generator that yields branches.
         """  # noqa: E501
-        return super().branches(ids, only_terminal=only_terminal, dynamic_iterator=dynamic_iterator)
+        return super().branches(ids, filter="endpoint", dynamic_iterator=dynamic_iterator)
 
     def branch(self, branch_id: int, /) -> VTreeBranch:
         return super().branch(branch_id)

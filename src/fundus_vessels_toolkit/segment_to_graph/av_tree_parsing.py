@@ -81,9 +81,10 @@ def assign_av_label(
         # 3. Otherwise, label the branch as both arteries and veins
         else:
             branches_av_attr[branch.id] = AVLabel.BOTH
+    graph.branches_attr[av_attr] = branches_av_attr  # Why is this line necessary?
 
     # === Assign AV labels to nodes and propagate them through unknown passing nodes ===
-    propagate_av_labels(graph, av_attr=av_attr, only_label_nodes=not propagate_labels, inplace=True)
+    propagate_av_labels(graph=graph, av_attr=av_attr, only_label_nodes=not propagate_labels, inplace=True)
 
     return graph
 
@@ -145,6 +146,11 @@ def propagate_av_labels(
         if only_label_nodes:
             return graph
 
+    # === Relabels branches connected to two nodes labelled BOTH, as BOTH ===
+    for branch in graph.branches():
+        if all(nodes_av_attr[list(branch.nodes_id)] == AVLabel.BOTH) and branch.node_to_node_length() < 30:
+            branches_av_attr[branch.id] = AVLabel.BOTH
+
     # === Propagate AV labels to clusters of unknown branches ===
     # Find clusters of unknown branches
     unk_branches = graph.as_branches_ids(graph.branches_attr[av_attr] == AVLabel.UNK)
@@ -201,6 +207,7 @@ def simplify_av_graph(
     av_attr="av",
     *,
     node_merge_distance: float = 15,
+    unknown_node_merge_distance: float = 25,
     orphan_branch_min_length: float = 60,
     passing_node_min_angle: float = 110,
     propagate_labels=True,
@@ -223,15 +230,20 @@ def simplify_av_graph(
 
     # === Merge all small branches that are connected to two nodes of the same type ===
     nodes_clusters = []
+    unknown_nodes_clusters = []
     for branch in graph.branches(filter="non-endpoint"):
         if branch.node_to_node_length() < node_merge_distance:
             n1, n2 = nodes_av_attr[list(branch.nodes_id)]
             if n1 == n2:
-                nodes_clusters.append(branch.nodes_id)
-    nodes_clusters = cluster_by_distance(
-        geodata.nodes_coord(), node_merge_distance, edge_list=nodes_clusters, iterative=True
+                if n1 == AVLabel.UNK:
+                    unknown_nodes_clusters.append(branch.nodes_id)
+                else:
+                    nodes_clusters.append(branch.nodes_id)
+    nodes_clusters = cluster_by_distance(geodata.nodes_coord(), node_merge_distance, nodes_clusters, iterative=True)
+    unknown_nodes_clusters = cluster_by_distance(
+        geodata.nodes_coord(), unknown_node_merge_distance, unknown_nodes_clusters, iterative=True
     )
-    graph.merge_nodes(nodes_clusters, inplace=True, assume_reduced=True)
+    graph.merge_nodes(nodes_clusters + unknown_nodes_clusters, inplace=True, assume_reduced=True)
 
     # === Remove passing nodes of same type (post-clustering) ===
     simplify_passing_nodes(graph, min_angle=passing_node_min_angle, with_same_label=av_attr, inplace=True)
@@ -440,7 +452,7 @@ def build_line_digraph(
     # === Discover virtual branch to reconnect end nodes to adjacent branches or to other end nodes ===
     virtual_endp_edges = find_facing_endpoints(graph, max_distance=100, max_angle=30, filter="closest")
     virtual_edges, new_nodes, new_nodes_yx = find_endpoints_branches_intercept(
-        graph, max_distance=100, intercept_snapping_distance=20, omit_endpoints_to_endpoints=True
+        graph, max_distance=100, intercept_snapping_distance=20, ignore_endpoints=virtual_endp_edges.flatten()
     )
 
     # Insert any new nodes required by the virtual edges between end points and branches
@@ -468,12 +480,12 @@ def build_line_digraph(
         node_yx = Point.from_array(nodes_yx[node.id])
         od_dist = od_yx.distance(node_yx)
         p_dist = 1 - od_dist / od_mac_dist
-        tangents = -node.tips_tangent(geodata) if tips_tangent is None else -tips_tangent
+        tangents = node.tips_tangent(geodata) if tips_tangent is None else tips_tangent
         for t, b in zip(tangents, node.branches(), strict=True):
             # Expected tangent: perpendicular to the macula ...
-            expected_t = (macula_yx - node_yx).normalized().rot90()
-            if expected_t.dot(node_yx - od_yx) < 0:
-                expected_t = -expected_t  # ... and pointing outward from the optic disc
+            expected_t = (node_yx - od_yx).normalized()
+            # if expected_t.dot(node_yx - od_yx) < 0:
+            #    expected_t = -expected_t  # ... and pointing outward from the optic disc
             p_tan = t.dot(expected_t)
 
             edge_list.append([-1, b.id])
@@ -498,7 +510,7 @@ def build_line_digraph(
         else:
             p_calibre = (mean_calibres[0] - mean_calibres[1]) / np.max(mean_calibres)
 
-        common_p = p_tan + p_av * (1 - sigmoid(od_dist / 2 * od_mac_dist)) + offset
+        common_p = p_tan + p_av * (1 - sigmoid(od_dist / (2 * od_mac_dist))) + offset
         return common_p + p_calibre, common_p - p_calibre
 
     def fetch_tangents_calibre_av_labels(branch_ids, first_tip):
@@ -635,12 +647,125 @@ def resolve_digraph_to_vtree(
 
     vtree = VTree.from_graph(vgraph, branch_tree, branch_dirs, copy=False)
     # reorder_nodes
-    new_order = np.array([n.id for n in vtree.walk_nodes(depth_first=False)], dtype=int)
-    _, idx = np.unique(new_order, return_index=True)  # Take the first occurrence of each node
-    vtree.reindex_nodes(new_order[np.sort(idx)], inverse_lookup=True)
+    # new_order = np.array([n.id for n in vtree.walk_nodes(depth_first=False)], dtype=int)
+    # _, idx = np.unique(new_order, return_index=True)  # Take the first occurrence of each node
+    # vtree.reindex_nodes(new_order[np.sort(idx)], inverse_lookup=True)
 
     # reorder_branches
     # new_order = [b.id for b in vtree.walk_branches(depth_first=False)]
     # vtree.reindex_branches(new_order, inverse_lookup=True)
 
     return vtree
+
+
+def inspect_digraph_solving(
+    fundus_data: FundusData,
+    graph: VGraph,
+    *,
+    av_attr: str = "av",
+    passing_as_root_max_angle=30,
+):
+    import pandas as pd
+    import panel as pn
+    from jppype import Mosaic
+
+    pn.extension("tabulator")
+
+    graph = graph.copy()
+    macula_yx = fundus_data.macula_center if fundus_data.has_macula else None
+
+    # === Compute and solve the digraph ===
+    graph, line_list, line_tips, line_probability = build_line_digraph(
+        graph,
+        fundus_data.od_center,
+        macula_yx,
+        fundus_data.shape[1] // 2,
+        av_attr=av_attr,
+        passing_as_root_max_angle=passing_as_root_max_angle,
+    )
+    tree = resolve_digraph_to_vtree(graph.copy(), line_list, line_tips, line_probability)
+    tree.branches_attr["subtree"] = tree.subtrees_branch_labels()
+
+    # === Create the graph views ===
+    GRAPH_AV_COLORS = {
+        AVLabel.BKG: "grey",
+        AVLabel.ART: "red",
+        AVLabel.VEI: "blue",
+        AVLabel.BOTH: "purple",
+        AVLabel.UNK: "green",
+    }
+
+    def GENERIC_CMAP(x):
+        return ["grey", "red", "blue", "purple", "green", "orange"][x % 6]
+
+    m = Mosaic(2)
+    fundus_data.draw(view=m, labels_opacity=0.3)
+
+    m[0]["graph"] = graph.jppype_layer(bspline=True, edge_labels=True, node_labels=True)
+    m[0]["tangents"] = graph.geometric_data().jppype_branches_tips_tangents(scaling=2)
+    m[0]["graph"].edges_cmap = graph.branches_attr["av"].map(GRAPH_AV_COLORS).to_dict()
+
+    m[1]["graph"] = tree.jppype_layer(bspline=True, edge_labels=True)
+    m[1]["tangents"] = tree.geometric_data().jppype_branches_tips_tangents(scaling=2)
+    m[1]["graph"].edges_cmap = tree.branches_attr["subtree"].map(GENERIC_CMAP).to_dict()
+    m[1]["graph"].edges_labels = tree.branches_attr["subtree"].to_dict()
+
+    nodes_color = pd.Series("grey", index=tree.nodes_attr.index)
+    nodes_color[tree.root_nodes_ids()] = "black"
+    m[1]["graph"].nodes_cmap = nodes_color.to_dict()
+
+    m.show()
+
+    # === Create the graph views ===
+    lines_data = pd.DataFrame(
+        {
+            "b0": line_list[:, 0],
+            "b1": line_list[:, 1],
+            "n1": tree.branch_list[line_list[:, 1], np.where(line_tips[:, 1], 0, 1)],
+            "tree1": tree.branches_attr["subtree"][line_list[:, 1]].to_numpy(),
+            "p": line_probability,
+        }
+    )
+    root_data = lines_data[lines_data["b0"] == -1]
+    root_data = root_data.drop(columns=["b0"])
+    non_root_data = lines_data[lines_data["b0"] != -1]
+
+    tab_opt = dict(
+        show_index=False,
+        disabled=True,
+        layout="fit_data",
+        height=400,
+        align="center",
+        pagination=None,
+        header_filters=True,
+    )
+    root_table = pn.widgets.Tabulator(
+        root_data,
+        editors={k: None for k in root_data.columns},
+        text_align={k: "center" for k in root_data.columns},
+        **tab_opt,
+    )
+    non_root_table = pn.widgets.Tabulator(
+        non_root_data,
+        editors={k: None for k in non_root_data.columns},
+        text_align={k: "center" for k in non_root_data.columns},
+        **tab_opt,
+    )
+
+    def focus_on_root(event):
+        coord = tree.nodes_coord()[root_data["n1"].iloc[event.row]]
+        m[0].goto(coord[::-1], scale=3)
+
+    def focus_on_non_root(event):
+        coord = tree.nodes_coord()[non_root_data["n1"].iloc[event.row]]
+        m[0].goto(coord[::-1], scale=3)
+
+    root_table.on_click(focus_on_root)
+    non_root_table.on_click(focus_on_non_root)
+
+    return (
+        pn.Row(root_table, pn.Spacer(width=10), non_root_table, height=400),
+        graph,
+        tree,
+        (line_list, line_tips, line_probability),
+    )

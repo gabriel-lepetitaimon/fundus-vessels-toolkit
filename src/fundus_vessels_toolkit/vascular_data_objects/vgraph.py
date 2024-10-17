@@ -1557,8 +1557,10 @@ class VGraph:
         new_branch_ids : np.ndarray
             The indexes of the duplicated branches. Only returned if ``return_branch_id`` is True.
         """
-        graph = self if inplace else self.copy()
         branches_id = self.as_branches_ids(branch_indexes)
+        if len(branches_id) == 0:
+            return self if not return_branch_id else (self, np.empty(0, dtype=int))
+        graph = self if inplace else self.copy()
 
         branch_nodes = graph._branch_list[branches_id]
         oldB = graph.branches_count
@@ -2067,8 +2069,12 @@ class VGraph:
         ids : int or npt.ArrayLike[int], optional
             The indexes of the branches to iterate over. If None, iterate over all branches.
 
-        only_terminal : bool, optional
-            If True, iterate only over the terminal branches.
+        filter : str, optional
+            Filter the branches to iterate over:
+
+            - "orphan": iterate over the branches that are not connected to any other branch.
+            - "endpoint": iterate over the branches that are connected to only one other branch.
+            - "non-endpoint": iterate over the branches that are connected to more than one other branch.
 
         dynamic_iterator : bool, optional
             If True, iterate over all the branches present in the graph when this method is called.
