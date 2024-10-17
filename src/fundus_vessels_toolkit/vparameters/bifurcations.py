@@ -280,6 +280,12 @@ def node_normalized_coordinates(
         The normalized distance of the nodes to the optic disc as a 1D array of shape (n,).
     """
     normalized_od_dist = od_center.distance(yx) / od_diameter - 0.5
-    normalized_coord = (yx - od_center.numpy()[None, :]) / od_center.distance(macula_center)
+    centered_coord = yx - od_center.numpy()[None, :]
+    normalized_coord = centered_coord / od_center.distance(macula_center)
+    u = (macula_center - od_center).normalized()
+    y, x = normalized_coord.T
+    rotated_coord = np.stack([y * u.x + x * u.y, x * u.x - y * u.y], axis=1)
+    if od_center.x < macula_center.x:
+        rotated_coord[:, 0] = -rotated_coord[:, 0]
 
-    return normalized_coord, normalized_od_dist
+    return rotated_coord, normalized_od_dist
