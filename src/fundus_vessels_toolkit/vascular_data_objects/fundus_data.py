@@ -1,7 +1,7 @@
 from copy import copy
 from enum import IntEnum
 from pathlib import Path
-from typing import Optional, Self, Tuple
+from typing import Literal, Optional, Self, Tuple, overload
 
 import numpy as np
 import numpy.typing as npt
@@ -72,6 +72,7 @@ class FundusData:
         vessels=None,
         od=None,
         od_center=None,
+        od_size=None,
         macula=None,
         macula_center=None,
         *,
@@ -87,32 +88,40 @@ class FundusData:
             self._fundus = None
 
         if fundus_mask is not None:
-            self._fundus_mask = self.load_fundus_mask(fundus_mask, shape, auto_resize) if check else fundus_mask
+            self._fundus_mask = (
+                self.load_fundus_mask(fundus_mask, shape, auto_resize=auto_resize) if check else fundus_mask
+            )
             shape = self._fundus_mask.shape[:2]
         elif self._fundus is not None:
             self._fundus_mask = self.load_fundus_mask(self._fundus)
 
         #
         if vessels is not None:
-            self._vessels = self.load_vessels(vessels, shape, auto_resize) if check else vessels
+            self._vessels = self.load_vessels(vessels, shape, auto_resize=auto_resize) if check else vessels
             shape = self._vessels.shape[:2]
         else:
             self._vessels = None
         self._bin_vessels = None
 
         if od is not None:
-            self._od, self._od_center = self.load_od_macula(od, shape, auto_resize) if check else (od, None)
-            shape = self._od.shape[:2]
+            if check:
+                self._od, self._od_center, self._od_size = self.load_od_macula(
+                    od, shape, auto_resize=auto_resize, fit_ellipse=True
+                )
+                shape = self._od.shape[:2]
+            else:
+                self._od, self._od_center, self._od_size = od, od_center, od_size
         else:
-            self._od, self._od_center = None, None
+            self._od, self._od_center, self._od_size = None, od_center, od_size
 
         if macula is not None:
-            self._macula, self._macula_center = (
-                self.load_od_macula(macula, shape, auto_resize) if check else (macula, None)
-            )
-            shape = self._macula.shape[:2]
+            if check:
+                self._macula, self._macula_center = self.load_od_macula(macula, shape, auto_resize)
+                shape = self._macula.shape[:2]
+            else:
+                self._macula, self._macula_center = macula, macula_center
         else:
-            self._macula, self._macula_center = None, None
+            self._macula, self._macula_center = None, macula_center
 
         if shape is None:
             raise ValueError("No data was provided to initialize the FundusData.")
@@ -263,9 +272,24 @@ class FundusData:
 
         return vessels
 
+    @overload
     @staticmethod
-    def load_od_macula(seg, shape=None, auto_resize=True) -> npt.NDArray[np.uint8]:
-        from ..utils.safe_import import import_cv2 as cv2
+    def load_od_macula(
+        seg, shape: Optional[Tuple[int, int]] = None, *, auto_resize: bool = True, fit_ellipse: Literal[False] = False
+    ) -> Tuple[npt.NDArray[np.uint8], Point]: ...
+    @overload
+    @staticmethod
+    def load_od_macula(
+        seg, shape: Optional[Tuple[int, int]] = None, *, auto_resize: bool = True, fit_ellipse: Literal[True]
+    ) -> Tuple[npt.NDArray[np.uint8], Point, Point]: ...
+
+    @staticmethod
+    def load_od_macula(
+        seg, shape: Optional[Tuple[int, int]] = None, *, auto_resize: bool = True, fit_ellipse: bool = False
+    ) -> Tuple[npt.NDArray[np.uint8], Point] | Tuple[npt.NDArray[np.uint8], Point, Point]:
+        from ..utils.safe_import import import_cv2
+
+        cv2 = import_cv2()
 
         if isinstance(seg, (str, Path)):
             seg = load_image(seg, cast_to_float=False, resize=shape if auto_resize else None)
@@ -289,13 +313,17 @@ class FundusData:
             ), "The vessels map doesn't have the same shape as the fundus image."
             seg = crop_pad_center(seg, shape)
 
-        _, labels, stats, centroids = cv2().connectedComponentsWithStats(seg.astype(np.uint8), 4, cv2().CV_32S)
+        _, labels, stats, centroids = cv2.connectedComponentsWithStats(seg.astype(np.uint8), 4, cv2.CV_32S)
         if stats.shape[0] == 1:
-            return seg, ABSENT
-        if stats.shape[0] == 2:
-            return seg, Point(*centroids[1][::-1])
-        largest_cc = np.argmax(stats[1:, cv2().CC_STAT_AREA]) + 1
-        return labels == largest_cc, Point(*centroids[1][::-1])
+            return (seg, ABSENT) if not fit_ellipse else (seg, ABSENT, ABSENT)
+        largest_cc = np.argmax(stats[1:, cv2.CC_STAT_AREA]) + 1 if stats.shape[0] > 2 else 1
+        if not fit_ellipse:
+            return labels == largest_cc, Point(*centroids[1][::-1])
+        contours, _ = cv2.findContours(
+            (labels == largest_cc).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        ellipse = cv2.fitEllipse(contours[0])
+        return labels == largest_cc, Point(*ellipse[0][::-1]), Point(*ellipse[1][::-1])
 
     ####################################################################################################################
     #    === PROPERTY ACCESSORS ===
@@ -386,6 +414,33 @@ class FundusData:
         return None if self._od_center is ABSENT else self._od_center
 
     @property
+    def od_size(self) -> Optional[Point]:
+        """The size (width, height) of the optic disc or None if the optic disc is not visible in this fundus.
+
+        Raises
+        ------
+        AttributeError
+            If the optic disc segmentation was not provided.
+        """
+        if self._od_size is None:
+            if self._od is None:
+                raise AttributeError("The optic disc segmentation was not provided.")
+            else:
+                self._od_size = self._check_od(self._od, self.shape, return_diameter=True)
+        return None if self._od_size is ABSENT else self._od_size
+
+    @property
+    def od_diameter(self) -> Optional[float]:
+        """The diameter of the optic disc or None if the optic disc is not visible in this fundus.
+
+        Raises
+        ------
+        AttributeError
+            If the optic disc segmentation was not provided.
+        """
+        return None if self._od_size is None else self._od_size.max
+
+    @property
     def has_macula(self) -> bool:
         return self._macula is not None
 
@@ -417,6 +472,18 @@ class FundusData:
             else:
                 _, self._macula_center = self._check_od(self._macula, self.shape)
         return None if self._macula_center is ABSENT else self._macula_center
+
+    def infered_macula_center(self) -> Optional[Point]:
+        """The center of the macula or the center of the fundus if the macula is not visible."""
+        if self._macula_center is not None:
+            return self._macula_center
+        if self._od_center is None:
+            return None
+
+        half_weight = self._shape[1] * 0.4  # Assume 45° fundus image
+        if self._od_center[1] > half_weight:
+            half_weight = -half_weight
+        return Point(self._od_center.y, x=self._od_center.x + half_weight)
 
     @property
     def name(self) -> str:

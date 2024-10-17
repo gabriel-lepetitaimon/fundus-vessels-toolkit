@@ -394,7 +394,7 @@ class Point(NamedTuple):
     @overload
     def distance(self, other: npt.NDArray[np.float]) -> npt.NDArray[np.float]: ...
 
-    def distance(self, other: Point | Iterable[Point]) -> float | Iterable[float]:
+    def distance(self, other: Point | Iterable[Point]) -> float | Iterable[float] | npt.NDArray[np.float]:
         import numpy as np
 
         if isinstance(other, np.ndarray):
@@ -424,11 +424,23 @@ class Point(NamedTuple):
 
     @property
     def norm(self) -> float:
+        """The norm of the point"""
         return math.sqrt(self.x * self.x + self.y * self.y)
 
     @property
     def angle(self) -> float:
+        """The angle of the point in radians"""
         return math.atan2(self.y, self.x)
+
+    @property
+    def max(self) -> float:
+        """The maximum of y and x"""
+        return max(self.y, self.x)
+
+    @property
+    def min(self) -> float:
+        """The minimum of y and x"""
+        return min(self.y, self.x)
 
     def normalized(self) -> Point:
         norm = self.norm

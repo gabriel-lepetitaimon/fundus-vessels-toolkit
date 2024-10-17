@@ -50,7 +50,7 @@ class FundusAVSegToBiomarkers:
 
         return {
             "bifurcations": parametrize_bifurcations(tree, fundus_data=fundus_data),
-            "branches": parametrize_branches(tree),
+            "branches": parametrize_branches(tree, fundus_data=fundus_data),
         }
 
     def inspect_bifurcations(self, fundus_data: FundusData, *, show_tangents=True, label_branches=False):
@@ -183,7 +183,7 @@ class FundusAVSegToBiomarkers:
 
         for i, tree in enumerate(trees):
             parametrize_bifurcations(tree, fundus_data=fundus_data)  # To compute rank and strahler
-            branch_info = parametrize_branches(tree)
+            branch_info = parametrize_branches(tree, fundus_data=fundus_data)
             branch_infos.append(branch_info)
             nodes_rank = tree.nodes_attr["rank"].copy()
             branches_rank = tree.branches_attr["rank"].copy()

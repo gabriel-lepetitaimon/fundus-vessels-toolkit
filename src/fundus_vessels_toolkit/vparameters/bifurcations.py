@@ -1,7 +1,10 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
+
+from fundus_vessels_toolkit.utils.geometric import Point
 
 from ..utils.graph.measures import extract_bifurcations_parameters as extract_bifurcations_parameters
 from ..utils.math import modulo_pi
@@ -202,10 +205,18 @@ def parametrize_bifurcations(
     df = pd.DataFrame(bifurcations, columns=columns)
 
     if fundus_data is not None:
+        bifurcations_yx = np.stack(bifurcations_yx)
         if fundus_data.has_macula:
             df.insert(4, "dist_macula", fundus_data.macula_center.distance(bifurcations_yx))
         if fundus_data.has_od:
             df.insert(4, "dist_od", fundus_data.od_center.distance(bifurcations_yx))
+            macula_center = fundus_data.macula_center if fundus_data.has_macula else fundus_data.infered_macula_center()
+            norm_coord, norm_dist_od = node_normalized_coordinates(
+                bifurcations_yx, fundus_data.od_center, fundus_data.od_diameter, macula_center
+            )
+            df.insert(4, "norm_coord_x", norm_coord[:, 1])
+            df.insert(4, "norm_coord_y", norm_coord[:, 0])
+            df.insert(4, "norm_dist_od", norm_dist_od)
 
     return df
 
@@ -238,3 +249,37 @@ def assign_strahler_number(vtree: VTree, field: str = "strahler") -> VTree:
             else:
                 branch.attr[field] = strahlers[0] + 1
         branch.tail_node().attr[field] = branch.attr[field]
+
+
+def node_normalized_coordinates(
+    yx: npt.NDArray[np.float64], od_center: Point, od_diameter: float, macula_center: Point
+) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """
+    Compute the normalized coordinates of the nodes of a VTree.
+
+    Parameters
+    ----------
+    yx: npt.NDArray[np.float64]
+        The coordinates of the nodes as a 2D array of shape (n, 2).
+
+    od_center: Point
+        The center of the optic disc.
+
+    od_diameter: float
+        The diameter of the optic disc.
+
+    macula_center: Point
+        The center of the macula.
+
+    Returns
+    -------
+    normalized_coord: npt.NDArray[np.float64]
+        The normalized coordinates of the nodes as a 2D array of shape (n, 2).
+
+    normalized_od_dist: npt.NDArray[np.float64]
+        The normalized distance of the nodes to the optic disc as a 1D array of shape (n,).
+    """
+    normalized_od_dist = od_center.distance(yx) / od_diameter - 0.5
+    normalized_coord = (yx - od_center.numpy()[None, :]) / od_center.distance(macula_center)
+
+    return normalized_coord, normalized_od_dist

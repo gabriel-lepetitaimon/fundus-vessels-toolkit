@@ -6,10 +6,10 @@ import pandas as pd
 
 from ..utils.bezier import BSpline
 from ..utils.math import quantified_roots
-from ..vascular_data_objects import VBranchGeoData, VGraph
+from ..vascular_data_objects import FundusData, VBranchGeoData, VGraph
 
 
-def parametrize_branches(vgraph: VGraph) -> pd.DataFrame:
+def parametrize_branches(vgraph: VGraph, fundus_data: Optional[FundusData] = None) -> pd.DataFrame:
     """Extract parameters and biomarkers from the branches of a VGraph.
 
     The parameters extracted are:
@@ -24,6 +24,11 @@ def parametrize_branches(vgraph: VGraph) -> pd.DataFrame:
     ----------
     vgraph : VGraph
         The VGraph to analyze.
+
+    fundus_data : Optional[FundusData], optional
+        The fundus data associated with the VGraph, by default None.
+        If provided, the distance to the optic disc and macula, and the normalized coordinates of the bifurcations
+        are computed.
 
     Returns
     -------
@@ -91,6 +96,22 @@ def parametrize_branches(vgraph: VGraph) -> pd.DataFrame:
         df.insert(1, "strahler", vgraph.branches_attr["strahler"])
     if "rank" in vgraph.branches_attr:
         df.insert(1, "rank", vgraph.branches_attr["rank"])
+
+    if fundus_data is not None:
+        mid_yx = np.array(vgraph.geometric_data().branch_midpoint(df.index.to_numpy()))
+        if fundus_data.has_macula:
+            df.insert(4, "dist_macula", fundus_data.macula_center.distance(mid_yx))
+        if fundus_data.has_od:
+            from .bifurcations import node_normalized_coordinates
+
+            df.insert(4, "dist_od", fundus_data.od_center.distance(mid_yx))
+            macula_center = fundus_data.macula_center if fundus_data.has_macula else fundus_data.infered_macula_center()
+            norm_coord, norm_dist_od = node_normalized_coordinates(
+                mid_yx, fundus_data.od_center, fundus_data.od_diameter, macula_center
+            )
+            df.insert(4, "norm_coord_x", norm_coord[:, 1])
+            df.insert(4, "norm_coord_y", norm_coord[:, 0])
+            df.insert(4, "norm_dist_od", norm_dist_od)
 
     return df
 
