@@ -236,7 +236,7 @@ def cluster_nodes_by_distance(
     """  # noqa: E501
 
     if nodes_type == "junction":
-        nodes_id = vessel_graph.non_endpoints_nodes()
+        nodes_id = vessel_graph.junctions_nodes()
     elif nodes_type == "endpoints":
         nodes_id = vessel_graph.endpoints_nodes()
     else:

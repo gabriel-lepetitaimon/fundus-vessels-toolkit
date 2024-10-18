@@ -390,8 +390,8 @@ class VTree(VGraph):
     @overload
     def branch_dirs(self, branch_ids: int) -> np.bool_: ...
     @overload
-    def branch_dirs(self, branch_ids: npt.ArrayLike[int]) -> np.ndarray[np.bool_]: ...
-    def branch_dirs(self, branch_ids: int | npt.ArrayLike[int]) -> np.bool_ | np.ndarray:
+    def branch_dirs(self, branch_ids: Optional[npt.ArrayLike[int]] = None) -> np.ndarray[np.bool_]: ...
+    def branch_dirs(self, branch_ids: Optional[int | npt.ArrayLike[int]] = None) -> np.bool_ | np.ndarray:
         """Return the direction of the given branch(es).
 
         If ``True``, the tail node is the first of  ``tree.branch_list[branch_ids]`` and the head node is the second.
@@ -399,14 +399,16 @@ class VTree(VGraph):
 
         Parameters
         ----------
-        branch_ids : int | npt.ArrayLike[int]
-            The index of the branch(es).
+        branch_ids : int | npt.ArrayLike[int] | None
+            The index of the branch(es). If None, the function will return the direction of all the branches.
 
         Returns
         -------
         np.bool_ | np.ndarray
             The direction of the branch(es).
         """
+        if branch_ids is None:
+            return self._branch_dirs if self._branch_dirs is not None else np.ones(self.branches_count, dtype=bool)
         if self._branch_dirs is None:
             return True if np.isscalar(branch_ids) else np.ones(len(branch_ids), dtype=bool)
         return self._branch_dirs[branch_ids]
@@ -1105,7 +1107,7 @@ class VTree(VGraph):
         Generator[VTreeBranch]
             A generator that yields branches.
         """  # noqa: E501
-        return super().branches(ids, filter="endpoint", dynamic_iterator=dynamic_iterator)
+        return super().branches(ids, filter=filter, dynamic_iterator=dynamic_iterator)
 
     def branch(self, branch_id: int, /) -> VTreeBranch:
         return super().branch(branch_id)

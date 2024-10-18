@@ -1472,6 +1472,8 @@ class VGeometricData:
             splits_point = [Point.from_array(curve[0])]
             if splits_positions.ndim == 1:
                 for split_pos in splits_positions:
+                    if 0 < split_pos < 1:
+                        split_pos = int(split_pos * len(curve))
                     splits_id.append(int(split_pos))
                     splits_point.append(Point.from_array(curve[split_pos]))
             elif splits_positions.ndim == 2:
@@ -1620,15 +1622,30 @@ class VGeometricData:
         tangents: VBranchGeoDataKey = VBranchGeoData.Fields.TIPS_TANGENT,
         scaling=1,
         normalize=False,
-        invert_direction: Optional[bool | npt.NDArray[np.bool_]] = None,
-        show_only: Optional[npt.NDArray[np.bool_] | Literal["endpoints"]] = None,
+        invert_direction: Optional[bool | npt.NDArray[np.bool_] | Literal["tree"]] = None,
+        show_only: Optional[npt.NDArray[np.bool_] | Literal["endpoints", "junctions"]] = None,
     ):
         from jppype.layers import LayerQuiver
 
-        if isinstance(show_only, str) and show_only == "endpoints":
-            show_only = np.isin(self.parent_graph.branch_list, self.parent_graph.endpoints_nodes())
+        if isinstance(show_only, str):
+            if show_only == "endpoints":
+                show_only = np.isin(self.parent_graph.branch_list, self.parent_graph.endpoints_nodes())
+            elif show_only == "junctions":
+                show_only = np.isin(self.parent_graph.branch_list, self.parent_graph.junctions_nodes())
+            else:
+                raise ValueError(f"Invalid value for show_only: {show_only}")
         if show_only is not None and not show_only.any():
             return LayerQuiver(np.empty((0, 2)), np.empty((0, 2)), self.domain, "view_sqrt" if normalize else "scene")
+
+        if isinstance(invert_direction, str):
+            if invert_direction == "tree":
+                from .vtree import VTree
+
+                assert isinstance(self.parent_graph, VTree), "The parent graph is not a tree."
+                invert_direction = np.tile([False, True], self.branches_count).reshape(-1, 2)
+                invert_direction[~self.parent_graph.branch_dirs()] = [True, False]
+            else:
+                raise ValueError(f"Invalid value for invert_direction: {invert_direction}")
 
         branch_list = self.parent_graph.branch_list
 

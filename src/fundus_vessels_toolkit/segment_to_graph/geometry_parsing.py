@@ -82,7 +82,7 @@ def populate_geometry(
         VBranchGeoData.Fields.CURVATURE_ROOTS, curv_roots, branch_id=valid_curves_id, graph_index=True
     )
 
-    if populate_geometry:
+    if populate_tip_geodata:
         derive_tips_geometry_from_curve_geometry(vgraph, inplace=True)
 
     return vgraph
@@ -132,7 +132,6 @@ def derive_tips_geometry_from_curve_geometry(
     """  # noqa: E501
     if not inplace:
         vgraph = vgraph.copy()
-        return derive_tips_geometry_from_curve_geometry(vgraph, inplace=True)
 
     gdata = vgraph.geometric_data()
 

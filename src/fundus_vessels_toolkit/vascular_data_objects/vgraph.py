@@ -222,9 +222,9 @@ class VGraphBranch:
         return self.__graph
 
     @property
-    def nodes_id(self) -> Tuple[int, int]:
+    def nodes_id(self) -> List[int]:
         """The indexes of the nodes connected by the branch as a tuple."""
-        return tuple(int(_) for _ in self._nodes_id)
+        return [int(_) for _ in self._nodes_id]
 
     def nodes(self) -> Tuple[VGraphNode, VGraphNode]:
         """The two nodes connected by this branch.  # noqa: E501
@@ -946,13 +946,13 @@ class VGraph:
         return mask if as_mask else np.argwhere(mask).flatten()
 
     @overload
-    def non_endpoints_nodes(self, as_mask: Literal[False] = False) -> npt.NDArray[np.int_]: ...
+    def junctions_nodes(self, as_mask: Literal[False] = False) -> npt.NDArray[np.int_]: ...
     @overload
-    def non_endpoints_nodes(self, as_mask: Literal[True]) -> npt.NDArray[np.bool_]: ...
-    def non_endpoints_nodes(self, as_mask=False) -> npt.NDArray[np.int_ | np.bool_]:
-        """Compute the indexes of the non-endpoints nodes in the graph.
+    def junctions_nodes(self, as_mask: Literal[True]) -> npt.NDArray[np.bool_]: ...
+    def junctions_nodes(self, as_mask=False) -> npt.NDArray[np.int_ | np.bool_]:
+        """Compute the indexes of the junctions (non-endpoints) nodes in the graph.
 
-        The non-endpoints nodes are the nodes connected to at least two branches.
+        The junction nodes are the nodes connected to at least two branches.
 
         Parameters
         ----------
@@ -960,7 +960,7 @@ class VGraph:
         Returns
         -------
         np.ndarray
-            The indexes of the non-endpoints nodes (or if ``as_mask`` is True, a boolean mask of shape (N,) where N is the number of nodes).
+            The indexes of the junction nodes (or if ``as_mask`` is True, a boolean mask of shape (N,) where N is the number of nodes).
         """  # noqa: E501
         mask = np.bincount(self._branch_list.flatten(), minlength=self.nodes_count) > 1
         return mask if as_mask else np.argwhere(mask).flatten()
@@ -1063,6 +1063,18 @@ class VGraph:
         """
         self_loop_mask = self._branch_list[:, 0] == self._branch_list[:, 1]
         return self_loop_mask if as_mask else np.argwhere(self_loop_mask).flatten()
+
+    def twin_branches(self) -> List[npt.NDArray[np.int_]]:
+        """Compute the indexes of the branches that are twins in the graph.
+
+        Returns
+        -------
+        npt.NDArray[np.int_]
+            The indexes of the twin branches as a 2D array of shape (N, 2) where N is the number of pair of twin branches.
+        """  # noqa: E501
+        branch_list = np.sort(self._branch_list, axis=1)
+        _, inv, counts = np.unique(branch_list, return_inverse=True, return_counts=True, axis=0)
+        return [np.argwhere(inv == twin_id).flatten() for twin_id in np.argwhere(counts > 1).flatten()]
 
     def nodes_connected_graphs(self) -> Tuple[npt.NDArray[np.int_]]:
         """Compute the connected components of the graph nodes.
@@ -1581,7 +1593,7 @@ class VGraph:
         branchID: int,
         split_coord: Optional[Point | List[Point] | npt.ArrayLike] = None,
         *,
-        split_curve_id: Optional[int | Iterable[int]] = None,
+        split_curve_id: Optional[int | float | Iterable[int] | Iterable[float]] = None,
         return_branch_ids=False,
         return_node_ids=False,
         inplace=False,
