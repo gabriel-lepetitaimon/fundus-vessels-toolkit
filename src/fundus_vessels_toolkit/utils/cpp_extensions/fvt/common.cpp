@@ -428,9 +428,9 @@ bool Edge::operator==(const Edge& e) const { return (start == e.start && end == 
 bool Edge::operator!=(const Edge& e) const { return (start != e.start || end != e.end || id != e.id); }
 bool Edge::operator<(const Edge& e) const { return id < e.id; }
 
-GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N, bool directed) {
+GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N, bool directed, bool keep_orientation) {
     if (N < 0) {
-        N = 0;
+        N = -1;
         for (const IntPair& e : edges) N = std::max(N, std::max(e[0], e[1]));
         N++;
     }
@@ -440,7 +440,13 @@ GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N, bool
     for (const IntPair& e : edges) {
         const Edge edge(e[0], e[1], i);
         graph[edge.start].insert(edge);
-        if (!directed) graph[edge.end].insert(edge);
+        if (!directed) {
+            if (keep_orientation) {
+                graph[edge.end].insert(edge);
+            } else {
+                graph[edge.end].insert(Edge(e[1], e[0], i));
+            }
+        }
         i++;
     }
     return graph;

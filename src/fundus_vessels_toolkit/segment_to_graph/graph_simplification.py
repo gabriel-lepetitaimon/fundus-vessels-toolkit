@@ -658,7 +658,7 @@ def find_endpoints_branches_intercept(
     """  # noqa: E501
     import torch
 
-    from ..utils.cpp_extensions.graph_cpp import find_closest_branches as find_closest_branches_cpp
+    from ..utils.cpp_extensions.fvt_cpp import find_closest_branches as find_closest_branches_cpp
 
     endpoints = vessel_graph.endpoints_nodes()
     if ignore_endpoints is not None:

@@ -232,6 +232,7 @@ class VGraphBranch:
         ..warning::
             The returned :class:`VGraphNode` objects are linked to their node and not to this branch tip. After merging, splitting or flipping this branch, the original returned nodes may not be connected by this branch anymore.
         """  # noqa: E501
+        assert self.is_valid(), "The branch has been removed from the graph."
         n1, n2 = self._nodes_id
         return VGraphNode(self.__graph, n1), VGraphNode(self.__graph, n2)
 
@@ -255,6 +256,7 @@ class VGraphBranch:
 
     @property
     def attr(self) -> DFSetterAccessor:
+        assert self.is_valid(), "The branch has been removed from the graph."
         return DFSetterAccessor(self.__graph._branches_attr, self._id)
 
     def curve(self, geodata: VGeometricData | int = 0) -> npt.NDArray[np.int_]:
@@ -272,6 +274,7 @@ class VGraphBranch:
         np.ndarray
             The indexes of the pixels forming the curve of the branch.
         """
+        assert self.is_valid(), "The branch has been removed from the graph."
         if not isinstance(geodata, VGeometricData):
             geodata = self.graph.geometric_data(geodata)
         return geodata.branch_curve(self._id)
@@ -291,11 +294,13 @@ class VGraphBranch:
         Point
             The middle point of the branch.
         """
+        assert self.is_valid(), "The branch has been removed from the graph."
         if not isinstance(geodata, VGeometricData):
             geodata = self.graph.geometric_data(geodata)
         return Point(*geodata.branch_midpoint(self._id))
 
     def bspline(self, geodata: VGeometricData | int = 0) -> BSpline:
+        assert self.is_valid(), "The branch has been removed from the graph."
         if not isinstance(geodata, VGeometricData):
             geodata = self.__graph.geometric_data(geodata)
         return geodata.branch_bspline(self._id)
@@ -324,6 +329,7 @@ class VGraphBranch:
         return geodata.branch_data(attr_name, self._id)
 
     def node_to_node_length(self, geodata: VGeometricData | int = 0) -> float:
+        assert self.is_valid(), "The branch has been removed from the graph."
         if not isinstance(geodata, VGeometricData):
             geodata = self.graph.geometric_data(geodata)
         yx1, yx2 = geodata.nodes_coord(self._nodes_id)
@@ -1356,7 +1362,8 @@ class VGraph:
             if node_ref._id > -1:
                 node_ref._id = indexes[node_ref._id + 1]
         for branch_ref in self._branches_refs:  # ... nodes indexes stored in branches references
-            branch_ref._nodes_id = indexes[branch_ref._nodes_id]
+            if branch_ref.is_valid():
+                branch_ref._nodes_id = indexes[branch_ref._nodes_id]
         return self
 
     def sort_nodes_by_degree(self, descending=True) -> VGraph:
@@ -1466,7 +1473,8 @@ class VGraph:
             for node in self._nodes_refs:
                 node._id = nodes_reindex[node._id + 1]
             for branch in self._branches_refs:
-                branch._nodes_id = nodes_reindex[branch._nodes_id + 1]
+                if branch.is_valid():
+                    branch._nodes_id = nodes_reindex[branch._nodes_id + 1]
 
         return nodes_reindex
 

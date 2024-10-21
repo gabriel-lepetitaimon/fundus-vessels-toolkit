@@ -5,10 +5,10 @@ import numpy as np
 import scipy.ndimage as scimage
 import torch
 
-from ..utils.cpp_extensions.graph_cpp import detect_skeleton_nodes as detect_skeleton_nodes_cpp
-from ..utils.cpp_extensions.graph_cpp import detect_skeleton_nodes_debug as detect_skeleton_nodes_debug_cpp
-from ..utils.cpp_extensions.graph_cpp import parse_skeleton as parse_skeleton_cpp
-from ..utils.cpp_extensions.graph_cpp import parse_skeleton_with_cleanup as parse_skeleton_with_cleanup_cpp
+from ..utils.cpp_extensions.fvt_cpp import detect_skeleton_nodes as detect_skeleton_nodes_cpp
+from ..utils.cpp_extensions.fvt_cpp import detect_skeleton_nodes_debug as detect_skeleton_nodes_debug_cpp
+from ..utils.cpp_extensions.fvt_cpp import parse_skeleton as parse_skeleton_cpp
+from ..utils.cpp_extensions.fvt_cpp import parse_skeleton_with_cleanup as parse_skeleton_with_cleanup_cpp
 from ..utils.lookup_array import create_removal_lookup
 from ..utils.torch import autocast_torch
 from ..vascular_data_objects import FundusData, VBranchGeoData, VGeometricData, VGraph

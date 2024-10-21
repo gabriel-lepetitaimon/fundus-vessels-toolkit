@@ -1,6 +1,7 @@
 #include <pybind11/stl.h>
 
 #include "branch.h"
+#include "disjoint_set.h"
 #include "edit_distance.h"
 #include "graph.h"
 #include "ray_iterators.h"
@@ -289,6 +290,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("curve_curvature", &compute_curvature, "Evaluate the curvature of a curve.");
     m.def("find_inflections_points", &find_inflections_points, "Find the inflection points of a curve.");
     m.def("fit_bezier", &fit_bezier_torch, "Fit a cubic bezier curve to a set of points.");
+    m.def("drawCone", &drawCone, "Draw a cone in a 2D image.");
+    m.def("drawLine", &drawLine, "Draw a line in a 2D image.");
 
     // === Skeleton.h ===
     m.def("detect_skeleton_nodes", &detect_skeleton_nodes, "Detect junctions and endpoints in a skeleton.");
@@ -303,6 +306,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("shortest_secondary_path", &shortest_secondary_path, "Compute the shortest path between two sets of nodes.");
     m.def("nodes_similarity", &nodes_similarity, "Compute the similarity between two sets of nodes.");
 
-    m.def("drawCone", &drawCone, "Draw a cone in a 2D image.");
-    m.def("drawLine", &drawLine, "Draw a line in a 2D image.");
+    // === graph.h ===
+    m.def("maximum_weighted_independent_set", &maximum_weighted_independent_set,
+          "Compute the maximum weighted independent set.");
+
+    // === disjoint_set.h ===
+    m.def("has_cycle", &has_cycle, "Find cycles in a list of parent.");
+    m.def("find_cycles", &find_cycles, "Find all cycles in a list of parent.");
 }

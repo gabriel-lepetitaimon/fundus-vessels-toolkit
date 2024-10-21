@@ -4,6 +4,11 @@
 #include <unordered_map>
 #include <vector>
 
+#include "common.h"
+
+bool has_cycle(torch::Tensor parent_list);
+std::list<std::list<int>> find_cycles(torch::Tensor parent_list);
+
 class ConstantDisjointSet {
    public:
     ConstantDisjointSet(std::size_t n);

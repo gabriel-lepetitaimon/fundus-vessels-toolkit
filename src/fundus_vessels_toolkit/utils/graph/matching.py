@@ -3,7 +3,7 @@ from typing import Optional
 import numpy as np
 import torch
 
-from ..cpp_extensions.graph_cpp import nodes_similarity as nodes_similarity_cpp
+from ..cpp_extensions.fvt_cpp import nodes_similarity as nodes_similarity_cpp
 from ..torch import autocast_torch
 
 

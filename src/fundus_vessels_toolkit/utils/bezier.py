@@ -674,7 +674,7 @@ class BSpline(tuple[BezierCubic]):
 def fit_bezier_cubic(
     curve: torch.Tensor, tangents: torch.Tensor, max_error: float, start: Optional[int] = 0, end: Optional[int] = 0
 ) -> Tuple[BezierCubic, float, torch.Tensor]:
-    from .cpp_extensions.graph_cpp import fit_bezier as fit_bezier_cpp
+    from .cpp_extensions.fvt_cpp import fit_bezier as fit_bezier_cpp
 
     curve = curve.cpu().int()
     tangents = tangents.cpu().float()

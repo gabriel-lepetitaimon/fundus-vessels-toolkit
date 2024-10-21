@@ -116,7 +116,7 @@ class FundusData:
 
         if macula is not None:
             if check:
-                self._macula, self._macula_center = self.load_od_macula(macula, shape, auto_resize)
+                self._macula, self._macula_center = self.load_od_macula(macula, shape, auto_resize=auto_resize)
                 shape = self._macula.shape[:2]
             else:
                 self._macula, self._macula_center = macula, macula_center
@@ -296,7 +296,7 @@ class FundusData:
         elif is_torch_tensor(seg):
             seg = seg.detach().cpu().numpy()
 
-        assert isinstance(seg, np.ndarray), "The optic disc map must be a numpy array."
+        assert isinstance(seg, np.ndarray), "The optic disc or macula map must be a numpy array."
         if seg.ndim == 3:
             seg = seg.mean(axis=2)
 

@@ -503,7 +503,7 @@ class VGeometricData:
         """
         import torch
 
-        from ..utils.cpp_extensions.graph_cpp import draw_branches_labels
+        from ..utils.cpp_extensions.fvt_cpp import draw_branches_labels
 
         domain_shape = self.domain.size
         top_left = np.array([self.domain.top, self.domain.left])
@@ -1506,7 +1506,7 @@ class VGeometricData:
                 self._branch_data_dict[attr_name][internal_id] = branch_attrs[0]
                 self._branch_data_dict[attr_name].extend(branch_attrs[1:])
             else:
-                self._branch_data_dict[attr_name].extend([None] * (n_splits + 1))
+                self._branch_data_dict[attr_name].extend([None] * (len(new_branch_ids)))
 
         self._sort_internal_branches_index()
         self._sort_internal_nodes_index()
@@ -1527,8 +1527,10 @@ class VGeometricData:
             branch_curve = self._branches_curve[branch_id]
             if branch_curve is not None:
                 self._branches_curve[branch_id] = np.flip(branch_curve, axis=0)
-            for attr_name, attr in self.list_branch_data(branch_id, graph_index=False).items():
-                self._branch_data_dict[attr_name][branch_id] = attr.flip(ctx.set_name(attr_name))
+            for attr_name, attr_data in self._branch_data_dict.items():
+                attr = attr_data[branch_id]
+                if attr is not None:
+                    attr_data[branch_id] = attr.flip(ctx.set_name(attr_name))
 
     def clear_branches_gdata(self, ids: int | Iterable[int]) -> None:
         ids, _ = as_1d_array(ids)

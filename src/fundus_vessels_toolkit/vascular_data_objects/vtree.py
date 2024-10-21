@@ -10,7 +10,7 @@ import pandas as pd
 
 from ..utils.lookup_array import add_empty_to_lookup, complete_lookup, invert_complete_lookup
 from ..utils.math import as_1d_array
-from ..utils.tree import has_cycle
+from ..utils.tree import find_cycles, has_cycle
 from .vgeometric_data import VBranchGeoDataKey, VGeometricData
 from .vgraph import VGraph, VGraphBranch, VGraphNode
 
@@ -309,10 +309,12 @@ class VTree(VGraph):
             If the tree is not a tree (i.e. contains cycles).
         """
         B = self.branches_count
-        assert self.branch_tree.min() >= -1, "The tree contains branches with invalid branch indexes."
-        assert self.branch_tree.max() < B, "The tree contains branches with invalid branch indexes."
-        assert np.all(self.branch_tree != np.arange(B)), "The tree contains branches that are their own parent."
-        assert not has_cycle(self.branch_tree), "The tree contains cycles."
+        assert self.branch_tree.min() >= -1, "Invalid tree: the provided branch parents contains invalid indexes."
+        assert self.branch_tree.max() < B, "Invalid tree: the provided branch parents contains invalid indexes."
+        assert np.all(self.branch_tree != np.arange(B)), "Invalid tree: some branches are their own parent."
+        assert not has_cycle(self.branch_tree), "Invalid tree: it contains the cycles " + "; ".join(
+            "{" + ", ".join(str(_) for _ in cycle) + "}" for cycle in find_cycles(self.branch_tree)
+        )
 
     def check_integrity(self):
         super().check_integrity()

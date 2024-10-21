@@ -1,10 +1,9 @@
 import itertools
 import warnings
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import numpy.typing as npt
-import skimage.segmentation as sk_seg
 
 from ..utils.cluster import cluster_by_distance, reduce_clusters
 from ..utils.geometric import Point
@@ -231,19 +230,36 @@ def simplify_av_graph(
     # === Merge all small branches that are connected to two nodes of the same type ===
     nodes_clusters = []
     unknown_nodes_clusters = []
+    max_merge_distance = max(node_merge_distance, unknown_node_merge_distance)
     for branch in graph.branches(filter="non-endpoint"):
-        if branch.node_to_node_length() < node_merge_distance:
+        if branch.node_to_node_length() < max_merge_distance:
             n1, n2 = nodes_av_attr[list(branch.nodes_id)]
+            # For this step, we consider branches with both type as unknown
+            n1 = AVLabel.UNK if n1 == AVLabel.BOTH else n1
+            n2 = AVLabel.UNK if n2 == AVLabel.BOTH else n2
+            # If the nodes are of the same type, we add the branch to the corresponding cluster
             if n1 == n2:
                 if n1 == AVLabel.UNK:
                     unknown_nodes_clusters.append(branch.nodes_id)
                 else:
                     nodes_clusters.append(branch.nodes_id)
-    nodes_clusters = cluster_by_distance(geodata.nodes_coord(), node_merge_distance, nodes_clusters, iterative=True)
-    unknown_nodes_clusters = cluster_by_distance(
-        geodata.nodes_coord(), unknown_node_merge_distance, unknown_nodes_clusters, iterative=True
-    )
-    graph.merge_nodes(nodes_clusters + unknown_nodes_clusters, inplace=True, assume_reduced=True)
+    if len(nodes_clusters):
+        nodes_clusters = cluster_by_distance(geodata.nodes_coord(), node_merge_distance, nodes_clusters, iterative=True)
+    if len(unknown_nodes_clusters):
+        unknown_nodes_clusters = cluster_by_distance(
+            geodata.nodes_coord(), unknown_node_merge_distance, unknown_nodes_clusters, iterative=True
+        )
+    if len(nodes_clusters) or len(unknown_nodes_clusters):
+        graph.merge_nodes(nodes_clusters + unknown_nodes_clusters, inplace=True, assume_reduced=True)
+
+    twin_branches = []
+    for twins in graph.twin_branches():
+        b0 = graph.branch(twins[0])
+        if b0.node_to_node_length() < unknown_node_merge_distance:
+            b0.attr[av_attr] = AVLabel.UNK
+            nodes_av_attr[b0.nodes_id] = AVLabel.UNK
+            twin_branches.extend(twins[1:])
+    graph.delete_branches(twin_branches, inplace=True)
 
     # === Remove passing nodes of same type (post-clustering) ===
     simplify_passing_nodes(graph, min_angle=passing_node_min_angle, with_same_label=av_attr, inplace=True)
@@ -411,10 +427,10 @@ def naive_vgraph_to_vtree(
 
 def build_line_digraph(
     graph: VGraph,
-    od_yx: Point,
-    macula_yx: Point | None = None,
+    fundus_data: FundusData,
     img_half_width: int = 512,
     *,
+    split_twins=True,
     av_attr: str = "av",
     passing_as_root_max_angle=30,
 ) -> Tuple[VGraph, npt.NDArray[np.int_], npt.NDArray[np.bool_], npt.NDArray[np.float64]]:
@@ -432,7 +448,7 @@ def build_line_digraph(
 
         The first array is its edge list of shape (n_edges, 2) where each row store the index of the parent branch, the index of the child branches and the index of the node connecting them.
 
-        The second array is a boolean array of shape (n_edges, 2) storing for each branch of the edge list, if it's connected through its first (True) or second (False) node.
+        The second array is is 0 or 1 array of shape (n_edges, 2) storing for each edge, the index of the nodes through which the branches are connected.
 
         The third array of shape (n_edges,) stores, for each directed edge, the probabilities of the parent branch being the parent of the child branch.
     """  # noqa: E501
@@ -443,18 +459,18 @@ def build_line_digraph(
     edge_first_tip = []
     edge_probs = []
 
-    if macula_yx is not None:
-        od_mac_dist = od_yx.distance(macula_yx)
-    else:
-        od_mac_dist = img_half_width
-        macula_yx = od_yx + Point(0, img_half_width) if od_yx.x < img_half_width else od_yx - Point(0, img_half_width)
+    macula_yx = fundus_data.macula_center if fundus_data.has_macula else fundus_data.infered_macula_center()
+    od_yx = fundus_data.od_center
+    od_mac_dist = od_yx.distance(macula_yx)
+    od_diameter = fundus_data.od_diameter
 
-    # === Split self-loop branches in 3 and twin branches in two to differentiate their tips ===
-    for b in graph.self_loop_branches():
-        graph.split_branch(b, split_curve_id=[0.3, 0.6], inplace=True)
-    for twins in graph.twin_branches():
-        for b in twins:
-            graph.split_branch(b, split_curve_id=0.5, inplace=True)
+    if split_twins:
+        # === Split self-loop branches in 3 and twin branches in two to differentiate their tips ===
+        for b in graph.self_loop_branches():
+            graph.split_branch(b, split_curve_id=[0.3, 0.6], inplace=True)
+        for twins in graph.twin_branches():
+            for b in twins:
+                graph.split_branch(b, split_curve_id=0.5, inplace=True)
 
     # === Discover virtual branch to reconnect end nodes to adjacent branches or to other end nodes ===
     virtual_endp_edges = find_facing_endpoints(graph, max_distance=100, max_angle=30, filter="closest")
@@ -484,24 +500,61 @@ def build_line_digraph(
     graph.branches_attr[av_attr].iloc[both_branches] = AVLabel.ART
     graph.branches_attr[av_attr].iloc[new_branches] = AVLabel.VEI
 
+    graph.flip_branches_direction(graph.branch_list[:, 0] > graph.branch_list[:, 1])
+
     nodes_yx = geodata.nodes_coord()
-    orphan_branches = graph.orphan_branches(as_mask=True)
+
+    out_pole_yx = od_yx.numpy()[None, :]
+    in_pole_yx = ((macula_yx - od_yx) * 1.5 + od_yx).numpy()[None, :]
+
+    def expected_tangent_sim(yx, t):
+        u_out = yx - out_pole_yx
+        norm_u_out = np.linalg.norm(u_out, axis=1)
+        out_influence = (1 / norm_u_out**2)[:, None]
+        u_out /= norm_u_out[:, None]
+
+        u_in = in_pole_yx - yx
+        norm_u_in = np.linalg.norm(u_in, axis=1)
+        in_influence = (1 / norm_u_in**2)[:, None]
+        u_in /= norm_u_in[:, None]
+
+        expected_t = (u_out * out_influence + u_in * in_influence) / (out_influence + in_influence)
+        return (t * expected_t).sum(axis=1)
+
+    # === Compute the probability associated with the orientation of each branch ===
+    branches_dir_p = np.zeros((graph.branches_count, 2), dtype=float)
+    branches_calibres = geodata.branch_data(VBranchGeoData.Fields.CALIBRES)
+    branches_tangents = geodata.branch_data(VBranchGeoData.Fields.TANGENTS)
+    branches_curves = geodata.branch_curve()
+    for branch in graph.branches():
+        branch_id = branch.id
+
+        # 1. ... based on its calibre variation
+        p_calibre = 0
+        calibre = branches_calibres[branch_id]
+        if calibre is not None and len(calibre.data) > 40:
+            n = len(calibre.data)
+            calibre = np.nanmean(calibre.data[: n // 2]) - np.nanmean(calibre.data[n // 2 :])
+            p_calibre = sigmoid(calibre / 3, antisymmetric=True)
+
+        # 2. ... based on its tangents
+        p_tan = 0
+        if branches_tangents[branch_id] is not None:
+            p_tan = expected_tangent_sim(branches_curves[branch_id], branches_tangents[branch_id].data).mean()
+
+        p_dir = p_tan * 0.3 + p_calibre * 1
+        branches_dir_p[branch_id] = p_dir, -p_dir
 
     # === Utility function to compute the edge probabilities  ===
     def root_p(node_yx, tip_tangent):
         # === Compute the probability that a branch is a root branch ===
         # 1. ... based on the distance to the optic disc
         od_dist = od_yx.distance(node_yx)
-        p_dist = 1 - od_dist / od_mac_dist
+        p_dist = (od_dist_offset := 0) - sigmoid(od_dist / od_mac_dist, antisymmetric=True)
 
         # 2. ... based on the angle between the tangent of the tip and the expected tangent
         # Expected tangent: away from the disc, toward the macula (similar to magnetic field lines)
-        u_away_od = (node_yx - od_yx).normalized()
-        u_toward_mac = (macula_yx - node_yx).normalized()
-        mac_influence = 1 / macula_yx.distance(node_yx) ** 2
-        od_influence = 1 / od_dist**2
-        expected_t = (u_away_od * od_influence + u_toward_mac * mac_influence) / (od_influence + mac_influence)
-        p_tan = tip_tangent.dot(expected_t)
+        p_tan = float(expected_tangent_sim(node_yx.numpy(), tip_tangent))
 
         return p_tan + p_dist
 
@@ -515,14 +568,15 @@ def build_line_digraph(
             p_av = 0
         else:
             p_av = 1 if av_labels[0] == av_labels[1] else -1
+        p_av *= 1 - sigmoid(od_dist / (2 * od_mac_dist))
 
         # 3. ... based on the difference of the calibres of the branches
         if np.any(np.isnan(mean_calibres)) or np.any(mean_calibres == 0):
             p_calibre = 0
         else:
-            p_calibre = (mean_calibres[0] - mean_calibres[1]) / np.max(mean_calibres)
+            p_calibre = sigmoid((mean_calibres[0] - mean_calibres[1]) / 3, antisymmetric=True) / 2
 
-        common_p = p_tan + p_av * (1 - sigmoid(od_dist / (2 * od_mac_dist))) + offset
+        common_p = p_tan + p_av + offset
         return common_p + p_calibre, common_p - p_calibre
 
     def fetch_tangents_calibre_av_labels(branch_ids, first_tip):
@@ -533,53 +587,54 @@ def build_line_digraph(
         return tip_tangents, calibres, av_labels
 
     # === Utility function to add edge to the directed line graph ===
-    def add_edge_pair(branch12, first_tip12, p12, p21):
+    def add_edge_pair(branch12, tip_id12, p12, p21):
         edge_list.append(branch12)
-        edge_first_tip.append(first_tip12)
+        edge_first_tip.append(tip_id12)
         edge_probs.append(p12)
 
         edge_list.append(branch12[::-1])
-        edge_first_tip.append(first_tip12[::-1])
+        edge_first_tip.append(tip_id12[::-1])
         edge_probs.append(p21)
 
     def add_root_edge(node: VGraphNode, tips_tangent=None):
         node_yx = Point.from_array(nodes_yx[node.id])
         tangents = node.tips_tangent(geodata) if tips_tangent is None else tips_tangent
-        for t, b in zip(tangents, node.branches(), strict=True):
+        tips = node.branches_first_node
+        for t, b, first in zip(tangents, node.branches(), tips, strict=True):
             edge_list.append([-1, b.id])
-            edge_first_tip.append([False, node.branches_first_node[0]])
+            edge_first_tip.append([0, 0 if first else 1])
             edge_probs.append(root_p(node_yx, t))
+
+    # === Find closest nodes to the optic disc for each connected component ===
+    root_nodes = np.zeros(graph.nodes_count, dtype=bool)
+    for nodes in graph.nodes_connected_graphs():
+        root_nodes[nodes[np.argmin(od_yx.distance(nodes_yx[nodes]))]] = True
 
     # === Create the directed line graph from the graph ===
     # 1. ORPHAN BRANCHES
-    for branch in graph.branches(filter="orphan"):
-        n0_yx, n1_yx = nodes_yx[branch.nodes_id]
-        tips_tangents = geodata.tips_tangent(branch.id)
-        p0 = root_p(Point.from_array(n0_yx), tips_tangents[0])
-        p1 = root_p(Point.from_array(n1_yx), tips_tangents[1])
-        edge_list.append([-1, branch.id])
-        if p0 > p1:
-            edge_first_tip.append([False, True])
-            edge_probs.append(p0)
-        else:
-            edge_first_tip.append([False, False])
-            edge_probs.append(p1)
+    # for branch in graph.branches(filter="orphan"):
+    #     n0_yx, n1_yx = nodes_yx[branch.nodes_id]
+    #     tips_tangents = geodata.tips_tangent(branch.id)
+    #     p0 = root_p(Point.from_array(n0_yx), tips_tangents[0])
+    #     p1 = root_p(Point.from_array(n1_yx), tips_tangents[1])
+    #     edge_list.append([-1, branch.id])
+    #     if p0 > p1:
+    #         edge_first_tip.append([False, True])
+    #         edge_probs.append(p0)
+    #     else:
+    #         edge_first_tip.append([False, False])
+    #         edge_probs.append(p1)
 
     for node in graph.nodes():
         node_degree = node.degree
-        if node_degree == 1:
-            # 2. LEAF NODES
-            if not orphan_branches[node.branches_ids[0]]:  # Orphan branches were processed at the beginning
-                add_root_edge(node)
+        od_dist = od_yx.distance(nodes_yx[node.id])
+        if root_nodes[node.id] or node_degree == 1 or od_dist < od_diameter * 0.75:
+            # 2. ROOT NODES
+            # if not orphan_branches[node.branches_ids[0]]:  # Orphan branches were processed at the beginning
+            add_root_edge(node)
 
-        else:
+        if node_degree > 1:
             # 3. PASSING / BRANCHING / JUNCTION NODES
-            if node_degree == 2:
-                # If passing node but with branches forming an small angle
-                tip_tangents = node.tips_tangent(geodata)
-                if np.dot(tip_tangents[0], tip_tangents[1]) >= np.cos(np.deg2rad(passing_as_root_max_angle)):
-                    add_root_edge(node, tip_tangents)
-
             od_dist = od_yx.distance(nodes_yx[node.id])
 
             # For each pairs of branches, compute the probability of the first being the parent of the second
@@ -590,9 +645,10 @@ def build_line_digraph(
             for b1, b2 in itertools.combinations(range(len(branch_ids)), 2):
                 b12 = [b1, b2]
                 p12, p21 = branch_to_branch_p(tip_tangents[b12], mean_calibres[b12], branch_av[b12], od_dist)
-                add_edge_pair(branch_ids[b12], first_tip[b12], p12, p21)
+                tip_id12 = np.where(first_tip[b12], 0, 1)
+                add_edge_pair(branch_ids[b12], tip_id12, p12, p21)
 
-    # 3. VIRTUAL EDGES: CONNECTING ENDPOINTS TOGETHER
+    # 4. VIRTUAL EDGES: CONNECTING ENDPOINTS TOGETHER
     b, t = graph.incident_branches_individual(virtual_endp_edges.flatten(), return_branch_direction=True)
     endp_branch = []
     endp_first_tips = []
@@ -604,25 +660,29 @@ def build_line_digraph(
                 endp_branch.extend([b[e][i], b[e + 1][j]])
                 endp_first_tips.extend([t[e][i], t[e + 1][j]])
                 vendp_edges.append(virtual_endp_edges[e // 2])
-    endp_branch = np.array(endp_branch, dtype=int)
-    endp_first_tips = np.array(endp_first_tips, dtype=bool)
-    virtual_endp_edges = np.array(vendp_edges, dtype=int)
+    if len(endp_branch) != 0:
+        endp_branch = np.array(endp_branch, dtype=int)
+        endp_first_tips = np.array(endp_first_tips, dtype=bool)
+        virtual_endp_edges = np.array(vendp_edges, dtype=int)
 
-    tips_tangents, calibres, av_labels = fetch_tangents_calibre_av_labels(endp_branch, endp_first_tips)
-    endp_branch = endp_branch.reshape(-1, 2)
-    endp_first_tips = endp_first_tips.reshape(-1, 2)
-    tips_tangents = tips_tangents.reshape(-1, 2, 2)
-    calibres = calibres.reshape(-1, 2)
-    av_labels = av_labels.reshape(-1, 2)
+        tips_tangents, branches_calibres, av_labels = fetch_tangents_calibre_av_labels(endp_branch, endp_first_tips)
+        endp_branch = endp_branch.reshape(-1, 2)
+        endp_first_tips = endp_first_tips.reshape(-1, 2)
+        tips_tangents = tips_tangents.reshape(-1, 2, 2)
+        branches_calibres = branches_calibres.reshape(-1, 2)
+        av_labels = av_labels.reshape(-1, 2)
 
-    for e in range(len(endp_branch)):
-        od_dist = np.mean(od_yx.distance(nodes_yx[virtual_endp_edges[e]]))
-        dist_between_endp = np.linalg.norm(np.diff(nodes_yx[virtual_endp_edges[e]]))
-        p_offset = 1 - dist_between_endp / 40
-        p12, p21 = branch_to_branch_p(tips_tangents[e], calibres[e], av_labels[e], od_dist, offset=p_offset)
-        add_edge_pair(endp_branch[e], endp_first_tips[e], p12, p21)
+        for e in range(len(endp_branch)):
+            od_dist = np.mean(od_yx.distance(nodes_yx[virtual_endp_edges[e]]))
+            dist_between_endp = np.linalg.norm(np.diff(nodes_yx[virtual_endp_edges[e]], axis=0))
+            p_offset = 1 - dist_between_endp / 40
+            p12, p21 = branch_to_branch_p(
+                tips_tangents[e], branches_calibres[e], av_labels[e], od_dist, offset=p_offset
+            )
+            tip_id12 = np.where(endp_first_tips[e], 0, 1)
+            add_edge_pair(endp_branch[e], tip_id12, p12, p21)
 
-    # 4. VIRTUAL EDGES: CONNECTING ENDPOINTS TO BRANCHES
+    # 5. VIRTUAL EDGES: CONNECTING ENDPOINTS TO BRANCHES
     for e in range(virtual_edges.shape[0]):
         endpoint_node = graph.node(virtual_edges[e, 0])
         endp_branch_ids = endpoint_node.branches_ids
@@ -639,7 +699,7 @@ def build_line_digraph(
         )
 
         od_dist = np.mean(od_yx.distance(nodes_yx[node.id]))
-        p_offset = 1 - np.linalg.norm(np.diff(nodes_yx[[endpoint_node.id, node.id]], axis=0)) / 40
+        p_offset = -np.linalg.norm(np.diff(nodes_yx[[endpoint_node.id, node.id]], axis=0)) / 40
 
         for i in range(len(endp_branch_ids)):
             for j in range(len(node_branch_ids)):
@@ -652,81 +712,184 @@ def build_line_digraph(
                 )
                 branch_id12 = endp_branch_ids[i], node_branch_ids[j]
                 first_tip12 = endp_first_tips[i], node_first_tips[j]
-                add_edge_pair(branch_id12, first_tip12, p12, p21)
+                tip_id12 = np.where(first_tip12, 0, 1)
+                add_edge_pair(branch_id12, tip_id12, p12, p21)
 
-    return graph, np.array(edge_list), np.array(edge_first_tip), np.array(edge_probs)
+    return graph, np.array(edge_list), np.array(edge_first_tip), np.array(edge_probs), branches_dir_p
 
 
 def resolve_digraph_to_vtree(
     vgraph: VGraph,
     line_list: npt.NDArray[np.int_],
-    line_tips: npt.NDArray[np.bool_],
+    line_tips: npt.NDArray[np.int_],
     line_probability: npt.NDArray[np.float64],
+    branches_dir_p: npt.NDArray[np.float64],
+    tricot: bool = True,
+    debug_info: Optional[Dict[str, Any]] = None,
 ) -> VTree:
     import networkx as nx
     from networkx.algorithms.tree.branchings import maximum_spanning_arborescence
 
-    digraph = nx.DiGraph()
-    for line, p, tips in zip(line_list, line_probability, line_tips, strict=True):
-        digraph.add_edge(*line, p=p, tips=tips)
+    if not tricot:
+        orphan_branch = vgraph.orphan_branches(as_mask=True)
 
-    optimal_tree = maximum_spanning_arborescence(digraph, attr="p", preserve_attrs=True)
-    branch_tree = {}
-    branch_dirs = {}
-    for b1, b2, info in optimal_tree.edges(data=True):
-        tips = info["tips"]
-        n1 = vgraph.branch_list[b1, 0 if tips[0] else 1]
-        n2 = vgraph.branch_list[b2, 0 if tips[1] else 1]
-        if b1 == -1 or n1 == n2:
-            branch_tree[b2] = b1
-            branch_dirs[b2] = tips[1]
+        digraph = nx.DiGraph()
+        for line, p, tips_id in zip(line_list, line_probability, line_tips, strict=True):
+            if orphan_branch[line[1]] and (already_added := digraph.edges.get(line, None)) is not None:
+                if already_added["p"] >= p:
+                    continue
+            digraph.add_edge(*line, p=p, tips=tips_id)
+
+        optimal_tree = maximum_spanning_arborescence(digraph, attr="p", preserve_attrs=True)
+        branch_tree = {}
+        branch_dirs = {}
+        for b_from, b_to, info in optimal_tree.edges(data=True):
+            tips_id = info["tips"]
+            n1 = vgraph.branch_list[b_from, tips_id[0]]
+            n2 = vgraph.branch_list[b_to, tips_id[1]]
+            if b_from == -1 or n1 == n2:
+                branch_tree[b_to] = b_from
+                branch_dirs[b_to] = tips_id[1] == 0
+            else:
+                vgraph, b_id = vgraph.add_branches([[n1, n2]], return_branch_id=True, inplace=True)
+                b_id = b_id[0]
+                branch_tree[b_id] = b_from
+                branch_dirs[b_id] = True
+                branch_tree[b_to] = b_id
+                branch_dirs[b_to] = tips_id[1] == 0
+
+        try:
+            branch_tree = np.array([branch_tree[b] for b in range(vgraph.branches_count)], dtype=int)
+            branch_dirs = np.array([branch_dirs[b] for b in range(vgraph.branches_count)], dtype=bool)
+        except KeyError:
+            raise ValueError("Some branches were not added to the tree.") from None
+    else:
+        from ..utils.cpp_extensions.fvt_cpp import maximum_weighted_independent_set
+
+        # NEW ATTEMPT TO DIFFERENTIATE ROOT TIPS AND PREVENT BRANCHES FROM BEING BOTH PRIMARY AND SECONDARY
+        # REVERSE TRICOT!!!!
+
+        print("REVERSE TRICOT")
+
+        digraph = nx.DiGraph()
+        for id, (line, p, tips_id) in enumerate(zip(line_list, line_probability, line_tips, strict=True)):
+            b_from, b_to = line + 1
+            b_from_tip_id, b_to_tip_id = tips_id
+            if b_from_tip_id == 0:
+                b_from = -b_from  # Source: First node of the source branch => the source branch is reversed
+
+            if b_to_tip_id == 1:
+                b_to = -b_to  # Target: Second node of the destination branch => the dest branch is reversed
+
+            dir_p = branches_dir_p[line[0], 0 if b_from_tip_id == 1 else 1]
+            dir_p += branches_dir_p[line[1], 0 if b_to_tip_id == 0 else 1]
+            digraph.add_edge(b_from, b_to, p=p + dir_p, id=id)
+
+        # Solve the double optimal tree (using both direction for each branch)
+        optimal_tree = maximum_spanning_arborescence(digraph, attr="p", preserve_attrs=True)
+
+        if True:
+            # Regenerate digraph using only the edges of the optimal tree
+            kept_edges = np.zeros(len(line_list), dtype=bool)
+            digraph = nx.DiGraph()
+            for b0, b1, info in optimal_tree.edges(data=True):
+                digraph.add_edge(abs(b0) - 1, abs(b1) - 1, p=info["p"], tips=[1 if b0 > 0 else 0, 0 if b1 > 0 else 1])
+                kept_edges[info["id"]] = True
+
+            optimal_tree = maximum_spanning_arborescence(digraph, attr="p", preserve_attrs=True)
+            branch_tree = {}
+            branch_dirs = {}
+            for b_from, b_to, info in optimal_tree.edges(data=True):
+                tips_id = info["tips"]
+                n1 = vgraph.branch_list[b_from, tips_id[0]]
+                n2 = vgraph.branch_list[b_to, tips_id[1]]
+                if b_from == -1 or n1 == n2:
+                    branch_tree[b_to] = b_from
+                    branch_dirs[b_to] = tips_id[1] == 0
+                else:
+                    vgraph, b_id = vgraph.add_branches([[n1, n2]], return_branch_id=True, inplace=True)
+                    b_id = b_id[0]
+                    branch_tree[b_id] = b_from
+                    branch_dirs[b_id] = True
+                    branch_tree[b_to] = b_id
+                    branch_dirs[b_to] = tips_id[1] == 0
+
+            try:
+                branch_tree = np.array([branch_tree[b] for b in range(vgraph.branches_count)], dtype=int)
+                branch_dirs = np.array([branch_dirs[b] for b in range(vgraph.branches_count)], dtype=bool)
+            except KeyError:
+                raise ValueError("Some branches were not added to the tree.") from None
+
+            if debug_info is not None:
+                debug_info["kept_edges"] = kept_edges
         else:
-            vgraph, b_id = vgraph.add_branches([[n1, n2]], return_branch_id=True, inplace=True)
-            b_id = b_id[0]
-            branch_tree[b_id] = b1
-            branch_dirs[b_id] = True
-            branch_tree[b2] = b_id
-            branch_dirs[b2] = tips[1]
+            double_branch_tree = np.zeros((vgraph.branches_count, 2), int) - 2
+            double_branch_tree_p = np.zeros((vgraph.branches_count, 2), float)
+            for B_from, B_to, info in optimal_tree.edges(data=True):
+                double_branch_tree[abs(B_to) - 1, 1 if B_to < 0 else 0] = B_from
+                double_branch_tree_p[abs(B_to) - 1, 1 if B_to < 0 else 0] = info["p"]
 
-    try:
-        branch_tree = np.array([branch_tree[b] for b in range(vgraph.branches_count)], dtype=int)
-        branch_dirs = np.array([branch_dirs[b] for b in range(vgraph.branches_count)], dtype=bool)
-    except KeyError:
-        raise ValueError("Some branches were not added to the tree.") from None
+            # Identify the subtrees
+            root_branches = np.argwhere(double_branch_tree == 0)
+            subtrees = []
+            subtrees_dirs = []
+            subtrees_p = []
 
-    # FAILED ATTEMPT TO DIFFERENTIATE ROOT TIPS AND PREVENT BRANCHES FROM BEING BOTH PRIMARY AND SECONDARY
-    # min_p = -100
-    # B = vgraph.branches_count
+            for root in root_branches:
+                p = double_branch_tree_p[tuple(root)]
+                subtree = [np.array([root[0]], dtype=int)]
+                subtree_dirs = np.zeros((vgraph.branches_count, 2), bool)
+                subtree_dirs[tuple(root)] = True
 
-    # digraph = nx.DiGraph()
-    # for b in range(1, vgraph.branches_count + 1):
-    #     digraph.add_edge(0, -b, p=min_p)  # ∅ -> -b0
-    #     digraph.add_edge(0, -B - b, p=min_p)  # ∅ -> -b1
-    #     digraph.add_edge(-b, B + b, p=0)  # -b0 -> b1+
-    #     digraph.add_edge(-B - b, b, p=0)  # -b1 -> b0+
+                root = root[0] + 1 if root[1] == 0 else -(root[0] + 1)
+                active_branches = np.array([root], dtype=int)
 
-    # for line, p, tips in zip(line_list, line_probability, line_tips, strict=True):
-    #     b_out, b_in = line + 1
-    #     tip_in, tip_out = tips
-    #     if not tip_in:
-    #         b_in += B
-    #     if b_out != 0 and tip_out:
-    #         b_out += B
-    #     digraph.add_edge(b_out, -b_in, p=p)
+                while active_branches.size > 0:
+                    direct_branch = np.argwhere(np.isin(double_branch_tree[:, 0], active_branches)).flatten()
+                    if direct_branch.size != 0:
+                        assert not subtree_dirs[direct_branch].any(), "The optimal arborescence contains cycles."
+                        subtree_dirs[direct_branch, 0] = True
+                        p += double_branch_tree_p[direct_branch, 0].sum()
+                        subtree.append(direct_branch)
 
-    # optimal_tree = maximum_spanning_arborescence(digraph, attr="p")
-    # set_branches = np.zeros(vgraph.branches_count, dtype=bool)
-    # branch_tree = np.empty(vgraph.branches_count, int)
-    # branch_dirs = np.empty(vgraph.branches_count, bool)
-    # for B1, B2 in optimal_tree.edges():
-    #     b1 = B1 % B - 1
-    #     b2 = -B2 % B - 1
-    #     if B1 < 0 or (B1 == 0 and set_branches[b2]):
-    #         continue
-    #     assert b2 != b1, "A branch cannot be its own parent."
-    #     branch_tree[b2] = b1
-    #     branch_dirs[b2] = -B2 > B
-    #     set_branches[b2] = True
+                    inverse_branch = np.argwhere(np.isin(double_branch_tree[:, 1], active_branches)).flatten()
+                    if inverse_branch.size != 0:
+                        assert not subtree_dirs[inverse_branch].any(), "The optimal arborescence contains cycles."
+                        subtree_dirs[inverse_branch, 1] = True
+                        p += double_branch_tree_p[inverse_branch, 1].sum()
+                        subtree.append(inverse_branch)
+
+                    active_branches = np.concatenate([direct_branch + 1, -(inverse_branch + 1)])
+
+                subtrees.append(np.concatenate(subtree))
+                subtrees_dirs.append(subtree_dirs)
+                subtrees_p.append(p)
+
+            # Solve for the maximal weighted independent set of subtrees
+            # (the set may not contains two trees sharing a branch, we search the forest providing the highest probability)
+            trees_mutually_exclusive = []
+            for s1, s2 in itertools.combinations(range(len(subtrees_dirs)), 2):
+                if (subtrees_dirs[s1].any(axis=1) & subtrees_dirs[s2].any(axis=1)).any():
+                    trees_mutually_exclusive.append((s1, s2))
+
+            subtrees_p = np.array(subtrees_p, dtype=float)  # + np.array([s.sum() for s in subtrees_dirs]) * 10
+            if subtrees_p.min() < 0:
+                subtrees_p -= subtrees_p.min() - 1
+            optimal_forest = maximum_weighted_independent_set(trees_mutually_exclusive, subtrees_p)
+
+            # Reconstruct the tree from the optimal forest
+            branch_tree = np.zeros(vgraph.branches_count, int) - 1
+            branch_dirs = np.zeros(vgraph.branches_count, bool)
+            for s in optimal_forest:
+                subtree_branches = subtrees_dirs[s]
+                b, dirs = np.where(subtree_branches)
+                branch_tree[b] = abs(double_branch_tree[b, dirs]) - 1
+                branch_dirs[b] = dirs == 0
+
+            if debug_info is not None:
+                debug_info["subtrees"] = subtrees_dirs
+                debug_info["subtrees_p"] = subtrees_p
+                debug_info["optimal_forest"] = optimal_forest
 
     vtree = VTree.from_graph(vgraph, branch_tree, branch_dirs, copy=False)
     return vtree
@@ -747,18 +910,19 @@ def inspect_digraph_solving(
     pn.extension("tabulator")
 
     graph = graph.copy()
-    macula_yx = fundus_data.macula_center if fundus_data.has_macula else None
 
     # === Compute and solve the digraph ===
-    graph, line_list, line_tips, line_probability = build_line_digraph(
+    graph, line_list, line_tips, line_probability, branches_dir_p = build_line_digraph(
         graph,
-        fundus_data.od_center,
-        macula_yx,
-        fundus_data.shape[1] // 2,
+        fundus_data,
         av_attr=av_attr,
         passing_as_root_max_angle=passing_as_root_max_angle,
     )
-    tree = resolve_digraph_to_vtree(graph.copy(), line_list, line_tips, line_probability)
+    B = graph.branches_count
+    debug_info = {}
+    tree = resolve_digraph_to_vtree(
+        graph.copy(), line_list, line_tips, line_probability, branches_dir_p, debug_info=debug_info
+    )
     tree.branches_attr["subtree"] = tree.subtrees_branch_labels()
 
     # === Create the graph views ===
@@ -774,7 +938,7 @@ def inspect_digraph_solving(
         from jppype.utils.color import colormap_by_name
 
         colormap = colormap_by_name()
-        colormap = ["red", "blue", "purple", "green", "orange", "cyan", "pink", "brown", "teal", "lime"]
+        colormap = ["red", "blue", "purple", "green", "orange", "cyan", "pink", "yellow", "teal", "lime"]
         return colormap[x % len(colormap)]
 
     m = Mosaic(2)
@@ -798,15 +962,27 @@ def inspect_digraph_solving(
     m.show()
 
     # === Create the graph views ===
+    branch_anc = tree.branch_tree[line_list[:, 1]]
+    b0, b1 = line_list.T
+    tip0, tip1 = line_tips.T
+
+    # line_subtrees = np.full(b0.shape, "", dtype=object)
+    # for i, s in enumerate(debug_info["subtrees"]):
+    #     line_subtrees[s[b0, tip0] & s[b1, tip1]] = str(i)
+
     lines_data = pd.DataFrame(
         {
-            "b0": line_list[:, 0],
-            "b1": line_list[:, 1],
-            "n0": tree.branch_list[line_list[:, 0], np.where(line_tips[:, 0], 0, 1)],
-            "n1": tree.branch_list[line_list[:, 1], np.where(line_tips[:, 1], 0, 1)],
-            "tree1": tree.branches_attr["subtree"][line_list[:, 1]].to_numpy(),
+            "b0": b0,
+            "b1": b1,
+            "n0": tree.branch_list[b0, tip0],
+            "n1": tree.branch_list[b1, tip1],
+            "tree1": tree.branches_attr["subtree"][b1].to_numpy(),
             "p": line_probability,
-            "optimal": tree.branch_tree[line_list[:, 1]] == line_list[:, 0],
+            "dir0_p": branches_dir_p[b0, np.where(tip0 == 1, 0, 1)],
+            "dir1_p": branches_dir_p[b1, np.where(tip1 == 0, 0, 1)],
+            "optimal": ((branch_anc == b0) | ((branch_anc > B) & (tree.branch_tree[branch_anc] == b0))),
+            # "subtree": line_subtrees,
+            "kept": debug_info.get("kept_edges", np.zeros(b0.shape, dtype=bool)),
         }
     )
     root_data = lines_data[lines_data["b0"] == -1]
@@ -814,7 +990,12 @@ def inspect_digraph_solving(
     non_root_data = lines_data[lines_data["b0"] != -1]
 
     def highlight_optimal(row):
-        return ["background-color: #fff8d7"] * len(row) if row["optimal"] else [""] * len(row)
+        if row["optimal"]:
+            return ["background-color: #fff8d7"] * len(row)
+        elif row["kept"]:  # row["subtree"] != "":
+            return ["background-color: #f8d7ff"] * len(row)
+        else:
+            return [""] * len(row)
 
     tab_opt = dict(
         show_index=False,
@@ -824,7 +1005,13 @@ def inspect_digraph_solving(
         align="center",
         pagination=None,
         header_filters=True,
-        formatters={"p": NumberFormatter(format="0.000"), "optimal": BooleanFormatter(icon="check-circle")},
+        formatters={
+            "p": NumberFormatter(format="0.000"),
+            "dir0_p": NumberFormatter(format="0.000"),
+            "dir1_p": NumberFormatter(format="0.000"),
+            "optimal": BooleanFormatter(icon="check-circle"),
+            "kept": BooleanFormatter(icon="check-circle"),
+        },
     )
     root_table = pn.widgets.Tabulator(
         root_data,
@@ -840,6 +1027,13 @@ def inspect_digraph_solving(
         **tab_opt,
     )
     non_root_table.style.apply(highlight_optimal, axis=1)
+    non_root_table2 = pn.widgets.Tabulator(
+        non_root_data,
+        editors={k: None for k in non_root_data.columns},
+        text_align={k: "center" for k in non_root_data.columns},
+        **tab_opt,
+    )
+    non_root_table2.style.apply(highlight_optimal, axis=1)
 
     def focus_on_root(event):
         coord = tree.nodes_coord()[root_data["n1"].iloc[event.row]]
@@ -851,9 +1045,10 @@ def inspect_digraph_solving(
 
     root_table.on_click(focus_on_root)
     non_root_table.on_click(focus_on_non_root)
+    non_root_table2.on_click(focus_on_non_root)
 
     return (
-        pn.Row(root_table, pn.Spacer(width=10), non_root_table, height=400),
+        pn.Row(root_table, pn.Spacer(width=10), non_root_table, pn.Spacer(width=10), non_root_table2, height=400),
         graph,
         tree,
         lines_data,

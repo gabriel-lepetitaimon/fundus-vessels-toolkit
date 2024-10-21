@@ -2,7 +2,7 @@ from typing import Tuple
 
 import numpy as np
 
-from ..utils.cpp_extensions.graph_cpp import shortest_secondary_path as cpp_shortest_path
+from ..utils.cpp_extensions.fvt_cpp import shortest_secondary_path as cpp_shortest_path
 from ..vascular_data_objects.vgraph import VGraph
 from .node_matching import match_nodes_by_distance
 

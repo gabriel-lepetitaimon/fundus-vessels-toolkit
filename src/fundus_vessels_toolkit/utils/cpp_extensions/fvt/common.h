@@ -161,6 +161,8 @@ struct Point {
         merge : std::vector<IntPoint> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
 #pragma omp declare reduction( \
         merge : std::vector<std::vector<IntPoint>> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
+#pragma omp declare reduction( \
+        merge : std::vector<int> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
 
 using CurveYX = std::vector<IntPoint>;
 using Vector = Point;
@@ -365,7 +367,7 @@ using EdgeList = std::vector<Edge>;
 using GraphAdjList = std::vector<std::set<Edge>>;
 #pragma omp declare reduction(merge : std::vector<Edge> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
 
-GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N = -1, bool directed = false);
+GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N = -1, bool directed = false, bool keep_orientation = true);
 GraphAdjList edge_list_to_adjlist(const EdgeList& edges, int N = -1, bool directed = false);
 GraphAdjList edge_list_to_adjlist(const Tensor2DAcc<int>& edges, int N = -1, bool directed = false);
 
