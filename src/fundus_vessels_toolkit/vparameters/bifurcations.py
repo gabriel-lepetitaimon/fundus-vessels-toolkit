@@ -27,26 +27,38 @@ def bifurcations_biomarkers(d0, d1, d2, θ1, θ2, *, as_dict=True) -> Dict[str, 
     """
     θ_branching = θ1 + θ2
     θ_assymetry = abs(θ1 - θ2)
+
     assymetry_ratio = d2**2 / d1**2
     branching_coefficient = (d1 + d2) ** 2 / d0**2
+    area_ratio = d1**2 + d2**2 / d0**2
 
     # Optimality Ratio: https://link.springer.com/content/pdf/10.1016/j.artres.2010.06.003.pdf
     optimality_ratio = ((d1**3 + d2**3) / 2 * d0**3) ** (1 / 3)
     optimality_dev = abs(optimality_ratio - 1 / 2 ** (1 / 3))
 
-    junctional_exponent_dev = abs(d0**3 - d1**3 - d2**3) ** (1 / 3) / d0
+    junctional_exponent_dev = (abs(d0**3 - d1**3 - d2**3) ** (1 / 3)) / d0
 
     if as_dict:
         return {
             "θ_branching": θ_branching,
             "θ_assymetry": θ_assymetry,
             "assymetry_ratio": assymetry_ratio,
+            "branching_coefficient": branching_coefficient,
+            "area_ratio": area_ratio,
             "optimality_ratio": optimality_ratio,
             "optimality_dev": optimality_dev,
             "junctional_exponent_dev": junctional_exponent_dev,
-            "branching_coefficient": branching_coefficient,
         }
-    return [θ_branching, θ_assymetry, assymetry_ratio, branching_coefficient]
+    return [
+        θ_branching,
+        θ_assymetry,
+        assymetry_ratio,
+        branching_coefficient,
+        area_ratio,
+        optimality_ratio,
+        optimality_dev,
+        junctional_exponent_dev,
+    ]
 
 
 def parametrize_bifurcations(

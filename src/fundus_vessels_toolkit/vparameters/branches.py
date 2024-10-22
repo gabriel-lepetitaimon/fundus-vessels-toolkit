@@ -71,8 +71,20 @@ def parametrize_branches(vgraph: VGraph, fundus_data: Optional[FundusData] = Non
         std_calibre = np.std(calibres)
         mean_curvature = np.mean(curvature)
         std_curvature = np.std(curvature)
+        curve_arc = arc(curve)
 
-        params = [branch.id, arc(curve), chord(curve), mean_calibre, std_calibre, mean_curvature, std_curvature]
+        length_diameter_ratio = curve_arc / mean_calibre
+
+        params = [
+            branch.id,
+            curve_arc,
+            chord(curve),
+            mean_calibre,
+            std_calibre,
+            mean_curvature,
+            std_curvature,
+            length_diameter_ratio,
+        ]
         tortuosities = branch_tortuosity(curve, curvature, curv_roots, as_dict=False)
 
         if all_bsplines is not None:
@@ -83,7 +95,16 @@ def parametrize_branches(vgraph: VGraph, fundus_data: Optional[FundusData] = Non
 
         branches_params.append(params + tortuosities + bspline_tortuosities)
 
-    columns = ["branch", "arc", "chord", "mean_calibre", "std_calibre", "mean_curvature", "std_curvature"]
+    columns = [
+        "branch",
+        "arc",
+        "chord",
+        "mean_calibre",
+        "std_calibre",
+        "mean_curvature",
+        "std_curvature",
+        "length_diameter_ratio",
+    ]
     columns += TORTUOSITY_KEYS
     if all_bsplines is not None:
         columns += BSPLINE_TORTUOSITY_KEYS
