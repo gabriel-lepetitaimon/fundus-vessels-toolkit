@@ -1,3 +1,4 @@
+import warnings
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -227,6 +228,14 @@ def parametrize_bifurcations(
     df = pd.DataFrame(bifurcations, columns=columns)
 
     if fundus_data is not None:
+        if len(bifurcations_yx) == 0 or all(len(_) == 0 for _ in bifurcations_yx):
+            warnings.warn(
+                "No bifurcations was found in the provided VTree"
+                + (f" (for image: {fundus_data.name})" if fundus_data.has_name else "")
+                + "."
+            )
+            return df
+
         bifurcations_yx = np.stack(bifurcations_yx)
         if fundus_data.has_macula:
             df.insert(4, "dist_macula", fundus_data.macula_center.distance(bifurcations_yx))
