@@ -11,6 +11,7 @@ __all__ = [
     "SimplifyTopology",
 ]
 
+import warnings
 from dataclasses import dataclass
 from typing import List, Literal, Optional, Tuple, TypeAlias
 
@@ -685,8 +686,9 @@ def find_endpoints_branches_intercept(
         max_distance,
         np.deg2rad(2 * angle_tolerance),
     )
-    # if nearest_branch.max() > len(branch_list):
-    #     nearest_branch[nearest_branch > len(branch_list)] = -1
+    if nearest_branch.max() > len(branch_list):
+        warnings.warn("Invalid nearest branch index.")
+        nearest_branch[nearest_branch > len(branch_list)] = -1
     nearest_branch = nearest_branch.numpy()
     intercept = intercept.numpy()
 
