@@ -508,7 +508,7 @@ class VGeometricData:
         domain_shape = self.domain.size
         top_left = np.array([self.domain.top, self.domain.left])
         curves = [
-            torch.empty((0, 2), dtype=int) if c is None else torch.from_numpy(c - top_left).int()
+            torch.empty(0, 2, dtype=int) if c is None else torch.from_numpy(c - top_left).int()
             for c in self.branch_curve()
         ]
         branches_label_map = np.zeros(domain_shape, dtype=np.int32)
@@ -516,9 +516,11 @@ class VGeometricData:
             nodes_coord = torch.from_numpy(self.nodes_coord(graph_index=False) - top_left).int()
             branch_list = torch.from_numpy(self.parent_graph.branch_list).int()
         else:
-            nodes_coord = torch.empty((0, 2), dtype=int)
-            branch_list = torch.empty((0, 2), dtype=int)
-        draw_branches_labels(curves, torch.from_numpy(branches_label_map), nodes_coord, branch_list)
+            nodes_coord = torch.empty(0, 2, dtype=int)
+            branch_list = torch.empty(0, 2, dtype=int)
+        branches_label_map = torch.from_numpy(branches_label_map)
+        draw_branches_labels(curves, branches_label_map, nodes_coord, branch_list)
+        branches_label_map = branches_label_map.numpy()
 
         if calibre_attr is not None:
             from skimage.draw import line

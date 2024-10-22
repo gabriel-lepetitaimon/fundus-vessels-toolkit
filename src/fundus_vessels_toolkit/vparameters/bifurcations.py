@@ -157,7 +157,8 @@ def parametrize_bifurcations(
             if np.isnan(tertiary_tangents[i]).any() or np.sum(tertiary_tangents[i]) == 0:
                 # If the tangent is not available, fallback to the difference of nodes coordinates
                 tertiary_tangents[i] = np.diff(gdata.nodes_coord(list(ter_branch.directed_nodes_id)), axis=0)[0]
-                tertiary_tangents[i] /= np.linalg.norm(tertiary_tangents[i])
+                if (tertiary_tangents[i] != 0).any():
+                    tertiary_tangents[i] /= np.linalg.norm(tertiary_tangents[i])
 
         # === Select the secondary branch (main successor) ===
         second_branch_i = 0
