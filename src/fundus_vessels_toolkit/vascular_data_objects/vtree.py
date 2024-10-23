@@ -12,7 +12,7 @@ from ..utils.lookup_array import add_empty_to_lookup, complete_lookup, invert_co
 from ..utils.math import as_1d_array
 from ..utils.tree import find_cycles, has_cycle
 from .vgeometric_data import VBranchGeoDataKey, VGeometricData
-from .vgraph import VGraph, VGraphBranch, VGraphNode
+from .vgraph import IndexesLike, VGraph, VGraphBranch, VGraphNode
 
 
 ########################################################################################################################
@@ -425,6 +425,16 @@ class VTree(VGraph):
         """
         return np.argwhere(self._branch_tree == -1).flatten()
 
+    def leaf_branches_ids(self) -> np.ndarray:
+        """Return the indexes of the leaf branches.
+
+        Returns
+        -------
+        np.ndarray
+            The indexes of the leaf branches.
+        """
+        return np.setdiff1d(np.arange(self.branches_count), self._branch_tree)
+
     def tree_branch_list(self) -> npt.NDArray[np.int_]:
         """Return the list of branches of the tree.
 
@@ -539,7 +549,7 @@ class VTree(VGraph):
         assert set_branches.all(), "Some branches were not assigned to a subtree."
         return labels
 
-    def branch_head(self, branch_id: int | npt.ArrayLike[int]) -> int | npt.NDArray[np.int_]:
+    def branch_head(self, branch_id: Optional[int | npt.ArrayLike[int]] = None) -> int | npt.NDArray[np.int_]:
         """Return the head node(s) of the given branch(es).
 
         Parameters
@@ -552,13 +562,21 @@ class VTree(VGraph):
         np.ndarray
             The indexes of the head nodes.
         """
-        branch_id, is_single = as_1d_array(branch_id, dtype=int)
-        heads = self._branch_list[branch_id]
-        if self._branch_dirs is not None:
-            heads = heads[:, np.where(self._branch_dirs[branch_id], 1, 0)]
+
+        if branch_id is None:
+            branch_list = self._branch_list
+            is_single = False
+        else:
+            branch_id, is_single = self.as_branches_ids(branch_id, return_single=True)
+            branch_list = self._branch_list[branch_id]
+        if self._branch_dirs is None:
+            heads = branch_list[:, 1]
+        else:
+            branch_dir = self._branch_dirs if branch_id is None else self._branch_dirs[branch_id]
+            heads = np.take_along_axis(branch_list, np.where(branch_dir, 1, 0)[:, None], axis=1)[:, 0]
         return heads[0] if is_single else heads
 
-    def branch_tail(self, branch_id: int | npt.ArrayLike[int]) -> int | npt.NDArray[np.int_]:
+    def branch_tail(self, branch_id: Optional[int | npt.ArrayLike[int]] = None) -> int | npt.NDArray[np.int_]:
         """Return the tail node(s) of the given branch(es).
 
         Parameters
@@ -571,10 +589,18 @@ class VTree(VGraph):
         np.ndarray
             The indexes of the tail nodes.
         """
-        branch_id, is_single = as_1d_array(branch_id, dtype=int)
-        tails = self._branch_list[branch_id]
-        if self._branch_dirs is not None:
-            tails = tails[:, np.where(self._branch_dirs[branch_id], 0, 1)]
+        if branch_id is None:
+            branch_list = self._branch_list
+            is_single = False
+        else:
+            is_single = np.isscalar(branch_id)
+            branch_id = self.as_branches_ids(branch_id)
+            branch_list = self._branch_list[branch_id]
+        if self._branch_dirs is None:
+            tails = branch_list[:, 0]
+        else:
+            branch_dir = self._branch_dirs if branch_id is None else self._branch_dirs[branch_id]
+            tails = np.take_along_axis(branch_list, np.where(branch_dir, 0, 1)[:, None], axis=1)[:, 0]
         return tails[0] if is_single else tails
 
     def walk(
@@ -627,7 +653,26 @@ class VTree(VGraph):
         if self._branch_dirs is not None:
             node_id = np.where(self._branch_dirs[root_branches], 0, 1)
             root_nodes = np.take_along_axis(root_nodes, node_id[:][:, None], axis=1).squeeze(1)
+        else:
+            root_nodes = root_nodes[:, 0]
         return np.unique(root_nodes)
+
+    def leaf_nodes_ids(self) -> npt.NDArray[np.int_]:
+        """Return the indexes of the leaf nodes.
+
+        Returns
+        -------
+        np.ndarray
+            The indexes of the leaf nodes.
+        """
+        leaf_branches = np.setdiff1d(np.arange(self.branches_count), self._branch_tree)
+        leaf_nodes = self._branch_list[leaf_branches]
+        if self._branch_dirs is not None:
+            node_id = np.where(self._branch_dirs[leaf_branches], 1, 0)
+            leaf_nodes = np.take_along_axis(leaf_nodes, node_id[:][:, None], axis=1).squeeze(1)
+        else:
+            leaf_nodes = leaf_nodes[:, 1]
+        return np.unique(leaf_nodes)
 
     def node_incoming_branches(self, node_id: int | npt.ArrayLike[int]) -> npt.NDArray[np.int_]:
         """Return the ingoing branches of the given node(s).
@@ -855,7 +900,8 @@ class VTree(VGraph):
             return self
         return self.flip_branches_direction(np.argwhere(~self._branch_dirs).flatten())
 
-    def flip_branches_direction(self, branches_id: int | Iterable[int]) -> VTree:
+    def flip_branches_direction(self, branches_id: IndexesLike) -> VTree:
+        branches_id = self.as_branches_ids(branches_id)
         super().flip_branches_direction(branches_id)
 
         if self._branch_dirs is None:
@@ -877,7 +923,7 @@ class VTree(VGraph):
 
     def delete_branches(
         self,
-        branch_indexes: int | npt.ArrayLike[int],
+        branch_indexes: IndexesLike,
         delete_orphan_nodes=True,
         *,
         delete_successors=False,
@@ -887,7 +933,7 @@ class VTree(VGraph):
 
         Parameters
         ----------
-        branch_indexes : int | npt.ArrayLike[int]
+        branch_indexes : IndexesLike
             The indexes of the branches to remove.
 
         delete_orphan_nodes : bool, optional
@@ -909,7 +955,7 @@ class VTree(VGraph):
         """  # noqa: E501
         tree = self.copy() if not inplace else self
 
-        branch_indexes = np.atleast_1d(branch_indexes).astype(int).flatten()
+        branch_indexes = tree.as_branches_ids(branch_indexes)
         if delete_successors:
             branch_indexes = np.unique(np.concatenate([branch_indexes, tree.branch_successors(branch_indexes)]))
         else:
@@ -918,14 +964,34 @@ class VTree(VGraph):
                     branch_indexes[np.where(tree.branch_has_successors(branch_indexes))[0]], branch_indexes
                 )
             ).size == 0, f"The branches {branch_indexes[invalid]} can't be deleted: they still have successors."
-        super(self.__class__, tree).delete_branches(
+        super(tree.__class__, tree).delete_branches(
             branch_indexes, delete_orphan_nodes=delete_orphan_nodes, inplace=True
         )
-        return self
+        return tree
+
+    def delete_nodes(self, node_indexes: IndexesLike, *, inplace: bool = False) -> VTree:
+        """Remove the nodes with the given indexes from the tree.
+
+        Parameters
+        ----------
+        node_indexes : IndexesLike
+            The indexes of the nodes to remove.
+
+        inplace : bool, optional
+            If True (by default), the tree is modified in place. Otherwise, a new tree is returned.
+
+        Returns
+        -------
+        VTree
+            The modified tree.
+        """
+        tree = self.copy() if not inplace else self
+        super(tree.__class__, tree).delete_nodes(node_indexes, inplace=True)
+        return tree
 
     def fuse_nodes(
         self,
-        nodes: npt.NDArray[np.int_],
+        nodes: IndexesLike,
         *,
         quiet_invalid_node=False,
         inplace=False,
@@ -937,7 +1003,7 @@ class VTree(VGraph):
 
         Parameters
         ----------
-        nodes : npt.NDArray
+        nodes : IndexesLike
             Array of indexes of the nodes to fuse.
 
         quiet_invalid_node : bool, optional
@@ -956,7 +1022,7 @@ class VTree(VGraph):
         VTree
             The modified tree.
         """
-        nodes = np.atleast_1d(nodes).astype(int).flatten()
+        nodes = self.as_nodes_ids(nodes)
 
         if not quiet_invalid_node:
             assert (
@@ -999,14 +1065,14 @@ class VTree(VGraph):
         tree._branch_tree = np.delete(del_lookup[branch_tree + 1], del_branch)
         return tree
 
-    def merge_nodes(self, nodes: npt.NDArray[np.int_], *, inplace=False) -> VTree:
+    def merge_nodes(self, nodes: IndexesLike, *, inplace=False) -> VTree:
         """Merge the given nodes into a single node.
 
         The nodes are removed from the tree and their corresponding branches are merged.
 
         Parameters
         ----------
-        nodes : npt.NDArray
+        nodes : IndexesLike
             Array of indexes of the nodes to merge.
 
         inplace : bool, optional

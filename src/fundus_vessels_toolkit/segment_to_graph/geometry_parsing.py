@@ -1,8 +1,10 @@
+import warnings
 from typing import Literal, Optional
 
 import numpy as np
 
 from ..utils.graph.measures import extract_branch_geometry
+from ..utils.math import intercept_segment
 from ..vascular_data_objects import FundusData, VBranchGeoData, VGraph
 
 
@@ -220,3 +222,56 @@ def derive_tips_geometry_from_curve_geometry(
         gdata.set_branch_data(VBranchGeoData.Fields.TIPS_BOUNDARIES, tips_bounds, graph_index=False, no_check=True)
 
     return vgraph
+
+
+def center_junction_nodes(
+    graph: VGraph, *, tangent_tips: VBranchGeoData.Key = VBranchGeoData.Fields.TIPS_TANGENT, inplace: bool = False
+) -> VGraph:
+    """Place the nodes at the center of the branches bifurcations.
+
+    Each node which has three incident branches or more is placed at the barycenter of the intersection of the tangents from the branches tips.
+
+    Parameters
+    ----------
+    graph : VGraph
+        The graph to center the nodes of.
+
+    tangent_tips : VBranchGeoData.Fields.TIPS_TANGENT
+        The field containing the tangent of the tips of the branches.
+
+    inplace : bool, optional
+        If True, the graph is modified in place, by default False.
+
+    Returns
+    -------
+    VGraph
+        The graph with the nodes centered.
+    """  # noqa: E501
+    if not inplace:
+        graph = graph.copy()
+
+    for gdata in graph._geometric_data:
+        tips_data = gdata.tip_data_around_node(attrs=[tangent_tips], graph_index=False)
+        all_tips_yx = tips_data["yx"]
+        all_tips_t = tips_data[tangent_tips]
+
+        for node_id, (tips_yx, tips_t) in enumerate(zip(all_tips_yx, all_tips_t, strict=True)):
+            n_branch = len(tips_yx)
+            if n_branch < 3:
+                continue
+
+            # Compute the tangent intersections
+            a0, a1, b0, b1 = [], [], [], []
+            intercepts = []
+            for t0 in range(n_branch - 1):
+                a0 = tips_yx[t0]
+                a1 = tips_yx[t0] - tips_t[t0]
+                b0 = tips_yx[t0 + 1 :]
+                b1 = tips_yx[t0 + 1 :] - tips_t[t0 + 1 :]
+                intercepts.append(intercept_segment(a0, a1, b0, b1, a1_bound=False, b1_bound=False).squeeze(0))
+            intercepts = np.concatenate(intercepts)
+            intercepts = intercepts[np.isfinite(intercepts).all(axis=1)]
+            if len(intercepts):
+                gdata._nodes_coord[node_id] = intercepts.mean(axis=0)
+
+    return graph

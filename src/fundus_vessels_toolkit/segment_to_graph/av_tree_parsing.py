@@ -274,17 +274,62 @@ def simplify_av_graph(
     return graph
 
 
-def naive_av_split(graph: VGraph, *, av_attr: str = "av") -> Tuple[VGraph, VGraph]:
-    n_attr = graph.nodes_attr
-    a_graph = graph.delete_nodes(n_attr.index[n_attr[av_attr] == AVLabel.VEI].to_numpy(), inplace=False)
-    v_graph = graph.delete_nodes(n_attr.index[n_attr[av_attr] == AVLabel.ART].to_numpy(), inplace=False)
+def split_av_graph(
+    graph: VGraph, *, av_attr: str = "av", simplify: bool = True, center_junction_nodes: bool = True
+) -> Tuple[VGraph, VGraph]:
+    # n_attr = graph.nodes_attr
+    # a_graph = graph.delete_nodes(n_attr.index[n_attr[av_attr] == AVLabel.VEI].to_numpy(), inplace=False)
+    # v_graph = graph.delete_nodes(n_attr.index[n_attr[av_attr] == AVLabel.ART].to_numpy(), inplace=False)
 
-    b_attr = a_graph.branches_attr
-    a_graph.delete_branches(b_attr.index[b_attr[av_attr] == AVLabel.VEI].to_numpy(), inplace=True)
-    b_attr = v_graph.branches_attr
-    v_graph.delete_branches(b_attr.index[b_attr[av_attr] == AVLabel.ART].to_numpy(), inplace=True)
+    b_attr = graph.branches_attr
+    a_graph = graph.delete_branches(b_attr[av_attr] == AVLabel.VEI, inplace=False)
+    # b_attr = v_graph.branches_attr
+    v_graph = graph.delete_branches(b_attr[av_attr] == AVLabel.ART, inplace=False)
+
+    if simplify:
+        from .graph_simplification import simplify_passing_nodes
+
+        simplify_passing_nodes(a_graph, with_same_label=av_attr, inplace=True)
+        simplify_passing_nodes(v_graph, with_same_label=av_attr, inplace=True)
+
+    if center_junction_nodes:
+        from .geometry_parsing import center_junction_nodes
+
+        center_junction_nodes(a_graph, inplace=True)
+        center_junction_nodes(v_graph, inplace=True)
 
     return a_graph, v_graph
+
+
+def relabel_av_by_subtree(tree: VTree, *, av_attr: str = "av", inplace: bool = False) -> VTree:
+    """Relabel the branches of a tree based on the most common label of its subtree.
+
+    Parameters
+    ----------
+    tree : VTree
+        Tree to relabel.
+
+    av_attr : str, optional
+        Name of the attribute storing the AV labels.
+
+    inplace : bool, optional
+        If True, the tree is modified in place.
+
+    Returns
+    -------
+    VTree
+        The relabeled tree.
+    """
+    if not inplace:
+        tree = tree.copy()
+
+    for root in tree.root_branches_ids():
+        subtree = np.concatenate([[root], tree.branch_successors(root, max_depth=None)])
+        subtree_av = tree.branches_attr.loc[subtree, av_attr].fillna(AVLabel.UNK)
+        label = np.bincount(subtree_av, minlength=5)[1:3].argmax()
+        label = AVLabel.ART if label == 0 else AVLabel.VEI
+        tree.branches_attr.loc[subtree, av_attr] = label
+    return tree
 
 
 def naive_vgraph_to_vtree(
@@ -724,53 +769,16 @@ def resolve_digraph_to_vtree(
     line_tips: npt.NDArray[np.int_],
     line_probability: npt.NDArray[np.float64],
     branches_dir_p: npt.NDArray[np.float64],
-    tricot: bool = True,
+    *,
+    pre_filter_line: bool = True,
     debug_info: Optional[Dict[str, Any]] = None,
 ) -> VTree:
     import networkx as nx
     from networkx.algorithms.tree.branchings import maximum_spanning_arborescence
 
-    if not tricot:
-        orphan_branch = vgraph.orphan_branches(as_mask=True)
+    orphan_branch = vgraph.orphan_branches(as_mask=True)
 
-        digraph = nx.DiGraph()
-        for line, p, tips_id in zip(line_list, line_probability, line_tips, strict=True):
-            if orphan_branch[line[1]] and (already_added := digraph.edges.get(line, None)) is not None:
-                if already_added["p"] >= p:
-                    continue
-            digraph.add_edge(*line, p=p, tips=tips_id)
-
-        optimal_tree = maximum_spanning_arborescence(digraph, attr="p", preserve_attrs=True)
-        branch_tree = {}
-        branch_dirs = {}
-        for b_from, b_to, info in optimal_tree.edges(data=True):
-            tips_id = info["tips"]
-            n1 = vgraph.branch_list[b_from, tips_id[0]]
-            n2 = vgraph.branch_list[b_to, tips_id[1]]
-            if b_from == -1 or n1 == n2:
-                branch_tree[b_to] = b_from
-                branch_dirs[b_to] = tips_id[1] == 0
-            else:
-                vgraph, b_id = vgraph.add_branches([[n1, n2]], return_branch_id=True, inplace=True)
-                b_id = b_id[0]
-                branch_tree[b_id] = b_from
-                branch_dirs[b_id] = True
-                branch_tree[b_to] = b_id
-                branch_dirs[b_to] = tips_id[1] == 0
-
-        try:
-            branch_tree = np.array([branch_tree[b] for b in range(vgraph.branches_count)], dtype=int)
-            branch_dirs = np.array([branch_dirs[b] for b in range(vgraph.branches_count)], dtype=bool)
-        except KeyError:
-            raise ValueError("Some branches were not added to the tree.") from None
-    else:
-        from ..utils.cpp_extensions.fvt_cpp import maximum_weighted_independent_set
-
-        # NEW ATTEMPT TO DIFFERENTIATE ROOT TIPS AND PREVENT BRANCHES FROM BEING BOTH PRIMARY AND SECONDARY
-        # REVERSE TRICOT!!!!
-
-        print("REVERSE TRICOT")
-
+    if pre_filter_line:
         digraph = nx.DiGraph()
         for id, (line, p, tips_id) in enumerate(zip(line_list, line_probability, line_tips, strict=True)):
             b_from, b_to = line + 1
@@ -788,110 +796,66 @@ def resolve_digraph_to_vtree(
         # Solve the double optimal tree (using both direction for each branch)
         optimal_tree = maximum_spanning_arborescence(digraph, attr="p", preserve_attrs=True)
 
-        if True:
-            # Regenerate digraph using only the edges of the optimal tree
-            kept_edges = np.zeros(len(line_list), dtype=bool)
-            digraph = nx.DiGraph()
-            for b0, b1, info in optimal_tree.edges(data=True):
-                digraph.add_edge(abs(b0) - 1, abs(b1) - 1, p=info["p"], tips=[1 if b0 > 0 else 0, 0 if b1 > 0 else 1])
-                kept_edges[info["id"]] = True
+        kept_edges = np.zeros(len(line_list), dtype=bool)
 
-            optimal_tree = maximum_spanning_arborescence(digraph, attr="p", preserve_attrs=True)
-            branch_tree = {}
-            branch_dirs = {}
-            for b_from, b_to, info in optimal_tree.edges(data=True):
-                tips_id = info["tips"]
-                n1 = vgraph.branch_list[b_from, tips_id[0]]
-                n2 = vgraph.branch_list[b_to, tips_id[1]]
-                if b_from == -1 or n1 == n2:
-                    branch_tree[b_to] = b_from
-                    branch_dirs[b_to] = tips_id[1] == 0
-                else:
-                    vgraph, b_id = vgraph.add_branches([[n1, n2]], return_branch_id=True, inplace=True)
-                    b_id = b_id[0]
-                    branch_tree[b_id] = b_from
-                    branch_dirs[b_id] = True
-                    branch_tree[b_to] = b_id
-                    branch_dirs[b_to] = tips_id[1] == 0
+        digraph = nx.DiGraph()
+        for B0, B1, info in optimal_tree.edges(data=True):
+            b0, b1 = abs(B0) - 1, abs(B1) - 1
+            if orphan_branch[b1] and (already_added := digraph.edges.get((b0, b1), None)) is not None:
+                if already_added["p"] >= info["p"]:
+                    continue
+            digraph.add_edge(b0, b1, p=info["p"], tips=[1 if B0 > 0 else 0, 0 if B1 > 0 else 1])
+            kept_edges[info["id"]] = True
 
-            try:
-                branch_tree = np.array([branch_tree[b] for b in range(vgraph.branches_count)], dtype=int)
-                branch_dirs = np.array([branch_dirs[b] for b in range(vgraph.branches_count)], dtype=bool)
-            except KeyError:
-                raise ValueError("Some branches were not added to the tree.") from None
+        if debug_info is not None:
+            debug_info["kept_edges"] = kept_edges
+    else:
+        digraph = nx.DiGraph()
+        for line, p, tips_id in zip(line_list, line_probability, line_tips, strict=True):
+            if orphan_branch[line[1]] and (already_added := digraph.edges.get(line, None)) is not None:
+                if already_added["p"] >= p:
+                    continue
+            digraph.add_edge(*line, p=p, tips=tips_id)
 
-            if debug_info is not None:
-                debug_info["kept_edges"] = kept_edges
+    optimal_tree = maximum_spanning_arborescence(digraph, attr="p", preserve_attrs=True)
+
+    branch_tree = {}
+    branch_dirs = {}
+    for b_from, b_to, info in optimal_tree.edges(data=True):
+        tips_id = info["tips"]
+        n1 = vgraph.branch_list[b_from, tips_id[0]]
+        n2 = vgraph.branch_list[b_to, tips_id[1]]
+        if b_from == -1 or n1 == n2:
+            branch_tree[b_to] = b_from
+            branch_dirs[b_to] = tips_id[1] == 0
         else:
-            double_branch_tree = np.zeros((vgraph.branches_count, 2), int) - 2
-            double_branch_tree_p = np.zeros((vgraph.branches_count, 2), float)
-            for B_from, B_to, info in optimal_tree.edges(data=True):
-                double_branch_tree[abs(B_to) - 1, 1 if B_to < 0 else 0] = B_from
-                double_branch_tree_p[abs(B_to) - 1, 1 if B_to < 0 else 0] = info["p"]
+            vgraph, b_id = vgraph.add_branches([[n1, n2]], return_branch_id=True, inplace=True)
+            b_id = b_id[0]
+            branch_tree[b_id] = b_from
+            branch_dirs[b_id] = True
+            branch_tree[b_to] = b_id
+            branch_dirs[b_to] = tips_id[1] == 0
 
-            # Identify the subtrees
-            root_branches = np.argwhere(double_branch_tree == 0)
-            subtrees = []
-            subtrees_dirs = []
-            subtrees_p = []
-
-            for root in root_branches:
-                p = double_branch_tree_p[tuple(root)]
-                subtree = [np.array([root[0]], dtype=int)]
-                subtree_dirs = np.zeros((vgraph.branches_count, 2), bool)
-                subtree_dirs[tuple(root)] = True
-
-                root = root[0] + 1 if root[1] == 0 else -(root[0] + 1)
-                active_branches = np.array([root], dtype=int)
-
-                while active_branches.size > 0:
-                    direct_branch = np.argwhere(np.isin(double_branch_tree[:, 0], active_branches)).flatten()
-                    if direct_branch.size != 0:
-                        assert not subtree_dirs[direct_branch].any(), "The optimal arborescence contains cycles."
-                        subtree_dirs[direct_branch, 0] = True
-                        p += double_branch_tree_p[direct_branch, 0].sum()
-                        subtree.append(direct_branch)
-
-                    inverse_branch = np.argwhere(np.isin(double_branch_tree[:, 1], active_branches)).flatten()
-                    if inverse_branch.size != 0:
-                        assert not subtree_dirs[inverse_branch].any(), "The optimal arborescence contains cycles."
-                        subtree_dirs[inverse_branch, 1] = True
-                        p += double_branch_tree_p[inverse_branch, 1].sum()
-                        subtree.append(inverse_branch)
-
-                    active_branches = np.concatenate([direct_branch + 1, -(inverse_branch + 1)])
-
-                subtrees.append(np.concatenate(subtree))
-                subtrees_dirs.append(subtree_dirs)
-                subtrees_p.append(p)
-
-            # Solve for the maximal weighted independent set of subtrees
-            # (the set may not contains two trees sharing a branch, we search the forest providing the highest probability)
-            trees_mutually_exclusive = []
-            for s1, s2 in itertools.combinations(range(len(subtrees_dirs)), 2):
-                if (subtrees_dirs[s1].any(axis=1) & subtrees_dirs[s2].any(axis=1)).any():
-                    trees_mutually_exclusive.append((s1, s2))
-
-            subtrees_p = np.array(subtrees_p, dtype=float)  # + np.array([s.sum() for s in subtrees_dirs]) * 10
-            if subtrees_p.min() < 0:
-                subtrees_p -= subtrees_p.min() - 1
-            optimal_forest = maximum_weighted_independent_set(trees_mutually_exclusive, subtrees_p)
-
-            # Reconstruct the tree from the optimal forest
-            branch_tree = np.zeros(vgraph.branches_count, int) - 1
-            branch_dirs = np.zeros(vgraph.branches_count, bool)
-            for s in optimal_forest:
-                subtree_branches = subtrees_dirs[s]
-                b, dirs = np.where(subtree_branches)
-                branch_tree[b] = abs(double_branch_tree[b, dirs]) - 1
-                branch_dirs[b] = dirs == 0
-
-            if debug_info is not None:
-                debug_info["subtrees"] = subtrees_dirs
-                debug_info["subtrees_p"] = subtrees_p
-                debug_info["optimal_forest"] = optimal_forest
+    try:
+        branch_tree = np.array([branch_tree[b] for b in range(vgraph.branches_count)], dtype=int)
+        branch_dirs = np.array([branch_dirs[b] for b in range(vgraph.branches_count)], dtype=bool)
+    except KeyError:
+        raise ValueError("Some branches were not added to the tree.") from None
 
     vtree = VTree.from_graph(vgraph, branch_tree, branch_dirs, copy=False)
+
+    # Fix branches that are both primary and secondary for a given node
+    non_root_branches_mask = vtree.branch_tree != -1
+    non_root_branches = np.argwhere(non_root_branches_mask).flatten()
+    branch_parent = vtree.branch_tree[non_root_branches_mask]
+    parents_tail = vtree.branch_tail(branch_parent)
+    tails = vtree.branch_tail(non_root_branches_mask)
+    prim_sec_branches = branch_parent[tails == parents_tail]
+
+    if len(prim_sec_branches) > 0:
+        erroneous_sec_branches = non_root_branches[tails == parents_tail]
+        vtree.branch_tree[erroneous_sec_branches] = vtree.branch_tree[prim_sec_branches]
+
     return vtree
 
 
@@ -925,6 +889,9 @@ def inspect_digraph_solving(
     )
     tree.branches_attr["subtree"] = tree.subtrees_branch_labels()
 
+    av_tree = relabel_av_by_subtree(tree, av_attr=av_attr)
+    a_tree, v_tree = split_av_graph(av_tree, av_attr=av_attr)
+
     # === Create the graph views ===
     GRAPH_AV_COLORS = {
         AVLabel.BKG: "grey",
@@ -941,7 +908,7 @@ def inspect_digraph_solving(
         colormap = ["red", "blue", "purple", "green", "orange", "cyan", "pink", "yellow", "teal", "lime"]
         return colormap[x % len(colormap)]
 
-    m = Mosaic(2)
+    m = Mosaic(3)
     fundus_data.draw(view=m, labels_opacity=0.3)
 
     m[0]["graph"] = graph.jppype_layer(bspline=True, edge_labels=True, node_labels=True)
@@ -953,11 +920,26 @@ def inspect_digraph_solving(
         scaling=4, show_only="junctions", invert_direction="tree"
     )
     m[1]["graph"].edges_cmap = tree.branches_attr["subtree"].map(GENERIC_CMAP).to_dict()
+    # m[1]["graph"].edges_cmap = av_tree.branches_attr["av"].map(GRAPH_AV_COLORS).to_dict()
     m[1]["graph"].edges_labels = tree.branches_attr["subtree"].to_dict()
 
     nodes_color = pd.Series("grey", index=tree.nodes_attr.index)
     nodes_color[tree.root_nodes_ids()] = "black"
     m[1]["graph"].nodes_cmap = nodes_color.to_dict()
+
+    m[2]["a_tree"] = a_tree.jppype_layer(bspline=True, edge_labels=True, node_labels=True)
+    m[2]["a_tree"].edges_cmap = GRAPH_AV_COLORS[AVLabel.ART]
+    nodes_color = pd.Series(GRAPH_AV_COLORS[AVLabel.ART], index=a_tree.nodes_attr.index)
+    nodes_color[a_tree.root_nodes_ids()] = "#7a1a1a"
+    nodes_color[a_tree.leaf_nodes_ids()] = "#da7676"
+    m[2]["a_tree"].nodes_cmap = nodes_color.to_dict()
+
+    m[2]["v_tree"] = v_tree.jppype_layer(bspline=True, edge_labels=True, node_labels=True)
+    m[2]["v_tree"].edges_cmap = GRAPH_AV_COLORS[AVLabel.VEI]
+    nodes_color = pd.Series(GRAPH_AV_COLORS[AVLabel.VEI], index=v_tree.nodes_attr.index)
+    nodes_color[v_tree.root_nodes_ids()] = "#1a1a7a"
+    nodes_color[v_tree.leaf_nodes_ids()] = "#7676da"
+    m[2]["v_tree"].nodes_cmap = nodes_color.to_dict()
 
     m.show()
 
@@ -986,7 +968,7 @@ def inspect_digraph_solving(
         }
     )
     root_data = lines_data[lines_data["b0"] == -1]
-    root_data = root_data.drop(columns=["b0", "n0"])
+    root_data = root_data.drop(columns=["b0", "n0", "dir0_p"])
     non_root_data = lines_data[lines_data["b0"] != -1]
 
     def highlight_optimal(row):
@@ -1050,6 +1032,6 @@ def inspect_digraph_solving(
     return (
         pn.Row(root_table, pn.Spacer(width=10), non_root_table, pn.Spacer(width=10), non_root_table2, height=400),
         graph,
-        tree,
+        (a_tree, v_tree),
         lines_data,
     )
