@@ -1407,7 +1407,9 @@ class VGraph:
 
         # Update branches indexes in ...
         self._branch_list[indexes, :] = self._branch_list.copy()  # ... branch list
-        self._branches_attr = self._branches_attr.set_index(indexes)  # ... branches attributes
+        self._branches_attr = self._branches_attr.set_index(indexes).reindex(
+            pd.RangeIndex(self.branches_count), copy=False
+        )  # ... branches attributes
         for gdata in self._geometric_data:
             gdata._reindex_branches(indexes)
 
@@ -1506,7 +1508,7 @@ class VGraph:
             The modified graph.
         """  # noqa: E501
         graph = self if inplace else self.copy()
-        branch_indexes = self.as_branches_ids(branch_indexes)
+        branch_indexes = graph.as_branches_ids(branch_indexes)
 
         # Find connected nodes
         connected_nodes = np.array([])
@@ -1550,7 +1552,7 @@ class VGraph:
         assert np.all(np.logical_and(branch_nodes >= 0, branch_nodes < graph.nodes_count)), "Invalid node indexes."
 
         graph._branch_list = np.concatenate((graph._branch_list, branch_nodes), axis=0)
-        graph._branches_attr = graph._branches_attr.reindex(pd.RangeIndex(graph.branches_count), copy=False)
+        graph._branches_attr = graph._branches_attr.reindex(pd.RangeIndex(len(graph._branch_list)), copy=False)
 
         for gdata in graph._geometric_data:
             gdata._append_empty_branches(len(branch_nodes))
@@ -1640,7 +1642,7 @@ class VGraph:
             assert split_coord.ndim == 2 and split_coord.shape[1] == 2, "split_coord must be a 2D array of shape (N, 2)"
             if len(split_coord) > 1:
                 # Sort the splits by their position on the branch curve
-                split_curve_id = self.geometric_data().branch_closest_index(split_coord, branchID)
+                split_curve_id = graph.geometric_data().branch_closest_index(split_coord, branchID)
                 split_order = np.argsort(split_curve_id)
                 split_coord = split_coord[split_order]
             else:
@@ -1677,7 +1679,7 @@ class VGraph:
             new_branches.append((nPrev, nNext))
         graph._branch_list = np.concatenate((graph._branch_list, new_branches), axis=0)
         # 2. ... in the branches attributes
-        new_df = graph._branches_attr.reindex(pd.RangeIndex(graph.branches_count), copy=False)
+        new_df = graph._branches_attr.reindex(pd.RangeIndex(len(graph._branch_list)), copy=False)
         new_df.iloc[new_branchIds] = new_df.iloc[branchID]
         graph._branches_attr = new_df
 
@@ -1797,7 +1799,7 @@ class VGraph:
             The modified graph.
         """
         graph = self.copy() if not inplace else self
-        nodes_idx = self.as_nodes_ids(nodes_idx)
+        nodes_idx = graph.as_nodes_ids(nodes_idx)
         graph._fuse_nodes(nodes_idx, quiet_invalid_node=quiet_invalid_node, incident_branches=incident_branches)
         return graph
 

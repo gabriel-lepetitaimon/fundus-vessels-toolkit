@@ -320,6 +320,18 @@ class VGeometricData:
         else:
             raise TypeError("Invalid type for node id.")
 
+    def set_nodes_coord(
+        self, coord: npt.ArrayLike[float], ids: Optional[int | npt.NDArray[np.int32]], *, graph_index=True
+    ) -> None:
+        """Set the coordinates of the nodes in the graph."""
+        ids, _ = as_1d_array(ids)
+        coord = np.atleast_2d(coord)
+        assert coord.ndim == 2, "The coordinates should be a 2D array."
+        assert coord.shape[0] == len(ids), "The number of coordinates should be the same as the number of nodes."
+
+        internal_id = self._graph_to_internal_nodes_index(ids, graph_index=graph_index)
+        self._nodes_coord[internal_id] = coord
+
     @property
     def branches_count(self) -> int:
         """Return the number of branches whose geometric data are stored in this object."""
@@ -910,7 +922,7 @@ class VGeometricData:
             out = {"branches": branch_ids} | {attr: [] for attr in attrs}
             nan = np.array([np.nan, np.nan], dtype=np.float32)
             out["yx"] = [
-                np.stack([[c[0 if d else -1] if len(c) else nan for c, d in zip(node_curves, dirs, strict=True)]])
+                np.stack([c[0 if d else -1] if len(c) else nan for c, d in zip(node_curves, dirs, strict=True)])
                 for node_curves, dirs in zip(curves, branch_dirs, strict=True)
             ]
 
