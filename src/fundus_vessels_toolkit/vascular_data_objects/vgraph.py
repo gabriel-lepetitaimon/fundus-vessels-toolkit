@@ -972,23 +972,31 @@ class VGraph:
         return mask if as_mask else np.argwhere(mask).flatten()
 
     @overload
-    def passing_nodes(self, as_mask: Literal[False] = False) -> npt.NDArray[np.int_]: ...
+    def passing_nodes(self, *, as_mask: Literal[False] = False, exclude_loop: bool = False) -> npt.NDArray[np.int_]: ...
     @overload
-    def passing_nodes(self, as_mask: Literal[True]) -> npt.NDArray[np.bool_]: ...
-    def passing_nodes(self, as_mask=False) -> npt.NDArray[np.int_ | np.bool_]:
+    def passing_nodes(self, *, as_mask: Literal[True], exclude_loop: bool = False) -> npt.NDArray[np.bool_]: ...
+    def passing_nodes(self, *, as_mask=False, exclude_loop: bool = False) -> npt.NDArray[np.int_ | np.bool_]:
         """Return the indexes of the nodes that are connected to exactly two branches.
 
         Parameters
         ----------
         as_mask : bool, optional
             If True, return a mask of the passing nodes instead of their indexes.
+        exclude_loop : bool, optional
+            If True, exclude the nodes connected to themselves.
 
         Returns
         -------
         np.ndarray
             The indexes of the passing nodes (or if ``as_mask`` is True, a boolean mask of shape (N,) where N is the number of nodes).
         """  # noqa: E501
-        mask = np.bincount(self._branch_list.flatten(), minlength=self.nodes_count) == 2
+        branch_list = self._branch_list
+        mask = np.bincount(branch_list.flatten(), minlength=self.nodes_count) == 2
+        if exclude_loop:
+            loops = branch_list[:, 0] == branch_list[:, 1]
+            if np.any(loops):
+                mask[branch_list[loops, 0]] = False
+
         return mask if as_mask else np.argwhere(mask).flatten()
 
     @overload

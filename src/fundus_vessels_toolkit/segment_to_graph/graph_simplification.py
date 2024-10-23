@@ -496,7 +496,7 @@ def simplify_passing_nodes(
     """  # noqa: E501
 
     # === Get all nodes with degree 2 ===
-    nodes_to_fuse = vgraph.passing_nodes()
+    nodes_to_fuse = vgraph.passing_nodes(exclude_loop=True)
 
     if not_fusable is not None:
         # === Filter out nodes that should not be merged ===
