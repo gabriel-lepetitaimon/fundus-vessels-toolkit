@@ -448,6 +448,9 @@ class VGraph:
         """
         N, B = self.nodes_count, self.branches_count
 
+        assert N > 0, "The graph must contain at least one node."
+        assert B > 0, "The graph must contain at least one branch."
+
         # --- Check geometric data ---
         branches_idx = set()
         nodes_idx = set()

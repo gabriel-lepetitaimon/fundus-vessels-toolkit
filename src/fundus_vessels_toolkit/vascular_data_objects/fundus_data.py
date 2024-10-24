@@ -153,7 +153,7 @@ class FundusData:
             other._vessels = other.load_vessels(vessels, other.shape)
             other._bin_vessels = None
         if od is not None:
-            other._od, other._od_center = other.load_od_macula(od, other.shape)
+            other._od, other._od_center, other._od_size = other.load_od_macula(od, other.shape, fit_ellipse=True)
         if macula is not None:
             other._macula, other._macula_center = other.load_od_macula(macula, other.shape)
         if name is not None:
@@ -212,7 +212,7 @@ class FundusData:
         else:
             raise ValueError("Invalid fundus mask")
 
-        fundus_mask = fundus_mask.astype(np.bool)
+        fundus_mask = fundus_mask.astype(np.bool_)
 
         if shape is not None and fundus_mask.shape != shape:
             H, W = shape
@@ -229,7 +229,7 @@ class FundusData:
         if isinstance(vessels, (str, Path)):
             vessels = load_image(vessels, cast_to_float=False, resize=shape if auto_resize else None)
         elif is_torch_tensor(vessels):
-            vessels = vessels.detach().cpu().numpy()
+            vessels = vessels.numpy(force=True)
 
         assert isinstance(vessels, np.ndarray), "The vessels map must be a numpy array."
         if vessels.ndim == 3:
@@ -524,7 +524,7 @@ class FundusData:
 
         labels = np.zeros(self.shape, dtype=np.uint8)
         if self._vessels is not None:
-            labels = self._vessels
+            labels = self._vessels.copy()
 
         if self._od is not None:
             labels[self._od] = 10

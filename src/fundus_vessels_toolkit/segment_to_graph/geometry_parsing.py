@@ -270,7 +270,8 @@ def center_junction_nodes(
                 b1 = tips_yx[t0 + 1 :] - tips_t[t0 + 1 :]
                 intercepts.append(intercept_segment(a0, a1, b0, b1, a1_bound=False, b1_bound=False).squeeze(0))
             intercepts = np.concatenate(intercepts)
-            intercepts = intercepts[np.isfinite(intercepts).all(axis=1)]
+            # intercepts = intercepts[np.isfinite(intercepts).all(axis=1)]
+            intercepts = intercepts[gdata.domain.contains(intercepts)]
             if len(intercepts):
                 gdata._nodes_coord[node_id] = intercepts.mean(axis=0)
 

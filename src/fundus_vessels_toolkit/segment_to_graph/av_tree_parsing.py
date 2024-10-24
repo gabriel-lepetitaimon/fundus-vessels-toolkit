@@ -45,8 +45,16 @@ def assign_av_label(
             continue
 
         # 0. Check the AV labels under each pixel of the skeleton and boundaries of the branch
-        branch_skltn_av = av_map[branch_curve[:, 0], branch_curve[:, 1]]
         bound = branch.geodata(VBranchGeoData.Fields.BOUNDARIES, gdata).data
+        valid_bound = gdata.domain.contains(bound).all(axis=1)
+        if not np.all(valid_bound):
+            warnings.warn(f"Branch {branch.id} has invalid boundary points. They will be ignored.", stacklevel=1)
+            branch_curve = branch_curve[valid_bound]
+            if len(branch_curve) < 2:
+                continue
+            bound = bound[valid_bound]
+
+        branch_skltn_av = av_map[branch_curve[:, 0], branch_curve[:, 1]]
         branch_bound_av = av_map[bound[:, :, 0], bound[:, :, 1]]
         branch_av = np.concatenate([branch_skltn_av[:, None], branch_bound_av], axis=1)
         skel_is_art = np.any(branch_av == AVLabel.ART, axis=1)
@@ -473,11 +481,9 @@ def naive_vgraph_to_vtree(
 def build_line_digraph(
     graph: VGraph,
     fundus_data: FundusData,
-    img_half_width: int = 512,
     *,
     split_twins=True,
     av_attr: str = "av",
-    passing_as_root_max_angle=30,
 ) -> Tuple[VGraph, npt.NDArray[np.int_], npt.NDArray[np.bool_], npt.NDArray[np.float64]]:
     """Build a directed line graph storing the probabilities that a branch is the parent of another branch.
 
@@ -613,7 +619,7 @@ def build_line_digraph(
             p_av = 0
         else:
             p_av = 1 if av_labels[0] == av_labels[1] else -1
-        p_av *= 1 - sigmoid(od_dist / (2 * od_mac_dist))
+        p_av *= 1 - 0.5 * sigmoid(od_dist / (3 * od_mac_dist))
 
         # 3. ... based on the difference of the calibres of the branches
         if np.any(np.isnan(mean_calibres)) or np.any(mean_calibres == 0):
@@ -845,16 +851,15 @@ def resolve_digraph_to_vtree(
     vtree = VTree.from_graph(vgraph, branch_tree, branch_dirs, copy=False)
 
     # Fix branches that are both primary and secondary for a given node
-    non_root_branches_mask = vtree.branch_tree != -1
-    non_root_branches = np.argwhere(non_root_branches_mask).flatten()
-    branch_parent = vtree.branch_tree[non_root_branches_mask]
-    parents_tail = vtree.branch_tail(branch_parent)
-    tails = vtree.branch_tail(non_root_branches_mask)
-    prim_sec_branches = branch_parent[tails == parents_tail]
+    secondary_branches = np.argwhere(vtree.branch_tree != -1).flatten()
+    primary_branches = vtree.branch_tree[secondary_branches]
+    prim_sec_sharing_tail = vtree.branch_tail(primary_branches) == vtree.branch_tail(secondary_branches)
+    prim_sec_branches = primary_branches[prim_sec_sharing_tail]
 
     if len(prim_sec_branches) > 0:
-        erroneous_sec_branches = non_root_branches[tails == parents_tail]
-        vtree.branch_tree[erroneous_sec_branches] = vtree.branch_tree[prim_sec_branches]
+        # Redirect their direct successors to their direct ancestor
+        sec_erroneous_successors = secondary_branches[prim_sec_sharing_tail]
+        vtree.branch_tree[sec_erroneous_successors] = vtree.branch_tree[prim_sec_branches]
 
     return vtree
 
@@ -864,7 +869,6 @@ def inspect_digraph_solving(
     graph: VGraph,
     *,
     av_attr: str = "av",
-    passing_as_root_max_angle=30,
 ):
     import pandas as pd
     import panel as pn
@@ -880,7 +884,6 @@ def inspect_digraph_solving(
         graph,
         fundus_data,
         av_attr=av_attr,
-        passing_as_root_max_angle=passing_as_root_max_angle,
     )
     B = graph.branches_count
     debug_info = {}

@@ -79,6 +79,7 @@ class AVSegToTree(AVSegToTreeBase):
 
         super(AVSegToTree, self).__init__()
         self.segToGraph = if_none(segToGraph, FUNDUS_SEG_TO_GRAPH)
+        self.av_attr = "av"
 
     def __call__(
         self,
@@ -91,17 +92,16 @@ class AVSegToTree(AVSegToTreeBase):
         fundus = self.prepare_data(fundus, av=av, od=od)
         if fundus.od_center is None:
             raise NotImplementedError("Parsing tree of image without optic disc is not implemented.")
-
-        graph = self.to_vgraph(fundus, populate_geometry=False, simplify=True)
-        trees = self.split_av_graph(graph)
-        return trees[0], trees[1]
+        graph = self.to_vgraph(fundus, label_av=True, simplify=True)
+        lines_digraph_info = self.build_line_digraph(graph, fundus)
+        tree = self.resolve_digraph_to_vtree(*lines_digraph_info, relabel_av=True)
+        return self.split_av_tree(tree)
 
     # --- Intermediate steps ---
     def assign_av_labels(
         self,
         graph: VGraph,
         av_map: npt.NDArray[np.int_],
-        av_attr: Optional[str] = None,
         *,
         propagate_labels=True,
         inplace: bool = False,
@@ -113,7 +113,7 @@ class AVSegToTree(AVSegToTreeBase):
             av_map=av_map,
             ratio_threshold=0.8,
             split_av_branch=True,
-            av_attr=if_none(av_attr, "av"),
+            av_attr=self.av_attr,
             propagate_labels=propagate_labels,
             inplace=inplace,
         )
@@ -123,14 +123,43 @@ class AVSegToTree(AVSegToTreeBase):
 
         return simplify_av_graph(
             graph,
-            av_attr="av",
+            av_attr=self.av_attr,
             inplace=inplace,
         )
 
+    def build_line_digraph(
+        self, graph: VGraph, fundus_data: FundusData
+    ) -> Tuple[VGraph, npt.NDArray[np.int_], npt.NDArray[np.bool_], npt.NDArray[np.float64]]:
+        from ..segment_to_graph.av_tree_parsing import build_line_digraph
+
+        return build_line_digraph(graph, fundus_data, av_attr=self.av_attr)
+
+    def resolve_digraph_to_vtree(
+        self,
+        vgraph: VGraph,
+        line_list: npt.NDArray[np.int_],
+        line_tips: npt.NDArray[np.int_],
+        line_probability: npt.NDArray[np.float64],
+        branches_dir_p: npt.NDArray[np.float64],
+        *,
+        relabel_av: bool = True,
+    ) -> VTree:
+        from ..segment_to_graph.av_tree_parsing import relabel_av_by_subtree, resolve_digraph_to_vtree
+
+        vtree = resolve_digraph_to_vtree(vgraph, line_list, line_tips, line_probability, branches_dir_p)
+        if relabel_av:
+            relabel_av_by_subtree(vtree, av_attr=self.av_attr, inplace=True)
+        return vtree
+
+    def split_av_tree(self, tree: VTree) -> Tuple[VTree, VTree]:
+        from ..segment_to_graph.av_tree_parsing import split_av_graph
+
+        return split_av_graph(tree)
+
     # --- Utility methods ---
-    def to_vgraph(self, fundus=None, /, *, av=None, od=None, label_av=True, populate_geometry=None, simplify=None):
+    def to_vgraph(self, fundus=None, /, *, av=None, od=None, label_av=True, simplify=None):
         fundus = self.prepare_data(fundus, av=av, od=od)
-        graph = self.segToGraph(fundus.vessels, parse_geometry=populate_geometry, simplify=False)
+        graph = self.segToGraph(fundus.vessels, parse_geometry=True, simplify=False)
         if label_av:
             self.assign_av_labels(graph, fundus.av, inplace=True)
             if if_none(simplify, self.segToGraph.simplify_graph):

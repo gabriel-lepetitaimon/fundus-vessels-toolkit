@@ -26,21 +26,14 @@ class FundusAVSegToBiomarkers:
     ) -> Dict[str, pd.DataFrame]:
         fundus = self.avseg_to_tree.prepare_data(fundus, av=av, od=od)
 
-        trees = self.to_av_trees(fundus, av=av, od=od)
+        trees = self.to_av_trees(fundus)
         biomarkers = {}
         for vtype, tree in zip(["art", "vei"], trees, strict=True):
             biomarkers |= {f"{vtype}_{k}": v for k, v in self.tree_to_biomarkers(tree, fundus).items()}
         return biomarkers
 
-    def to_av_trees(
-        self,
-        fundus: Optional[FundusData] = None,
-        /,
-        *,
-        av: Optional[npt.NDArray[np.int_] | torch.Tensor | str | Path] = None,
-        od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
-    ) -> Tuple[VTree, VTree]:
-        trees = self.avseg_to_tree(fundus, av=av, od=od)
+    def to_av_trees(self, fundus: Optional[FundusData] = None) -> Tuple[VTree, VTree]:
+        trees = self.avseg_to_tree(fundus)
 
         return trees
 
@@ -133,7 +126,7 @@ class FundusAVSegToBiomarkers:
             views.append(view)
             tables.append(table)
 
-        display(GridBox(views, layout=Layout(grid_template_columns="repeat(2, 1fr)", grid_template_rows="400px")))
+        display(GridBox(views, layout=Layout(grid_template_columns="repeat(2, 1fr)", grid_template_rows="500px")))
         return (
             pn.Row(tables[0], pn.Spacer(width=10), tables[1], height=400, scroll=True),
             trees,

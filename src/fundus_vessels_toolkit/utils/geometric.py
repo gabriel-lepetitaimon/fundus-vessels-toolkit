@@ -294,6 +294,39 @@ class Rect(NamedTuple):
         r = self.to_int()
         return slice(r.y, r.y + r.h), slice(r.x, r.x + r.w)
 
+    @overload
+    def contains(self, other: Point | Rect) -> bool: ...
+    @overload
+    def contains(self, other: npt.ArrayLike) -> npt.NDArray[np.bool_]: ...
+    def contains(self, other: Point | Rect | npt.ArrayLike) -> bool | npt.NDArray[np.bool_]:
+        if isinstance(other, Point):
+            return self.y <= other.y <= self.y + self.h and self.x <= other.x <= self.x + self.w
+        elif isinstance(other, Rect):
+            return (
+                (self.y <= other.y)
+                & (self.x <= other.x)
+                & (self.y + self.h >= other.y + other.h)
+                & (self.x + self.w >= other.x + other.w)
+            )
+        elif isinstance(other, np.ndarray):
+            other = np.atleast_2d(other)
+            assert other.shape[-1] in (2, 4), "Array must have shape (n, 2) or (n, 4)"
+            if other.shape[-1] == 2:
+                return (
+                    np.isfinite(other).all(axis=-1)
+                    & (self.y <= other[..., 0])
+                    & (self.x <= other[..., 1])
+                    & (self.y + self.h >= other[..., 0])
+                    & (self.x + self.w >= other[..., 1])
+                )
+            return (
+                np.isfinite(other).all(axis=-1)
+                & (self.y <= other[..., 0])
+                & (self.x <= other[..., 1])
+                & (self.y + self.h >= other[..., 0] + other[..., 2])
+                & (self.x + self.w >= other[..., 1] + other[..., 3])
+            )
+
     @staticmethod
     def union(*rects: Tuple[Iterable[Rect] | Rect, ...]) -> Rect:
         rects = sum(((r,) if isinstance(r, Rect) else tuple(r) for r in rects), ())

@@ -807,16 +807,19 @@ class VTree(VGraph):
         return np.unique(branch_list[succ_branches, 1])
 
     @overload
-    def passing_nodes(self, as_mask: Literal[False] = False) -> npt.NDArray[np.int_]: ...
+    def passing_nodes(self, *, as_mask: Literal[False] = False, exclude_loop: bool = False) -> npt.NDArray[np.int_]: ...
     @overload
-    def passing_nodes(self, as_mask: Literal[True]) -> npt.NDArray[np.bool_]: ...
-    def passing_nodes(self, as_mask=False) -> npt.NDArray[np.int_ | np.bool_]:
+    def passing_nodes(self, *, as_mask: Literal[True], exclude_loop: bool = False) -> npt.NDArray[np.bool_]: ...
+    def passing_nodes(self, *, as_mask=False, exclude_loop: bool = False) -> npt.NDArray[np.int_ | np.bool_]:
         """Return the indexes of the nodes that have exactly one incoming and one outgoing branch.
 
         Parameters
         ----------
         as_mask : bool, optional
             If True, return a boolean mask instead of the indexes. By default: False.
+
+        exclude_loop : bool, optional
+            This argument have no effect for trees (self-loop are not allowed). It is kept for compatibility with :meth:`VGraph.passing_nodes`.
 
         Returns
         -------
