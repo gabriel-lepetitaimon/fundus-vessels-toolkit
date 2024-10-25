@@ -40,7 +40,6 @@ def assign_av_label(
     branches_av_attr = graph.branches_attr[av_attr]
     for branch in graph.branches():
         branch_curve = branch.curve()
-        # node_to_node_length = branch.node_to_node_length()
         if len(branch_curve) <= 2:
             continue
 
@@ -215,7 +214,7 @@ def simplify_av_graph(
     *,
     node_merge_distance: float = 15,
     unknown_node_merge_distance: float = 25,
-    orphan_branch_min_length: float = 60,
+    orphan_branch_min_length: float = 20,
     passing_node_min_angle: float = 110,
     propagate_labels=True,
     inplace=False,
@@ -285,17 +284,20 @@ def simplify_av_graph(
 def split_av_graph(
     graph: VGraph, *, av_attr: str = "av", simplify: bool = True, center_junction_nodes: bool = True
 ) -> Tuple[VGraph, VGraph]:
-    # n_attr = graph.nodes_attr
-    # a_graph = graph.delete_nodes(n_attr.index[n_attr[av_attr] == AVLabel.VEI].to_numpy(), inplace=False)
-    # v_graph = graph.delete_nodes(n_attr.index[n_attr[av_attr] == AVLabel.ART].to_numpy(), inplace=False)
-
     b_attr = graph.branches_attr
     a_graph = graph.delete_branches(b_attr[av_attr] == AVLabel.VEI, inplace=False)
-    # b_attr = v_graph.branches_attr
     v_graph = graph.delete_branches(b_attr[av_attr] == AVLabel.ART, inplace=False)
 
     if simplify:
         from .graph_simplification import simplify_passing_nodes
+
+        def remove_unknown_leaf_branches(graph):
+            unkown_branches = graph.as_branches_ids(graph.branches_attr[av_attr] == AVLabel.UNK)
+            while (unkown_terminal_branches := np.intersect1d(unkown_branches, graph.leaf_branches_ids())).size:
+                graph.delete_branches(unkown_terminal_branches, inplace=True)
+
+        remove_unknown_leaf_branches(a_graph)
+        remove_unknown_leaf_branches(v_graph)
 
         simplify_passing_nodes(a_graph, with_same_label=av_attr, inplace=True)
         simplify_passing_nodes(v_graph, with_same_label=av_attr, inplace=True)
@@ -307,6 +309,75 @@ def split_av_graph(
         center_junction_nodes(v_graph, inplace=True)
 
     return a_graph, v_graph
+
+
+def split_av_graph_by_subtree(
+    tree: VTree,
+    *,
+    av_attr: str = "av",
+    simplify: bool = True,
+    center_junction_nodes: bool = True,
+    inplace: bool = False,
+) -> Tuple[VGraph, VGraph]:
+    if not inplace:
+        tree = tree.copy()
+
+    tree.branches_attr[av_attr].fillna(AVLabel.UNK, inplace=True)
+    art_branches = tree.as_branches_ids(tree.branches_attr[av_attr] == AVLabel.ART)
+    vei_branches = tree.as_branches_ids(tree.branches_attr[av_attr] == AVLabel.VEI)
+    geodata = tree.geometric_data()
+
+    # === Assign one artery or vein label to each subtree ===
+    subtrees = tree.subtrees()
+    subtrees_av = np.empty(len(subtrees), dtype=bool)  # True: artery, False: vein
+    for i, subtree in enumerate(subtrees):
+        subtree_a = np.intersect1d(subtree, art_branches)
+        subtree_v = np.intersect1d(subtree, vei_branches)
+        a_weight = np.sum(geodata.branches_arc_length(subtree_a, fast_approximation=True))
+        v_weight = np.sum(geodata.branches_arc_length(subtree_v, fast_approximation=True))
+        if a_weight >= v_weight:
+            subtrees_av[i] = True
+        else:
+            subtrees_av[i] = False
+
+    # === Split the tree into two trees based on the AV label of the subtrees ===
+    if any(subtrees_av):
+        v_branches = np.concatenate([subtrees for i, subtrees in enumerate(subtrees) if not subtrees_av[i]])
+        a_tree = tree.delete_branches(v_branches, inplace=False)
+    else:
+        a_tree = VTree.empty_like(tree)
+    if any(~subtrees_av):
+        a_branches = np.concatenate([subtrees for i, subtrees in enumerate(subtrees) if subtrees_av[i]])
+        v_tree = tree.delete_branches(a_branches, inplace=False)
+    else:
+        v_tree = VTree.empty_like(tree)
+
+    # === Simplify the trees ===
+    if simplify:
+        from .graph_simplification import simplify_crossing_nodes, simplify_passing_nodes
+
+        def remove_unknown_leaf_branches(graph):
+            unkown_branches = graph.as_branches_ids(graph.branches_attr[av_attr] == AVLabel.UNK)
+            while (unkown_terminal_branches := np.intersect1d(unkown_branches, graph.leaf_branches_ids())).size:
+                graph.delete_branches(unkown_terminal_branches, inplace=True)
+
+        remove_unknown_leaf_branches(a_tree)
+        remove_unknown_leaf_branches(v_tree)
+
+        simplify_passing_nodes(a_tree, min_angle=110, inplace=True)
+        simplify_passing_nodes(v_tree, min_angle=110, inplace=True)
+
+        simplify_crossing_nodes(a_tree, inplace=True)
+        simplify_crossing_nodes(v_tree, inplace=True)
+
+    # === Center junction nodes ===
+    if center_junction_nodes:
+        from .geometry_parsing import center_junction_nodes
+
+        center_junction_nodes(a_tree, inplace=True)
+        center_junction_nodes(v_tree, inplace=True)
+
+    return a_tree, v_tree
 
 
 def relabel_av_by_subtree(tree: VTree, *, av_attr: str = "av", inplace: bool = False) -> VTree:
@@ -331,12 +402,22 @@ def relabel_av_by_subtree(tree: VTree, *, av_attr: str = "av", inplace: bool = F
     if not inplace:
         tree = tree.copy()
 
+    tree.branches_attr[av_attr].fillna(AVLabel.UNK, inplace=True)
+    art_branches = tree.as_branches_ids(tree.branches_attr[av_attr] == AVLabel.ART)
+    vei_branches = tree.as_branches_ids(tree.branches_attr[av_attr] == AVLabel.VEI)
+    geodata = tree.geometric_data()
+
     for root in tree.root_branches_ids():
         subtree = np.concatenate([[root], tree.branch_successors(root, max_depth=None)])
-        subtree_av = tree.branches_attr.loc[subtree, av_attr].fillna(AVLabel.UNK)
-        label = np.bincount(subtree_av, minlength=5)[1:3].argmax()
-        label = AVLabel.ART if label == 0 else AVLabel.VEI
-        tree.branches_attr.loc[subtree, av_attr] = label
+        subtree_a = np.intersect1d(subtree, art_branches)
+        subtree_v = np.intersect1d(subtree, vei_branches)
+        a_weight = np.sum(geodata.branches_arc_length(subtree_a, fast_approximation=True))
+        v_weight = np.sum(geodata.branches_arc_length(subtree_v, fast_approximation=True))
+        if a_weight >= v_weight:
+            tree.branches_attr.loc[subtree_v, av_attr] = AVLabel.ART
+        else:
+            tree.branches_attr.loc[subtree_a, av_attr] = AVLabel.VEI
+
     return tree
 
 
@@ -484,6 +565,7 @@ def build_line_digraph(
     *,
     split_twins=True,
     av_attr: str = "av",
+    inplace: bool = False,
 ) -> Tuple[VGraph, npt.NDArray[np.int_], npt.NDArray[np.bool_], npt.NDArray[np.float64]]:
     """Build a directed line graph storing the probabilities that a branch is the parent of another branch.
 
@@ -506,6 +588,9 @@ def build_line_digraph(
     from .geometry_parsing import derive_tips_geometry_from_curve_geometry
     from .graph_simplification import find_endpoints_branches_intercept, find_facing_endpoints
 
+    if not inplace:
+        graph = graph.copy()
+
     edge_list = []
     edge_first_tip = []
     edge_probs = []
@@ -526,7 +611,7 @@ def build_line_digraph(
     # === Discover virtual branch to reconnect end nodes to adjacent branches or to other end nodes ===
     virtual_endp_edges = find_facing_endpoints(graph, max_distance=100, max_angle=30, filter="closest")
     virtual_edges, new_nodes, new_nodes_yx = find_endpoints_branches_intercept(
-        graph, max_distance=100, intercept_snapping_distance=20, ignore_endpoints=virtual_endp_edges.flatten()
+        graph, max_distance=100, intercept_snapping_distance=20, omit_endpoints_to_endpoints=True
     )
 
     # Insert any new nodes required by the virtual edges between end points and branches
@@ -548,6 +633,7 @@ def build_line_digraph(
     branches_av = graph.branches_attr[av_attr]
     both_branches = branches_av[branches_av.isin([AVLabel.BOTH, AVLabel.UNK])].index.to_numpy()
     _, new_branches = graph.duplicate_branches(both_branches, return_branch_id=True, inplace=True)
+    both_branches = np.concatenate([both_branches, new_branches])
     graph.branches_attr[av_attr].iloc[both_branches] = AVLabel.ART
     graph.branches_attr[av_attr].iloc[new_branches] = AVLabel.VEI
 
@@ -579,6 +665,9 @@ def build_line_digraph(
     branches_curves = geodata.branch_curve()
     for branch in graph.branches():
         branch_id = branch.id
+        curve = branches_curves[branch_id]
+        if curve is None or len(curve) < 3:
+            continue
 
         # 1. ... based on its calibre variation
         p_calibre = 0
@@ -591,6 +680,7 @@ def build_line_digraph(
         # 2. ... based on its tangents
         p_tan = 0
         if branches_tangents[branch_id] is not None:
+            assert len(branches_tangents[branch_id].data), f"Branch {branch_id} has no tangent data."
             p_tan = expected_tangent_sim(branches_curves[branch_id], branches_tangents[branch_id].data).mean()
 
         p_dir = p_tan * 0.3 + p_calibre * 1
@@ -662,30 +752,15 @@ def build_line_digraph(
         root_nodes[nodes[np.argmin(od_yx.distance(nodes_yx[nodes]))]] = True
 
     # === Create the directed line graph from the graph ===
-    # 1. ORPHAN BRANCHES
-    # for branch in graph.branches(filter="orphan"):
-    #     n0_yx, n1_yx = nodes_yx[branch.nodes_id]
-    #     tips_tangents = geodata.tips_tangent(branch.id)
-    #     p0 = root_p(Point.from_array(n0_yx), tips_tangents[0])
-    #     p1 = root_p(Point.from_array(n1_yx), tips_tangents[1])
-    #     edge_list.append([-1, branch.id])
-    #     if p0 > p1:
-    #         edge_first_tip.append([False, True])
-    #         edge_probs.append(p0)
-    #     else:
-    #         edge_first_tip.append([False, False])
-    #         edge_probs.append(p1)
-
     for node in graph.nodes():
         node_degree = node.degree
         od_dist = od_yx.distance(nodes_yx[node.id])
         if root_nodes[node.id] or node_degree == 1 or od_dist < od_diameter * 0.75:
-            # 2. ROOT NODES
-            # if not orphan_branches[node.branches_ids[0]]:  # Orphan branches were processed at the beginning
+            # 1. ROOT NODES
             add_root_edge(node)
 
         if node_degree > 1:
-            # 3. PASSING / BRANCHING / JUNCTION NODES
+            # 2. PASSING / BRANCHING / JUNCTION NODES
             od_dist = od_yx.distance(nodes_yx[node.id])
 
             # For each pairs of branches, compute the probability of the first being the parent of the second
@@ -699,7 +774,7 @@ def build_line_digraph(
                 tip_id12 = np.where(first_tip[b12], 0, 1)
                 add_edge_pair(branch_ids[b12], tip_id12, p12, p21)
 
-    # 4. VIRTUAL EDGES: CONNECTING ENDPOINTS TOGETHER
+    # 3. VIRTUAL EDGES: CONNECTING ENDPOINTS TOGETHER
     b, t = graph.incident_branches_individual(virtual_endp_edges.flatten(), return_branch_direction=True)
     endp_branch = []
     endp_first_tips = []
@@ -733,7 +808,7 @@ def build_line_digraph(
             tip_id12 = np.where(endp_first_tips[e], 0, 1)
             add_edge_pair(endp_branch[e], tip_id12, p12, p21)
 
-    # 5. VIRTUAL EDGES: CONNECTING ENDPOINTS TO BRANCHES
+    # 4. VIRTUAL EDGES: CONNECTING ENDPOINTS TO BRANCHES
     for e in range(virtual_edges.shape[0]):
         endpoint_node = graph.node(virtual_edges[e, 0])
         endp_branch_ids = endpoint_node.branches_ids
@@ -766,6 +841,47 @@ def build_line_digraph(
                 tip_id12 = np.where(first_tip12, 0, 1)
                 add_edge_pair(branch_id12, tip_id12, p12, p21)
 
+    # 5. VIRTUAL EDGES: CONNECTING ENDPOINTS TO ENDPOINTS THROUGH BRANCHES
+    intercept_nodes, intercept_count = np.unique(virtual_edges[:, 1], return_counts=True)
+    for through_node, count in zip(intercept_nodes, intercept_count, strict=True):
+        if count <= 1:
+            continue
+        od_dist = np.mean(od_yx.distance(nodes_yx[through_node]))
+        connected_endp = virtual_edges[virtual_edges[:, 1] == through_node, 0]
+        for endp1, endp2 in itertools.combinations(connected_endp, 2):
+            endp1_node = graph.node(endp1)
+            endp2_node = graph.node(endp2)
+            endp1_branch_ids = endp1_node.branches_ids
+            endp1_first_tips = endp1_node.branches_first_node
+            endp1_tips_tangent, endp1_mean_calibres, endp1_branch_av = fetch_tangents_calibre_av_labels(
+                endp1_branch_ids, endp1_first_tips
+            )
+
+            endp2_branch_ids = endp2_node.branches_ids
+            endp2_first_tips = endp2_node.branches_first_node
+            endp2_tips_tangent, endp2_mean_calibres, endp2_branch_av = fetch_tangents_calibre_av_labels(
+                endp2_branch_ids, endp2_first_tips
+            )
+
+            p_offset = -np.linalg.norm(np.diff(nodes_yx[[endp1, endp2]], axis=0)) / 40
+            for i in range(len(endp1_branch_ids)):
+                for j in range(len(endp2_branch_ids)):
+                    p12, p21 = branch_to_branch_p(
+                        tip_tangents=np.array([endp1_tips_tangent[i], endp2_tips_tangent[j]]),
+                        mean_calibres=np.array([endp1_mean_calibres[i], endp2_mean_calibres[j]]),
+                        av_labels=np.array([endp1_branch_av[i], endp2_branch_av[j]]),
+                        od_dist=od_dist,
+                        offset=p_offset,
+                    )
+                    branch_id12 = endp1_branch_ids[i], endp2_branch_ids[j]
+                    first_tip12 = endp1_first_tips[i], endp2_first_tips[j]
+                    tip_id12 = np.where(first_tip12, 0, 1)
+                    add_edge_pair(branch_id12, tip_id12, p12, p21)
+
+    # Relabel the branches that were duplicated
+    graph.branches_attr[av_attr].fillna(AVLabel.UNK, inplace=True)
+    graph.branches_attr.loc[both_branches, av_attr] = AVLabel.UNK
+
     return graph, np.array(edge_list), np.array(edge_first_tip), np.array(edge_probs), branches_dir_p
 
 
@@ -795,9 +911,11 @@ def resolve_digraph_to_vtree(
             if b_to_tip_id == 1:
                 b_to = -b_to  # Target: Second node of the destination branch => the dest branch is reversed
 
-            dir_p = branches_dir_p[line[0], 0 if b_from_tip_id == 1 else 1]
-            dir_p += branches_dir_p[line[1], 0 if b_to_tip_id == 0 else 1]
-            digraph.add_edge(b_from, b_to, p=p + dir_p, id=id)
+            p += branches_dir_p[line[0], 0 if b_from_tip_id == 1 else 1]
+            p += branches_dir_p[line[1], 0 if b_to_tip_id == 0 else 1]
+            if (already_added := digraph.edges.get((b_from, b_to), None)) is not None and already_added["p"] >= p:
+                continue
+            digraph.add_edge(b_from, b_to, p=p, id=id)
 
         # Solve the double optimal tree (using both direction for each branch)
         optimal_tree = maximum_spanning_arborescence(digraph, attr="p", preserve_attrs=True)
@@ -807,9 +925,8 @@ def resolve_digraph_to_vtree(
         digraph = nx.DiGraph()
         for B0, B1, info in optimal_tree.edges(data=True):
             b0, b1 = abs(B0) - 1, abs(B1) - 1
-            if orphan_branch[b1] and (already_added := digraph.edges.get((b0, b1), None)) is not None:
-                if already_added["p"] >= info["p"]:
-                    continue
+            if (already_added := digraph.edges.get((b0, b1), None)) is not None and already_added["p"] >= info["p"]:
+                continue
             digraph.add_edge(b0, b1, p=info["p"], tips=[1 if B0 > 0 else 0, 0 if B1 > 0 else 1])
             kept_edges[info["id"]] = True
 
@@ -892,8 +1009,7 @@ def inspect_digraph_solving(
     )
     tree.branches_attr["subtree"] = tree.subtrees_branch_labels()
 
-    av_tree = relabel_av_by_subtree(tree, av_attr=av_attr)
-    a_tree, v_tree = split_av_graph(av_tree, av_attr=av_attr)
+    a_tree, v_tree = split_av_graph_by_subtree(tree, av_attr=av_attr)
 
     # === Create the graph views ===
     GRAPH_AV_COLORS = {
@@ -923,7 +1039,6 @@ def inspect_digraph_solving(
         scaling=4, show_only="junctions", invert_direction="tree"
     )
     m[1]["graph"].edges_cmap = tree.branches_attr["subtree"].map(GENERIC_CMAP).to_dict()
-    # m[1]["graph"].edges_cmap = av_tree.branches_attr["av"].map(GRAPH_AV_COLORS).to_dict()
     m[1]["graph"].edges_labels = tree.branches_attr["subtree"].to_dict()
 
     nodes_color = pd.Series("grey", index=tree.nodes_attr.index)
@@ -951,10 +1066,6 @@ def inspect_digraph_solving(
     b0, b1 = line_list.T
     tip0, tip1 = line_tips.T
 
-    # line_subtrees = np.full(b0.shape, "", dtype=object)
-    # for i, s in enumerate(debug_info["subtrees"]):
-    #     line_subtrees[s[b0, tip0] & s[b1, tip1]] = str(i)
-
     lines_data = pd.DataFrame(
         {
             "b0": b0,
@@ -966,7 +1077,6 @@ def inspect_digraph_solving(
             "dir0_p": branches_dir_p[b0, np.where(tip0 == 1, 0, 1)],
             "dir1_p": branches_dir_p[b1, np.where(tip1 == 0, 0, 1)],
             "optimal": ((branch_anc == b0) | ((branch_anc > B) & (tree.branch_tree[branch_anc] == b0))),
-            # "subtree": line_subtrees,
             "kept": debug_info.get("kept_edges", np.zeros(b0.shape, dtype=bool)),
         }
     )

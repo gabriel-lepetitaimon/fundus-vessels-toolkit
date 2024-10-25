@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import warnings
 from copy import copy, deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Tuple, overload
@@ -224,6 +225,28 @@ class VGeometricData:
             branches_attr=VBranchGeoData.load(data["branches_attr"]),
             parent_graph=parent_graph,
             fundus_data=fundus_data,
+        )
+
+    @classmethod
+    def empty(cls, parent_graph: Optional[VGraph] = None) -> VGeometricData:
+        """Create an empty geometric data object."""
+        return cls(
+            nodes_coord=np.empty((0, 2), dtype=np.float32),
+            branches_curve=[],
+            domain=Rect(0, 0, 0, 0),
+            parent_graph=parent_graph,
+        )
+
+    @classmethod
+    def empty_like(
+        cls, other: VGeometricData, parent_graph: Optional[VGraph | Literal["other"]] = "other"
+    ) -> VGeometricData:
+        """Create an empty geometric data object with the same domain and nodes as another geometric data object."""
+        return cls(
+            nodes_coord=np.empty((0, 2), dtype=np.float32),
+            branches_curve=[],
+            domain=other.domain,
+            parent_graph=other.parent_graph if parent_graph == "other" else parent_graph,
         )
 
     def copy(self, parent_graph="same") -> VGeometricData:
@@ -934,6 +957,47 @@ class VGeometricData:
                     out[attr].append(data)
             return {k: v[0] for k, v in out.items()} if is_single else out
 
+    def tips_coord(
+        self,
+        branch_ids: Optional[int | npt.ArrayLike[int]] = None,
+        first_tip: Optional[bool | npt.ArrayLike[bool]] = None,
+        *,
+        use_nodes_if_missing: bool = True,
+        graph_index=True,
+    ) -> np.ndarray:
+        """Return the coordinates of the tips of the branches.
+
+        Parameters
+        ----------
+        branch_ids : Optional[int | np.ndarray], optional
+            The id of the branch(es), by default None
+
+        first_tip : Optional[bool | np.ndarray], optional
+            - If None, return the coordinates of both tips of the branch(es).
+            - If True, return the coordinates of the first tip of the branch(es).
+            - If False, return the coordinates of the second tip of the branch(es).
+            - If an array of bool, return the coordinates of the first or the second tip of each branch according to the value of the array.
+
+        use_nodes_if_missing : bool, optional
+            If True, infer the branch directions from the nodes if the tip is missing, by default True.
+
+            .. warning::
+                This option requires the parent graph to be set.
+
+        graph_index : bool, optional
+            Whether the branch_id is indexed according to the graph (True) or to the internal representation (False), by default True.
+
+        Returns
+        -------
+        np.ndarray
+            The coordinates of the tips of the branch(es).
+
+            - If first_tip is not None, the data is an array of shape (b, 2) where b is the length of ``branch_ids`` or (2, ) if ``branch_ids`` is a scalar.
+            - If first_tip is None, the data is an array of shape (b, 2, 2) where b is the length of ``branch_ids`` or (2, 2) if ``branch_ids`` is a scalar.
+        """  # noqa: E501
+        branch_ids, is_single = as_1d_array(branch_ids) if branch_ids is not None else (None, False)
+        raise NotImplementedError
+
     def tips_tangent(
         self,
         branch_ids: Optional[int | npt.ArrayLike[int]] = None,
@@ -1003,14 +1067,37 @@ class VGeometricData:
 
             unknown_tangents: npt.NDArray[np.bool_] = np.isnan(tangents).any(axis=1) | np.all(tangents == 0, axis=1)
             if unknown_tangents.any():
-                branch_ids = np.asarray(branch_ids) if branch_ids is not None else self.branches_id
-                unk_branches = branch_ids[unknown_tangents]
+                unk_branches = np.asarray(branch_ids) if branch_ids is not None else self.branches_id
+                if first_tip_is_none:
+                    unk_branches = np.repeat(unk_branches, 2)
+                unk_branches = unk_branches[unknown_tangents]
                 unk_first_tip: npt.NDArray[np.bool_] = first_tip[unknown_tangents]
-                nodes = self.nodes_coord(branch_list[unk_branches].flatten()).reshape(-1, 2, 2)
-                t = np.diff(nodes, axis=1).squeeze(1)
-                t = t / np.linalg.norm(t, axis=1)[:, None]
-                t[~unk_first_tip] *= -1
-                tangents[unknown_tangents] = t
+                nodes = branch_list[unk_branches]
+                loop_branches = nodes[:, 0] == nodes[:, 1]
+                if loop_branches.any():
+                    warnings.warn(
+                        f"Branch(es): {np.unique(unk_branches[loop_branches])} are self-loop branches "
+                        "with invalid tangents, their tips tangent will be set to (0, 0).",
+                        stacklevel=2,
+                    )
+                    nodes = nodes[~loop_branches]
+                    loop_branches = np.argwhere(unknown_tangents).flatten()[loop_branches]
+                    tangents[loop_branches] = 0
+                    unknown_tangents[loop_branches] = False
+
+                if nodes.shape[0] != 0:
+                    t = np.diff(self.nodes_coord(nodes.flatten()).reshape(-1, 2, 2), axis=1).squeeze(1)
+                    t_zero = np.all(t == 0, axis=1)
+                    if t_zero.any():
+                        warnings.warn(
+                            f"The nodes of branch(es) {np.unique(unk_branches[t_zero])} are superposed,"
+                            "their tips tangent will be set to (0, 0).",
+                            stacklevel=2,
+                        )
+                    if not t_zero.all():
+                        t[~t_zero] = t[~t_zero] / np.linalg.norm(t[~t_zero], axis=1)[:, None]
+                        t[~unk_first_tip] *= -1
+                    tangents[unknown_tangents] = t
 
             if first_tip_is_none:
                 tangents = tangents.reshape(-1, 2, 2)
@@ -1668,7 +1755,7 @@ class VGeometricData:
         arrows_p = []
         arrows_v = []
         curves = self.branch_curve()
-        tangents = self.branch_data(tangents)
+        tangents = self.tips_tangent(attr=tangents)
         for i, curve, tangent in zip(self.branches_id, curves, tangents, strict=True):
             if show_only is not None and not show_only[i].any():
                 continue
@@ -1678,19 +1765,19 @@ class VGeometricData:
                 tail_p = curve[0]
                 head_p = curve[-1]
 
-            tail_to_head = (head_p - tail_p).astype(float)
-            tail_to_head /= np.linalg.norm(tail_to_head)
-            if tangent is None:
-                tail_t = tail_to_head
-                head_t = -tail_t
-            else:
-                tangent = tangent.data
-                tail_t, head_t = tangent[0], tangent[-1]
-                if np.isnan(tail_t).any() or np.sum(tail_t) == 0:
-                    tail_t = tail_to_head
-                if np.isnan(head_t).any() or np.sum(head_t) == 0:
-                    head_t = -tail_to_head
-
+            # tail_to_head = (head_p - tail_p).astype(float)
+            # tail_to_head /= np.linalg.norm(tail_to_head)
+            # if tangent is None:
+            #     tail_t = tail_to_head
+            #     head_t = -tail_t
+            # else:
+            #     tangent = tangent.data
+            #     tail_t, head_t = tangent[0], tangent[-1]
+            #     if np.isnan(tail_t).any() or np.sum(tail_t) == 0:
+            #         tail_t = tail_to_head
+            #     if np.isnan(head_t).any() or np.sum(head_t) == 0:
+            #         head_t = -tail_to_head
+            tail_t, head_t = tangent
             if invert_direction is not None and invert_direction is not False:
                 if invert_direction is True:
                     tail_t = -tail_t

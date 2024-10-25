@@ -30,7 +30,7 @@ std::tuple<torch::Tensor, torch::Tensor, std::vector<torch::Tensor>, torch::Tens
     // --- Clean the branches tips ---
     double clean_branches_tips = get_if_exists(options, "clean_branches_tips", 0.);
     double clean_terminal_branches_tips = get_if_exists(options, "clean_terminal_branches_tips", 0.);
-    bool adaptativeTangent = get_if_exists(options, "adaptative_tangent", 1.) > 0;
+    bool adaptativeTangent = get_if_exists(options, "adaptative_tangents", 1.) > 0;
     auto tangents_calibres_tensor = torch::empty({0}, torch::kFloat);
     if (clean_branches_tips > 0) {
         auto const &adj_list = edge_list_to_adjlist(edge_list, node_yx.size());
@@ -139,7 +139,7 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_skeleton(
 
     // --- Clean the branches tips ---
     int clean_branches_tips = get_if_exists(options, "clean_branches_tips", 0.);
-    bool adaptativeTangent = get_if_exists(options, "adaptative_tangent", 1.) > 0;
+    bool adaptativeTangent = get_if_exists(options, "adaptative_tangents", 1.) > 0;
     if (clean_branches_tips > 0) {
         auto const &adj_list = edge_list_to_adjlist(tensor_to_vectorIntPair(branch_list), node_yx.size(0));
         clean_branches_skeleton(curves, labels_acc, seg_acc, adj_list, clean_branches_tips, adaptativeTangent);

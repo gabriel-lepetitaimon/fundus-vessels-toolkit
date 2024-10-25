@@ -306,7 +306,9 @@ torch::Tensor draw_branches_labels(const std::vector<torch::Tensor> &branchCurve
                                    const torch::Tensor &nodeCoords, const torch::Tensor &branchList) {
     const std::size_t B = branchCurves.size();
     auto branchesLabels = out.accessor<int, 2>();
-    int H = out.size(0), W = out.size(1);
+
+    const auto &size = branchesLabels.sizes();
+    int H = size[0], W = size[1];
 
     for (std::size_t b = 0; b < B; b++) {
         const auto &curveT = branchCurves[b];
@@ -314,7 +316,18 @@ torch::Tensor draw_branches_labels(const std::vector<torch::Tensor> &branchCurve
                     " should have a shape of (N, 2) instead of ", curveT.sizes());
         const auto &curve = curveT.accessor<int, 2>();
         const std::size_t N = curve.size(0);
-        for (std::size_t i = 0; i < N; i++) branchesLabels[curve[i][0]][curve[i][1]] = b + 1;
+        if (N == 0) continue;
+
+        IntPoint prev = {curve[0][0], curve[0][1]};
+        for (std::size_t i = 0; i < N; i++) {
+            IntPoint p = {curve[i][0], curve[i][1]};
+            if (!p.is_adjacent(prev)) {
+                draw_line(prev, p, branchesLabels, b + 1, H, W);
+            } else {
+                branchesLabels[p.y][p.x] = b + 1;
+            }
+            prev = p;
+        }
     }
 
     if (nodeCoords.numel() == 0 || branchList.numel() == 0) return out;
@@ -332,34 +345,12 @@ torch::Tensor draw_branches_labels(const std::vector<torch::Tensor> &branchCurve
         const IntPoint end = {nodeCoords_acc[branchList_acc[b][1]][0], nodeCoords_acc[branchList_acc[b][1]][1]};
         const auto &curve = branchCurves[b].accessor<int, 2>();
         if (curve.size(0) == 0) {
-            RayIterator ray(start, end - start);
-            int i = ray.stepTo(end);
-            while (i-- != 0) {
-                const IntPoint &p = ++ray;
-                if (!p.is_inside(H, W)) break;
-                branchesLabels[p.y][p.x] = b + 1;
-            }
+            draw_line(start, end, branchesLabels, b + 1);
         } else {
             const IntPoint p1 = {curve[0][0], curve[0][1]};
             const IntPoint p2 = {curve[curve.size(0) - 1][0], curve[curve.size(0) - 1][1]};
-            if (p1 != start) {
-                RayIterator ray(start, p1 - start);
-                int i = ray.stepTo(p1);
-                while (i-- != 0) {
-                    const IntPoint &p = ++ray;
-                    if (!p.is_inside(H, W)) break;
-                    branchesLabels[p.y][p.x] = b + 1;
-                }
-            }
-            if (p2 != end) {
-                RayIterator ray(end, p2 - end);
-                int i = ray.stepTo(p2);
-                while (i-- != 0) {
-                    const IntPoint &p = ++ray;
-                    if (!p.is_inside(H, W)) break;
-                    branchesLabels[p.y][p.x] = b + 1;
-                }
-            }
+            if (p1 != start) draw_line(start, p1, branchesLabels, b + 1);
+            if (p2 != end) draw_line(p2, end, branchesLabels, b + 1);
         }
     }
 

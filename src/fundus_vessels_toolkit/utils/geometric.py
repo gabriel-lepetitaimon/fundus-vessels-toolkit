@@ -92,11 +92,9 @@ class Rect(NamedTuple):
     @overload
     @classmethod
     def from_points(cls, bottom_right: Tuple[float | int, float | int]) -> Rect: ...
-
     @overload
     @classmethod
     def from_points(cls, bottom: float | int, right: float | int) -> Rect: ...
-
     @overload
     @classmethod
     def from_points(
@@ -112,13 +110,11 @@ class Rect(NamedTuple):
     def from_points(
         cls, top: float | int, left: float | int, bottom: float | int, right: float | int, *, ensure_positive: bool
     ) -> Rect: ...
-
     @overload
     @classmethod
     def from_points(
         cls, top_left_bottom_right: Tuple[float | int, float | int, float | int, float | int], *, ensure_positive: bool
     ) -> Rect: ...
-
     @classmethod
     def from_points(
         cls,
@@ -159,6 +155,14 @@ class Rect(NamedTuple):
     @classmethod
     def empty(cls) -> Rect:
         return cls(0, 0, 0, 0)
+
+    @classmethod
+    def bounding_box(cls, points: npt.ArrayLike[float]) -> Rect:
+        points = np.atleast_2d(points)
+        assert points.ndim == 2 and points.shape[-1] == 2, "Array must have shape (n, 2)"
+        min_y, min_x = points.min(axis=0)
+        max_y, max_x = points.max(axis=0)
+        return cls(h=max_y - min_y, w=max_x - min_x, y=min_y, x=min_x)
 
     def is_self_empty(self) -> bool:
         return self.w == 0 or self.h == 0

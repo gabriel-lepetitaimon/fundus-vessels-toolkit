@@ -23,9 +23,9 @@ from fundus_vessels_toolkit.utils import if_none
 
 from ..utils.cluster import cluster_by_distance, iterative_reduce_clusters, reduce_clusters
 from ..utils.dataclass import UpdateableDataclass
-from ..utils.geometric import Point, distance_matrix
+from ..utils.geometric import distance_matrix
 from ..utils.lookup_array import create_removal_lookup
-from ..vascular_data_objects import VBranchGeoData, VGraph
+from ..vascular_data_objects import VBranchGeoData, VGraph, VTree
 
 
 class NodeSimplificationCallBack:
@@ -539,6 +539,32 @@ def simplify_passing_nodes(
     return vgraph
 
 
+def simplify_crossing_nodes(tree: VTree, inplace=False) -> VTree:
+    """
+    Merge crossing nodes of a vessel tree.
+
+    Crossing nodes are nodes with two or more incoming branches with successors.
+
+    Parameters
+    ----------
+        vessel_graph:
+            The graph of the vasculature extracted from the vessel map.
+
+    Returns
+    -------
+        The modified graph with the crossing nodes fused.
+
+    """  # noqa: E501
+    if not inplace:
+        tree = tree.copy()
+
+    crossing_nodes = tree.crossing_nodes_ids()
+    if len(crossing_nodes) == 0:
+        return tree
+
+    warnings.warn("simplify_crossing_nodes is not implemented yet.", stacklevel=2)
+
+
 def find_facing_endpoints(
     vessel_graph: VGraph,
     max_distance: float = 100,
@@ -687,7 +713,7 @@ def find_endpoints_branches_intercept(
         np.deg2rad(2 * angle_tolerance),
     )
     if nearest_branch.max() > len(branch_list):
-        warnings.warn("Invalid nearest branch index.")
+        warnings.warn("Invalid nearest branch index.", stacklevel=2)
         nearest_branch[nearest_branch > len(branch_list)] = -1
     nearest_branch = nearest_branch.numpy()
     intercept = intercept.numpy()
@@ -703,32 +729,38 @@ def find_endpoints_branches_intercept(
 
     # === Redirect intercept points that are near branch tips to existing nodes ===
     dist_to_branch_tips = np.linalg.norm(intercept[:, None, :] - nodes_yx[branch_list[nearest_branch]], axis=2)
-    closest_tip = np.argmin(dist_to_branch_tips, axis=1)
-    dist_to_closest_tip = np.take_along_axis(dist_to_branch_tips, closest_tip[:, None], axis=1).squeeze(axis=1)
-    closest_tip = branch_list[nearest_branch, closest_tip]
+    closest_tip_node = np.argmin(dist_to_branch_tips, axis=1)
+    dist_to_closest_tip = np.take_along_axis(dist_to_branch_tips, closest_tip_node[:, None], axis=1).squeeze(axis=1)
+    closest_tip_node = branch_list[nearest_branch, closest_tip_node]
     redirect_to_tip = dist_to_closest_tip <= intercept_snapping_distance * 0.66
 
     endp_to_tips_edges = np.empty((0, 2), dtype=int)
     if np.any(redirect_to_tip):
+        # Sort the intercept points redirected towards endpoints from those redirected to normal nodes
         redirect_to_tip = np.argwhere(redirect_to_tip).flatten()
-        closest_tip_is_endpoints = np.isin(closest_tip[redirect_to_tip], endpoints)
+        closest_tip_is_endpoints = np.isin(closest_tip_node[redirect_to_tip], endpoints)
         redirect_to_node = redirect_to_tip[~closest_tip_is_endpoints]
 
-        endp_to_tips_edges = np.stack((endpoints[redirect_to_node], closest_tip[redirect_to_node]), axis=1)
+        # First add the edges that will be redirected to normal nodes
+        endp_to_tips_edges = np.stack((endpoints[redirect_to_node], closest_tip_node[redirect_to_node]), axis=1)
         redirected_endpoints = np.zeros(n_nodes, dtype=bool)
         redirected_endpoints[endp_to_tips_edges[:, 0]] = True
 
+        # Then find the endpoints that are redirected to one another...
+        redirect_to_endp = redirect_to_tip[closest_tip_is_endpoints]
+        new_endp_edges = np.stack((endpoints[redirect_to_endp], closest_tip_node[redirect_to_endp]), axis=1)
+        new_endp_edges = np.unique(np.sort(new_endp_edges, axis=1), axis=0)
+        # ... and add them to the list of edges (except if they should be omitted)
         if not omit_endpoints_to_endpoints:
-            redirect_to_endp = redirect_to_tip[closest_tip_is_endpoints]
-            new_endp_edges = np.stack((endpoints[redirect_to_endp], closest_tip[redirect_to_endp]), axis=1)
-            new_endp_edges = np.unique(np.sort(new_endp_edges, axis=1), axis=0)
             endp_to_tips_edges = np.concatenate((endp_to_tips_edges, new_endp_edges), axis=0)
-            redirected_endpoints[new_endp_edges.flatten()] = True
+        redirected_endpoints[new_endp_edges.flatten()] = True
 
+        # Check if all endpoints were redirected
         redirected_endpoints = redirected_endpoints[endpoints]
         if np.all(redirected_endpoints):
             return endp_to_tips_edges, np.empty((0, 2), dtype=int), np.empty((0, 2), dtype=np.float64)
 
+        # If not, remove the redirected endpoints from the list (even if they were omitted)
         endpoints = endpoints[~redirected_endpoints]
         intercept = intercept[~redirected_endpoints]
         nearest_branch = nearest_branch[~redirected_endpoints]
@@ -741,14 +773,14 @@ def find_endpoints_branches_intercept(
     endp_to_intercept_nodes_edges = np.array([endpoints, new_intercept_nodes_id], dtype=int).T
     new_intercept_nodes = np.array([new_intercept_nodes_id, nearest_branch], dtype=int).T
 
-    branches, branches_inv, branches_count = np.unique(nearest_branch, return_inverse=True, return_counts=True)
+    branches, branches_count = np.unique(nearest_branch, return_counts=True)
     if intercept_snapping_distance > 0 and np.any(branches_count > 1):
         intercept_nodes_merge_lookup = np.arange(len(endpoints))
         intercept_to_remove = []
         for b, count in zip(branches, branches_count, strict=True):
             if count <= 1:
                 continue
-            intercept_ids = np.argwhere(branches_inv == b).flatten()
+            intercept_ids = np.argwhere(nearest_branch == b).flatten()
             clusters = cluster_by_distance(intercept[intercept_ids], intercept_snapping_distance, iterative=True)
             for cluster in clusters:
                 if len(cluster) > 1:

@@ -16,7 +16,7 @@ std::tuple<std::vector<CurveTangents>, std::vector<Scalars>, std::vector<IntPoin
 extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAcc<bool>& segmentation,
                           std::map<std::string, double> options, bool assume_contiguous) {
     // --- Parse Options ---
-    bool adaptative_tangent = get_if_exists(options, "adaptative_tangent", 1.0) > 0;
+    bool adaptative_tangents = get_if_exists(options, "adaptative_tangents", 1.0) > 0;
     float bspline_targetSqrError = pow(get_if_exists(options, "bspline_target_error", 0.0), 3);
     float curv_roots_percentileThreshold = get_if_exists(options, "curvature_roots_percentile_threshold", 0.1);
 
@@ -79,13 +79,13 @@ extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAcc<
                 branchesTangents[curveI][i] = tangent;
 
                 // Compute the calibre of the curve
-                if (return_calibre || return_boundaries || adaptative_tangent) {
+                if (return_calibre || return_boundaries || adaptative_tangents) {
                     auto boundaries = fast_branch_boundaries(curve, i, segmentation, tangent);
 
-                    if (return_calibre || adaptative_tangent) {
+                    if (return_calibre || adaptative_tangents) {
                         auto calibre = fast_branch_calibre(boundaries[0], boundaries[1], tangent);
 
-                        if (adaptative_tangent && calibre == calibre) {
+                        if (adaptative_tangents && calibre == calibre) {
                             const auto& refinedTangent =
                                 adaptative_curve_tangent(curve, i, calibre, true, true, start, end);
                             branchesTangents[curveI][i] = refinedTangent;

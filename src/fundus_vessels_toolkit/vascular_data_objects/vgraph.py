@@ -3,8 +3,9 @@ from __future__ import annotations
 __all__ = ["VGraph"]
 
 import itertools
+import warnings
 from pathlib import Path
-from typing import Dict, Generator, Iterable, List, Literal, Optional, Tuple, Type, TypeAlias, Union, overload
+from typing import Any, Dict, Generator, Iterable, List, Literal, Optional, Tuple, Type, TypeAlias, Union, overload
 from weakref import WeakSet
 
 import numpy as np
@@ -455,6 +456,10 @@ class VGraph:
         branches_idx = set()
         nodes_idx = set()
         for gdata in self._geometric_data:
+            # Check that each node has a distinct position
+            if (np.diff(gdata._nodes_coord[np.lexsort(gdata._nodes_coord.T)], axis=0) == 0).all(axis=1).any():
+                warnings.warn("The geometric data contains duplicated nodes coordinates.", stacklevel=2)
+
             branches_idx.update(gdata.branches_id)
             nodes_idx.update(gdata.nodes_id)
 
@@ -589,6 +594,31 @@ class VGraph:
             [VGeometricData.load(d) for d in data["geometric_data"]] if "geometric_data" in data else [],
             pd.DataFrame(data["nodes_attr"]) if "nodes_attr" in data else None,
             pd.DataFrame(data["branches_attr"]) if "branches_attr" in data else None,
+        )
+
+    @classmethod
+    def empty(cls) -> VGraph:
+        """Create an empty graph."""
+        return cls(np.empty((0, 2), dtype=int), [VGeometricData.empty()], nodes_count=0, check_integrity=False)
+
+    @classmethod
+    def empty_like(cls, other: VGraph) -> VGraph:
+        """Create an empty graph with the same attributes as another graph."""
+        assert isinstance(other, VGraph), "The other object must be a VGraph object."
+        return cls(**cls._empty_like_kwargs(other))
+
+    @classmethod
+    def _empty_like_kwargs(cls, other: VGraph) -> Dict[str, Any]:
+        branch_attr = pd.DataFrame(columns=other._branches_attr.columns)
+        node_attr = pd.DataFrame(columns=other._nodes_attr.columns)
+
+        return dict(
+            branch_list=np.empty((0, 2), dtype=int),
+            geometric_data=[VGeometricData.empty_like(_, parent_graph=None) for _ in other._geometric_data],
+            nodes_attr=node_attr,
+            branches_attr=branch_attr,
+            nodes_count=0,
+            check_integrity=False,
         )
 
     ####################################################################################################################
@@ -2180,28 +2210,30 @@ class VGraph:
                 "edge_map_visible": edge_map,
             }
         )
-        if bspline is not None:
-            if bspline is True:
-                bspline = VBranchGeoData.Fields.BSPLINE
-            branches_geodata = self.branches_geo_data(bspline)
-            nodes_coord = self.nodes_coord()
 
-            bsplines_path = []
-            filler_paths = []
-            for i, d in enumerate(branches_geodata):
-                n1, n2 = [Point(*nodes_coord[_]) for _ in self._branch_list[i]]
-                if isinstance(d, VBranchGeoData.BSpline):
-                    bsplines_path.append(d.data.to_path())
-                    filler_paths.append([_.to_path() for _ in d.data.filling_curves(n1, n2, smoothing=0.5)])
-                else:
-                    bsplines_path.append("")
-                    filler_paths.append([BezierCubic(n1, n1, n2, n2).to_path()])
+        if self.branches_count > 0:
+            if bspline is not None:
+                if bspline is True:
+                    bspline = VBranchGeoData.Fields.BSPLINE
+                branches_geodata = self.branches_geo_data(bspline)
+                nodes_coord = self.nodes_coord()
 
-            layer.edges_path = bsplines_path
-            layer.dotted_edges_paths = filler_paths
+                bsplines_path = []
+                filler_paths = []
+                for i, d in enumerate(branches_geodata):
+                    n1, n2 = [Point(*nodes_coord[_]) for _ in self._branch_list[i]]
+                    if isinstance(d, VBranchGeoData.BSpline):
+                        bsplines_path.append(d.data.to_path())
+                        filler_paths.append([_.to_path() for _ in d.data.filling_curves(n1, n2, smoothing=0.5)])
+                    else:
+                        bsplines_path.append("")
+                        filler_paths.append([BezierCubic(n1, n1, n2, n2).to_path()])
 
-        if bspline or edge_map:
-            layer.edges_labels_coord = self.geometric_data().branch_midpoint()
+                layer.edges_path = bsplines_path
+                layer.dotted_edges_paths = filler_paths
+
+            if bspline or edge_map:
+                layer.edges_labels_coord = self.geometric_data().branch_midpoint()
 
         if max_colored_node_id:
             node_cmap = {None: colormap_by_name()} | {

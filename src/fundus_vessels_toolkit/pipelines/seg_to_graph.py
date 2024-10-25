@@ -33,7 +33,7 @@ class SegToGraph:
         simplify_graph: bool = True,
         simplify_graph_arg: Optional[GraphSimplifyArg] = None,
         parse_geometry=True,
-        adaptative_tangents=False,
+        adaptative_tangents=True,
         bspline_target_error=1.5,
     ):
         """

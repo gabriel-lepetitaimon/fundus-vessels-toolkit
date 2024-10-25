@@ -131,6 +131,7 @@ def parse_skeleton(
     min_terminal_branch_length=3,
     min_terminal_branch_calibre_ratio=1,
     max_spurs_length=30,
+    adaptative_tangents=True,
 ) -> Tuple[torch.Tensor, torch.Tensor, List[torch.Tensor], torch.Tensor, torch.Tensor]:
     """
     Label the skeleton map with the junctions and endpoints.
@@ -198,6 +199,7 @@ def parse_skeleton(
             min_spurs_length=min_terminal_branch_length,
             spurs_calibre_factor=min_terminal_branch_calibre_ratio,
             max_spurs_length=max_spurs_length,
+            adaptative_tangents=adaptative_tangents,
         )
         out = parse_skeleton_with_cleanup_cpp(skeleton_map, segmentation_map, opts)
     else:

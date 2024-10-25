@@ -1,20 +1,5 @@
 #include "ray_iterators.h"
 
-/**
- * @brief Track the first not-segmented pixels on two semi-infinite lines
- * defined by a start point and a direction. The first line is tracked in the
- * direction of the direction vector, while the second line is tracked in the
- * opposite direction.
- *
- * @param start The start point of the line.
- * @param direction The direction of the line.
- * @param segmentation An accessor to a 2D tensor of shape (H, W) containing the
- * binary segmentation.
- * @param max_distance The maximum distance to track.
- *
- * @return The first point of the line for which the segmentation is false. If
- * no such point is found, return IntPoint::Invalid().
- */
 std::array<IntPoint, 2> track_nearest_edges(const IntPoint& start, const Point& direction,
                                             const Tensor2DAcc<bool>& segmentation, int max_iter) {
     if (direction.is_null()) return {{IntPoint::Invalid(), IntPoint::Invalid()}};
@@ -105,20 +90,6 @@ std::array<IntPoint, 2> track_nearest_edges(const IntPoint& start, const Point& 
     return {dBound, rBound};
 }
 
-/**
- * @brief Track the nearest non-zero pixel on a cone defined by a start point, a
- * direction and an angle.
- *
- * @param start The tip of the cone.
- * @param direction The direction of the cone.
- * @param angle The angle of the cone.
- * @param segmentation An accessor to a 2D tensor of shape (H, W) containing a
- * semantic segmentation.
- * @param max_distance The maximum distance to track.
- *
- * @return The first point (label and position) both inside the cone and the
- * segmentation. If no such point is found, return {0, IntPoint::Invalid()}.
- */
 std::pair<int, IntPoint> track_nearest_branch(const IntPoint& start, const Point& direction, float angle,
                                               float max_distance, const Tensor2DAcc<int>& branchMap) {
     if (direction.is_null()) return {0, IntPoint::Invalid()};
@@ -154,6 +125,25 @@ std::pair<int, IntPoint> track_nearest_branch(const IntPoint& start, const Point
         }
     }
     return best;
+}
+
+void draw_line(IntPoint start, IntPoint end, Tensor2DAcc<int>& tensor, int value, int H, int W) {
+    if (start == end) {
+        if (start.is_inside(H, W)) tensor[start.y][start.x] = value;
+        return;
+    }
+    bool safe = start.is_inside(1, 1, H - 1, W - 1) && end.is_inside(1, 1, H - 1, W - 1);
+    RayIterator ray(start, end - start);
+    int i = ray.stepTo(end);
+    while (i-- > 0) {
+        const IntPoint& p = ++ray;
+        if (safe || p.is_inside(H, W)) tensor[p.y][p.x] = value;
+    }
+}
+
+void draw_line(IntPoint start, IntPoint end, Tensor2DAcc<int>& tensor, int value) {
+    const auto& size = tensor.sizes();
+    draw_line(start, end, tensor, value, size[0], size[1]);
 }
 
 /**********************************************************************************************************************

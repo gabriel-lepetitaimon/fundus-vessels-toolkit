@@ -29,7 +29,7 @@ class VTreeNode(VGraphNode):
 
     @property
     def graph(self) -> VTree:
-        return self._graph
+        return super().graph
 
     def _update_incident_branches_cache(self):
         self._outgoing_branches_id = self.graph.node_outgoing_branches(self.id)
@@ -378,6 +378,21 @@ class VTree(VGraph):
             tree.check_tree_integrity()
         return tree
 
+    @classmethod
+    def empty(cls) -> VTree:
+        """Create an empty tree."""
+        return cls(np.empty((0, 2), dtype=int), np.empty(0, dtype=int), None, [], nodes_count=0, check_integrity=False)
+
+    @classmethod
+    def empty_like(cls, other: VTree) -> VTree:
+        """Create an empty tree with the same attributes as another tree."""
+        assert isinstance(other, VTree), "The input must be a VTree object."
+        return super().empty_like(other)
+
+    @classmethod
+    def _empty_like_kwargs(cls, other: VTree) -> Dict[str, any]:
+        return super()._empty_like_kwargs(other) | {"branch_tree": np.empty(0, dtype=int), "branch_dirs": None}
+
     ####################################################################################################################
     #  === TREE BRANCHES PROPERTIES ===
     ####################################################################################################################
@@ -448,7 +463,7 @@ class VTree(VGraph):
 
         dirs = self._branch_dirs
         branch_list = self._branch_list.copy()
-        branch_list[dirs] = branch_list[dirs][:, ::-1]
+        branch_list[~dirs] = branch_list[~dirs][:, ::-1]
         return branch_list
 
     def branch_ancestors(
@@ -530,6 +545,26 @@ class VTree(VGraph):
         has_succ = np.any(branch_id[:, None] == self.branch_tree[None, :], axis=1)
         return has_succ[0] if is_single else has_succ
 
+    def subtrees(self) -> List[npt.NDArray[np.int_]]:
+        """Return the indexes of the branches of each subtree.
+
+        Returns
+        -------
+        List[np.ndarray]
+            The indexes of the branches of each subtree.
+        """
+        subtrees = []
+        set_branches = np.zeros(self.branches_count, dtype=bool)
+        for branch_id in self.root_branches_ids():
+            subtree_branches = np.concatenate([[branch_id], self.branch_successors(branch_id, max_depth=None)])
+            subtrees.append(subtree_branches)
+
+            assert not np.any(set_branches[subtree_branches]), "Some branches are assigned to multiple subtrees."
+            set_branches[subtree_branches] = True
+
+        assert set_branches.all(), "Some branches were not assigned to a subtree."
+        return subtrees
+
     def subtrees_branch_labels(self) -> npt.NDArray[np.int_]:
         """Label each branch with a unique identifier of its subtree.
 
@@ -539,14 +574,8 @@ class VTree(VGraph):
             The labels of the subtrees.
         """
         labels = np.empty(self.branches_count, dtype=int)
-        set_branches = np.zeros(self.branches_count, dtype=bool)
-        for i, branch_id in enumerate(self.root_branches_ids()):
-            labels[branch_id] = i
-            succ = self.branch_successors(branch_id, max_depth=None)
-            labels[succ] = i
-            set_branches[branch_id] = True
-            set_branches[succ] = True
-        assert set_branches.all(), "Some branches were not assigned to a subtree."
+        for i, branches_ids in enumerate(self.subtrees()):
+            labels[branches_ids] = i
         return labels
 
     def branch_head(self, branch_id: Optional[int | npt.ArrayLike[int]] = None) -> int | npt.NDArray[np.int_]:
@@ -673,6 +702,25 @@ class VTree(VGraph):
         else:
             leaf_nodes = leaf_nodes[:, 1]
         return np.unique(leaf_nodes)
+
+    def crossing_nodes_ids(self) -> npt.NDArray[np.int_]:
+        """Return the indexes of the crossing nodes.
+
+        Crossing nodes are nodes with two or more incoming branches with successors.
+
+        Returns
+        -------
+        np.ndarray
+            The indexes of the crossing nodes.
+        """
+        crossing_candidates = np.argwhere(self.node_indegree() >= 2).flatten()
+        crossing = []
+        for node_id in crossing_candidates:
+            outgoing_branches = self.node_outgoing_branches(crossing_candidates)
+            incoming_branches_with_successors = np.unique(self.branch_tree[outgoing_branches])
+            if len(incoming_branches_with_successors) > (1 if incoming_branches_with_successors[0] != -1 else 2):
+                crossing.append(node_id)
+        return np.array(crossing, dtype=int)
 
     def node_incoming_branches(self, node_id: int | npt.ArrayLike[int]) -> npt.NDArray[np.int_]:
         """Return the ingoing branches of the given node(s).

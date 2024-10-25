@@ -152,6 +152,9 @@ std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_ske
             return std::make_tuple(start, Point(curveYX[end] - curveYX[start]).normalize(), INVALID_CALIBRE,
                                    curveYX[start], curveYX[start]);
 
+        const int curveStart = forward ? start : end;
+        const int curveEnd = forward ? end : start;
+
         // === Check if pixel is valid (Lambda Function) ===
         auto is_branch_pixel_valid = [&](const IntPoint &p, const std::array<IntPoint, 2> &boundaries,
                                          const std::array<IntPoint, 2> &nextBoundaries, const Point &tangent,
@@ -187,10 +190,14 @@ std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_ske
             return true;
         };
 
-        Point tangent = fast_curve_tangent(curveYX, start, TANGENT_HALF_GAUSS, forward, !forward);
+        Point tangent = fast_curve_tangent(curveYX, start, TANGENT_HALF_GAUSS, forward, !forward, curveStart, curveEnd);
         auto boundaries = fast_branch_boundaries(curveYX, start, segmentation, tangent);
         float calibre = fast_branch_calibre(boundaries[0], boundaries[1], tangent);
-        if (adaptativeTangent) tangent = adaptative_curve_tangent(curveYX, start, calibre, forward, !forward);
+        if (adaptativeTangent) {
+            tangent = adaptative_curve_tangent(curveYX, start, calibre, forward, !forward, curveStart, curveEnd);
+            boundaries = fast_branch_boundaries(curveYX, start, segmentation, tangent);
+            calibre = fast_branch_calibre(boundaries[0], boundaries[1], tangent);
+        }
 
         Point nextTangent;
         float nextCalibre;
@@ -198,11 +205,16 @@ std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_ske
 
         for (int i = start; i != end; i += inc) {
             const int nextI = i + inc;
-            nextTangent = fast_curve_tangent(curveYX, nextI, TANGENT_HALF_GAUSS, forward, !forward);
+            nextTangent =
+                fast_curve_tangent(curveYX, nextI, TANGENT_HALF_GAUSS, forward, !forward, curveStart, curveEnd);
             nextBoundaries = fast_branch_boundaries(curveYX, nextI, segmentation, nextTangent);
-            nextCalibre = fast_branch_calibre(boundaries[0], boundaries[1], tangent);
-            if (adaptativeTangent)
-                nextTangent = adaptative_curve_tangent(curveYX, nextI, nextCalibre, forward, !forward);
+            nextCalibre = fast_branch_calibre(nextBoundaries[0], nextBoundaries[1], nextTangent);
+            if (adaptativeTangent) {
+                nextTangent =
+                    adaptative_curve_tangent(curveYX, nextI, nextCalibre, forward, !forward, curveStart, curveEnd);
+                nextBoundaries = fast_branch_boundaries(curveYX, nextI, segmentation, nextTangent);
+                nextCalibre = fast_branch_calibre(nextBoundaries[0], nextBoundaries[1], nextTangent);
+            }
 
             if (is_branch_pixel_valid(curveYX[i], boundaries, nextBoundaries, tangent, nextTangent, calibre,
                                       nextCalibre))
@@ -252,18 +264,27 @@ std::tuple<int, Vector, float, IntPoint, IntPoint> clean_branch_skeleton_tip(con
                                                                              int maxRemovedLength,
                                                                              bool adaptativeTangent = false) {
     const CurveYX &curveYX = branchCurves[branchID];
-    const int start = startTip ? 0 : curveYX.size() - 1;
+    int start = startTip ? 0 : curveYX.size() - 1;
     const int end = startTip ? std::min(maxRemovedLength, (int)curveYX.size() - 2)
                              : std::max((int)curveYX.size() - 1 - maxRemovedLength, 1);
     const int inc = startTip ? 1 : -1;
 
     // === If the branch is too short, keep it ===
-    if (curveYX.size() <= 3)
+    if (std::abs(start - end) <= 3)
         return std::make_tuple(start, Point(curveYX[end] - curveYX[start]).normalize(), INVALID_CALIBRE, curveYX[start],
                                curveYX[start]);
 
     const Point endTangent = fast_curve_tangent(curveYX, end, TANGENT_HALF_GAUSS);
-    const float endCalibre = fast_branch_calibre(curveYX, end, segmentation, endTangent);
+    const float refCalibre = fast_branch_calibre(curveYX, end, segmentation, endTangent);
+    if (refCalibre == refCalibre && refCalibre < 20) {
+        if (std::abs(start - end) <= refCalibre)
+            return std::make_tuple(start, Point(curveYX[end] - curveYX[start]).normalize(), INVALID_CALIBRE,
+                                   curveYX[start], curveYX[start]);
+        // If a reference calibre is available, start by removing the pixels that are too close to the tip
+        start += std::floor(refCalibre / 2) * inc;
+    }
+    const int curveStart = startTip ? start : end;
+    const int curveEnd = startTip ? end : start;
 
     // === Check if pixel is valid (Lambda Function) ===
     auto is_branch_pixel_valid = [&](const IntPoint &p, const std::array<IntPoint, 2> &boundaries,
@@ -273,33 +294,43 @@ std::tuple<int, Vector, float, IntPoint, IntPoint> clean_branch_skeleton_tip(con
         auto const &boundL = boundaries[0], boundR = boundaries[1];
         if (!boundL.is_valid() || !boundR.is_valid()) return false;
 
-        // 2. Check if the skeleton is too close to the boundaries
-        if (calibre < endCalibre / 3) return false;
+        // 2. Check if the branch width is constant for this pixel and the next
+        if (abs(calibre - nextCalibre) > 1.42) return false;
 
-        // 3. Check if the skeleton is at the center of the boundaries
+        // 3. Check if the tangent is within 20 degrees of the next tangent
+        if (tangent.dot(nextTangent) < .94) return false;
+
+        // 4. Check if the skeleton is at the center of the boundaries
         const float dL = distance(p, boundL), dR = distance(p, boundR);
         if (abs(dL - dR) > 1.42) return false;
-
-        // 4. Check if the branch width is constant for this pixel and the next
-        if (abs(calibre - nextCalibre) > 1.42) return false;
 
         return true;
     };
 
-    Point tangent = fast_curve_tangent(curveYX, start, TANGENT_HALF_GAUSS, startTip, !startTip);
+    Point tangent = fast_curve_tangent(curveYX, start, TANGENT_HALF_GAUSS, startTip, !startTip, curveStart, curveEnd);
     auto boundaries = fast_branch_boundaries(curveYX, start, segmentation, tangent);
     float calibre = fast_branch_calibre(boundaries[0], boundaries[1], tangent);
-    if (adaptativeTangent) tangent = adaptative_curve_tangent(curveYX, start, calibre, true, true, start, end);
+    if (adaptativeTangent) {
+        tangent = adaptative_curve_tangent(curveYX, start, calibre, startTip, !startTip, curveStart, curveEnd);
+        boundaries = fast_branch_boundaries(curveYX, start, segmentation, tangent);
+        calibre = fast_branch_calibre(boundaries[0], boundaries[1], tangent);
+    }
 
     Point nextTangent;
     float nextCalibre;
     std::array<IntPoint, 2> nextBoundaries;
 
     for (int i = start; i != end; i += inc) {
-        nextTangent = fast_curve_tangent(curveYX, i + inc, TANGENT_HALF_GAUSS, startTip, !startTip);
-        nextBoundaries = fast_branch_boundaries(curveYX, i + inc, segmentation, nextTangent);
-        nextCalibre = fast_branch_calibre(boundaries[0], boundaries[1], tangent);
-        if (adaptativeTangent) nextTangent = adaptative_curve_tangent(curveYX, i, nextCalibre, true, true, start, end);
+        const int nextI = i + inc;
+        nextTangent = fast_curve_tangent(curveYX, nextI, TANGENT_HALF_GAUSS, startTip, !startTip, curveStart, curveEnd);
+        nextBoundaries = fast_branch_boundaries(curveYX, nextI, segmentation, nextTangent);
+        nextCalibre = fast_branch_calibre(nextBoundaries[0], nextBoundaries[1], nextTangent);
+        if (adaptativeTangent) {
+            nextTangent =
+                adaptative_curve_tangent(curveYX, nextI, nextCalibre, startTip, !startTip, curveStart, curveEnd);
+            nextBoundaries = fast_branch_boundaries(curveYX, nextI, segmentation, nextTangent);
+            nextCalibre = fast_branch_calibre(nextBoundaries[0], nextBoundaries[1], nextTangent);
+        }
 
         if (is_branch_pixel_valid(curveYX[i], boundaries, nextBoundaries, tangent, nextTangent, calibre, nextCalibre))
             return std::make_tuple(i, tangent, calibre, boundaries[0], boundaries[1]);
@@ -309,8 +340,7 @@ std::tuple<int, Vector, float, IntPoint, IntPoint> clean_branch_skeleton_tip(con
         calibre = nextCalibre;
     }
 
-    return std::make_tuple(end, tangent, fast_branch_calibre(boundaries[0], boundaries[1], tangent), boundaries[0],
-                           boundaries[1]);
+    return std::make_tuple(end, tangent, calibre, boundaries[0], boundaries[1]);
 }
 
 /**

@@ -1,8 +1,8 @@
-import warnings
 from typing import Literal, Optional
 
 import numpy as np
 
+from ..utils.geometric import Rect
 from ..utils.graph.measures import extract_branch_geometry
 from ..utils.math import intercept_segment
 from ..vascular_data_objects import FundusData, VBranchGeoData, VGraph
@@ -12,7 +12,7 @@ def populate_geometry(
     vgraph: VGraph,
     vessel_segmentation: Optional[np.ndarray | FundusData] = None,
     *,
-    adaptative_tangents=False,
+    adaptative_tangents=True,
     bspline_target_error: float = 2,
     populate_tip_geodata: bool = True,
     inplace: bool = False,
@@ -42,13 +42,6 @@ def populate_geometry(
     """
     if not inplace:
         vgraph = vgraph.copy()
-        return populate_geometry(
-            vgraph,
-            vessel_segmentation,
-            adaptative_tangents=adaptative_tangents,
-            bspline_target_error=bspline_target_error,
-            inplace=True,
-        )
 
     geo_data = vgraph.geometric_data()
 
@@ -66,7 +59,7 @@ def populate_geometry(
     tangents, calibres, boundaries, curvatures, curv_roots, bsplines = extract_branch_geometry(
         valid_curves,
         vessel_segmentation,
-        adaptative_tangent=adaptative_tangents,
+        adaptative_tangents=adaptative_tangents,
         bspline_target_error=bspline_target_error,
         bspline_max_gap=7,
         return_boundaries=True,
@@ -250,6 +243,9 @@ def center_junction_nodes(
     if not inplace:
         graph = graph.copy()
 
+    if graph.nodes_count == 0:
+        return graph
+
     for gdata in graph._geometric_data:
         tips_data = gdata.tip_data_around_node(attrs=[tangent_tips], graph_index=False)
         all_tips_yx = tips_data["yx"]
@@ -271,7 +267,7 @@ def center_junction_nodes(
                 intercepts.append(intercept_segment(a0, a1, b0, b1, a1_bound=False, b1_bound=False).squeeze(0))
             intercepts = np.concatenate(intercepts)
             # intercepts = intercepts[np.isfinite(intercepts).all(axis=1)]
-            intercepts = intercepts[gdata.domain.contains(intercepts)]
+            intercepts = intercepts[Rect.bounding_box(tips_yx).contains(intercepts)]
             if len(intercepts):
                 gdata._nodes_coord[node_id] = intercepts.mean(axis=0)
 

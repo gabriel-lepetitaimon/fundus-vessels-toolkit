@@ -48,7 +48,7 @@ def track_branches(edge_labels_map, nodes_yx, edge_list) -> list[list[int]]:
 def extract_branch_geometry(
     branch_curves: List[torch.Tensor],
     segmentation: torch.Tensor,
-    adaptative_tangent: bool = True,
+    adaptative_tangents: bool = True,
     return_calibre: bool = True,
     return_boundaries: bool = False,
     return_curvature: bool = False,
@@ -69,7 +69,7 @@ def extract_branch_geometry(
     segmentation : torch.Tensor
         A 2D tensor of shape (H, W) containing the segmentation of the image.
 
-    adaptative_tangent : bool, optional
+    adaptative_tangents : bool, optional
         If True, the standard deviation of the gaussian weighting the curve points is set to the vessel calibre.
 
     return_calibre : bool, optional
@@ -106,7 +106,7 @@ def extract_branch_geometry(
 
     """  # noqa: E501
     options = dict(
-        adaptative_tangent=adaptative_tangent,
+        adaptative_tangents=adaptative_tangents,
         return_calibre=return_calibre,
         return_boundaries=return_boundaries,
         return_curvature=return_curvature,
@@ -132,8 +132,8 @@ def extract_branch_geometry_from_skeleton(
     edge_list: torch.Tensor,
     segmentation: torch.Tensor,
     clean_branches_tips: int = 20,
+    adaptative_tangents: bool = True,
     return_labels: bool = False,
-    adaptative_tangent: bool = True,
 ) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor], torch.Tensor]:
     """Track branches from a labels map and extract their geometry.
 
@@ -155,6 +155,9 @@ def extract_branch_geometry_from_skeleton(
     clean_branches_tips : int, optional
         The maximum number of pixels removable at branches tips. By default 20.
 
+    adaptative_tangents : bool, optional
+        If True, the standard deviation of the gaussian weighting the curve points is set to the vessel cal
+
     return_labels : bool, optional
 
     Returns
@@ -170,7 +173,7 @@ def extract_branch_geometry_from_skeleton(
 
     """
     options = dict(
-        clean_branches_tips=float(clean_branches_tips), bspline_max_error=4, adaptative_tangent=adaptative_tangent
+        clean_branches_tips=float(clean_branches_tips), bspline_max_error=4, adaptative_tangents=adaptative_tangents
     )
 
     branch_labels = branch_labels.int()

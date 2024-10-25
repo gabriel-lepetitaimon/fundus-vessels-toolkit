@@ -64,6 +64,25 @@ class AVSegToTreeBase(metaclass=ABCMeta):
     ) -> VGraph: ...
 
 
+MINIMAL_FUNDUS_SEG_TO_GRAPH = SegToGraph(
+    skeletonize_method="lee",
+    fix_hollow=True,
+    clean_branches_tips=30,
+    min_terminal_branch_length=4,
+    min_terminal_branch_calibre_ratio=1,
+    simplify_graph_arg=GraphSimplifyArg(
+        max_spurs_length=0,
+        reconnect_endpoints=False,
+        junctions_merge_distance=1,
+        min_orphan_branches_length=3,
+        max_cycles_length=3,
+        simplify_topology=False,
+    ),
+    parse_geometry=True,
+    adaptative_tangents=True,
+)
+
+
 class AVSegToTree(AVSegToTreeBase):
     def __init__(
         self,
@@ -78,7 +97,7 @@ class AVSegToTree(AVSegToTreeBase):
         """
 
         super(AVSegToTree, self).__init__()
-        self.segToGraph = if_none(segToGraph, FUNDUS_SEG_TO_GRAPH)
+        self.segToGraph = if_none(segToGraph, MINIMAL_FUNDUS_SEG_TO_GRAPH)
         self.av_attr = "av"
 
     def __call__(
@@ -92,9 +111,9 @@ class AVSegToTree(AVSegToTreeBase):
         fundus = self.prepare_data(fundus, av=av, od=od)
         if fundus.od_center is None:
             raise NotImplementedError("Parsing tree of image without optic disc is not implemented.")
-        graph = self.to_vgraph(fundus, label_av=True, simplify=True)
-        lines_digraph_info = self.build_line_digraph(graph, fundus)
-        tree = self.resolve_digraph_to_vtree(*lines_digraph_info, relabel_av=True)
+        graph = self.to_vgraph(fundus, simplify=True)
+        lines_digraph_info = self.build_line_digraph(graph, fundus, inplace=True)
+        tree = self.resolve_digraph_to_vtree(*lines_digraph_info)
         return self.split_av_tree(tree)
 
     # --- Intermediate steps ---
@@ -128,11 +147,11 @@ class AVSegToTree(AVSegToTreeBase):
         )
 
     def build_line_digraph(
-        self, graph: VGraph, fundus_data: FundusData
+        self, graph: VGraph, fundus_data: FundusData, inplace: bool = False
     ) -> Tuple[VGraph, npt.NDArray[np.int_], npt.NDArray[np.bool_], npt.NDArray[np.float64]]:
         from ..segment_to_graph.av_tree_parsing import build_line_digraph
 
-        return build_line_digraph(graph, fundus_data, av_attr=self.av_attr)
+        return build_line_digraph(graph, fundus_data, av_attr=self.av_attr, inplace=inplace)
 
     def resolve_digraph_to_vtree(
         self,
@@ -141,260 +160,26 @@ class AVSegToTree(AVSegToTreeBase):
         line_tips: npt.NDArray[np.int_],
         line_probability: npt.NDArray[np.float64],
         branches_dir_p: npt.NDArray[np.float64],
-        *,
-        relabel_av: bool = True,
     ) -> VTree:
-        from ..segment_to_graph.av_tree_parsing import relabel_av_by_subtree, resolve_digraph_to_vtree
+        from ..segment_to_graph.av_tree_parsing import resolve_digraph_to_vtree
 
         vtree = resolve_digraph_to_vtree(vgraph, line_list, line_tips, line_probability, branches_dir_p)
-        if relabel_av:
-            relabel_av_by_subtree(vtree, av_attr=self.av_attr, inplace=True)
         return vtree
 
     def split_av_tree(self, tree: VTree) -> Tuple[VTree, VTree]:
-        from ..segment_to_graph.av_tree_parsing import split_av_graph
+        from ..segment_to_graph.av_tree_parsing import split_av_graph_by_subtree
 
-        return split_av_graph(tree)
+        return split_av_graph_by_subtree(tree, av_attr=self.av_attr)
 
     # --- Utility methods ---
-    def to_vgraph(self, fundus=None, /, *, av=None, od=None, label_av=True, simplify=None):
+    def to_vgraph(self, fundus=None, /, *, av=None, od=None, label_av=True, simplify=True):
         fundus = self.prepare_data(fundus, av=av, od=od)
-        graph = self.segToGraph(fundus.vessels, parse_geometry=True, simplify=False)
+        graph = self.segToGraph(fundus.vessels, parse_geometry=True, simplify=True)
         if label_av:
             self.assign_av_labels(graph, fundus.av, inplace=True)
-            if if_none(simplify, self.segToGraph.simplify_graph):
+            if simplify:
                 self.simplify_av_graph(graph, inplace=True)
-        elif if_none(simplify, self.segToGraph.simplify_graph):
-            self.segToGraph.simplify(graph, inplace=True)
         return graph
-
-
-# class AVSegToTree(AVSegToTreeBase):
-#     def __init__(
-#         self,
-#         skeletonize_method: SkeletonizeMethod | str = "lee",
-#         fix_hollow=True,
-#         clean_branches_tips=20,
-#         min_terminal_branch_length=4,
-#         min_terminal_branch_calibre_ratio=1,
-#         max_spurs_length=30,
-#         min_orphan_branch_length=0,
-#         merge_small_cycles: float = 0,
-#         simplify_topology: SimplifyTopology = "node",
-#         parse_geometry=True,
-#         adaptative_tangents=False,
-#         bspline_target_error=3,
-#     ):
-#         """
-
-#         Parameters
-#         ----------
-#         skeletonize_method:
-#             Method to use for skeletonization. One of: 'medial_axis', 'zhang', 'lee' (default).
-
-#         fix_hollow:
-#             If True (by default), hollow cross pattern are filled and considered as a 4-branches junction.
-
-#         clean_branches_tips:
-#             If > 0, clean the skeleton extremities of each branches.
-#             This step ensure that the branch skeleton actually starts where the branch emerge from the junction/bifurcation and not at the center of the junction/bifurcation. Skeleton inside the junction/bifurcation is often not relevant and may affect the accuracy of tangent and calibre estimation.
-
-#             The value of ``clean_branches_tips`` is the maximum number of pixel that can be removed through this process.
-
-#         min_terminal_branch_length :
-#         If > 0, remove terminal branches that are shorter than this value in pixel.
-
-#         min_terminal_branch_calibre_ratio :
-#             If > 0, remove terminal branches that are shorter than this value times the calibre of its largest adjacent branch.
-
-#         max_spurs_length :
-#             If > 0, prevent the removal of a terminal branch longer than this value.
-
-#         min_orphan_branch_length:
-#             If > 0, remove branches that are not connected to any junction and are shorter than this value.
-
-#         nodes_merge_distance:
-#             - If True (by default), merge nodes that are closer than 2 pixels.
-#             - If False, do not merge nodes.
-#             - If an integer, merge nodes that are closer than this distance.
-
-#         merge_small_cycles:
-#             Remove cycles whose size is inferior to this. Default: 0.
-
-#         simplify_topology:
-#             - If True or 'both', remove nodes that are not junctions or endpoints.
-#             - If False, do not remove any node.
-#             - If 'node', remove nodes that are not junctions.
-#             - If 'junction', remove nodes that are not junctions or endpoints.
-
-#         parse_geometry:
-#             If True, populate the geometry of the graph with the tangent and calibre of the branches.
-
-#         adaptative_tangents:
-#             If True, adapt the smoothing of the branches tangents to the local calibre of the vessel.
-
-#         bspline_target_error:
-#             Target error for the bspline interpolation of the branches. Default is 3.
-#         """  # noqa: E501
-#         super(AVSegToTree, self).__init__()
-
-#         self.skeletonize_method: SkeletonizeMethod | str = skeletonize_method
-
-#         self.fix_hollow = fix_hollow
-#         self.clean_branches_tips = clean_branches_tips
-#         self.min_terminal_branch_length = min_terminal_branch_length
-#         self.min_terminal_branch_calibre_ratio = min_terminal_branch_calibre_ratio
-#         self.max_spurs_length = max_spurs_length
-
-#         self.assign_ratio_threshold = 4 / 5
-#         self.assign_split_branch = True
-#         self.propagate_assigned_labels = True
-
-#         self.simplification_enabled = True
-#         self.min_orphan_branch_length = min_orphan_branch_length
-#         self.iterative_nodes_merge = True
-#         self.merge_small_cycles = merge_small_cycles
-#         self.simplify_topology = simplify_topology
-#         self.node_simplification_criteria = None
-
-#         self.geometry_parsing_enabled = parse_geometry
-#         self.adaptative_tangents = adaptative_tangents
-#         self.bspline_target_error = bspline_target_error
-
-#     def __call__(
-#         self,
-#         fundus: Optional[FundusData] = None,
-#         /,
-#         *,
-#         av: Optional[npt.NDArray[np.int_] | torch.Tensor | str | Path] = None,
-#         od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
-#     ) -> Tuple[VGraph, VGraph]:
-#         fundus = self.prepare_data(fundus, av=av, od=od)
-
-#         vessel_skeleton = self.skeletonize(fundus.vessels)
-#         graph = self.skel_to_vgraph(vessel_skeleton, fundus.vessels)
-#         self.assign_av_labels(graph, fundus.av, inplace=True)
-#         if self.simplification_enabled:
-#             self.simplify_av_graph(graph, inplace=True)
-#         graphs = self.split_av_graph(graph)
-#         trees = []
-#         for g in graphs:
-#             trees.append(self.vgraph_to_vtree(g, fundus.od_center))
-
-#         if self.geometry_parsing_enabled:
-#             for tree in trees:
-#                 self.populate_geometry(tree, fundus, inplace=True)
-
-#         return trees
-
-#     # --- Intermediate steps ---
-#     def skeletonize(self, vessels: npt.NDArray[np.bool_] | torch.Tensor) -> npt.NDArray[np.bool_] | torch.Tensor:
-#         from ..segment_to_graph.skeleton_parsing import detect_skeleton_nodes
-#         from ..segment_to_graph.skeletonize import skeletonize
-
-#         binary_skel = skeletonize(vessels > 0, method=self.skeletonize_method) > 0
-#         remove_endpoint_branches = self.min_terminal_branch_length > 0 or self.min_terminal_branch_calibre_ratio > 0
-#         return detect_skeleton_nodes(
-#             binary_skel, fix_hollow=self.fix_hollow, remove_endpoint_branches=remove_endpoint_branches
-#         )
-
-#     def skel_to_vgraph(
-#         self,
-#         skeleton: npt.NDArray[np.bool_] | torch.Tensor,
-#         vessels: Optional[npt.NDArray[np.bool_] | torch.Tensor | FundusData] = None,
-#     ) -> VGraph:
-#         from ..segment_to_graph.graph_simplification import simplify_graph
-#         from ..segment_to_graph.skeleton_parsing import skeleton_to_vgraph
-
-#         graph = skeleton_to_vgraph(
-#             skeleton,
-#             vessels=vessels,
-#             fix_hollow=self.fix_hollow,
-#             clean_branches_tips=self.clean_branches_tips,
-#             min_terminal_branch_length=self.min_terminal_branch_length,
-#             min_terminal_branch_calibre_ratio=self.min_terminal_branch_calibre_ratio,
-#             max_spurs_length=self.max_spurs_length,
-#         )
-#         simplify_graph(
-#             graph,
-#             junctions_merge_distance=0,
-#             max_cycles_length=self.merge_small_cycles,
-#             simplify_topology=None,
-#             min_orphan_branches_length=self.min_orphan_branch_length,
-#             # node_simplification_criteria=self.node_simplification_criteria,
-#             inplace=True,
-#         )
-
-#         return graph
-
-#     def assign_av_labels(
-#         self, graph: VGraph, av_map: npt.NDArray[np.int_], av_attr: Optional[str] = None, inplace: bool = False
-#     ) -> VGraph:
-#         from ..segment_to_graph.av_tree_parsing import assign_av_label
-
-#         return assign_av_label(
-#             graph,
-#             av_map=av_map,
-#             ratio_threshold=self.assign_ratio_threshold,
-#             split_av_branch=self.assign_split_branch,
-#             av_attr=if_none(av_attr, "av"),
-#             propagate_labels=self.propagate_assigned_labels,
-#             inplace=inplace,
-#         )
-
-#     def simplify_av_graph(self, graph: VGraph, inplace: bool = False) -> VGraph:
-#         from ..segment_to_graph.av_tree_parsing import simplify_av_graph
-
-#         return simplify_av_graph(
-#             graph,
-#             av_attr="av",
-#             inplace=inplace,
-#         )
-
-#     def split_av_graph(self, graph: VGraph, av_attr: Optional[str] = None) -> Tuple[VGraph, VGraph]:
-#         from ..segment_to_graph.av_tree_parsing import naive_av_split
-
-#         return naive_av_split(graph, av_attr=if_none(av_attr, "av"))
-
-#     def populate_geometry(self, graph: VGraph, fundus: FundusData, inplace: bool = False) -> VGraph:
-#         from ..segment_to_graph.geometry_parsing import populate_geometry
-
-#         return populate_geometry(
-#             graph,
-#             fundus.vessels,
-#             adaptative_tangents=self.adaptative_tangents,
-#             bspline_target_error=self.bspline_target_error,
-#             inplace=inplace,
-#         )
-
-#     def vgraph_to_vtree(self, graph: VGraph, od_pos: Point) -> VTree:
-#         from ..segment_to_graph.av_tree_parsing import naive_vgraph_to_vtree, simplify_av_graph
-#         from ..segment_to_graph.tree_simplification import clean_vtree
-
-#         tree = naive_vgraph_to_vtree(graph, od_pos)
-#         return clean_vtree(tree)
-
-#     # --- Utility methods ---
-#     def to_vgraph(
-#         self,
-#         fundus: Optional[FundusData] = None,
-#         /,
-#         *,
-#         av: Optional[npt.NDArray[np.int_] | torch.Tensor | str | Path] = None,
-#         od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
-#         simplify: Optional[bool] = None,
-#         populate_geometry: Optional[bool] = None,
-#     ) -> VGraph:
-#         fundus = self.prepare_data(fundus, av=av, od=od)
-
-#         vessel_skeleton = self.skeletonize(fundus.vessels)
-#         graph = self.skel_to_vgraph(vessel_skeleton, fundus)
-#         self.assign_av_labels(graph, fundus, inplace=True)
-#         if if_none(simplify, self.simplification_enabled):
-#             self.simplify_av_graph(graph, inplace=True)
-#         if if_none(populate_geometry, self.geometry_parsing_enabled):
-#             self.populate_geometry(graph, fundus, inplace=True)
-#         return graph
 
 
 FUNDUS_SEG_TO_GRAPH = SegToGraph(
