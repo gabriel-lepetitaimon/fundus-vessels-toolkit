@@ -26,6 +26,7 @@ from ..utils.dataclass import UpdateableDataclass
 from ..utils.geometric import distance_matrix
 from ..utils.lookup_array import create_removal_lookup
 from ..vascular_data_objects import VBranchGeoData, VGraph, VTree
+from .geometry_parsing import derive_tips_geometry_from_curve_geometry
 
 
 class NodeSimplificationCallBack:
@@ -69,7 +70,7 @@ class GraphSimplifyArg(UpdateableDataclass):
 
 
 def simplify_graph(
-    vessel_graph: VGraph,
+    graph: VGraph,
     arg: Optional[GraphSimplifyArg] = None,
     /,
     *,
@@ -94,7 +95,7 @@ def simplify_graph(
 
     Parameters
     ----------
-        vessel_graph:
+        graph:
             The graph of the vasculature extracted from the vessel map.
 
         max_spurs_length:
@@ -163,17 +164,17 @@ def simplify_graph(
     )
 
     if not inplace:
-        vessel_graph = vessel_graph.copy()
+        graph = graph.copy()
 
     if arg.max_spurs_length > 0:
-        remove_spurs(vessel_graph, arg.max_spurs_length, inplace=True)
+        remove_spurs(graph, arg.max_spurs_length, inplace=True)
 
     if arg.max_cycles_length > 0:
-        merge_small_cycles(vessel_graph, arg.max_cycles_length, inplace=True)
+        merge_small_cycles(graph, arg.max_cycles_length, inplace=True)
 
     if arg.junctions_merge_distance > 0:
         merge_nodes_by_distance(
-            vessel_graph,
+            graph,
             max_distance=arg.junctions_merge_distance,
             nodes_type="junction",
             only_connected_nodes=True,
@@ -183,25 +184,25 @@ def simplify_graph(
 
     if type(arg.reconnect_endpoints) is bool:
         if arg.reconnect_endpoints:
-            vessel_graph = _reconnect_endpoints(vessel_graph, inplace=True)
+            graph = _reconnect_endpoints(graph, inplace=True)
     else:
-        vessel_graph = _reconnect_endpoints(vessel_graph, arg.reconnect_endpoints, inplace=True)
+        graph = _reconnect_endpoints(graph, arg.reconnect_endpoints, inplace=True)
 
     if arg.max_cycles_length > 0 or arg.simplify_topology in ("branch", "both") or arg.simplify_topology is True:
         max_nodes_distance = arg.max_cycles_length if arg.simplify_topology not in ("branch", "both") else None
-        merge_equivalent_branches(vessel_graph, max_nodes_distance, inplace=True)
+        merge_equivalent_branches(graph, max_nodes_distance, inplace=True)
 
     if arg.simplify_topology in ("node", "both") or arg.simplify_topology is True:
-        simplify_passing_nodes(vessel_graph, min_angle=arg.passing_node_min_angle, inplace=True)
+        simplify_passing_nodes(graph, min_angle=arg.passing_node_min_angle, inplace=True)
 
     if arg.min_orphan_branches_length > 0:
-        remove_orphan_branches(vessel_graph, arg.min_orphan_branches_length, inplace=True)
+        remove_orphan_branches(graph, arg.min_orphan_branches_length, inplace=True)
 
-    return vessel_graph
+    return graph
 
 
 def cluster_nodes_by_distance(
-    vessel_graph: VGraph,
+    graph: VGraph,
     max_distance: float,
     nodes_type: Literal["all", "junction", "endpoints"] = "all",
     only_connected_nodes: Optional[bool] = None,
@@ -212,7 +213,7 @@ def cluster_nodes_by_distance(
 
     Parameters
     ----------
-        vessel_graph:
+        graph:
             The graph of the vasculature extracted from the vessel map.
 
         max_distance:
@@ -237,9 +238,9 @@ def cluster_nodes_by_distance(
     """  # noqa: E501
 
     if nodes_type == "junction":
-        nodes_id = vessel_graph.junctions_nodes()
+        nodes_id = graph.junctions_nodes()
     elif nodes_type == "endpoints":
-        nodes_id = vessel_graph.endpoints_nodes()
+        nodes_id = graph.endpoints_nodes()
     else:
         nodes_id = None
 
@@ -247,13 +248,13 @@ def cluster_nodes_by_distance(
         # --- Cluster only connected nodes ---
         # ... Only edges of the graph are considered
         if nodes_id is None:
-            branches = vessel_graph.branch_list
+            branches = graph.branch_list
         else:
-            branch_id = np.argwhere(np.isin(vessel_graph.branch_list, nodes_id).all(axis=1)).flatten()
-            branches = vessel_graph.branch_list[branch_id]
+            branch_id = np.argwhere(np.isin(graph.branch_list, nodes_id).all(axis=1)).flatten()
+            branches = graph.branch_list[branch_id]
         # Exclude branches with the same start and end nodes
         branches = branches[branches[:, 0] != branches[:, 1]]
-        nodes_coord = vessel_graph.nodes_coord()
+        nodes_coord = graph.nodes_coord()
         # Compute the distance between the nodes of each branch
         branch_dist = np.linalg.norm(nodes_coord[branches[:, 0]] - nodes_coord[branches[:, 1]], axis=1)
         # Reduce the clusters
@@ -265,9 +266,9 @@ def cluster_nodes_by_distance(
     elif only_connected_nodes is None:
         # --- Cluster all nodes ---
         if nodes_id is None:
-            return cluster_by_distance(vessel_graph.nodes_coord(), max_distance, iterative=iterative_clustering)
+            return cluster_by_distance(graph.nodes_coord(), max_distance, iterative=iterative_clustering)
         else:
-            nodes_coord = vessel_graph.nodes_coord()[nodes_id]
+            nodes_coord = graph.nodes_coord()[nodes_id]
             clusters = cluster_by_distance(nodes_coord, max_distance, iterative=iterative_clustering)
             return [{nodes_id[_] for _ in cluster} for cluster in clusters]
 
@@ -275,12 +276,12 @@ def cluster_nodes_by_distance(
         # --- Cluster only unconnected nodes ---
         # ... For each pair of independent subgraphs of the vessel graph, only their closest nodes can be clustered
         # Get the independent subgraphs of the vessel graph
-        connected_nodes_id = vessel_graph.nodes_connected_graphs()
+        connected_nodes_id = graph.nodes_connected_graphs()
         # Filter the nodes type
         connected_nodes_id = [np.intersect1d(_, nodes_id, assume_unique=True) for _ in connected_nodes_id]
         # Compute the distance between all these nodes
         all_nodes_id = np.concatenate(connected_nodes_id)
-        all_nodes_coord = vessel_graph.nodes_coord()[all_nodes_id]
+        all_nodes_coord = graph.nodes_coord()[all_nodes_id]
         distance = np.linalg.norm(all_nodes_coord[:, None] - all_nodes_coord, axis=-1)
         # and create a short id for each subgraph
         connected_nodes_short_id = []
@@ -304,7 +305,7 @@ def cluster_nodes_by_distance(
 
 
 def merge_nodes_by_distance(
-    vessel_graph: VGraph,
+    graph: VGraph,
     max_distance: float,
     nodes_type: Literal["all", "junction", "endpoints"] = "all",
     only_connected_nodes: Optional[bool] = None,
@@ -317,7 +318,7 @@ def merge_nodes_by_distance(
 
     Parameters
     ----------
-        vessel_graph:
+        graph:
             The graph of the vasculature extracted from the vessel map.
 
         max_distance:
@@ -336,23 +337,23 @@ def merge_nodes_by_distance(
     """  # noqa: E501
 
     clusters = cluster_nodes_by_distance(
-        vessel_graph=vessel_graph,
+        graph=graph,
         max_distance=max_distance,
         nodes_type=nodes_type,
         only_connected_nodes=only_connected_nodes,
         iterative_clustering=iterative_clustering,
     )
-    nodes_weight = None if nodes_type != "all" else (~vessel_graph.endpoints_nodes(as_mask=True)) * 1
-    return vessel_graph.merge_nodes(clusters, nodes_weight=nodes_weight, inplace=inplace, assume_reduced=True)
+    nodes_weight = None if nodes_type != "all" else (~graph.endpoints_nodes(as_mask=True)) * 1
+    return graph.merge_nodes(clusters, nodes_weight=nodes_weight, inplace=inplace, assume_reduced=True)
 
 
-def merge_small_cycles(vessel_graph: VGraph, max_cycle_size: float, inplace=False) -> VGraph:
+def merge_small_cycles(graph: VGraph, max_cycle_size: float, inplace=False) -> VGraph:
     """
     Merge small cycles of the vessel graph.
 
     Parameters
     ----------
-        vessel_graph:
+        graph:
             The graph of the vasculature extracted from the vessel map.
 
         max_cycle_size:
@@ -364,24 +365,24 @@ def merge_small_cycles(vessel_graph: VGraph, max_cycle_size: float, inplace=Fals
 
     """  # noqa: E501
 
-    nodes_coord = vessel_graph.nodes_coord()
-    nx_graph = nx.from_numpy_array(vessel_graph.node_adjacency_matrix())
+    nodes_coord = graph.nodes_coord()
+    nx_graph = nx.from_numpy_array(graph.node_adjacency_matrix())
     cycles = [_ for _ in nx.chordless_cycles(nx_graph, length_bound=4) if len(_) > 2]
     cycles_max_dist = [distance_matrix(nodes_coord[cycle]).max() for cycle in cycles]
     cycles = [cycle for cycle, max_dist in zip(cycles, cycles_max_dist, strict=True) if max_dist < max_cycle_size]
     if len(cycles) == 0:
-        return vessel_graph
+        return graph
     cycles = reduce_clusters(cycles)
-    return vessel_graph.merge_nodes(cycles, inplace=inplace)
+    return graph.merge_nodes(cycles, inplace=inplace)
 
 
-def merge_equivalent_branches(vessel_graph: VGraph, max_nodes_distance: float = None, inplace=False) -> VGraph:
+def merge_equivalent_branches(graph: VGraph, max_nodes_distance: float = None, inplace=False) -> VGraph:
     """
     Merge equivalent branches of the vessel graph.
 
     Parameters
     ----------
-        vessel_graph:
+        graph:
             The graph of the vasculature extracted from the vessel map.
 
         max_nodes_distance:
@@ -394,13 +395,13 @@ def merge_equivalent_branches(vessel_graph: VGraph, max_nodes_distance: float = 
     """  # noqa: E501
 
     branches, branches_inverse, branches_count = np.unique(
-        vessel_graph.branch_list, return_counts=True, return_inverse=True, axis=0
+        graph.branch_list, return_counts=True, return_inverse=True, axis=0
     )
 
     equi_branches_mask = branches_count > 1
     if max_nodes_distance is not None:
         equi_branches = branches[equi_branches_mask]
-        nodes_coord = vessel_graph.nodes_coord()
+        nodes_coord = graph.nodes_coord()
         equi_branches_dist = np.linalg.norm(nodes_coord[equi_branches[:, 0]] - nodes_coord[equi_branches[:, 1]], axis=1)
         equi_branches_mask[equi_branches_mask] &= equi_branches_dist < max_nodes_distance
 
@@ -409,16 +410,16 @@ def merge_equivalent_branches(vessel_graph: VGraph, max_nodes_distance: float = 
         duplicate_branches_id = np.argwhere(branches_inverse.flatten() == duplicate_id).flatten()
         branch_to_remove.extend(duplicate_branches_id[1:])
 
-    return vessel_graph.delete_branches(branch_to_remove, inplace=inplace)
+    return graph.delete_branches(branch_to_remove, inplace=inplace)
 
 
-def remove_spurs(vessel_graph: VGraph, max_spurs_length: float = 0, inplace=False) -> VGraph:
+def remove_spurs(graph: VGraph, max_spurs_length: float = 0, inplace=False) -> VGraph:
     """
     Remove spurs (terminal branches) whose chord length is shorter than max_spurs_distance.
 
     Parameters
     ----------
-        vessel_graph:
+        graph:
             The graph of the vasculature extracted from the vessel map.
 
         max_spurs_length:
@@ -430,18 +431,18 @@ def remove_spurs(vessel_graph: VGraph, max_spurs_length: float = 0, inplace=Fals
 
     """  # noqa: E501
 
-    terminal_branches = vessel_graph.endpoints_branches()
-    terminal_branches_length = vessel_graph.branches_arc_length(terminal_branches)
-    return vessel_graph.delete_branches(terminal_branches[terminal_branches_length < max_spurs_length], inplace=inplace)
+    terminal_branches = graph.endpoints_branches()
+    terminal_branches_length = graph.branches_arc_length(terminal_branches)
+    return graph.delete_branches(terminal_branches[terminal_branches_length < max_spurs_length], inplace=inplace)
 
 
-def remove_orphan_branches(vessel_graph: VGraph, min_length: float | bool = 0, inplace=False) -> VGraph:
+def remove_orphan_branches(graph: VGraph, min_length: float | bool = 0, inplace=False) -> VGraph:
     """
     Remove single branches (branches connected to no other branches) whose length is shorter than min_length.
 
     Parameters
     ----------
-    vessel_graph :
+    graph :
         The graph of the vasculature extracted from the vessel
     min_length : float, optional
         The minimum length of the single branches to keep, by default 0.
@@ -453,16 +454,16 @@ def remove_orphan_branches(vessel_graph: VGraph, min_length: float | bool = 0, i
         The modified graph with the single branches removed.
     """
     if not min_length or (np.isscalar(min_length) and min_length <= 0):
-        return vessel_graph
-    orphan_branches = vessel_graph.orphan_branches()
+        return graph
+    orphan_branches = graph.orphan_branches()
     if np.isscalar(min_length):
-        single_branches_length = vessel_graph.branches_arc_length(orphan_branches)
+        single_branches_length = graph.branches_arc_length(orphan_branches)
         orphan_branches = orphan_branches[single_branches_length < min_length]
-    return vessel_graph.delete_branches(orphan_branches, inplace=inplace)
+    return graph.delete_branches(orphan_branches, inplace=inplace)
 
 
 def simplify_passing_nodes(
-    vgraph: VGraph,
+    graph: VGraph,
     *,
     not_fusable: Optional[npt.ArrayLike] = None,
     min_angle: float = 0,
@@ -474,7 +475,7 @@ def simplify_passing_nodes(
 
     Parameters
     ----------
-        vessel_graph:
+        graph:
             The graph of the vasculature extracted from the vessel map.
 
         not_fusable:
@@ -487,7 +488,7 @@ def simplify_passing_nodes(
 
         with_same_label:
             If not None, the nodes are merged only if they have the same label.
-            If a string, use ``vessel_graph.branches_attr[with_same_label]`` as the labels.
+            If a string, use ``graph.branches_attr[with_same_label]`` as the labels.
 
     Returns
     -------
@@ -496,24 +497,35 @@ def simplify_passing_nodes(
     """  # noqa: E501
 
     # === Get all nodes with degree 2 ===
-    nodes_to_fuse = vgraph.passing_nodes(exclude_loop=True)
+    nodes_to_fuse, incident_branches, idirs = graph.passing_nodes_with_branch_index(
+        exclude_loop=True, return_branch_direction=True
+    )
+    idirs[:, 0] = ~idirs[:, 0]
+
+    if len(nodes_to_fuse) == 0:
+        return graph
 
     if not_fusable is not None:
         # === Filter out nodes that should not be merged ===
-        nodes_to_fuse = np.setdiff1d(nodes_to_fuse, not_fusable)
+        not_fusable = ~np.isin(nodes_to_fuse, not_fusable, assume_unique=True)
+        if np.all(not_fusable):
+            return graph
+        nodes_to_fuse = nodes_to_fuse[not_fusable]
+        incident_branches = incident_branches[not_fusable]
+        idirs = idirs[not_fusable]
 
-    if len(nodes_to_fuse) == 0:
-        return vgraph
+    if min_angle > 0 and graph.geometric_data().has_branch_data(VBranchGeoData.Fields.TANGENTS):
+        derive_tips_geometry_from_curve_geometry(graph, tangent=True, inplace=True)
 
-    incident_branches = None
-    if min_angle > 0:
         # === Filter out nodes with a too small angle between their two incident branches ===
-        geo_data = vgraph.geometric_data()
-        incident_branches, idirs = vgraph.incident_branches_individual(nodes_to_fuse, return_branch_direction=True)
-        incident_branches = np.stack(incident_branches)
+        geo_data = graph.geometric_data()
         t = np.stack([geo_data.tips_tangent(b, d) for b, d in zip(incident_branches, idirs, strict=True)])
         cos = np.sum(t[:, 1, :] * t[:, 0, :], axis=1)
         fuseable_nodes = cos <= np.cos(np.deg2rad(min_angle))
+
+        unknown_t = np.isin(incident_branches, geo_data.branch_with_unknown_curve())
+        fuseable_nodes[unknown_t.any(axis=1)] = True
+
         nodes_to_fuse = nodes_to_fuse[fuseable_nodes]
         incident_branches = incident_branches[fuseable_nodes]
 
@@ -521,52 +533,20 @@ def simplify_passing_nodes(
         # === Filter nodes which don't have the same label ===
         if isinstance(with_same_label, str):
             # Attempt to get the labels from the branches attributes
-            with_same_label = vgraph.branches_attr[with_same_label]
+            with_same_label = graph.branches_attr[with_same_label]
         with_same_label = np.asarray(with_same_label)
-
-        if incident_branches is None:
-            # Get the incident branches if not already computed
-            incident_branches = np.stack(vgraph.incident_branches_individual(nodes_to_fuse))
 
         same_label = with_same_label[incident_branches[:, 0]] == with_same_label[incident_branches[:, 1]]
         nodes_to_fuse = nodes_to_fuse[same_label]
         incident_branches = incident_branches[same_label]
 
     if len(nodes_to_fuse):
-        return vgraph.fuse_nodes(
-            nodes_to_fuse, inplace=inplace, quiet_invalid_node=True, incident_branches=incident_branches
-        )
-    return vgraph
-
-
-def simplify_crossing_nodes(tree: VTree, inplace=False) -> VTree:
-    """
-    Merge crossing nodes of a vessel tree.
-
-    Crossing nodes are nodes with two or more incoming branches with successors.
-
-    Parameters
-    ----------
-        vessel_graph:
-            The graph of the vasculature extracted from the vessel map.
-
-    Returns
-    -------
-        The modified graph with the crossing nodes fused.
-
-    """  # noqa: E501
-    if not inplace:
-        tree = tree.copy()
-
-    crossing_nodes = tree.crossing_nodes_ids()
-    if len(crossing_nodes) == 0:
-        return tree
-
-    warnings.warn("simplify_crossing_nodes is not implemented yet.", stacklevel=2)
+        return graph.merge_consecutive_branches(incident_branches, nodes_to_fuse, inplace=inplace)
+    return graph
 
 
 def find_facing_endpoints(
-    vessel_graph: VGraph,
+    graph: VGraph,
     max_distance: float = 100,
     max_angle: float = 30,
     filter: Optional[Literal["closest", "exclusive"]] = "exclusive",
@@ -577,7 +557,7 @@ def find_facing_endpoints(
 
     Parameters
     ----------
-    vessel_graph: VGraph
+    graph: VGraph
         The vasculature graph.
 
     max_distance: float
@@ -597,14 +577,14 @@ def find_facing_endpoints(
     facing_endpoints: npt.NDArray[np.int]
         An (E, 2) array where each row contains the indices of two endpoints that are facing each other.
     """  # noqa: E501
-    geodata = vessel_graph.geometric_data()
+    geodata = graph.geometric_data()
 
-    endp_branch, endp_mask = vessel_graph.endpoints_branches(return_endpoints_mask=True)
+    endp_branch, endp_mask = graph.endpoints_branches(return_endpoints_mask=True)
     b, endp_tip_id = np.where(endp_mask)
     endp_branch = endp_branch[b]
-    endp = vessel_graph.branch_list[endp_branch, endp_tip_id]
+    endp = graph.branch_list[endp_branch, endp_tip_id]
     endp_first_tip = endp_tip_id == 0
-    endp_pos = geodata.nodes_coord()[endp]
+    endp_pos = geodata.tips_coord(endp_branch, endp_first_tip).astype(np.float64)
 
     dist = np.linalg.norm(endp_pos[:, None, :] - endp_pos[None, :, :], axis=2)
     facing = dist <= max_distance
@@ -641,7 +621,7 @@ def find_facing_endpoints(
 
 
 def find_endpoints_branches_intercept(
-    vessel_graph: VGraph,
+    graph: VGraph,
     max_distance: float = 100,
     angle_tolerance: float = 10,
     intercept_snapping_distance: float = 30,
@@ -655,7 +635,7 @@ def find_endpoints_branches_intercept(
 
     Parameters
     ----------
-    vessel_graph: VGraph
+    graph: VGraph
         The vasculature graph.
 
     max_distance: float
@@ -687,17 +667,19 @@ def find_endpoints_branches_intercept(
 
     from ..utils.cpp_extensions.fvt_cpp import find_closest_branches as find_closest_branches_cpp
 
-    endpoints = vessel_graph.endpoints_nodes()
+    endpoints, endpoints_branches, idirs = graph.endpoints_nodes_with_branch_index(return_branch_direction=True)
     if ignore_endpoints is not None:
-        endpoints = np.setdiff1d(endpoints, ignore_endpoints)
+        ignore_endpoints = np.isin(endpoints, ignore_endpoints, assume_unique=True)
+        if np.any(ignore_endpoints):
+            endpoints = endpoints[~ignore_endpoints]
+            endpoints_branches = endpoints_branches[~ignore_endpoints]
+            idirs = idirs[~ignore_endpoints]
 
-    endpoints_branches, idirs = vessel_graph.incident_branches_individual(endpoints, return_branch_direction=True)
-    endpoints_branches = np.array(endpoints_branches).flatten()
-    gdata = vessel_graph.geometric_data()
+    gdata = graph.geometric_data()
     nodes_yx = gdata.nodes_coord()
     n_nodes = len(nodes_yx)
     endpoints_yx = nodes_yx[endpoints]
-    branch_list = vessel_graph.branch_list
+    branch_list = graph.branch_list
 
     if not isinstance(tangent, np.ndarray):
         endpoints_t = -np.stack([gdata.tips_tangent(b, d) for b, d in zip(endpoints_branches, idirs, strict=True)])
@@ -732,7 +714,7 @@ def find_endpoints_branches_intercept(
     closest_tip_node = np.argmin(dist_to_branch_tips, axis=1)
     dist_to_closest_tip = np.take_along_axis(dist_to_branch_tips, closest_tip_node[:, None], axis=1).squeeze(axis=1)
     closest_tip_node = branch_list[nearest_branch, closest_tip_node]
-    redirect_to_tip = dist_to_closest_tip <= intercept_snapping_distance * 0.66
+    redirect_to_tip = dist_to_closest_tip <= intercept_snapping_distance  # * 0.66
 
     endp_to_tips_edges = np.empty((0, 2), dtype=int)
     if np.any(redirect_to_tip):
@@ -806,7 +788,7 @@ def find_endpoints_branches_intercept(
 
 
 def reconnect_endpoints(
-    vessel_graph: VGraph,
+    graph: VGraph,
     arg: Optional[ReconnectEndpointsArg] = None,
     /,
     *,
@@ -823,7 +805,7 @@ def reconnect_endpoints(
 
     Parameters
     ----------
-    vessel_graph : VGraph
+    graph : VGraph
         The vasculature graph.
     max_distance : float, optional
         The maximum distance between an endpoint and the point of intercept on a branch, by default 100
@@ -853,7 +835,7 @@ def reconnect_endpoints(
     )
 
     new_endpoints_edges = find_facing_endpoints(
-        vessel_graph,
+        graph,
         max_distance=if_none(arg.endpoints_to_endpoints_max_distance, arg.max_distance),
         max_angle=arg.max_angle,
         filter="exclusive",
@@ -861,7 +843,7 @@ def reconnect_endpoints(
     )
 
     new_edges, new_nodes, new_nodes_yx = find_endpoints_branches_intercept(
-        vessel_graph,
+        graph,
         max_distance=arg.max_distance,
         angle_tolerance=arg.max_angle,
         intercept_snapping_distance=arg.intercept_snapping_distance,
@@ -869,7 +851,7 @@ def reconnect_endpoints(
         ignore_endpoints=new_endpoints_edges.flatten(),
     )
 
-    vessel_graph = vessel_graph.copy() if not inplace else vessel_graph
+    graph = graph.copy() if not inplace else graph
 
     if len(new_nodes):
         branch, inv = np.unique(new_nodes[:, 1], return_inverse=True)
@@ -877,16 +859,19 @@ def reconnect_endpoints(
         for i, b in enumerate(branch):
             nodes = new_nodes[inv == i, 0]
             split_yx = new_nodes_yx[inv == i]
-            vessel_graph, new_nodes_id = vessel_graph.split_branch(b, split_yx, return_node_ids=True, inplace=True)
-            lookup[nodes] = new_nodes_id
+            split_curve_id = graph.geometric_data().branch_closest_index(split_yx, b)
+            nodes_order = np.argsort(split_curve_id)
+            split_yx, split_curve_id = split_yx[nodes_order], split_curve_id[nodes_order]
+            graph, new_nodes_id = graph.split_branch(b, split_curve_id, split_yx, return_node_ids=True, inplace=True)
+            lookup[nodes[nodes_order]] = new_nodes_id
         new_edges[:, 1] = lookup[new_edges[:, 1]]
 
     if len(new_edges):
-        vessel_graph.add_branches(new_edges, inplace=True)
+        graph.add_branches(new_edges, inplace=True)
     if len(new_endpoints_edges):
-        vessel_graph.add_branches(new_endpoints_edges, inplace=True)
+        graph.add_branches(new_endpoints_edges, inplace=True)
 
-    return vessel_graph
+    return graph
 
 
 _reconnect_endpoints = reconnect_endpoints

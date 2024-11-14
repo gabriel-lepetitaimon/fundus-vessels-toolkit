@@ -42,10 +42,8 @@ std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_
             out[edge.id][startSide ? 0 : 1] = {startSide ? tangent : -tangent, calibre, boundL, boundR};
         } else {
             //  ... **all** its incident branches...
-            // (if the node connect exactly two branches, prevent the branch cleaning)
-            int nodeMaxRemovedLength = node_adjacency.size() == 2 ? 0 : maxRemovedLength;
             auto const &tips_around_node = clean_branch_skeleton_around_node(
-                branchCurves, nodeID, node_adjacency, segmentation, nodeMaxRemovedLength, adaptativeTangent);
+                branchCurves, nodeID, node_adjacency, segmentation, maxRemovedLength, adaptativeTangent);
 
             // ... and store the tips indexes, in order to clean them later.
             int i = 0;
@@ -68,15 +66,15 @@ std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_
     for (std::size_t i = 0; i < branchCurves.size(); i++) {
         // For each branch, remove the invalid pixels
         auto &branchYX = branchCurves[i];
-        auto [startI, endI] = branches_tips[i];
+        auto [firstI, lastI] = branches_tips[i];
 
-        if (startI < endI - 1) {
+        if (firstI <= lastI - 1) {
             // Remove the invalid pixels from the branch labels, the branchYX and the tangents
-            for (auto p = branchYX.begin() + endI; p != branchYX.end(); p++) branchesLabelMap[p->y][p->x] = 0;
-            branchYX.erase(branchYX.begin() + endI, branchYX.end());
+            for (auto p = branchYX.begin() + lastI; p != branchYX.end(); p++) branchesLabelMap[p->y][p->x] = 0;
+            branchYX.erase(branchYX.begin() + lastI + 1, branchYX.end());
 
-            for (auto p = branchYX.begin(); p != branchYX.begin() + startI; p++) branchesLabelMap[p->y][p->x] = 0;
-            branchYX.erase(branchYX.begin(), branchYX.begin() + startI);
+            for (auto p = branchYX.begin(); p != branchYX.begin() + firstI; p++) branchesLabelMap[p->y][p->x] = 0;
+            branchYX.erase(branchYX.begin(), branchYX.begin() + firstI);
         } else {
             // If the valid section of the branch is 1 px or less, remove the branch.
             for (auto p : branchYX) branchesLabelMap[p.y][p.x] = 0;
@@ -85,6 +83,18 @@ std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_
     }
 
     return out;
+}
+
+bool is_valid_boundaries(const IntPoint &p, const std::array<IntPoint, 2> &boundaries) {
+    // 1. Check if the boundaries are valid
+    auto const &boundL = boundaries[0], boundR = boundaries[1];
+    if (!boundL.is_valid() || !boundR.is_valid()) return false;
+
+    // 2. Check if the skeleton is at the center of the boundaries
+    const float dL = distance(p, boundL), dR = distance(p, boundR);
+    if (abs(dL - dR) >= 1 + 1.42) return false;
+
+    return true;
 }
 
 /**
@@ -133,10 +143,7 @@ std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_ske
 
         // The branch exploration should start by the last index if the node is at the end of the branch
         const int start = forward ? c0 : curveEnd - c0;
-        // When evaluating the validity of the last pixel, we consider the next pixel
-        // end serves as the loop stop condition and hence must stop at curveEnd-1 or 1 to avoid out of bound
-        const int end =
-            forward ? std::min(start + maxRemovedLength, curveEnd - 1) : std::max(start - maxRemovedLength, 1);
+        const int end = forward ? std::min(start + maxRemovedLength, curveEnd) : std::max(start - maxRemovedLength, 0);
         return std::make_tuple(start, end);
     };
 
@@ -145,15 +152,12 @@ std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_ske
         auto [branchID, forward] = branchesInfos[branchI];
         const CurveYX &curveYX = branchCurves[branchID];
 
-        const int inc = forward ? 1 : -1;
         auto const [start, end] = get_branch_start_end(branchID, forward);
-        // === If the branch is too short, keep it ===
-        if (curveYX.size() <= 3)
-            return std::make_tuple(start, Point(curveYX[end] - curveYX[start]).normalize(), INVALID_CALIBRE,
-                                   curveYX[start], curveYX[start]);
+        const int curveSize = curveYX.size();
 
-        const int curveStart = forward ? start : end;
-        const int curveEnd = forward ? end : start;
+        // === If the branch is too short, remove it ===
+        if (curveSize <= 3)
+            return std::make_tuple(end, Point(0, 0), INVALID_CALIBRE, IntPoint::Invalid(), IntPoint::Invalid());
 
         // === Check if pixel is valid (Lambda Function) ===
         auto is_branch_pixel_valid = [&](const IntPoint &p, const std::array<IntPoint, 2> &boundaries,
@@ -165,10 +169,10 @@ std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_ske
 
             // 2. Check if the skeleton is at the center of the boundaries
             const float dL = distance(p, boundL), dR = distance(p, boundR);
-            if (abs(dL - dR) > 1.42) return false;
+            if (abs(dL - dR) >= 1.42) return false;
 
             // 3. Check if the branch width is constant for this pixel and the next
-            if (abs(calibre - nextCalibre) > 1.42) return false;
+            if (abs(calibre - nextCalibre) > 2.1213) return false;
 
             // If the node is an endpoint (it should not), the previous conditions are enough to check its validity
             if (node_adjacency.size() == 1) return true;
@@ -179,50 +183,66 @@ std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_ske
                 for (auto [id, forward] : branchesInfos) {
                     if (id == branchID) continue;
                     const CurveYX &otherCurve = branchCurves[id];
-                    auto const [otherStart, otherEnd] = get_branch_start_end(id, forward);
-                    const float dist = std::get<1>(find_closest_pixel(otherCurve, p, otherStart, otherEnd, true));
+                    auto [otherStart, otherEnd] = get_branch_start_end(id, forward);
+                    auto const [closest_p, dist] = find_closest_pixel(otherCurve, bound, otherStart, otherEnd, true);
                     if (dist < distToCurrentBranch) return false;
                 }
                 return true;
             };
-            if (!isClosestToCurrentBranch(boundL) || !isClosestToCurrentBranch(boundR)) return false;
+            if (!isClosestToCurrentBranch(boundaries[0]) || !isClosestToCurrentBranch(boundaries[1])) return false;
 
             return true;
         };
 
-        Point tangent = fast_curve_tangent(curveYX, start, TANGENT_HALF_GAUSS, forward, !forward, curveStart, curveEnd);
+        Point tangent = fast_curve_tangent(curveYX, start, TANGENT_HALF_GAUSS, forward, !forward, 0, curveSize);
         auto boundaries = fast_branch_boundaries(curveYX, start, segmentation, tangent);
         float calibre = fast_branch_calibre(boundaries[0], boundaries[1], tangent);
         if (adaptativeTangent) {
-            tangent = adaptative_curve_tangent(curveYX, start, calibre, forward, !forward, curveStart, curveEnd);
+            tangent = adaptative_curve_tangent(curveYX, start, calibre, forward, !forward, 0, curveSize);
             boundaries = fast_branch_boundaries(curveYX, start, segmentation, tangent);
             calibre = fast_branch_calibre(boundaries[0], boundaries[1], tangent);
         }
 
-        Point nextTangent;
-        float nextCalibre;
-        std::array<IntPoint, 2> nextBoundaries;
+        const int inc = forward ? 1 : -1;
+        int nextI = start + inc;
 
-        for (int i = start; i != end; i += inc) {
-            const int nextI = i + inc;
-            nextTangent =
-                fast_curve_tangent(curveYX, nextI, TANGENT_HALF_GAUSS, forward, !forward, curveStart, curveEnd);
+        Point nextTangent = fast_curve_tangent(curveYX, nextI, TANGENT_HALF_GAUSS, forward, !forward, 0, curveSize);
+        std::array<IntPoint, 2> nextBoundaries = fast_branch_boundaries(curveYX, nextI, segmentation, nextTangent);
+        float nextCalibre = fast_branch_calibre(nextBoundaries[0], nextBoundaries[1], nextTangent);
+        if (adaptativeTangent && nextCalibre == nextCalibre) {
+            nextTangent = adaptative_curve_tangent(curveYX, nextI, nextCalibre, forward, !forward, 0, curveSize);
             nextBoundaries = fast_branch_boundaries(curveYX, nextI, segmentation, nextTangent);
             nextCalibre = fast_branch_calibre(nextBoundaries[0], nextBoundaries[1], nextTangent);
-            if (adaptativeTangent) {
-                nextTangent =
-                    adaptative_curve_tangent(curveYX, nextI, nextCalibre, forward, !forward, curveStart, curveEnd);
-                nextBoundaries = fast_branch_boundaries(curveYX, nextI, segmentation, nextTangent);
-                nextCalibre = fast_branch_calibre(nextBoundaries[0], nextBoundaries[1], nextTangent);
+        }
+
+        Point nextTangent2;
+        float nextCalibre2;
+        std::array<IntPoint, 2> nextBoundaries2;
+
+        const int endI = end - inc;
+        while (nextI != endI) {
+            const int nextI2 = nextI + inc;
+            nextTangent2 = fast_curve_tangent(curveYX, nextI2, TANGENT_HALF_GAUSS, forward, !forward, 0, curveSize);
+            nextBoundaries2 = fast_branch_boundaries(curveYX, nextI2, segmentation, nextTangent2);
+            nextCalibre2 = fast_branch_calibre(nextBoundaries2[0], nextBoundaries2[1], nextTangent2);
+            if (adaptativeTangent && nextCalibre2 == nextCalibre2) {
+                nextTangent2 = adaptative_curve_tangent(curveYX, nextI2, nextCalibre2, forward, !forward, 0, curveSize);
+                nextBoundaries2 = fast_branch_boundaries(curveYX, nextI2, segmentation, nextTangent2);
+                nextCalibre2 = fast_branch_calibre(nextBoundaries2[0], nextBoundaries2[1], nextTangent2);
             }
 
-            if (is_branch_pixel_valid(curveYX[i], boundaries, nextBoundaries, tangent, nextTangent, calibre,
-                                      nextCalibre))
-                return std::make_tuple(i, tangent, calibre, boundaries[0], boundaries[1]);
+            if (is_branch_pixel_valid(curveYX[nextI - inc], boundaries, nextBoundaries2, tangent, nextTangent2, calibre,
+                                      nextCalibre2))
+                return std::make_tuple(nextI - inc, tangent, calibre, boundaries[0], boundaries[1]);
 
             tangent = nextTangent;
             boundaries = nextBoundaries;
             calibre = nextCalibre;
+
+            nextTangent = nextTangent2;
+            nextBoundaries = nextBoundaries2;
+            nextCalibre = nextCalibre2;
+            nextI = nextI2;
         }
 
         return std::make_tuple(end, tangent, fast_branch_calibre(boundaries[0], boundaries[1], tangent), boundaries[0],
@@ -274,15 +294,12 @@ std::tuple<int, Vector, float, IntPoint, IntPoint> clean_branch_skeleton_tip(con
         return std::make_tuple(start, Point(curveYX[end] - curveYX[start]).normalize(), INVALID_CALIBRE, curveYX[start],
                                curveYX[start]);
 
-    const Point endTangent = fast_curve_tangent(curveYX, end, TANGENT_HALF_GAUSS);
-    const float refCalibre = fast_branch_calibre(curveYX, end, segmentation, endTangent);
-    if (refCalibre == refCalibre && refCalibre < 20) {
-        if (std::abs(start - end) <= refCalibre)
-            return std::make_tuple(start, Point(curveYX[end] - curveYX[start]).normalize(), INVALID_CALIBRE,
-                                   curveYX[start], curveYX[start]);
-        // If a reference calibre is available, start by removing the pixels that are too close to the tip
-        start += std::floor(refCalibre / 2) * inc;
+    if (end != (startTip ? (int)curveYX.size() - 2 : 1)) {
+        const Point endTangent = fast_curve_tangent(curveYX, end, TANGENT_HALF_GAUSS);
+        float refCalibre = fast_branch_calibre(curveYX, end, segmentation, endTangent);
+        if (refCalibre == refCalibre) start += std::min((int)std::floor(refCalibre / 2), std::abs(start - end)) * inc;
     }
+
     const int curveStart = startTip ? start : end;
     const int curveEnd = startTip ? end : start;
 
@@ -294,15 +311,15 @@ std::tuple<int, Vector, float, IntPoint, IntPoint> clean_branch_skeleton_tip(con
         auto const &boundL = boundaries[0], boundR = boundaries[1];
         if (!boundL.is_valid() || !boundR.is_valid()) return false;
 
-        // 2. Check if the branch width is constant for this pixel and the next
+        // 2. Check if the skeleton is at the center of the boundaries
+        const float dL = distance(p, boundL), dR = distance(p, boundR);
+        if (abs(dL - dR) >= 1.42) return false;
+
+        // 3. Check if the branch width is constant for this pixel and the next
         if (abs(calibre - nextCalibre) > 1.42) return false;
 
-        // 3. Check if the tangent is within 20 degrees of the next tangent
+        // 4. Check if the tangent is within 20 degrees of the next tangent
         if (tangent.dot(nextTangent) < .94) return false;
-
-        // 4. Check if the skeleton is at the center of the boundaries
-        const float dL = distance(p, boundL), dR = distance(p, boundR);
-        if (abs(dL - dR) > 1.42) return false;
 
         return true;
     };
@@ -343,15 +360,6 @@ std::tuple<int, Vector, float, IntPoint, IntPoint> clean_branch_skeleton_tip(con
     return std::make_tuple(end, tangent, calibre, boundaries[0], boundaries[1]);
 }
 
-/**
- * @brief Remove small terminal branches
- *
- * @param min_length The length under which a branch is removed
- * @param edgeList A list of edges representing the branches of the graph.
- * @param branchCurves A list of branches skeleton defined by a vector of points.
- * @param nodeCoords A list of nodes coordinates. (To remove the singleton nodes resulting from the spurs deletion.)
- * @param labelMap An accessor to a 2D tensor of shape (H, W) containing the vessels binary segmentation.
- */
 void remove_small_spurs(float min_length, EdgeList &edgeList, std::vector<CurveYX> &branchCurves,
                         std::vector<IntPoint> &nodeCoords, Tensor2DAcc<int> &labelMap) {
     // Search for the terminal edges

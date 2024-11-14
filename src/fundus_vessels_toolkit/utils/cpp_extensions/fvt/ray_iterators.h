@@ -106,6 +106,7 @@ class ConeIterator {
 
     const IntPoint& start() const;
     const RayIterator& leftRay() const;
+    const RayIterator& transversalRay() const;
     const Point& rightRayDirection() const;
 
    protected:

@@ -336,88 +336,116 @@ std::list<std::set<int>> iterative_cluster_by_distance(torch::Tensor pos, float 
 /*****************************************************************************
  *                    === REDUCE CHAINS ===
  *****************************************************************************/
-std::list<std::list<int>> solve_1d_chains(std::list<std::vector<int>> chains) {
-    std::list<std::list<int>> solved_chains;
-    for (auto chain : chains) {
-        // Ensure each index is not part of the middle of another chain
-        for (auto solved_chain : solved_chains) {
-            auto it = solved_chain.begin();
-            it++;
-            auto penultimate = solved_chain.end();
+std::array<std::vector<std::vector<int>>, 2> solve_1d_chains(std::vector<std::vector<int>> chains) {
+    // === Ensure each index is not part of the middle of another chain ===
+    for (auto it = chains.begin(); it != chains.end(); it++) {
+        for (auto other_it = chains.begin(); other_it != it; other_it++) {
+            auto chain_it = it->begin();
+            chain_it++;
+            auto penultimate = it->end();
             penultimate--;
 
-            while (it != penultimate) {
-                TORCH_CHECK_VALUE(std::find(chain.begin(), chain.end(), *it) == chain.end(), "Index ", *it,
-                                  " is part of multiple chains.");
-                it++;
-            }
-        }
-
-        int chain_found = 0;
-        // Try to append chain to existing solved chains
-        auto it = solved_chains.begin();
-        for (; it != solved_chains.end(); it++) {
-            auto &solved_chain = *it;
-            auto const &front = chain.front();
-            auto const &back = chain.back();
-            auto const &solved_begin = solved_chain.begin();
-            auto const &solved_back = solved_chain.back();
-
-            if (solved_back == front) {
-                solved_chain.insert(solved_chain.end(), chain.begin() + 1, chain.end());
-                chain_found = 1;
-                break;
-            } else if (solved_back == back) {
-                solved_chain.insert(solved_chain.end(), chain.rbegin() + 1, chain.rend());
-                chain_found = 1;
-                break;
-            } else if (*solved_begin == back) {
-                solved_chain.insert(solved_begin, chain.begin(), chain.end() - 1);
-                chain_found = -1;
-                break;
-            } else if (*solved_begin == front) {
-                solved_chain.insert(solved_begin, chain.rbegin(), chain.rend() - 1);
-                chain_found = -1;
-                break;
-            }
-        }
-        if (!chain_found)
-            solved_chains.push_back(std::list<int>(chain.begin(), chain.end()));
-        else {
-            // If a chain was found, ensure that, if the new extremity is a part of another chain, the chains are merged
-            auto &chain = *it;
-            const int extremity = chain_found == 1 ? chain.back() : chain.front();
-            auto other_it = it;
-            other_it++;
-            if (chain_found == 1) {
-                for (; other_it != solved_chains.end(); other_it++) {
-                    if (other_it->front() == extremity) {
-                        chain.insert(chain.end(), ++other_it->begin(), other_it->end());
-                        solved_chains.erase(other_it);
-                        break;
-                    } else if (other_it->back() == extremity) {
-                        chain.insert(chain.end(), ++other_it->rbegin(), other_it->rend());
-                        solved_chains.erase(other_it);
-                        break;
-                    }
-                }
-            } else {
-                for (; other_it != solved_chains.end(); other_it++) {
-                    if (other_it->front() == extremity) {
-                        chain.insert(chain.begin(), other_it->rbegin(), --other_it->rend());
-                        solved_chains.erase(other_it);
-                        break;
-                    } else if (other_it->back() == extremity) {
-                        chain.insert(chain.begin(), other_it->begin(), --other_it->end());
-                        solved_chains.erase(other_it);
-                        break;
-                    }
-                }
+            while (chain_it != penultimate) {
+                TORCH_CHECK_VALUE(std::find(other_it->begin(), other_it->end(), *chain_it) == other_it->end(), "Index ",
+                                  *chain_it, " is part of multiple chains.");
+                chain_it++;
             }
         }
     }
 
-    return solved_chains;
+    std::list<std::tuple<std::list<int>, int, int>> solved_chains_summaries;  // {chain_ids, first, last}
+
+    // === Add or merge chains one by one ===
+    for (int chain_id = 0; chain_id < (int)chains.size(); chain_id++) {
+        const auto &chain = chains[chain_id];
+        const int &chain_first = chain.front();
+        const int &chain_last = chain.back();
+        int chain_pending_tip;
+        int solved_pending_tip = 0;  // 0: both, 1: back, -1: front
+
+        // Try to append chain to existing solved chains
+        auto solved_it = solved_chains_summaries.begin();
+        for (; solved_it != solved_chains_summaries.end(); solved_it++) {
+            auto &[solved_ids, solved_first, solved_last] = *solved_it;
+
+            if (solved_last == chain_first) {
+                solved_ids.push_back(chain_id + 1);
+                // solved_chain.insert(solved_chain.end(), chain.begin() + 1, chain.end());
+                solved_last = chain_pending_tip = chain_last;
+                solved_pending_tip = 1;
+            } else if (solved_last == chain_last) {
+                solved_ids.push_back(-chain_id - 1);
+                // solved_chain.insert(solved_chain.end(), chain.rbegin() + 1, chain.rend());
+                solved_last = chain_pending_tip = chain_first;
+                solved_pending_tip = 1;
+            } else if (solved_first == chain_first) {
+                solved_ids.push_front(-chain_id - 1);
+                // solved_chain.insert(solved_begin, chain.begin(), chain.end() - 1);
+                solved_first = chain_pending_tip = chain_last;
+                solved_pending_tip = -1;
+            } else if (solved_first == chain_last) {
+                solved_ids.push_front(chain_id + 1);
+                // solved_chain.insert(solved_begin, chain.rbegin(), chain.rend() - 1);
+                solved_first = chain_pending_tip = chain_first;
+                solved_pending_tip = -1;
+            } else
+                continue;
+
+            break;
+        }
+        if (solved_pending_tip == 0)
+            solved_chains_summaries.push_back({{chain_id + 1}, chain_first, chain_last});
+        else {
+            // If a chain was found, ensure that, if the new extremity is a part of another chain, the chains are
+            // merged
+            auto &[solved_ids, solved_first, solved_last] = *solved_it;
+            auto other_it = solved_it;
+            other_it++;
+            for (; other_it != solved_chains_summaries.end(); other_it++) {
+                const auto &[other_ids, other_first, other_last] = *other_it;
+
+                if (other_first == chain_pending_tip) {  // The cluster must be chained with the start of the other
+                    if (solved_pending_tip == 1) {       // The pending tip is at the end of the cluster
+                        solved_ids.insert(solved_ids.end(), other_ids.begin(), other_ids.end());
+                        solved_last = other_last;
+                    } else {  // The pending tip is at the beginning of the cluster => reverse other
+                        for (auto it = other_ids.rbegin(); it != other_ids.rend(); it++) solved_ids.push_front(-(*it));
+                        solved_first = other_last;
+                    }
+                } else if (other_last == chain_pending_tip) {  // The cluster must be chained with the end of the other
+                    if (solved_pending_tip == -1) {            // The pending tip is at the beginning of the cluster
+                        solved_ids.insert(solved_ids.begin(), other_ids.begin(), other_ids.end());
+                        solved_first = other_first;
+                    } else {  // The pending tip is at the end of the cluster => reverse other
+                        for (auto it = other_ids.rbegin(); it != other_ids.rend(); it++) solved_ids.push_back(-(*it));
+                        solved_last = other_first;
+                    }
+                } else
+                    continue;
+
+                solved_chains_summaries.erase(other_it);
+                break;
+            }
+        }
+    }
+
+    // === Expand summaries into proper chains ===
+    std::array<std::vector<std::vector<int>>, 2> out;
+
+    for (const auto &[chain_ids, first, last] : solved_chains_summaries) {
+        out[0].push_back({first});
+        auto &chain = out[0].back();
+        for (int chain_id : chain_ids) {
+            if (chain_id > 0)
+                chain.insert(chain.end(), ++chains[chain_id - 1].begin(), chains[chain_id - 1].end());
+            else
+                chain.insert(chain.end(), ++chains[-chain_id - 1].rbegin(), chains[-chain_id - 1].rend());
+        }
+
+        out[1].push_back({std::make_move_iterator(chain_ids.begin()), std::make_move_iterator(chain_ids.end())});
+    }
+
+    return out;
 }
 
 std::vector<torch::Tensor> remove_consecutive_duplicates(const torch::Tensor &tensor, bool return_index = false) {

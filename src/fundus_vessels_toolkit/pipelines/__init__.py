@@ -1,3 +1,3 @@
 from .av_to_biomarkers import FundusAVSegToBiomarkers
-from .avseg_to_tree import AVSegToTreeBase, NaiveAVSegToTree
+from .avseg_to_tree import AVSegToTree, AVSegToTreeBase, NaiveAVSegToTree
 from .seg_to_graph import FundusVesselSegToGraph, SegToGraph

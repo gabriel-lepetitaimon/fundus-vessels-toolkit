@@ -385,7 +385,7 @@ class FundusData:
         return self._od is not None
 
     @property
-    def od(self) -> npt.NDArray[np.float32]:
+    def od(self) -> npt.NDArray[np.bool_]:
         """The binary segmentation of the optic disc.
 
         Raises
@@ -476,7 +476,7 @@ class FundusData:
     def infered_macula_center(self) -> Optional[Point]:
         """The center of the macula or the center of the fundus if the macula is not visible."""
         if self._macula_center is not None:
-            return self._macula_center
+            return None if self._macula_center is ABSENT else self._macula_center
         if self._od_center is None:
             return None
 

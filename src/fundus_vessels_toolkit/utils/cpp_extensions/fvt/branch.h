@@ -90,9 +90,26 @@ std::pair<torch::Tensor, torch::Tensor> find_closest_branches(const torch::Tenso
 
 std::list<SizePair> split_contiguous_curves(const CurveYX &curve);
 
+/*
+ * @brief Draw the branches on a tensor.
+ *
+ * This method draws the branches on a tensor. The branches are represented by
+ * a list of curves and a list of nodes. The branches are drawn as a line
+ * between the nodes.
+ *
+ * @param branchCurves A list of uint tensor of shape (N, 2) representing the
+ * branch curves.
+ * @param shape The shape of the output tensor.
+ * @param nodeCoords A list of nodes coordinates.
+ * @param branchList A list of branches.
+ * @param interpolate A boolean indicating if the branches should be interpolated when the curve is not continuous.
+ *
+ * @return A tensor with the branches drawn.
+ */
 torch::Tensor draw_branches_labels(const std::vector<torch::Tensor> &branchCurves, const torch::Tensor &out,
                                    const torch::Tensor &nodeCoords = torch::empty({0, 2}, torch::kInt),
-                                   const torch::Tensor &branchList = torch::empty({0, 2}, torch::kInt));
+                                   const torch::Tensor &branchList = torch::empty({0, 2}, torch::kInt),
+                                   bool interpolate = false);
 
 /**************************************************************************************
  *              === BRANCH_FIXING.CPP ===
@@ -112,6 +129,15 @@ std::tuple<int, Vector, float, IntPoint, IntPoint> clean_branch_skeleton_tip(con
                                                                              int maxRemovedLength,
                                                                              bool adaptativeTangent);
 
+/**
+ * @brief Remove small terminal branches
+ *
+ * @param min_length The length under which a branch is removed
+ * @param edgeList A list of edges representing the branches of the graph.
+ * @param branchCurves A list of branches skeleton defined by a vector of points.
+ * @param nodeCoords A list of nodes coordinates. (To remove the singleton nodes resulting from the spurs deletion.)
+ * @param labelMap An accessor to a 2D tensor of shape (H, W) containing the vessels binary segmentation.
+ */
 void remove_small_spurs(float min_length, EdgeList &edgeList, std::vector<CurveYX> &branchCurves,
                         std::vector<IntPoint> &nodeCoords, Tensor2DAcc<int> &labelMap);
 
@@ -122,12 +148,39 @@ std::vector<Edge> find_spurs(const std::vector<CurveYX> &branchCurves, const Edg
 float largest_node_calibre(const int nodeId, const GraphAdjList &adjacency, const std::vector<CurveYX> &branchesCurves,
                            const Tensor2DAcc<bool> &segmentation);
 
+bool is_valid_boundaries(const IntPoint &p, const std::array<IntPoint, 2> &boundaries);
+
 /**************************************************************************************
  *              === BRANCH_GEOMETRY.CPP ===
  **************************************************************************************/
-std::tuple<std::vector<CurveTangents>, std::vector<Scalars>, std::vector<IntPointPairs>, std::vector<Scalars>,
-           std::vector<Sizes>, std::vector<BSpline>>
-extract_branches_geometry(std::vector<CurveYX> branch_curves, const Tensor2DAcc<bool> &segmentation,
+
+/**
+ * @brief Extract geometry information from a vessel graph.
+ *
+ * @param branch_labels The branch labels of the vessel graph.
+ * @param segmentation The segmentation of the vessel graph.
+ *
+ * @return A tuple containing as series of lists containing for each branch:
+ *
+ *      - the yx coordinates of the branch curve;
+ *
+ *      - the index where the curve is not contiguous;
+ *
+ *      - the curve tangents;
+ *
+ *      - the vessel calibres along the branch;
+ *
+ *      - the boundaries of the vessel along the branch;
+ *
+ *      - the curvature of the vessel along the branch;
+ *
+ *      - the index of the curvatures roots;
+ *
+ *      - the bspline representation of the branch.
+ */
+std::tuple<std::vector<CurveYX>, std::vector<Sizes>, std::vector<CurveTangents>, std::vector<Scalars>,
+           std::vector<IntPointPairs>, std::vector<Scalars>, std::vector<Sizes>, std::vector<BSpline>>
+extract_branches_geometry(std::vector<CurveYX> &branch_curves, const Tensor2DAcc<bool> &segmentation,
                           std::map<std::string, double> options = {}, bool assume_contiguous = false);
 
 BSpline bspline_regression(const CurveYX &curve, const CurveTangents &tangents, const Scalars &curvatures,

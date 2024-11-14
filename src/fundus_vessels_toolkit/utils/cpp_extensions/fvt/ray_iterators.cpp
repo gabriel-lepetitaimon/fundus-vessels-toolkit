@@ -73,7 +73,7 @@ std::array<IntPoint, 2> track_nearest_edges(const IntPoint& start, const Point& 
         } else if (!dSafe && !p.is_inside(H, W))
             break;
         lastP = p;
-    } while (++i < max_iter);
+    } while (++i != max_iter);
 
     i = 0;
     lastP = start;
@@ -85,7 +85,7 @@ std::array<IntPoint, 2> track_nearest_edges(const IntPoint& start, const Point& 
         } else if (!rSafe && !p.is_inside(H, W))
             break;
         lastP = p;
-    } while (++i < max_iter);
+    } while (++i != max_iter);
 
     return {dBound, rBound};
 }
@@ -99,16 +99,11 @@ std::pair<int, IntPoint> track_nearest_branch(const IntPoint& start, const Point
     float leftRayDelta = cIter.leftRay().delta();
     int max_it = max_distance / sqrt(1 + leftRayDelta * leftRayDelta) + 1;
 
-    bool safe = start.is_inside(1, 1, H - 1, W - 1) &&
-                cIter.leftRay().extrapolate(max_it + 1).is_inside(1, 1, H - 1, W - 1) &&
-                ((cIter.rightRayDirection() * (max_it + 1)) + start).is_inside(1, 1, H - 1, W - 1);
-
     float bestDist = max_distance + 1e-3;
     std::pair<int, IntPoint> best = {0, IntPoint::Invalid()};
 
     while (!cIter.iter() || cIter.height() < max_it) {
         const IntPoint& p = *cIter;
-        // if (safe || p.is_inside(H, W)) {
         if (p.is_inside(H, W)) {
             const int& branchID = branchMap[p.y][p.x];
             if (branchID > 0) {
@@ -473,3 +468,5 @@ bool ConeIterator::iter() {
 }
 
 bool ConeIterator::beyondRightRay(const IntPoint& p) { return _rightRay.cross(p - _start + Point(0.5, 0.5)) < 0; }
+
+const RayIterator& ConeIterator::transversalRay() const { return transversalIter; }

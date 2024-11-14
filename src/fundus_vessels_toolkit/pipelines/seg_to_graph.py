@@ -149,11 +149,17 @@ class SegToGraph:
                 img = segment_vessels(img)
         return img
 
-    def skeletonize(self, vessel_mask: npt.NDArray[np.bool_] | torch.Tensor) -> npt.NDArray[np.bool_] | torch.Tensor:
+    def skeletonize(
+        self,
+        vessel_seg: npt.NDArray[np.bool_] | torch.Tensor,
+        mask: Optional[npt.NDArray[np.bool_] | torch.Tensor] = None,
+    ) -> npt.NDArray[np.bool_] | torch.Tensor:
         from ..segment_to_graph.skeleton_parsing import detect_skeleton_nodes
         from ..segment_to_graph.skeletonize import skeletonize
 
-        binary_skel = skeletonize(vessel_mask, method=self.skeletonize_method) > 0
+        binary_skel = skeletonize(vessel_seg, method=self.skeletonize_method) > 0
+        if mask is not None:
+            binary_skel[~mask] = 0
         remove_endpoint_branches = self.min_terminal_branch_length > 0 or self.min_terminal_branch_calibre_ratio > 0
         return detect_skeleton_nodes(
             binary_skel, fix_hollow=self.fix_hollow, remove_endpoint_branches=remove_endpoint_branches
@@ -204,13 +210,13 @@ class SegToGraph:
         skel: npt.NDArray[np.bool_] | torch.Tensor,
         vessels: npt.NDArray[np.bool_] | torch.Tensor,
         simplify: bool = None,
-        populate_geometry: bool = None,
+        parse_geometry: bool = None,
     ) -> VGraph:
         vgraph = self.skel_to_vgraph(skel, vessels)
         if if_none(simplify, self.simplify_graph):
             self.simplify(vgraph, inplace=True)
 
-        if if_none(populate_geometry, self.geometry_parsing_enabled):
+        if if_none(parse_geometry, self.geometry_parsing_enabled):
             vgraph = self.populate_geometry(vgraph, vessels)
 
         return vgraph

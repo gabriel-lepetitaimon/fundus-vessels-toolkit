@@ -99,12 +99,14 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_curves(
     std::vector<torch::Tensor> branch_curves, const torch::Tensor &segmentation,
     std::map<std::string, double> options = {}) {
     auto const &seg_acc = segmentation.accessor<bool, 2>();
-    auto const &curves = tensors_to_curves(branch_curves);
-    auto const &[tangents, calibres, boundaries, curvatures, curv_roots, bsplines] =
+    auto curves = tensors_to_curves(branch_curves);
+    auto const &[cleanedCurves, curveSplits, tangents, calibres, boundaries, curvatures, curv_roots, bsplines] =
         extract_branches_geometry(curves, seg_acc, options);
 
     // --- Convert to tensor ---
     std::vector<std::vector<torch::Tensor>> out;
+    out.push_back(vectors_to_tensors(cleanedCurves));
+    out.push_back(vectors_to_tensors(curveSplits));
     out.push_back(vectors_to_tensors(tangents));
     if (calibres.size() > 0) out.push_back(vectors_to_tensors(calibres));
     if (boundaries.size() > 0) out.push_back(vectors_to_tensors(boundaries));
@@ -146,12 +148,13 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_skeleton(
     }
 
     // --- Extract branches geometry ---
-    auto const &[tangents, calibres, boundaries, curvatures, curv_roots, bsplines] =
+    auto const &[cleanedCurves, curveSplits, tangents, calibres, boundaries, curvatures, curv_roots, bsplines] =
         extract_branches_geometry(curves, seg_acc, options, true);
 
     // --- Convert to tensor ---
     std::vector<std::vector<torch::Tensor>> out;
-    out.push_back(vectors_to_tensors(curves));
+    out.push_back(vectors_to_tensors(cleanedCurves));
+    out.push_back(vectors_to_tensors(curveSplits));
     out.push_back(vectors_to_tensors(tangents));
     if (calibres.size() > 0) out.push_back(vectors_to_tensors(calibres));
     if (boundaries.size() > 0) out.push_back(vectors_to_tensors(boundaries));
@@ -274,6 +277,84 @@ torch::Tensor drawCone(std::array<int, 2> tip, std::array<float, 2> direction, f
 }
 
 /**************************************************************************************
+ *             === UTILS ===
+ **************************************************************************************/
+void first_index_of(const torch::Tensor &tensor, const torch::Tensor &elements, torch::Tensor &out) {
+    auto const &tensor_acc = tensor.accessor<int, 1>();
+    const int N = tensor_acc.size(0);
+
+    auto const &ele_acc = elements.accessor<int, 1>();
+    const int E = ele_acc.size(0);
+    std::list<IntPair> ele_list;
+    for (int i = 0; i < E; i++) ele_list.push_back({i, ele_acc[i]});
+
+    auto out_acc = out.accessor<int, 1>();
+    TORCH_CHECK_VALUE(out_acc.size(0) == E, "The output tensor must have the same number of rows as the elements.");
+
+    for (int i = 0; i < N; i++) {
+        const auto &v = tensor_acc[i];
+        auto it = ele_list.begin();
+        const auto it_end = ele_list.end();
+        while (it != it_end) {
+            const int e_value = it->at(1);
+            if (e_value == v) {
+                out_acc[it->at(0)] = i;
+                it = ele_list.erase(it);
+                if (ele_list.empty()) return;
+            } else
+                it++;
+        }
+    }
+
+    for (auto e : ele_list) out_acc[e[0]] = -1;
+}
+
+void first_two_index_of(const torch::Tensor &tensor, const torch::Tensor &elements, torch::Tensor &out) {
+    auto const &tensor_acc = tensor.accessor<int, 1>();
+    const int N = tensor_acc.size(0);
+    auto const &ele_acc = elements.accessor<int, 1>();
+    const int E = ele_acc.size(0);
+    auto out_acc = out.accessor<int, 2>();
+
+    TORCH_CHECK_VALUE(out_acc.size(1) == 2, "The output tensor must have 2 columns.");
+    TORCH_CHECK_VALUE(out_acc.size(0) == E, "The output tensor must have the same number of rows as the elements.");
+
+    std::vector<bool> first_found(E, false);
+    std::list<IntPair> elements_left;
+    for (int i = 0; i < E; i++) elements_left.push_back({i, ele_acc[i]});
+
+    for (int i = 0; i < N; i++) {
+        const auto &v = tensor_acc[i];
+
+        auto it = elements_left.begin();
+        const auto it_end = elements_left.end();
+        while (it != it_end) {
+            const int e_value = it->at(1);
+            if (e_value == v) {
+                const int e = it->at(0);
+                if (!first_found[e]) {
+                    first_found[e] = true;
+                    out_acc[e][0] = i;
+                } else {
+                    out_acc[e][1] = i;
+                    it = elements_left.erase(it);
+                    if (elements_left.empty())
+                        return;
+                    else
+                        continue;
+                }
+            }
+            it++;
+        }
+    }
+
+    for (int e = 0; e < E; e++) {
+        if (!first_found[e]) out_acc[e][0] = -1;
+    }
+    for (auto e : elements_left) out_acc[e[0]][1] = -1;
+}
+
+/**************************************************************************************
  *             === PYBIND11 BINDINGS ===
  **************************************************************************************/
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -292,6 +373,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fit_bezier", &fit_bezier_torch, "Fit a cubic bezier curve to a set of points.");
     m.def("drawCone", &drawCone, "Draw a cone in a 2D image.");
     m.def("drawLine", &drawLine, "Draw a line in a 2D image.");
+    m.def("first_two_index_of", &first_two_index_of,
+          "Find the first and second index of a set of elements in a tensor.");
+    m.def("first_index_of", &first_index_of, "Find the first index of a set of elements in a tensor.");
 
     // === Skeleton.h ===
     m.def("detect_skeleton_nodes", &detect_skeleton_nodes, "Detect junctions and endpoints in a skeleton.");

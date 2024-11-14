@@ -19,7 +19,7 @@ def skeleton_to_vgraph(
     vessels: Optional[torch.Tensor | np.ndarray | FundusData] = None,
     fix_hollow=True,
     clean_branches_tips=20,
-    clean_terminal_branches_tips=10,
+    clean_terminal_branches_tips=15,
     min_terminal_branch_length=4,
     min_terminal_branch_calibre_ratio=1,
     max_spurs_length=30,

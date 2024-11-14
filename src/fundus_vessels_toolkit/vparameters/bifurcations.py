@@ -116,6 +116,10 @@ def parametrize_bifurcations(
         A DataFrame containing the parameters of the bifurcations
     """  # noqa: E501
 
+    from ..segment_to_graph.geometry_parsing import derive_tips_geometry_from_curve_geometry
+
+    derive_tips_geometry_from_curve_geometry(vtree, tangent=True, calibre=True, inplace=True)
+
     gdata = vtree.geometric_data()
     nodes_yx = gdata.nodes_coord()
     bifurcations = []

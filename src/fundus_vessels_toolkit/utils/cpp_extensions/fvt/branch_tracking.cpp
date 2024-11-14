@@ -287,23 +287,8 @@ std::list<SizePair> split_contiguous_curves(const CurveYX &curve) {
     return curvesBoundaries;
 }
 
-/*
- * @brief Draw the branches on a tensor.
- *
- * This method draws the branches on a tensor. The branches are represented by
- * a list of curves and a list of nodes. The branches are drawn as a line
- * between the nodes.
- *
- * @param branchCurves A list of uint tensor of shape (N, 2) representing the
- * branch curves.
- * @param shape The shape of the output tensor.
- * @param nodeCoords A list of nodes coordinates.
- * @param branchList A list of branches.
- *
- * @return A tensor with the branches drawn.
- */
 torch::Tensor draw_branches_labels(const std::vector<torch::Tensor> &branchCurves, const torch::Tensor &out,
-                                   const torch::Tensor &nodeCoords, const torch::Tensor &branchList) {
+                                   const torch::Tensor &nodeCoords, const torch::Tensor &branchList, bool interpolate) {
     const std::size_t B = branchCurves.size();
     auto branchesLabels = out.accessor<int, 2>();
 
@@ -321,7 +306,7 @@ torch::Tensor draw_branches_labels(const std::vector<torch::Tensor> &branchCurve
         IntPoint prev = {curve[0][0], curve[0][1]};
         for (std::size_t i = 0; i < N; i++) {
             IntPoint p = {curve[i][0], curve[i][1]};
-            if (!p.is_adjacent(prev)) {
+            if (interpolate && !p.is_adjacent(prev)) {
                 draw_line(prev, p, branchesLabels, b + 1, H, W);
             } else {
                 branchesLabels[p.y][p.x] = b + 1;

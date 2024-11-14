@@ -56,7 +56,7 @@ def extract_branch_geometry(
     extract_bspline: bool = True,
     curvature_roots_percentile_threshold: float = 0.1,
     bspline_target_error: float = 3,
-    bspline_max_gap: float = 2,
+    split_on_gaps: float = 2,
 ) -> tuple[list[torch.Tensor], ...]:
     """Track branches from a labels map and extract their geometry.
 
@@ -90,8 +90,8 @@ def extract_branch_geometry(
     bspline_target_error : float, optional
         The maximum error allowed for the bspline interpolation. By default 10.
 
-    bspline_max_gap : float, optional
-        The maximum gap (in pixels) between two points of the skeleton above which the bspline is necessarily split. By default 2.
+    split_on_gaps : float, optional
+        The maximum gap (in pixels) between two points of the skeleton above which the curve is split. By default 2.
 
     curvature_roots_percentile_threshold : float, optional
         The percentile of the curvature values used to threshold the curvature roots. By default 0.15.
@@ -100,10 +100,13 @@ def extract_branch_geometry(
     -------
     tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]
     This method returns a tuple containing three lists of length B which contains, for each branch:
-    - a 2D tensor of shape (n, 2) containing the coordinates of the branch points (where n is the branch length).
-    - a 2D tensor of shape (n, 2) containing the tangent vectors at each branch point.
-    - a 2D tensor of shape (n,) containing the branch width (or calibre) at each branch point.
-
+    - a tensor of shape (n, 2) containing the yx coordinates of the branch curve;
+    - a tensor of shape (n,) containing the index where the curve is not contiguous;
+    - a tensor of shape (n, 2) containing the curve tangents;
+    - a tensor of shape (n,) containing the vessel calibres along the branch;
+    - a tensor of shape (n, 2, 2) the coordinates of the nearest vessel edges along the branch;
+    - a tensor of shape (n,) containing the curvature of the vessel along the branch;
+    - a tensor of shape (n,) containing the index of the curvatures roots;
     """  # noqa: E501
     options = dict(
         adaptative_tangents=adaptative_tangents,
@@ -113,7 +116,7 @@ def extract_branch_geometry(
         return_curvature_roots=return_curvature_roots,
         extract_bspline=extract_bspline,
         bspline_target_error=bspline_target_error,
-        bspline_max_gap=bspline_max_gap,
+        split_on_gaps=split_on_gaps,
         curvature_roots_percentile_threshold=curvature_roots_percentile_threshold,
     )
 

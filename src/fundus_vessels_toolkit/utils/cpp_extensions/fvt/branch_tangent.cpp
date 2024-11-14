@@ -61,7 +61,7 @@ Point adaptative_curve_tangent(const CurveYX& curveYX, std::size_t i, const floa
 Point curve_tangent(const CurveYX& curveYX, std::size_t i, const float std, const bool forward, const bool backward,
                     const std::size_t curveStart, const std::size_t curveEnd) {
     return curve_tangent(
-        curveYX, i, [std](float d) { return std::exp(-d * d / (2 * std * std)); }, std::max(1, (int)floor(std / 3)),
+        curveYX, i, [std](float d) { return std::exp(-d * d / (2 * std * std)); }, 1,
         forward, backward, curveStart, curveEnd);
 }
 

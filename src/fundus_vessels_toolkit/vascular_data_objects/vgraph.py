@@ -12,9 +12,9 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from ..utils import if_none
 from ..utils.bezier import BSpline
 from ..utils.cluster import reduce_chains, reduce_clusters
+from ..utils.cpp_optimized import first_index_of, first_two_index_of
 from ..utils.data_io import NumpyDict, load_numpy_dict, pandas_to_numpy_dict, save_numpy_dict
 from ..utils.fundus_projections import FundusProjection
 from ..utils.geometric import Point, Rect
@@ -210,7 +210,7 @@ class VGraphBranch:
         )
 
     def is_valid(self) -> bool:
-        return self._id >= 0
+        return 0 <= self._id < self.__graph.branches_count
 
     @property
     def id(self) -> int:
@@ -538,6 +538,7 @@ class VGraph:
             self._nodes_attr.copy() if self._nodes_attr is not None else None,
             self._branches_attr.copy() if self._branches_attr is not None else None,
             self._nodes_count,
+            check_integrity=False,
         )
 
     def save(self, filename: Optional[str | Path] = None) -> NumpyDict:
@@ -971,7 +972,7 @@ class VGraph:
     def endpoints_nodes(self, as_mask=False) -> npt.NDArray[np.int_ | np.bool_]:
         """Compute the indexes of the endpoints nodes in the graph.
 
-        The endpoints nodes are the nodes connected to zero or one branch.
+        The endpoints nodes are the nodes connected to exactly one branch.
 
         Parameters
         ----------
@@ -983,6 +984,48 @@ class VGraph:
         """  # noqa: E501
         mask = np.bincount(self._branch_list.flatten(), minlength=self.nodes_count) == 1
         return mask if as_mask else np.argwhere(mask).flatten()
+
+    @overload
+    def endpoints_nodes_with_branch_index(
+        self, *, return_branch_direction: Literal[False] = False
+    ) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]: ...
+    @overload
+    def endpoints_nodes_with_branch_index(
+        self, *, return_branch_direction: Literal[True]
+    ) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_], npt.NDArray[np.bool_]]: ...
+    def endpoints_nodes_with_branch_index(
+        self, *, return_branch_direction: bool = False
+    ) -> (
+        Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]
+        | Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_], npt.NDArray[np.bool_]]
+    ):
+        """Return the indexes of the nodes that are connected to exactly one branch along with the indexes of these branches.
+
+        Parameters
+        ----------
+        exclude_loop : bool, optional
+            If True, exclude the nodes connected to themselves. Default is False.
+
+        return_branch_direction : bool, optional
+            If True, also return whether the branch is outgoing from the node. Default is False.
+
+        Returns
+        -------
+        nodes_index: npt.NDArray[np.int_]
+            The indexes of the endpoints nodes.
+
+        incident_branch_index: npt.NDArray[np.int_]
+            The indexes of the branches connected to the passing nodes.
+
+        """  # noqa: E501
+        endpoint_nodes = self.endpoints_nodes(as_mask=False)
+        incident_branches = first_index_of(self._branch_list.flatten(), endpoint_nodes)
+        branch_index = incident_branches // 2
+        if return_branch_direction:
+            branch_dirs = incident_branches % 2 == 0
+            return endpoint_nodes, branch_index, branch_dirs
+        else:
+            return endpoint_nodes, branch_index
 
     @overload
     def junctions_nodes(self, as_mask: Literal[False] = False) -> npt.NDArray[np.int_]: ...
@@ -1008,7 +1051,9 @@ class VGraph:
     def passing_nodes(self, *, as_mask: Literal[False] = False, exclude_loop: bool = False) -> npt.NDArray[np.int_]: ...
     @overload
     def passing_nodes(self, *, as_mask: Literal[True], exclude_loop: bool = False) -> npt.NDArray[np.bool_]: ...
-    def passing_nodes(self, *, as_mask=False, exclude_loop: bool = False) -> npt.NDArray[np.int_ | np.bool_]:
+    def passing_nodes(
+        self, *, as_mask=False, exclude_loop: bool = False
+    ) -> npt.NDArray[np.int_ | np.bool_] | Tuple[npt.NDArray[np.int_ | np.bool_], List[npt.NDArray[np.int_]]]:
         """Return the indexes of the nodes that are connected to exactly two branches.
 
         Parameters
@@ -1020,17 +1065,67 @@ class VGraph:
 
         Returns
         -------
-        np.ndarray
+        passing_nodes_index: np.ndarray
             The indexes of the passing nodes (or if ``as_mask`` is True, a boolean mask of shape (N,) where N is the number of nodes).
+
+        incident_branch_index: List[np.ndarray]
+            The indexes of the branches connected to the passing nodes. Only returned if ``return_branch_index`` is True.
         """  # noqa: E501
         branch_list = self._branch_list
-        mask = np.bincount(branch_list.flatten(), minlength=self.nodes_count) == 2
         if exclude_loop:
-            loops = branch_list[:, 0] == branch_list[:, 1]
-            if np.any(loops):
-                mask[branch_list[loops, 0]] = False
+            branch_list = branch_list[branch_list[:, 0] != branch_list[:, 1]]
+        mask = np.bincount(branch_list.flatten(), minlength=self.nodes_count) == 2
 
         return mask if as_mask else np.argwhere(mask).flatten()
+
+    @overload
+    def passing_nodes_with_branch_index(
+        self, *, exclude_loop: bool = False, return_branch_direction: Literal[False] = False
+    ) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]: ...
+    @overload
+    def passing_nodes_with_branch_index(
+        self, *, exclude_loop: bool = False, return_branch_direction: Literal[True]
+    ) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_], npt.NDArray[np.bool_]]: ...
+    def passing_nodes_with_branch_index(
+        self, *, exclude_loop: bool = False, return_branch_direction: bool = False
+    ) -> (
+        Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]
+        | Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_], npt.NDArray[np.bool_]]
+    ):
+        """Return the indexes of the nodes that are connected to exactly two branches along with the indexes of these branches.
+
+        Parameters
+        ----------
+        exclude_loop : bool, optional
+            If True, exclude the nodes connected to themselves. Default is False.
+
+        return_branch_direction : bool, optional
+            If True, also return the branch direction. Default is False.
+
+        Returns
+        -------
+        passing_nodes_index: npt.NDArray[np.int_]
+            The indexes of the passing nodes as a array of shape (N,) where N is the number of passing nodes.
+
+        incident_branch_index: npt.NDArray[np.int_]
+            The indexes of the branches connected to the passing nodes as an array of shape (N, 2)
+
+        branch_direction: npt.NDArray[np.bool_] (optional)
+            An array of shape (N,2) indicating the direction of the branches according to :attr:`VGraph.branch_list`:
+            - For the first branches, True indicates that the passing node is the second node of the branch
+            - For the second branches, True indicates that the passing node is the first node of the branch.
+
+            (This is only returned if ``return_branch_direction`` is True.)
+
+        """  # noqa: E501
+        passing_nodes = self.passing_nodes(as_mask=False, exclude_loop=exclude_loop)
+        incident_branches = first_two_index_of(self._branch_list.flatten(), passing_nodes)
+        branch_index = incident_branches // 2
+        if return_branch_direction:
+            branch_dirs = incident_branches < self._branch_list.shape[0]
+            return passing_nodes, branch_index, branch_dirs
+        else:
+            return passing_nodes, branch_index
 
     @overload
     def endpoints_branches(
@@ -1517,7 +1612,7 @@ class VGraph:
                 node._id = nodes_reindex[node._id + 1]
             for branch in self._branches_refs:
                 if branch.is_valid():
-                    branch._nodes_id = nodes_reindex[branch._nodes_id + 1]
+                    branch._nodes_id = self._branch_list[branch._id]
 
         return nodes_reindex
 
@@ -1642,9 +1737,9 @@ class VGraph:
     def split_branch(
         self,
         branchID: int,
-        split_coord: Optional[Point | List[Point] | npt.ArrayLike] = None,
+        split_curve_id: npt.ArrayLike[int] | npt.ArrayLike[float],
+        split_coord: Optional[npt.ArrayLike[int]] = None,
         *,
-        split_curve_id: Optional[int | float | Iterable[int] | Iterable[float]] = None,
         return_branch_ids=False,
         return_node_ids=False,
         inplace=False,
@@ -1668,47 +1763,30 @@ class VGraph:
         graph = self if inplace else self.copy()
 
         # === Check coordinates or index of the splits ===
+        split_curve_id = np.asarray(split_curve_id)
+        assert split_curve_id.ndim == 1, "split_curve_id must be a 1D array."
+        assert split_curve_id.shape[0] > 0, "split_curve_id must contain at least one split point."
+        n_split = len(split_curve_id)
+
         if split_coord is not None:
             split_coord = np.asarray(split_coord)
-            if split_coord.ndim == 1:  # Single split
-                split_coord = split_coord[None]
             assert split_coord.ndim == 2 and split_coord.shape[1] == 2, "split_coord must be a 2D array of shape (N, 2)"
-            if len(split_coord) > 1:
-                # Sort the splits by their position on the branch curve
-                split_curve_id = graph.geometric_data().branch_closest_index(split_coord, branchID)
-                split_order = np.argsort(split_curve_id)
-                split_coord = split_coord[split_order]
-            else:
-                split_order = np.zeros(1, dtype=int)
-        elif split_curve_id is not None:
-            split_coord = np.asarray(split_curve_id)
-            if split_coord.ndim == 0:  # Single split
-                split_coord = split_coord[None]
-            assert split_coord.ndim == 1, "split_curve_id must be a 1D array."
-            if len(split_coord) > 1:
-                # Sort the splits by their position on the branch curve
-                split_order = np.argsort(split_coord)
-                split_coord = split_coord[split_order]
-            else:
-                split_order = np.zeros(1, dtype=int)
-        else:
-            raise ValueError("Either split_coord or split_curve_id must be provided.")
-        assert len(split_coord) > 0, "At least one split coordinate must be provided."
+            assert len(split_coord) == n_split, "split_coord and split_curve_id must have the same length."
 
         # === Compute index for the new nodes and branches ===
         _, nEnd = graph._branch_list[branchID]
-        new_nodeIds = [graph.nodes_count + i for i in range(len(split_coord))]
-        new_branchIds = [graph.branches_count + i for i in range(len(split_coord))]
+        new_nodeIds = np.arange(n_split) + graph.nodes_count
+        new_branchIds = np.arange(n_split) + graph.branches_count
 
         # === Split the branches in the geometric data ===
         for gdata in graph._geometric_data:
-            gdata._split_branch(branchID, split_coord, new_branchIds, new_nodeIds)
+            gdata._split_branch(branchID, split_curve_id, split_coord, new_branchIds, new_nodeIds)
 
         # === Insert new nodes and branches ... ===
         # 1. ... in the branch list
         graph._branch_list[branchID, 1] = new_nodeIds[0]
         new_branches = []
-        for nPrev, nNext in itertools.pairwise(new_nodeIds + [nEnd]):
+        for nPrev, nNext in itertools.pairwise(np.concatenate([new_nodeIds, [nEnd]])):
             new_branches.append((nPrev, nNext))
         graph._branch_list = np.concatenate((graph._branch_list, new_branches), axis=0)
         # 2. ... in the branches attributes
@@ -1730,9 +1808,9 @@ class VGraph:
 
         out = [graph]
         if return_branch_ids:
-            out.append([branchID] + [new_branchIds[_] for _ in split_order])
+            out.append(np.concatenate([[branchID], new_branchIds]))
         if return_node_ids:
-            out.append([new_nodeIds[_] for _ in split_order])
+            out.append(new_nodeIds)
 
         return out if len(out) > 1 else out[0]
 
@@ -1802,7 +1880,7 @@ class VGraph:
         self,
         nodes_idx: IndexesLike,
         *,
-        quiet_invalid_node=False,
+        quietly_ignore_invalid_nodes=False,
         inplace=False,
         incident_branches: Optional[List[npt.NDArray[np.int_]]] = None,
     ) -> VGraph:
@@ -1833,96 +1911,235 @@ class VGraph:
         """
         graph = self.copy() if not inplace else self
         nodes_idx = graph.as_nodes_ids(nodes_idx)
-        graph._fuse_nodes(nodes_idx, quiet_invalid_node=quiet_invalid_node, incident_branches=incident_branches)
+        graph._fuse_nodes(
+            nodes_idx, quietly_ignore_invalid_nodes=quietly_ignore_invalid_nodes, incident_branches=incident_branches
+        )
         return graph
 
     def _fuse_nodes(
-        self, nodes: npt.ArrayLike[int], quiet_invalid_node=False, incident_branches=None
-    ) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]:
+        self, nodes: npt.ArrayLike[int], quietly_ignore_invalid_nodes: Optional[bool] = False
+    ) -> Tuple[List[npt.NDArray[np.int_]], npt.NDArray[np.bool_], npt.NDArray[np.int_], npt.NDArray[np.int_]]:
         """Fuse nodes connected to exactly two branches. (See :meth:`fuse_nodes` for the public method)
-        This method operates inplace and returns a lookup table to reindex the branches and the indexes of the deleted branches.
-        """  # noqa: E501
-        first_last_merged_branches = []
-        reconnected_nodes = []
 
-        # 1. Find branches to delete and group the consecutive branches
-        branch_by_fused_nodes = {}
-        incident_branches = if_none(incident_branches, self.incident_branches_individual(nodes))
-        for nodes_id, b in zip(nodes, incident_branches, strict=True):
-            if len(b) == 2:
-                branch_by_fused_nodes[nodes_id] = b
-            elif not quiet_invalid_node:
-                raise ValueError(f"Node {nodes_id} is not connected to exactly two branches.")
-        consecutive_branches = reduce_chains(list(branch_by_fused_nodes.values()))
+        Parameters
+        ----------
+        nodes : npt.ArrayLike[int]
+            Array of indexes of the nodes to fuse.
+
+        quietly_ignore_invalid_nodes : bool, optional
+            If True, do not raise an error if a node is not connected to exactly two branches.
+            If False, raise an error if a node is not connected to exactly two branches.
+            If None, assumes that the provided nodes are connected to exactly two branches.
+
+        Returns
+        -------
+        consecutive_branches : List[np.ndarray]
+            The list of the N clusters of merged branches. The first branch now contains all the branches of the group. The index correspond the branches indexes before the merge.
+
+        main_branch_flipped : np.ndarray
+            A boolean array of shape (N,) indicating if the main branch of each group was flipped.
+
+        branch_merge_lookup : np.ndarray
+            A lookup table to reindex the branches after the merge.
+
+        branches_to_delete : np.ndarray
+            The indexes of the branches that were deleted. The index correspond the branches indexes before the merge.
+
+        """  # noqa: E501
+        branch_pairs = self.incident_branches_individual(nodes)
+
+        if quietly_ignore_invalid_nodes is not None:
+            ignore_nodes = []
+            for i, (nodes_id, pair) in enumerate(zip(nodes, branch_pairs, strict=True)):
+                if len(pair) != 2:
+                    if not quietly_ignore_invalid_nodes:
+                        raise ValueError(f"Node {nodes_id} is not connected to exactly two branches.")
+                    else:
+                        ignore_nodes.append(i)
+            if ignore_nodes:
+                nodes = np.delete(nodes, ignore_nodes)
+                branch_pairs = np.delete(branch_pairs, ignore_nodes)
+
+        return self._merge_consecutive_branches(
+            branch_pairs=branch_pairs, junction_nodes=nodes, remove_orphan_nodes=True
+        )
+
+    def merge_consecutive_branches(
+        self,
+        branch_pairs: npt.ArrayLike[int],
+        junction_nodes: Optional[npt.ArrayLike[int]] = None,
+        *,
+        remove_orphan_nodes: bool = True,
+        quietly_ignore_invalid_pairs: Optional[bool] = False,
+        inplace=False,
+    ) -> VGraph:
+        """Merge consecutive branches in the graph.
+
+        Parameters
+        ----------
+        branch_pairs : npt.ArrayLike[int]
+            The pairs of consecutive branches to merge.
+
+        junction_nodes : npt.ArrayLike[int], optional
+            The indexes of the junction nodes connecting each pair of branches. If None, the junction nodes are inferred from the branches graph.
+
+        remove_orphan_nodes : bool, optional
+            If True, the nodes that are not connected to any branch after the deletion are removed from the graph.
+
+        quietly_ignore_invalid_pairs : bool, optional
+            If True, ignore any branch pairs not consecutive or connecting the same nodes or containing looping branches.
+            If False, raise an error if such branches are found.
+            If None, assumes that the provided branches are valid.
+
+        inplace : bool, optional
+            If True, the graph is modified in place. Otherwise, a new graph is returned.
+
+        Returns
+        -------
+        VGraph
+            The modified graph.
+        """  # noqa: E501
+        graph = self.copy() if not inplace else self
+
+        branch_pairs = np.asarray(branch_pairs, dtype=int).reshape(-1, 2)
+
+        if junction_nodes is None:
+            junction_nodes = []
+            ignore_pairs = []
+            for i, pair in enumerate(branch_pairs):
+                branch_nodes = graph._branch_list[pair]
+                nodes, count = np.unique(branch_nodes, return_counts=True)
+                junction = nodes[count == 2]
+                if any(branch_nodes[:, 0] == branch_nodes[:, 1]) or junction.size != 1:
+                    ignore_pairs.append(i)
+                else:
+                    junction_nodes.append(junction[0])
+
+            if ignore_pairs:
+                if quietly_ignore_invalid_pairs:
+                    branch_pairs = np.delete(branch_pairs, ignore_pairs)
+                else:
+                    raise ValueError(f"Invalid consecutive branches: {branch_pairs[ignore_pairs].tolist()}.")
+        else:
+            # Check that the junction nodes are valid
+            junction_nodes = np.asarray(junction_nodes, dtype=int)
+            if quietly_ignore_invalid_pairs is not None:
+                assert len(junction_nodes) == len(branch_pairs), (
+                    "The number of junction nodes must match the number of branch pairs. \n"
+                    f"({len(junction_nodes)} junction nodes where provided and {len(branch_pairs)} branch pairs)"
+                )
+
+                invalid_pairs = [
+                    i
+                    for i, (node, b_pair) in enumerate(zip(junction_nodes, branch_pairs, strict=True))
+                    if node not in graph._branch_list[b_pair[0]] or node not in graph._branch_list[b_pair[1]]
+                ]
+                if len(invalid_pairs):
+                    if quietly_ignore_invalid_pairs:
+                        branch_pairs = np.delete(branch_pairs, invalid_pairs)
+                        junction_nodes = np.delete(junction_nodes, invalid_pairs)
+                    else:
+                        raise ValueError(f"Invalid consecutive branches: {branch_pairs[invalid_pairs].tolist()}.")
+
+        graph._merge_consecutive_branches(branch_pairs, junction_nodes, remove_orphan_nodes)
+        return graph
+
+    def _merge_consecutive_branches(
+        self, branch_pairs: npt.ArrayLike[int], junction_nodes: npt.ArrayLike[int], remove_orphan_nodes: bool = True
+    ) -> Tuple[List[npt.NDArray[np.int_]], npt.NDArray[np.bool_], npt.NDArray[np.int_], npt.NDArray[np.int_]]:
+        """Merge consecutive branches in the graph. (See :meth:`merge_consecutive_branches` for the public method)
+
+        .. warning::
+            This method assumes that the branches are consecutive and that the junction nodes are correctly provided.
+            Attempting to merge non-consecutive branches will result in unknown behaviors.
+
+        Parameters
+        ----------
+        branches_pairs : npt.ArrayLike[int]
+            The pairs of consecutive branches to merge.
+
+        junction_nodes : npt.ArrayLike[int]
+            The indexes of the junction nodes connecting each pair of branches.
+
+        remove_orphan_nodes : bool, optional
+            If True, the nodes that are not connected to any branch after the deletion are removed from the graph.
+
+        Returns
+        -------
+        consecutive_branches : List[npt.NDArray]
+            The list of the N clusters of merged branches. The first branch now contains all the branches of the group. The index correspond the branches indexes before the merge.
+
+        main_branch_flipped : npt.NDArray
+            A boolean array of shape (N,) indicating if the main branch of each group was flipped.
+
+        branch_merge_lookup : npt.NDArray
+            A lookup table to reindex the branches after the merge.
+
+        branches_to_delete : npt.NDArray
+            The indexes of the branches that were deleted. The index correspond the branches indexes before the merge.
+        """  # noqa: E501
+
+        # 1. Cluster consecutive branches
+        junction_nodes = np.asarray(junction_nodes, dtype=int)
+        branch_pairs = np.asarray(branch_pairs, dtype=int).reshape(-1, 2)
+
+        consecutive_branches, consecutive_pair_ids = reduce_chains(branch_pairs.tolist(), return_index=True)
+        consecutive_branches = [np.array(c, dtype=int) for c in consecutive_branches]
+        consecutive_pair_ids = [np.array(c, dtype=int) for c in consecutive_pair_ids]
 
         # 2. For each group of consecutive branches flip them if needed and merge them
         branches_to_delete = []
-        flip_main_branch = []
-        for branches in consecutive_branches:
-            flip_branches = np.zeros(len(branches), dtype=bool)
+        main_branch_flipped = np.empty(len(consecutive_branches), dtype=bool)
+        merged_branches_summary = {}
+        for i, (branches, pairs_id) in enumerate(zip(consecutive_branches, consecutive_pair_ids, strict=True)):
+            junctions = junction_nodes[abs(pairs_id) - 1]
+            b0, b_last = branches[[0, -1]]
 
-            # Read the first branch and check if the fused node is the first or the second one
-            n0, n1 = self._branch_list[branches[0]]
-            if n0 in branch_by_fused_nodes.keys():
-                # If n0 is the fused node, flip the branch
-                nNext = n0
-                n0 = n1
-                flip_branches[0] = True
-                flip_main_branch.append(True)
-            else:
-                nNext = n1
-                flip_main_branch.append(False)
+            b0_flipped = self._branch_list[b0, 1] != junctions[0]
+            flip_branches = np.concatenate([[b0_flipped], self._branch_list[branches[1:], 0] != junctions])
+            main_branch_flipped[i] = b0_flipped
 
-            # For each branch, check that its consecutive to the previous one and store the next node
-            for i, b in enumerate(branches[1:]):
-                n1, n2 = self._branch_list[b]
-                if n1 == nNext:
-                    nNext = n2
-                elif n2 == nNext:
-                    nNext = n1
-                    flip_branches[i + 1] = True
-                else:
-                    raise ValueError(f"Branches {b} is not consecutive to branch {branches[i]}.")
+            # Update the nodes of the first branch with the non-junction node of the cluster's first and last branches
+            self._branch_list[b0, 0] = self._branch_list[b0, 1 if b0_flipped else 0]
+            self._branch_list[b0, 1] = self._branch_list[b_last, 0 if flip_branches[-1] else 1]
 
-            # Update the first branch
-            self._branch_list[branches[0]] = [n0, nNext]
+            # Remember the merged branches
+            for b in branches[1:]:
+                merged_branches_summary[b] = b0
 
-            # Remember the first and last merged branches and the last node
-            first_last_merged_branches.append((branches[0], branches[-1]))
-            reconnected_nodes.append(nNext)
-
-            # Merge the branches
+            # Flip and merge the branches
             branches_to_delete.extend(branches[1:])
             for gdata in self._geometric_data:
                 if flip_branches.any():
-                    gdata._flip_branches_direction(np.asarray(branches)[flip_branches])
+                    gdata._flip_branches_direction(branches[flip_branches])
                 gdata._merge_branches(branches)
 
-        # 3a. Update the branch references of the first and last merged branches
+        # 3a. Update the branch references
         if self._branches_refs:
-            first_last_branches = np.unique(first_last_merged_branches)
-            last_to_first_branches = {last: first for first, last in first_last_merged_branches}
             for branch in self._branches_refs:
-                if branch._id in first_last_branches:
-                    # Redirect the last branches to the first ones
-                    branch._id = last_to_first_branches.get(branch._id, branch._id)
+                if (redirected_to := merged_branches_summary.get(branch._id, -1)) != -1:
+                    # Redirect the merged branches to the first ones
+                    branch._id = redirected_to
                     branch._nodes_id = self._branch_list[branch._id]
+
         # 3b. Update the nodes references of the reconnected nodes
         if self._nodes_refs:
-            reconnected_nodes = np.unique(reconnected_nodes)
+            reconnected_nodes = np.unique(self._branch_list[[c[0] for c in consecutive_branches]])
             for node in self._nodes_refs:
                 if node._id in reconnected_nodes:
                     node.clear_incident_branch_cache()
 
-        # 4. Remove the branches and the fused nodes
-        del_lookup = self._delete_branches(branches_to_delete)
-        fused_nodes = np.array(list(branch_by_fused_nodes.keys()))
-        self._delete_nodes(fused_nodes)
-
+        # 3c. Remove the branches and create the merge lookup
+        branch_merge_lookup = self._delete_branches(branches_to_delete, update_refs=False)
         for c in consecutive_branches:
-            del_lookup[c[1:]] = del_lookup[c[0]]
+            branch_merge_lookup[c[1:]] = branch_merge_lookup[c[0]]
 
-        return consecutive_branches, flip_main_branch, del_lookup, np.array(branches_to_delete, dtype=int)
+        # 4. Remove orphan nodes
+        if remove_orphan_nodes:
+            orphans = junction_nodes[~np.isin(junction_nodes, self._branch_list)]
+            self._delete_nodes(orphans)
+
+        return consecutive_branches, main_branch_flipped, branch_merge_lookup, np.array(branches_to_delete, dtype=int)
 
     def merge_nodes(
         self,

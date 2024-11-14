@@ -9,7 +9,7 @@ import numpy.typing as npt
 import pandas as pd
 
 from ..utils.lookup_array import add_empty_to_lookup, complete_lookup, invert_complete_lookup
-from ..utils.math import as_1d_array
+from ..utils.numpy import as_1d_array
 from ..utils.tree import find_cycles, has_cycle
 from .vgeometric_data import VBranchGeoDataKey, VGeometricData
 from .vgraph import IndexesLike, VGraph, VGraphBranch, VGraphNode
@@ -138,6 +138,10 @@ class VTreeBranch(VGraphBranch):
         """Returns the ancestor of this branch as a :class:`VTreeBranch`, or None if the branch is a root branch."""
         p = self.graph.branch_tree[self.id]
         return VTreeBranch(self.graph, p) if p >= 0 else None
+
+    def has_ancestor(self) -> bool:
+        """Check if the branch has an ancestor."""
+        return self.ancestor_id >= 0
 
     def ancestors(self, *, max_depth: int | None = 1) -> Generator[VTreeBranch]:
         """Iterate over the ancestors of the branch as :class:`VTreeBranch`."""
@@ -466,9 +470,7 @@ class VTree(VGraph):
         branch_list[~dirs] = branch_list[~dirs][:, ::-1]
         return branch_list
 
-    def branch_ancestors(
-        self, branch_id: int | npt.ArrayLike[int], *, max_depth: int | None = 1
-    ) -> np.ndarray[np.int_]:
+    def branch_ancestor(self, branch_id: int | npt.ArrayLike[int], *, max_depth: int | None = 1) -> np.ndarray[np.int_]:
         """Return the index of the ancestor (parent) branches of a given branch(es).
 
         Parameters
@@ -545,6 +547,40 @@ class VTree(VGraph):
         has_succ = np.any(branch_id[:, None] == self.branch_tree[None, :], axis=1)
         return has_succ[0] if is_single else has_succ
 
+    def branch_distance_to_root(self, branch_id: Optional[int | npt.ArrayLike[int]] = None) -> np.ndarray:
+        """Return the distance of the given branch(es) to the root.
+
+        Roots branches have a distance of 0.
+
+        Parameters
+        ----------
+        branch_id : int
+            The index of the branch(es).
+
+        Returns
+        -------
+        np.ndarray
+            The distance of the branches to the root.
+        """
+        if branch_id is None:
+            dist = np.zeros(self.branches_count, dtype=int)
+            b = self.root_branches_ids()
+            i = 1
+            while len(b := self.branch_successors(b, max_depth=1)) > 0:
+                dist[b] = i
+                i += 1
+            return dist
+
+        else:
+            branch_id, is_single = as_1d_array(branch_id, dtype=int)
+            dist = np.zeros(len(branch_id), dtype=int)
+            b = self.branch_tree[branch_id]
+            while np.any(b != -1):
+                non_root_b = b != -1
+                b[non_root_b] = self.branch_tree[b[non_root_b]]
+                dist[non_root_b] += 1
+            return dist[0] if is_single else dist
+
     def subtrees(self) -> List[npt.NDArray[np.int_]]:
         """Return the indexes of the branches of each subtree.
 
@@ -596,7 +632,8 @@ class VTree(VGraph):
             branch_list = self._branch_list
             is_single = False
         else:
-            branch_id, is_single = self.as_branches_ids(branch_id, return_single=True)
+            is_single = np.isscalar(branch_id)
+            branch_id = self.as_branches_ids(branch_id)
             branch_list = self._branch_list[branch_id]
         if self._branch_dirs is None:
             heads = branch_list[:, 1]
@@ -703,24 +740,86 @@ class VTree(VGraph):
             leaf_nodes = leaf_nodes[:, 1]
         return np.unique(leaf_nodes)
 
-    def crossing_nodes_ids(self) -> npt.NDArray[np.int_]:
+    @overload
+    def crossing_nodes_ids(
+        self,
+        branch_ids: Optional[npt.ArrayLike[int]] = None,
+        *,
+        return_branch_ids: Literal[False] = False,
+        only_traversing: bool = True,
+    ) -> npt.NDArray[np.int_]: ...
+    @overload
+    def crossing_nodes_ids(
+        self,
+        branch_ids: Optional[npt.ArrayLike[int]] = None,
+        *,
+        return_branch_ids: Literal[True],
+        only_traversing: bool = True,
+    ) -> Tuple[npt.NDArray[np.int_], List[Dict[int, npt.NDArray[np.int_]]]]: ...
+    def crossing_nodes_ids(
+        self,
+        branch_ids: Optional[npt.ArrayLike[int]] = None,
+        *,
+        return_branches: bool = False,
+        only_traversing: bool = True,
+    ) -> npt.NDArray[np.int_] | Tuple[npt.NDArray[np.int_], List[Dict[int, npt.NDArray[np.int_]]]]:
         """Return the indexes of the crossing nodes.
 
         Crossing nodes are nodes with two or more incoming branches with successors.
+
+        Parameters
+        ----------
+        branch_ids : np.ndarray
+            The indexes of the branches to consider. If None (by default), all the branches are considered.
+
+        return_branch_ids : bool, optional
+            If True, the function will return a dictionary containing the indexes of the crossing branches for each node.
+
+        only_traversing : bool, optional
+            If True, the function will only consider the branches that are traversing the node. By default: True.
 
         Returns
         -------
         np.ndarray
             The indexes of the crossing nodes.
-        """
+
+        List[Dict[int, np.ndarray]]
+            For each crossing nodes, a dictionary containing the indexes of the incoming branches (as key) and their successors (as value).
+        """  # noqa: E501
         crossing_candidates = np.argwhere(self.node_indegree() >= 2).flatten()
-        crossing = []
-        for node_id in crossing_candidates:
-            outgoing_branches = self.node_outgoing_branches(crossing_candidates)
-            incoming_branches_with_successors = np.unique(self.branch_tree[outgoing_branches])
-            if len(incoming_branches_with_successors) > (1 if incoming_branches_with_successors[0] != -1 else 2):
-                crossing.append(node_id)
-        return np.array(crossing, dtype=int)
+        crossings = []
+        crossing_branches = []
+
+        if only_traversing:
+            for node_id in crossing_candidates:
+                outgoing_branches = self.node_outgoing_branches(node_id)
+                if branch_ids is not None:
+                    outgoing_branches = np.intersect1d(outgoing_branches, branch_ids)
+                incoming_branches_with_successors = np.unique(self.branch_tree[outgoing_branches])
+                if branch_ids is not None:
+                    incoming_branches_with_successors = np.intersect1d(incoming_branches_with_successors, branch_ids)
+
+                if (l := len(incoming_branches_with_successors)) > 1:
+                    if incoming_branches_with_successors[0] != -1 or l > 2:
+                        crossings.append(node_id)
+                        if return_branches:
+                            branches = {}
+                            outgoing_branch_anc = self.branch_tree[outgoing_branches]
+                            for b in incoming_branches_with_successors:
+                                branches[b] = outgoing_branches[np.argwhere(outgoing_branch_anc == b).flatten()]
+                            crossing_branches.append(branches)
+            crossings = np.array(crossings, dtype=int)
+        else:
+            crossings = crossing_candidates
+            crossing_incoming_branches = [self.node_incoming_branches(c) for c in crossings]
+            if branch_ids is not None:
+                crossing_incoming_branches = [np.intersect1d(b, branch_ids) for b in crossing_incoming_branches]
+                crossings = [c for c, b in zip(crossings, crossing_incoming_branches, strict=True) if len(b) > 0]
+                crossing_incoming_branches = [b for b in crossing_incoming_branches if len(b) > 0]
+            crossing_branches = [
+                {b: self.branch_successors(b, max_depth=1) for b in branches} for branches in crossing_incoming_branches
+            ]
+        return (crossings, crossing_branches) if return_branches else crossings
 
     def node_incoming_branches(self, node_id: int | npt.ArrayLike[int]) -> npt.NDArray[np.int_]:
         """Return the ingoing branches of the given node(s).
@@ -826,7 +925,7 @@ class VTree(VGraph):
         max_depth = max_depth - 1 if max_depth is not None else None
         branch_list = self.tree_branch_list()
         pred_branches = np.argwhere(np.isin(branch_list[:, 1], node_id)).flatten()  # Ingoig branches
-        pred_branches = np.concatenate([self.branch_ancestors(pred_branches, max_depth=max_depth), pred_branches])
+        pred_branches = np.concatenate([self.branch_ancestor(pred_branches, max_depth=max_depth), pred_branches])
         return np.unique(branch_list[pred_branches, 0])
 
     def node_successors(self, node_id: int | npt.ArrayLike[int], *, max_depth: int | None = 1):
@@ -854,8 +953,48 @@ class VTree(VGraph):
         succ_branches = np.concatenate([self.branch_successors(succ_branches, max_depth=max_depth), succ_branches])
         return np.unique(branch_list[succ_branches, 1])
 
+    def node_distance_to_root(self, node_id: Optional[int | npt.ArrayLike[int]] = None) -> int | npt.NDArray[np.int_]:
+        """Return the distance between the given node(s) and the root node.
+
+        Parameters
+        ----------
+        node_id : int
+            The index of the node(s).
+
+        Returns
+        -------
+        np.ndarray
+            The distance between the node and the root node.
+        """
+        if node_id is None:
+            dist = np.zeros(self.nodes_count, dtype=int)
+            branch = self.root_branches_ids()
+            i = 1
+            while branch:
+                dist[self.branch_head(branch)] = i
+                branch = self.branch_successors(branch, max_depth=1)
+                i += 1
+            return dist
+        else:
+            dist = []
+            for nid in np.atleast_1d(node_id):
+                branches = self.node_incoming_branches(nid)
+                if len(branches) == 0:
+                    dist.append(0)
+                else:
+                    d = 1
+                    while -1 not in (branches := self.branch_tree[branches]):
+                        d += 1
+                    dist.append(d)
+            return np.array(dist, dtype=int)
+
     @overload
-    def passing_nodes(self, *, as_mask: Literal[False] = False, exclude_loop: bool = False) -> npt.NDArray[np.int_]: ...
+    def passing_nodes(
+        self,
+        *,
+        as_mask: Literal[False] = False,
+        exclude_loop: bool = False,  # , return_branch_index
+    ) -> npt.NDArray[np.int_]: ...
     @overload
     def passing_nodes(self, *, as_mask: Literal[True], exclude_loop: bool = False) -> npt.NDArray[np.bool_]: ...
     def passing_nodes(self, *, as_mask=False, exclude_loop: bool = False) -> npt.NDArray[np.int_ | np.bool_]:
@@ -879,6 +1018,67 @@ class VTree(VGraph):
         outdeg = np.bincount(branch_list[:, 0], minlength=self.nodes_count)
         mask = (incdeg == 1) & (outdeg == 1)
         return np.where(mask)[0] if not as_mask else mask
+
+    @overload
+    def passing_nodes_with_branch_index(
+        self,
+        *,
+        exclude_loop: bool = False,
+        return_branch_direction: Literal[False] = False,
+    ) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]: ...
+    @overload
+    def passing_nodes_with_branch_index(
+        self, *, exclude_loop: bool = False, return_branch_direction: Literal[True]
+    ) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_], npt.NDArray[np.bool_]]: ...
+    def passing_nodes_with_branch_index(
+        self, *, exclude_loop: bool = False, return_branch_direction: bool = False
+    ) -> (
+        Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]
+        | Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_], npt.NDArray[np.bool_]]
+    ):
+        """Return the indexes of the nodes that are connected to exactly two branches along with the indexes of these branches.
+
+        Parameters
+        ----------
+        exclude_loop : bool, optional
+            This argument have no effect for trees (cycles are not allowed). It is kept for compatibility with :meth:`VGraph.passing_nodes_with_branch_index`.
+
+        return_branch_direction : bool, optional
+            If True, also return whether the branch is outgoing from the node. Default is False.
+
+        Returns
+        -------
+        passing_nodes_index : npt.NDArray[np.int_]
+            The indexes of the passing nodes as a array of shape (N,) where N is the number of passing nodes.
+
+        incident_branch_index : npt.NDArray[np.int_]
+            The indexes of the branches connected to the passing nodes as a array of shape (N, 2). The branches are ordered as: [incoming, outgoing].
+
+        branch_direction : npt.NDArray[np.bool_] (optional)
+            An array of shape (N,2) indicating the direction of the branches according to :attr:`VGraph.branch_list`:
+            - For the first branches, True indicates that the passing node is the second node of the branch
+            - For the second branches, True indicates that the passing node is the first node of the branch.
+
+            (This is only returned if ``return_branch_direction`` is True.)
+
+        """  # noqa: E501
+        branch_tree = self._branch_tree
+        ancestor, successor, ancestor_count = np.unique(branch_tree, return_index=True, return_counts=True)
+        passing_mask = ancestor_count == 1
+        passing_branch = np.stack([ancestor[passing_mask], successor[passing_mask]], axis=1)
+
+        passing_branch_list = self._branch_list[passing_branch[:, 0]]  # Shape (N, 2)
+        if self._branch_dirs is not None:
+            passing_branch_dirs = self._branch_dirs[passing_branch]  # Shape (N,)
+            inverted_inc_branch = ~passing_branch_dirs[:, 0]
+            passing_branch_list[inverted_inc_branch] = passing_branch_list[inverted_inc_branch][:, ::-1]
+        elif return_branch_direction:
+            passing_branch_dirs = np.ones((passing_branch.shape[0], 2), dtype=bool)
+        passing_nodes = passing_branch_list[:, 1]
+
+        if not return_branch_direction:
+            return passing_nodes, passing_branch
+        return passing_nodes, passing_branch, passing_branch_dirs
 
     ####################################################################################################################
     #  === TREE MANIPULATION ===
@@ -1088,16 +1288,12 @@ class VTree(VGraph):
 
         tree = self.copy() if not inplace else self
 
-        # === Flip the branches to match the tree structure ===
-        # Necessary to reindex branches correctly in branch_tree
-        # (otherwise, using the reindexing code underneath, a branch can be its own parent)
-        # tree.flip_branches_to_tree_dir()
         branch_tree = tree.branch_tree
         branch_rank = invert_complete_lookup(np.array(list(self.walk(depth_first=False)), dtype=int))
 
         # === Fuse the node in the graph and geometrical data ===
         merged_branch, flip_branch, del_lookup, del_branch = tree._fuse_nodes(
-            nodes, quiet_invalid_node=quiet_invalid_node, incident_branches=incident_branches
+            nodes, quietly_ignore_invalid_nodes=quiet_invalid_node, incident_branches=incident_branches
         )
 
         # === Redirect the branch ancestors and direction===
@@ -1114,6 +1310,99 @@ class VTree(VGraph):
         # === Apply branch deletion to branch tree ===
         del_lookup = add_empty_to_lookup(del_lookup, increment_index=False)
         tree._branch_tree = np.delete(del_lookup[branch_tree + 1], del_branch)
+        return tree
+
+    def merge_consecutive_branches(
+        self,
+        branch_pairs: npt.ArrayLike[int],
+        junction_nodes: Optional[npt.ArrayLike[int]] = None,
+        *,
+        remove_orphan_nodes: bool = True,
+        quietly_ignore_invalid_pairs: Optional[bool] = False,
+        inplace=False,
+    ) -> VTree:
+        """Merge consecutive branches in the graph.
+
+        Parameters
+        ----------
+        branch_pairs : npt.ArrayLike[int]
+            The pairs of consecutive branches to merge.
+
+        junction_nodes : npt.ArrayLike[int], optional
+            The indexes of the junction nodes connecting each pair of branches. If None, the junction nodes are inferred from the branches graph.
+
+        remove_orphan_nodes : bool, optional
+            If True, the nodes that are not connected to any branch after the deletion are removed from the graph.
+
+        quietly_ignore_invalid_pairs : bool, optional
+            If True, ignore any branch pairs not consecutive.
+            If False, raise an error if such branches are found.
+            If None, assumes that the provided branch pairs are valid and sorted as [parent, child].
+
+        inplace : bool, optional
+            If True, the graph is modified in place. Otherwise, a new graph is returned.
+
+        Returns
+        -------
+        VGraph
+            The modified graph.
+        """  # noqa: E501
+        tree = self.copy() if not inplace else self
+        branch_pairs = np.asarray(branch_pairs, dtype=int).reshape(-1, 2)
+        branch_tree = tree._branch_tree
+
+        if quietly_ignore_invalid_pairs is not None:
+            tree_branch_list = tree.tree_branch_list()
+            # === Check and sort each pairs as [parent, child] ===
+            flipped_pairs_id = branch_tree[branch_pairs[:, 1]] != branch_pairs[:, 0]
+            if flipped_pairs_id.any():
+                branch_pairs[flipped_pairs_id] = branch_pairs[flipped_pairs_id][:, ::-1]
+                invalid_pairs = branch_tree[branch_pairs[:, 1]] != branch_pairs[:, 0]
+                if np.any(invalid_pairs):
+                    if quietly_ignore_invalid_pairs:
+                        branch_pairs = np.delete(branch_pairs, invalid_pairs)
+                        if junction_nodes is not None:
+                            junction_nodes = np.delete(junction_nodes, invalid_pairs)
+                    else:
+                        raise ValueError(f"Invalid consecutive branches: {branch_pairs[invalid_pairs].tolist()}.")
+
+            # === Check that the junction nodes are valid ===
+            if junction_nodes is None:
+                junction_nodes = tree_branch_list[branch_pairs[:, 0], 1]
+            else:
+                junction_nodes = np.asarray(junction_nodes, dtype=int)
+
+                invalid_pairs = junction_nodes != tree_branch_list[branch_pairs[:, 0], 1]
+                invalid_pairs |= junction_nodes != tree_branch_list[branch_pairs[:, 1], 0]
+
+                if np.any(invalid_pairs):
+                    if quietly_ignore_invalid_pairs:
+                        branch_pairs = np.delete(branch_pairs, invalid_pairs)
+                        junction_nodes = np.delete(junction_nodes, invalid_pairs)
+                    else:
+                        raise ValueError(f"Invalid consecutive branches: {branch_pairs[invalid_pairs].tolist()}.")
+        elif junction_nodes is None:
+            tree_branch_list = tree.tree_branch_list()
+            junction_nodes = tree_branch_list[branch_pairs[:, 0], 1]
+
+        # === Merge the branch in the graph and geometrical data ===
+        merged_branch, flip_branch, merge_lookup, del_branch = tree._merge_consecutive_branches(
+            branch_pairs, junction_nodes, remove_orphan_nodes=remove_orphan_nodes
+        )
+
+        # === Redirect the branch ancestors and direction===
+        ancestors_lookup = np.arange(branch_tree.size)
+        for branches, flip in zip(merged_branch, flip_branch, strict=True):
+            b0 = branches[0]
+            ancestors_lookup[branches] = b0
+            if flip:
+                main_branch = merge_lookup[b0]
+                tree._branch_dirs[main_branch] = ~tree._branch_dirs[main_branch]
+
+        # === Apply branch deletion to branch tree ===
+        branch_tree = branch_tree[ancestors_lookup]
+        merge_lookup = add_empty_to_lookup(merge_lookup, increment_index=False)
+        tree._branch_tree = np.delete(merge_lookup[branch_tree + 1], del_branch)
         return tree
 
     def merge_nodes(self, nodes: IndexesLike, *, inplace=False) -> VTree:

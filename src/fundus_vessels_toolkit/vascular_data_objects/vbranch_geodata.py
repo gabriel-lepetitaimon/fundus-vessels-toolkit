@@ -57,7 +57,13 @@ class MetaVBranchGeoDataBase(ABCMeta):
 
 
 class VBranchGeoDataBase(ABC, metaclass=MetaVBranchGeoDataBase):
-    """``VBranchGeoAttr`` is an abstract class defining a geometric attribute related to branch of a vascular graph."""
+    """:class:``VBranchGeoDataBase`` is an abstract class that stores the parametric data of a vascular graph.
+
+    .. warning::
+        VBranchGeoDataBase are considered immutable objects. Any modification to the data should be done by creating a new object.
+        If the geo data is stored as a numpy array, we advise to use the flag ``array.flags.writeable = False`` to ensure the data is not modified.
+
+    """  # noqa: E501
 
     def is_invalid(self, ctx: BranchGeoDataEditContext) -> str:
         """Check that the attribute data is valid. If not return an error message.
@@ -159,6 +165,7 @@ class VBranchCurveData(VBranchGeoDataBase):
     def __init__(self, data: np.ndarray) -> None:
         super().__init__()
         self.data = data
+        self.data.flags.writeable = False
 
     def copy(self) -> Self:
         return self.__class__(self.data)
@@ -167,8 +174,8 @@ class VBranchCurveData(VBranchGeoDataBase):
         curve = ctx.curve
         if self.data.shape[0] != curve.shape[0]:
             return (
-                f"Branch curve data must have the same length as the branch curve: {curve.shape[0]}."
-                f"(Data provided has shape: {self.data.shape}.)"
+                f"Branch curve data must have the same length as the branch curve."
+                f"(Data provided has shape: {self.data.shape}, but curve length is {curve.shape[0]})"
             )
         return ""
 
@@ -182,8 +189,8 @@ class VBranchCurveData(VBranchGeoDataBase):
         return cls(np.concatenate([_.data for _ in others if _ is not None], axis=0))
 
     def flip(self, ctx: BranchGeoDataEditContext) -> VBranchCurveData:
-        self.data = np.flip(self.data, axis=0)
-        return self
+        data = np.flip(self.data, axis=0)
+        return self.__class__(data)
 
     def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
         return [self.__class__(self.data[start:end]) for start, end in itertools.pairwise(splits_id)]
@@ -196,13 +203,15 @@ class VBranchCurveIndex(VBranchGeoDataBase):
     def __init__(self, data: np.ndarray) -> None:
         super().__init__()
         self.data = np.atleast_1d(data).astype(int)
+        self.data.flags.writeable = False
         assert self.data.ndim == 1, "Branch curve index data must be a 1D array."
 
     def copy(self) -> Self:
         return self.__class__(self.data)
 
     def is_invalid(self, ctx: BranchGeoDataEditContext) -> str:
-        self.data = np.sort(self.data.copy())
+        self.data = np.sort(self.data)
+        self.data.flags.writeable = False
         if len(self.data) and (self.data.max() >= ctx.curve.shape[0] or self.data.min() < 0):
             return f"Branch curve index data must have values between 0 and {ctx.curve.shape[0] - 1}."
         return ""
@@ -223,19 +232,22 @@ class VBranchCurveIndex(VBranchGeoDataBase):
         return cls(data)
 
     def flip(self, ctx: BranchGeoDataEditContext) -> Self:
-        self.data = np.flip(ctx.curve.shape[0] - self.data, axis=0)
-        return self
+        data = np.flip(ctx.curve.shape[0] - self.data, axis=0)
+        return self.__class__(data)
 
     def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
         if len(self.data) == 0:
             return [self.__class__(self.data) for _ in range(len(splits_id) - 1)]
+
         splitted_curveId = []
         start = 0
-        for id in splits_id[1:-1]:
-            end = np.argmax(self.data[start:] >= id)
-            splitted_curveId.append(VBranchCurveIndex(self.data[start : start + end]))
+        start_id = 0
+        for split_id in splits_id[1:-1]:
+            end = np.searchsorted(self.data[start:], split_id)
+            splitted_curveId.append(self.__class__(self.data[start : start + end] - start_id))
             start += end
-        splitted_curveId.append(VBranchCurveIndex(self.data[start:]))
+            start_id = split_id
+        splitted_curveId.append(self.__class__(self.data[start:] - start_id))
 
         return splitted_curveId
 
@@ -248,6 +260,7 @@ class VBranchTangents(VBranchGeoDataBase):
         super().__init__()
         assert data.ndim == 2 and data.shape[1] == 2, "Tangents must be a 2D array with 2 columns."
         self.data = data
+        self.data.flags.writeable = False
 
     def copy(self) -> Self:
         return self.__class__(self.data)
@@ -256,8 +269,8 @@ class VBranchTangents(VBranchGeoDataBase):
         curve = ctx.curve
         if self.data.shape[0] != curve.shape[0]:
             return (
-                f"Branch tangents data must have the same length as the branch curve: {curve.shape[0]}."
-                f"(Data provided has shape: {self.data.shape}.)"
+                f"Branch tangents data must have the same length as the branch curve."
+                f"(Data provided has shape: {self.data.shape}, but curve length is {curve.shape[0]}.)"
             )
         return ""
 
@@ -271,8 +284,8 @@ class VBranchTangents(VBranchGeoDataBase):
         return cls(np.concatenate([_.data for _ in others if _ is not None], axis=0))
 
     def flip(self, ctx: BranchGeoDataEditContext) -> VBranchTangents:
-        self.data = -np.flip(self.data, axis=0)
-        return self
+        data = -np.flip(self.data, axis=0)
+        return self.__class__(data)
 
     def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
         return [self.__class__(self.data[start:end]) for start, end in itertools.pairwise(splits_id)]
@@ -290,6 +303,7 @@ class VBranchTipsData(VBranchGeoDataBase):
             data.shape == expected_shape
         ), f"{self.__class__.__qualname__} data shape must be {expected_shape} but {data.shape} was provided."
         self.data = data
+        self.data.flags.writeable = False
 
     def copy(self) -> Self:
         return self.__class__(self.data)
@@ -327,8 +341,8 @@ class VBranchTipsData(VBranchGeoDataBase):
         )
 
     def flip(self, ctx: BranchGeoDataEditContext) -> Self:
-        self.data = np.flip(self.data, axis=0)
-        return self
+        data = np.flip(self.data, axis=0)
+        return self.__class__(data)
 
     def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
         nan = self.empty_data()
@@ -378,8 +392,8 @@ class VBranchTipsTangents(VBranchTipsData):
         return not np.all(np.isnan(self.data) | (self.data == 0))
 
     def flip(self, ctx: BranchGeoDataEditContext) -> Self:
-        self.data = np.flip(self.data, axis=0)  # No need to negate tangent tips are oriented in opposite direction
-        return self
+        data = np.flip(self.data, axis=0)  # No need to negate tangent tips are oriented in opposite direction
+        return self.__class__(data)
 
 
 ####################################################################################################
@@ -425,8 +439,7 @@ class VBranchBSpline(VBranchGeoDataBase):
         return cls(bspline)
 
     def flip(self, ctx: BranchGeoDataEditContext) -> VBranchBSpline:
-        self.data = self.data.flip()
-        return self
+        return self.__class__(self.data.flip())
 
     def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
         return [self.__class__(bspline) for bspline in self.data.split_into_multiple_bsplines(splits_point[1:-1])]

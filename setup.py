@@ -5,7 +5,7 @@ from torch.__config__ import parallel_info
 from torch.utils import cpp_extension
 
 DEBUG = False
-OPEN_MP = True
+OPEN_MP = not DEBUG
 
 WORKSPACE_FOLDER = Path(__file__).parent
 
@@ -19,7 +19,7 @@ def get_torch_extensions():
         extra_link_args = ["-s"]
 
     info = parallel_info()
-    if OPEN_MP and not DEBUG and "backend: OpenMP" in info and "OpenMP not found" not in info:
+    if OPEN_MP and "backend: OpenMP" in info and "OpenMP not found" not in info:
         extra_compile_args["cxx"] += ["-DAT_PARALLEL_OPENMP"]
         extra_compile_args["cxx"] += ["-fopenmp"]
         extra_link_args += ["-lgomp"]

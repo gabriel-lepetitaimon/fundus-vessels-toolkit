@@ -36,72 +36,31 @@ def angle_diff(a, b, degrees=False):
         return (diff + np.pi) % (2 * np.pi) - np.pi
 
 
-def np_isin_sorted(a, b, *, invert=False):
-    """
-    Return a boolean array indicating whether each element of a is contained in b.
-    Both a and b must be sorted.
-    """
-    if isinstance(a, np.ndarray):
-        searchsorted_id = np.searchsorted(b, a)
-        isin = (searchsorted_id < len(b)) & ((b[0] == a) | (searchsorted_id > 0))
-        return isin if not invert else ~isin
-    else:
-        if b[0] == a:
-            return True if not invert else False
-        isin = 0 < np.searchsorted(b, a) < len(b)
-        return isin if not invert else not isin
+def quantized_higher(x: npt.NDArray[np.float64], threshold: float, medfilt_size: int = 5):
+    from scipy.signal import medfilt
 
+    if len(x) <= 1:
+        return np.array([])
 
-def np_find_sorted(keys: Any, array: np.ndarray, assume_keys_sorted=False) -> int | np.ndarray:
-    """
-    Find the index of keys in an array.
+    x_quant = (x > threshold) * 1
 
-    Parameters
-    ----------
-    keys:
-        The key or keys (as a numpy array) to find in the array.
+    if all(x_quant == 0):
+        return np.array([])
+    elif all(x_quant == 1):
+        return np.array([len(x_quant) // 2])
 
-    array:
-        The array in which to find the keys. Must be sorted and unique.
+    if len(x) > medfilt_size:
+        x_quant = medfilt(x_quant * 1, medfilt_size)
 
-    assume_keys_sorted:
-        If True, assume that keys are sorted in ascending order.
+    x_change = np.argwhere(np.diff(x_quant) != 0).flatten() + 1
+    roots = []
+    for i0, i1 in itertools.pairwise([0] + list(x_change) + [len(x_quant) - 1]):
+        if i0 == i1 and i0 != len(x_quant) - 1:
+            continue
+        if x_quant[i0] == 1:
+            roots.append((i1 + i0) // 2)
 
-    Returns
-    -------
-    int | np.ndarray:
-        The index or indexes of the keys in the array. If a key is not found, -1 is returned.
-    """
-    if np.isscalar(keys):
-        if array[0] == keys:
-            return 0
-        i = np.searchsorted(array, keys)
-        isin = 0 < i < len(array)
-        return i if 0 < i < len(array) else -1
-    else:
-        keys = np.asarray(keys)
-        if len(keys) == 0:
-            return np.array([], dtype=int)
-        elif len(keys) == 1:
-            return np.asarray([np_find_sorted(keys[0], array)], dtype=int)
-
-        if not assume_keys_sorted:
-            searchsorted_id = np.searchsorted(array, keys)
-            isin = (searchsorted_id < len(array)) & ((array[0] == keys) | (searchsorted_id > 0))
-            searchsorted_id[~isin] = -1
-            return searchsorted_id
-        else:
-            k0 = np.argmax(keys < array[0])
-            if k0 != 0 or keys[0] < array[0]:
-                k0 += 1
-            k1 = np.argmax(keys > array[-1])
-            if k1 == 0 and keys[0] <= array[-1]:
-                k1 = len(array)
-            if k1 == k0:
-                return -np.ones(len(keys), dtype=int)
-
-            id = np.searchsorted(array, keys[k0:k1])
-            return np.concatenate([(-1,) * k0, id, (-1,) * (len(keys) - k1)])
+    return np.array(roots).astype(int)
 
 
 def quantified_roots(
@@ -226,36 +185,6 @@ def extract_splits(x, medfilt_size=5) -> Dict[Tuple[int, int], float | int]:
     }
 
 
-def as_1d_array(data: Any, *, dtype=None) -> Tuple[np.ndarray | None, bool]:
-    """Convert the data to a numpy array.
-
-    Parameters
-    ----------
-    data : Any
-        The data to convert.
-
-    Returns
-    -------
-    np.ndarray | None
-        The data as a numpy array.
-
-    bool
-        Whether the data is a scalar.
-    """
-
-    # TODO: Remove the None check and assume that data is valid, bad practice...
-    if data is None:
-        return None, False
-
-    data = np.asarray(data, dtype=dtype)
-    if data.ndim == 0:
-        return data[None], True
-    if data.ndim == 1:
-        return data, False
-
-    raise ValueError(f"Impossible to convert {data} to a 1D vector.")
-
-
 def modulo_pi(x):
     return (x + np.pi) % (2 * np.pi) - np.pi
 
@@ -334,6 +263,7 @@ def intercept_segment(
 
 
 def sigmoid(x, antisymmetric=False):
-    if antisymmetric:
-        return 2 / (1 + np.exp(-x)) - 1
-    return 1 / (1 + np.exp(-x))
+    with np.errstate(over="raise"):
+        if antisymmetric:
+            return 2 / (1 + np.exp(-x)) - 1
+        return 1 / (1 + np.exp(-x))

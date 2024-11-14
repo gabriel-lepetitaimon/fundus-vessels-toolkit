@@ -44,12 +44,6 @@ class AVSegToTreeBase(metaclass=ABCMeta):
             fundus = FundusData(vessels=av, od=od)
         else:
             fundus = fundus.update(vessels=av, od=od)
-
-        if self.mask_optic_disc:
-            av_seg = fundus.av.copy()
-            av_seg[fundus.od] = 0
-            fundus = fundus.update(vessels=av_seg)
-
         return fundus
 
     @abstractmethod
@@ -130,7 +124,6 @@ class AVSegToTree(AVSegToTreeBase):
         return assign_av_label(
             graph,
             av_map=av_map,
-            ratio_threshold=0.8,
             split_av_branch=True,
             av_attr=self.av_attr,
             propagate_labels=propagate_labels,
@@ -159,11 +152,14 @@ class AVSegToTree(AVSegToTreeBase):
         line_list: npt.NDArray[np.int_],
         line_tips: npt.NDArray[np.int_],
         line_probability: npt.NDArray[np.float64],
+        line_through_node: npt.NDArray[np.int_],
         branches_dir_p: npt.NDArray[np.float64],
     ) -> VTree:
         from ..segment_to_graph.av_tree_parsing import resolve_digraph_to_vtree
 
-        vtree = resolve_digraph_to_vtree(vgraph, line_list, line_tips, line_probability, branches_dir_p)
+        vtree = resolve_digraph_to_vtree(
+            vgraph, line_list, line_tips, line_probability, line_through_node, branches_dir_p
+        )
         return vtree
 
     def split_av_tree(self, tree: VTree) -> Tuple[VTree, VTree]:
@@ -174,7 +170,10 @@ class AVSegToTree(AVSegToTreeBase):
     # --- Utility methods ---
     def to_vgraph(self, fundus=None, /, *, av=None, od=None, label_av=True, simplify=True):
         fundus = self.prepare_data(fundus, av=av, od=od)
-        graph = self.segToGraph(fundus.vessels, parse_geometry=True, simplify=True)
+        mask = None if self.mask_optic_disc is None else ~fundus.od
+        skel = self.segToGraph.skeletonize(fundus.vessels, mask=mask)
+        vessels = fundus.vessels if self.mask_optic_disc is None else fundus.vessels * ~fundus.od
+        graph = self.segToGraph.from_skel(skel=skel, vessels=vessels, parse_geometry=True, simplify=True)
         if label_av:
             self.assign_av_labels(graph, fundus.av, inplace=True)
             if simplify:
@@ -226,11 +225,13 @@ class NaiveAVSegToTree(AVSegToTreeBase):
         fundus = self.prepare_data(fundus, av=av, od=od)
         if fundus.od_center is None:
             raise NotImplementedError("Parsing tree of image without optic disc is not implemented.")
-
-        av_skeleton = self.av_skeletonize(fundus.av)
+        av = fundus.av.copy()
+        if self.mask_optic_disc:
+            av[fundus.od] = 0
+        av_skeleton = self.av_skeletonize(av)
 
         graphs = [
-            self.skel_to_vgraph(av_skeleton, fundus.av, simplify=True, populate_geometry=True, **art_vei)
+            self.skel_to_vgraph(av_skeleton, av, simplify=True, populate_geometry=True, **art_vei)
             for art_vei in [{"artery": True, "vein": False}, {"artery": False, "vein": True}]
         ]
 
@@ -267,10 +268,10 @@ class NaiveAVSegToTree(AVSegToTreeBase):
         av = reduce(ior, (av == label for label in avlabel))
 
         vgraph = self.segToGraph.skel_to_vgraph(skel, av)
-        if if_none(simplify, self.segToGraph.simplify_graph):
-            self.segToGraph.simplify(vgraph, inplace=True)
         if if_none(populate_geometry, self.segToGraph.populate_geometry):
             self.segToGraph.populate_geometry(vgraph, av, inplace=True)
+        if if_none(simplify, self.segToGraph.simplify_graph):
+            self.segToGraph.simplify(vgraph, inplace=True)
 
         return vgraph
 
@@ -294,14 +295,17 @@ class NaiveAVSegToTree(AVSegToTreeBase):
         populate_geometry: Optional[bool] = None,
     ) -> Tuple[VGraph, VGraph]:
         fundus = self.prepare_data(fundus, av=av, od=od)
+        av = fundus.av.copy()
+        if self.mask_optic_disc:
+            av[fundus.od] = 0
 
-        av_skeleton = self.av_skeletonize(fundus.av)
+        av_skeleton = self.av_skeletonize(av)
 
         a_graph = self.skel_to_vgraph(
-            av_skeleton, fundus.av, artery=True, simplify=simplify, populate_geometry=populate_geometry
+            av_skeleton, av, artery=True, simplify=simplify, populate_geometry=populate_geometry
         )
         v_graph = self.skel_to_vgraph(
-            av_skeleton, fundus.av, vein=True, simplify=simplify, populate_geometry=populate_geometry
+            av_skeleton, av, vein=True, simplify=simplify, populate_geometry=populate_geometry
         )
 
         return a_graph, v_graph

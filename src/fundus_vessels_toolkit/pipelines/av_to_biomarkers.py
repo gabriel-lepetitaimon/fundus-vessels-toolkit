@@ -96,14 +96,23 @@ class FundusAVSegToBiomarkers:
                     show_only=show, invert_direction=invert, scaling=10
                 )
 
+            norm_pos = (
+                bifurcations["norm_coord_x"].map("{:.2f}".format)
+                + ", "
+                + bifurcations["norm_coord_y"].map("{:.2f}".format)
+            )
+            bifurcations.insert(4, "norm_pos", norm_pos)
+            bifurcations.drop(columns=["norm_coord_x", "norm_coord_y"], inplace=True)
+
             # Draw the table
             formatter = {}
             for col in ("dist_od", "dist_macula", "d0", "d1", "d2"):
                 formatter[col] = NumberFormatter(format="0")
             for col in ("θ1", "θ2", "θ_branching", "θ_assymetry"):
                 formatter[col] = NumberFormatter(format="0°")
-            for col in ("assymetry_ratio", "branching_coefficient"):
+            for col in ("assymetry_ratio", "branching_coefficient", "norm_dist_od"):
                 formatter[col] = NumberFormatter(format="0.00a")
+
             if label_branches:
                 bifurcations.rename(columns={"branch0": "B0", "branch1": "B1", "branch2": "B2"}, inplace=True)
             else:

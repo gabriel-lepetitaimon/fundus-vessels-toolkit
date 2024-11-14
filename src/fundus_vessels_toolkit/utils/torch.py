@@ -30,11 +30,15 @@ def recursive_numpy2torch(x, device=None):
     if isinstance(x, torch.Tensor):
         return x.to(device) if device is not None else x
     if isinstance(x, np.ndarray):
+        if not x.flags.writeable:
+            x = x.copy()
         try:
-            x = torch.from_numpy(x)
+            r = torch.from_numpy(x)
         except ValueError:
-            x = torch.from_numpy(x.copy())
-        return x.to(device) if device is not None else x
+            r = torch.from_numpy(x.copy())
+        if device is not None:
+            r = r.to(device)
+        return r
     if isinstance(x, dict):
         return {k: recursive_numpy2torch(v, device) for k, v in x.items()}
     if isinstance(x, list):

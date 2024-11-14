@@ -1,4 +1,4 @@
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Literal, Optional, Tuple, overload
 
 import numpy as np
 import torch  # Required for cpp extension loading
@@ -74,16 +74,32 @@ def remove_consecutive_duplicates(
     return remove_consecutive_duplicates_cpp(tensor, False)[0]
 
 
-def reduce_chains(chains: List[List[int]]) -> List[List[int]]:
+@overload
+def reduce_chains(chains: List[List[int]], *, return_index: Literal[False] = False) -> List[List[int]]: ...
+@overload
+def reduce_chains(
+    chains: List[List[int]], *, return_index: Literal[True]
+) -> Tuple[List[List[int]], List[List[int]]]: ...
+def reduce_chains(
+    chains: List[List[int]], *, return_index: bool = False
+) -> List[List[int]] | Tuple[List[List[int]], List[List[int]]]:
     """
     Reduce the number of chains by merging chains that share at least one element.
+
+    Examples
+    --------
+    >>> reduce_chains([[1, 2], [2, 3, 4], [5, 4], [6, 7]])
+    [[1, 2, 3, 4, 5], [6, 7]]
+
+    >>> reduce_chains([[1, 2], [3, 2], [4,3], [4, 5], [6, 7]], return_index=True)
+    ([[1, 2, 3, 4, 5], [6, 7]], [[1, -2, -3, 4], [5]])
     """
     chains = [list(c) for c in chains]
     try:
-        chains = solve_1d_chains_cpp(chains)
+        chains, chains_id = solve_1d_chains_cpp(chains)
     except SystemError:
         raise ValueError("Chains must be non-overlapping.") from None
-    return chains
+    return (chains, chains_id) if return_index else chains
 
 
 @autocast_torch

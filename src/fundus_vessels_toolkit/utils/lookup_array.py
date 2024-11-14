@@ -132,9 +132,10 @@ def complete_lookup(lookup: npt.NDArray[np.int_], max_index: int, assume_valid=F
 
 def create_removal_lookup(
     removed_mask: npt.ArrayLike,
+    *,
+    length: Optional[int] = None,
     replace_value: Optional[int] = None,
     add_empty: bool = False,
-    length: Optional[int] = None,
 ) -> npt.NDArray[np.int_]:
     """Create a lookup table to reorder index after having removed elements from an array.
 

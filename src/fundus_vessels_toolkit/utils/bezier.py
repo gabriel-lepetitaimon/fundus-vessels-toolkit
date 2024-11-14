@@ -117,19 +117,39 @@ class BezierCubic(NamedTuple):
 
         yx_points = np.atleast_2d(yx_points).astype(float)
         assert yx_points.ndim == 2 and yx_points.shape[1] == 2, "yx_points must be a 2D array of shape (n, 2)"
+        n = yx_points.shape[0]
 
         # Compute projection on the trapezoid defined by (p0, c0, c1, p1)
         p0, c0, c1, p1 = self.to_array()
-        p0c0_u = ((c0 - p0) / (p0c0norm := np.linalg.norm(c0 - p0)))[None, :]
-        c0c1_u = ((c1 - c0) / (c0c1norm := np.linalg.norm(c1 - c0)))[None, :]
-        p1c1_u = ((c1 - p1) / (p1c1norm := np.linalg.norm(c1 - p1)))[None, :]
 
-        l_p0c0 = np.clip((yx_points - p0) @ p0c0_u.T, 0, p0c0norm)
-        l_c0c1 = np.clip((yx_points - c0) @ c0c1_u.T, 0, c0c1norm)
-        l_p1c1 = np.clip((yx_points - p1) @ p1c1_u.T, 0, p1c1norm)
-        p0c0_proj = l_p0c0 * p0c0_u + p0[None, :]
-        c0c1_proj = l_c0c1 * c0c1_u + c0[None, :]
-        p1c1_proj = l_p1c1 * p1c1_u + p1[None, :]
+        if np.all(p0 == c0) and np.all(p0 == c1) and np.all(p0 == p1):
+            proj = np.full_like(yx_points, p0)
+            out = (proj,)
+            if return_distance:
+                dist = np.linalg.norm(proj - yx_points, axis=1)
+                out = out + (dist,)
+            if return_u:
+                out = out + (np.zeros(len(yx_points)),)
+            return proj if len(out) == 1 else out
+
+        if np.any(p0 != c0):
+            p0c0_u = ((c0 - p0) / (p0c0norm := np.linalg.norm(c0 - p0)))[None, :]
+            l_p0c0 = np.clip((yx_points - p0) @ p0c0_u.T, 0, p0c0norm)
+            p0c0_proj = l_p0c0 * p0c0_u + p0[None, :]
+        else:
+            p0c0_proj, l_p0c0, p0c0norm = p0[None, :], np.zeros((1, n)), 0
+        if np.any(c1 != c0):
+            c0c1_u = ((c1 - c0) / (c0c1norm := np.linalg.norm(c1 - c0)))[None, :]
+            l_c0c1 = np.clip((yx_points - c0) @ c0c1_u.T, 0, c0c1norm)
+            c0c1_proj = l_c0c1 * c0c1_u + c0[None, :]
+        else:
+            c0c1_proj, l_c0c1, c0c1norm = c0[None, :], np.zeros((1, n)), 0
+        if np.any(p1 != c1):
+            p1c1_u = ((c1 - p1) / (p1c1norm := np.linalg.norm(c1 - p1)))[None, :]
+            l_p1c1 = np.clip((yx_points - p1) @ p1c1_u.T, 0, p1c1norm)
+            p1c1_proj = l_p1c1 * p1c1_u + p1[None, :]
+        else:
+            p1c1_proj, l_p1c1, p1c1norm = p1[None, :], np.zeros((1, n)), 0
 
         proj = np.stack([p0c0_proj, c0c1_proj, p1c1_proj], axis=0)
         dist = np.linalg.norm(proj - yx_points[None, :, :], axis=2)
