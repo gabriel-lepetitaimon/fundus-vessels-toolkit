@@ -203,11 +203,11 @@ def derive_tips_geometry_from_curve_geometry(
 
     if tangent:
         tips_tangents = []
-        nodes_coord = gdata.nodes_coord()
+        nodes_coord = gdata.node_coord()
         branch_list = vgraph.branch_list  # TODO: transpose to graph_index=False
 
         if tangent == "bspline":
-            branches_bsplines = gdata.branch_bspline(name=VBranchGeoData.Fields.BSPLINE)
+            branches_bsplines = gdata.branch_bspline(attr=VBranchGeoData.Fields.BSPLINE)
             for i, branch_bspline in enumerate(branches_bsplines):
                 if branch_bspline:
                     tips_tangents.append(np.array(branch_bspline.tips_tangents(normalize=True), dtype=float))
@@ -283,7 +283,7 @@ def center_junction_nodes(
     if not inplace:
         graph = graph.copy()
 
-    if graph.nodes_count == 0:
+    if graph.node_count == 0:
         return graph
 
     for gdata in graph._geometric_data:

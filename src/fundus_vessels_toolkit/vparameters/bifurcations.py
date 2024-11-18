@@ -121,16 +121,16 @@ def parametrize_bifurcations(
     derive_tips_geometry_from_curve_geometry(vtree, tangent=True, calibre=True, inplace=True)
 
     gdata = vtree.geometric_data()
-    nodes_yx = gdata.nodes_coord()
+    nodes_yx = gdata.node_coord()
     bifurcations = []
     bifurcations_yx = []
 
-    if strahler_field is not None and strahler_field not in vtree.branches_attr:
+    if strahler_field is not None and strahler_field not in vtree.branch_attr:
         assign_strahler_number(vtree, field=strahler_field)
 
-    if branch_rank_field is not None and branch_rank_field not in vtree.branches_attr:
-        vtree.branches_attr[branch_rank_field] = 1
-        vtree.nodes_attr[branch_rank_field] = 0
+    if branch_rank_field is not None and branch_rank_field not in vtree.branch_attr:
+        vtree.branch_attr[branch_rank_field] = 1
+        vtree.node_attr[branch_rank_field] = 0
 
     for branch in vtree.walk_branches():
         if branch_rank_field is not None:
@@ -149,7 +149,7 @@ def parametrize_bifurcations(
         head_calibre = head_data.get(calibre_tip, np.nan)
 
         if np.isnan(head_tangent).any() or np.sum(head_tangent) == 0:
-            head_tangent = np.diff(gdata.nodes_coord(list(branch.directed_nodes_id)), axis=0)[0]
+            head_tangent = np.diff(gdata.node_coord(list(branch.directed_nodes_id)), axis=0)[0]
             head_tangent /= np.linalg.norm(head_tangent)
 
         # === Get the calibres and tangents data for its successors ===
@@ -161,7 +161,7 @@ def parametrize_bifurcations(
         for i, ter_branch in enumerate(tertiary_branches):
             if np.isnan(tertiary_tangents[i]).any() or np.sum(tertiary_tangents[i]) == 0:
                 # If the tangent is not available, fallback to the difference of nodes coordinates
-                tertiary_tangents[i] = np.diff(gdata.nodes_coord(list(ter_branch.directed_nodes_id)), axis=0)[0]
+                tertiary_tangents[i] = np.diff(gdata.node_coord(list(ter_branch.directed_nodes_id)), axis=0)[0]
                 if (tertiary_tangents[i] != 0).any():
                     tertiary_tangents[i] /= np.linalg.norm(tertiary_tangents[i])
 
@@ -273,9 +273,9 @@ def assign_strahler_number(vtree: VTree, field: str = "strahler") -> VTree:
     VTree
         The VTree with the Strahler numbers assigned.
     """
-    vtree.nodes_attr[field] = 1
-    vtree.branches_attr[field] = 1
-    reverse_depth_order = np.array(list(vtree.walk(depth_first=True)), dtype=int)[::-1]
+    vtree.node_attr[field] = 1
+    vtree.branch_attr[field] = 1
+    reverse_depth_order = np.array(list(vtree.walk(traversal="dfs")), dtype=int)[::-1]
     for branch in vtree.branches(reverse_depth_order):
         if branch.has_successors:
             strahlers = sorted([s.attr[field] for s in branch.successors()], reverse=True)

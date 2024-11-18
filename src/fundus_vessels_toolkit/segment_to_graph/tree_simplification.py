@@ -6,9 +6,9 @@ from .graph_simplification import simplify_passing_nodes
 
 def clean_vtree(vtree: VTree, *, av_attr: str = "av") -> VTree:
     # === Remove terminal branches with unknown type ===
-    if av_attr in vtree.branches_attr:
+    if av_attr in vtree.branch_attr:
         while to_delete := [b.id for b in vtree.branches() if not b.has_successors and b.attr[av_attr] == AVLabel.UNK]:
-            vtree.delete_branches(to_delete, inplace=True)
+            vtree.delete_branch(to_delete, inplace=True)
 
     # === Remove passing nodes ===
     simplify_passing_nodes(vtree, inplace=True)

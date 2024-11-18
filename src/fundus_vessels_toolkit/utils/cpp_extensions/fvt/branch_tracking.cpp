@@ -199,7 +199,7 @@ IntPoint track_nearest_edge(const IntPoint &start, const Point &direction, const
  * @brief Find the closest pixel to a point in a curve.
  *
  * This method returns the index of the closest pixel to a point in a curve.
- * The search is performed between the start and end indexes.
+ * The search is performed between the start and end indices.
  *
  * @param curve A list of points defining the curve.
  * @param p The point to which the distance should be computed.

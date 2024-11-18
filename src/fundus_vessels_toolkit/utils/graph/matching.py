@@ -177,7 +177,7 @@ def euclidien_matching(
             if True, return the distance between each matched nodes.
     Returns:
         A np.ndarray of shape (2, n_match), where n_match is the number of matched nodes. The first row contains the
-            indexes of the matched nodes from the first graph, while the second row contains the indexes of the matched
+            indices of the matched nodes from the first graph, while the second row contains the indices of the matched
             nodes from the second graph.
 
         If return_distance is True, returns ((node1_matched, node2_matched), nodes_distance), where nodes_distance

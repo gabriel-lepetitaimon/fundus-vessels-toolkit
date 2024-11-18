@@ -69,8 +69,8 @@ def inspect_matching(
         src_match = dst_match = np.arange(N_match)
         N_gt_match = N_match
 
-    src_graph.reindex_nodes(src_nodes_id[src_reorder], inverse_lookup=True)
-    dst_graph.reindex_nodes(dst_nodes_id[dst_reorder], inverse_lookup=True)
+    src_graph.reindex_nodes(src_nodes_id[src_reorder], inverse_lookup=True, inplace=True)
+    dst_graph.reindex_nodes(dst_nodes_id[dst_reorder], inverse_lookup=True, inplace=True)
     if src_features is not None:
         src_features.set_index(invert_complete_lookup(src_reorder), inplace=True)
     if dst_features is not None:
@@ -101,7 +101,7 @@ def inspect_matching(
         # Color matched nodes and branches
         if matching_gt is None:
             nodes_cmap = {None: colormap_by_name()} | {
-                int(_): "#444" for _ in np.setdiff1d(np.arange(g.nodes_count), true_match)
+                int(_): "#444" for _ in np.setdiff1d(np.arange(g.node_count), true_match)
             }
         else:
             nodes_cmap = (
@@ -111,9 +111,9 @@ def inspect_matching(
             )
         graph_viewer[i]["vgraph"].nodes_cmap = nodes_cmap
         if branch_matching is None:
-            invalid_branches = np.setdiff1d(np.arange(g.branches_count), g.incident_branches(true_match))
+            invalid_branches = np.setdiff1d(np.arange(g.branch_count), g.incident_branches(true_match))
         else:
-            invalid_branches = np.setdiff1d(np.arange(g.branches_count), branch_matching[i])
+            invalid_branches = np.setdiff1d(np.arange(g.branch_count), branch_matching[i])
         branch_cmap = {None: colormap_by_name()} | {int(_): "#444" for _ in invalid_branches}
         graph_viewer[i]["vgraph"].edges_cmap = branch_cmap
 
@@ -194,8 +194,8 @@ def inspect_matching(
 
     # Link the mosaic and the heatmap
     def zoom_on(src_node, dst_node):
-        src_coord = src_graph.nodes_coord()[src_node]
-        dst_coord = dst_graph.nodes_coord()[dst_node]
+        src_coord = src_graph.node_coord()[src_node]
+        dst_coord = dst_graph.node_coord()[dst_node]
 
         graph_viewer[0].goto((src_coord[1], src_coord[0]), 3)
         graph_viewer[1].goto((dst_coord[1], dst_coord[0]), 3)

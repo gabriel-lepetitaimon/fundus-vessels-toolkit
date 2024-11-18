@@ -67,3 +67,8 @@ section-order = ["future", "standard-library", "third-party", "steered_cnn", "fi
 
 [tool.ruff.isort.sections]
 "steered_cnn" = ["steered_cnn"]
+
+[tool.pytest.ini_options]
+addopts          = "--doctest-modules src/fundus_vessels_toolkit --doctest-ignore-import-errors --doctest-report ndiff"
+testpaths        = ["tests"]
+doctest_optionflags = ["NORMALIZE_WHITESPACE", "ELLIPSIS"]

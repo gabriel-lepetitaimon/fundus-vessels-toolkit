@@ -18,7 +18,7 @@ std::array<IntPoint, 2> fast_branch_boundaries(const CurveYX &curveYX, const std
  * @param curveYX A list of points defining the curve.
  * @param segmentation A 2D tensor of shape (H, W) containing the binary segmentation.
  * @param tangents A list of tangents at each point to be evaluated.
- * @param evaluateAtID A list of indexes where the width should be evaluated. If empty, the width is evaluated at each
+ * @param evaluateAtID A list of indices where the width should be evaluated. If empty, the width is evaluated at each
  * point.
  *
  * @return A list of pairs of floats representing the left and right width at each point.
@@ -111,7 +111,7 @@ float fast_branch_calibre(const CurveYX &curveYX, std::size_t i, const Tensor2DA
  * @param curveYX A list of points defining the curve.
  * @param segmentation A 2D tensor of shape (H, W) containing the binary segmentation.
  * @param tangents A list of tangents at each point to be evaluated.
- * @param evaluateAtID A list of indexes where the width should be evaluated. If empty, the width is evaluated at each
+ * @param evaluateAtID A list of indices where the width should be evaluated. If empty, the width is evaluated at each
  * point.
  *
  * @return A list of floats representing the width at each point.
@@ -141,7 +141,7 @@ Scalars fast_branch_calibre(const CurveYX &curveYX, const Tensor2DAcc<bool> &seg
  * @param curveYX A list of points defining the curve.
  * @param segmentation A 2D tensor of shape (H, W) containing the binary segmentation.
  * @param tangents A list of tangents at each point to be evaluated.
- * @param evaluateAtID A list of indexes where the width should be evaluated. If empty, the width is evaluated at each
+ * @param evaluateAtID A list of indices where the width should be evaluated. If empty, the width is evaluated at each
  * point.
  *
  * @return A list of floats representing the width at each point.

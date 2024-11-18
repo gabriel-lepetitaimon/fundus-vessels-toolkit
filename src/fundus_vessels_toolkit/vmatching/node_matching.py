@@ -63,12 +63,12 @@ def match_nodes_by_distance(
     """  # noqa: E501
 
     matched_nodes = euclidien_matching(
-        vgraph1.nodes_coord(), vgraph2.nodes_coord(), max_matching_distance, min_distance, density_sigma, gamma
+        vgraph1.node_coord(), vgraph2.node_coord(), max_matching_distance, min_distance, density_sigma, gamma
     )
 
     if reindex_nodes:
-        vgraph1.reindex_nodes(matched_nodes[0], inverse_lookup=True)
-        vgraph2.reindex_nodes(matched_nodes[1], inverse_lookup=True)
+        vgraph1.reindex_nodes(matched_nodes[0], inverse_lookup=True, inplace=True)
+        vgraph2.reindex_nodes(matched_nodes[1], inverse_lookup=True, inplace=True)
         matched_nodes = np.stack([np.arange(len(matched_nodes[0])), np.arange(len(matched_nodes[1]))], axis=0)
 
     return matched_nodes
@@ -129,8 +129,8 @@ def ransac_refine_node_matching(
         raise ValueError("matched_nodes must be a tuple of two arrays or an array of shape (2, N)") from None
     fix_matched_nodes, mov_matched_nodes = matched_nodes
 
-    fix_yx = fix_graph.nodes_coord()[fix_matched_nodes]
-    mov_yx = moving_graph.nodes_coord()[mov_matched_nodes]
+    fix_yx = fix_graph.node_coord()[fix_matched_nodes]
+    mov_yx = moving_graph.node_coord()[mov_matched_nodes]
 
     if final_projection is None:
         final_projection = {12: QuadraticProjection}
@@ -152,8 +152,8 @@ def ransac_refine_node_matching(
     mov_matched_nodes = mov_matched_nodes[valid_nodes]
 
     if reindex_graphs:
-        fix_graph.reindex_nodes(fix_matched_nodes, inverse_lookup=True)
-        moving_graph.reindex_nodes(mov_matched_nodes, inverse_lookup=True)
+        fix_graph.reindex_nodes(fix_matched_nodes, inverse_lookup=True, inplace=True)
+        moving_graph.reindex_nodes(mov_matched_nodes, inverse_lookup=True, inplace=True)
         fix_matched_nodes = np.arange(len(fix_matched_nodes))
         mov_matched_nodes = np.arange(len(mov_matched_nodes))
 
@@ -234,12 +234,12 @@ class NodeSimilarityEstimator(ABC):
                 raise ValueError("matchable must be a tuple of two or three arrays")
 
             if n1.dtype == bool:
-                assert n1.shape == (vgraph1.nodes_count,), "matchable[0] must have the same length as the first graph"
+                assert n1.shape == (vgraph1.node_count,), "matchable[0] must have the same length as the first graph"
                 n1 = n1.nonzero()[0]
             else:
                 assert n1.dtype == int, "matchable[0] must be an array of integers"
             if n2.dtype == bool:
-                assert n2.shape == (vgraph2.nodes_count,), "matchable[1] must have the same length as the second graph"
+                assert n2.shape == (vgraph2.node_count,), "matchable[1] must have the same length as the second graph"
                 n2 = n2.nonzero()[0]
             else:
                 assert n2.dtype == int, "matchable[1] must be an array of integers"
@@ -248,8 +248,8 @@ class NodeSimilarityEstimator(ABC):
             return m, n1, n2
         elif isinstance(matchable, np.ndarray):
             assert matchable.dtype == bool and matchable.shape == (
-                vgraph1.nodes_count,
-                vgraph2.nodes_count,
+                vgraph1.node_count,
+                vgraph2.node_count,
             ), "matchable must be a boolean array of shape (N1,N2)"
             n1_mask = ~np.any(matchable, axis=0)
             n2_mask = ~np.any(matchable, axis=1)
@@ -357,7 +357,7 @@ class JunctionSimilarity(NodeSimilarityEstimator):
         self, vgraph1: VGraph, vgraph2: VGraph, matchable: np.ndarray | Tuple[np.ndarray] | None = None
     ) -> np.ndarray:
         if matchable is None:
-            matchable = (vgraph1.nodes_degree() > 2, vgraph2.nodes_degree() > 2)
+            matchable = (vgraph1.node_degree() > 2, vgraph2.node_degree() > 2)
 
         return super()._check_matchable(vgraph1, vgraph2, matchable)
 
@@ -485,8 +485,8 @@ class JunctionSimilarity(NodeSimilarityEstimator):
         return True
 
     def min_weight(self, vgraph1: VGraph, vgraph2: VGraph, n1: np.ndarray | None, n2: np.ndarray | None) -> np.ndarray:
-        N1 = vgraph1.nodes_count if n1 is None else len(n1)
-        N2 = vgraph2.nodes_count if n2 is None else len(n2)
+        N1 = vgraph1.node_count if n1 is None else len(n1)
+        N2 = vgraph2.node_count if n2 is None else len(n2)
         return np.full((N1,), 0.4), np.full((N2,), 0.4)
 
 
@@ -532,7 +532,7 @@ def match_junctions(
         if match_branches and not similarity_estimator.branch_matching_available():
             raise ValueError("The provided similarity estimator does not support branch matching.")
 
-    n1, n2 = vgraph1.nodes_degree() > 2, vgraph2.nodes_degree() > 2
+    n1, n2 = vgraph1.node_degree() > 2, vgraph2.node_degree() > 2
 
     matchable = None
     if pre_registration:
@@ -547,7 +547,7 @@ def match_junctions(
             pre_registration = False
         else:
             dist = np.linalg.norm(
-                vgraph1.nodes_coord()[n1, None] - T.transform(vgraph2.nodes_coord()[n2])[None, :], axis=2
+                vgraph1.node_coord()[n1, None] - T.transform(vgraph2.node_coord()[n2])[None, :], axis=2
             )
             matchable = dist < 20
 
@@ -555,8 +555,8 @@ def match_junctions(
     matched_nodes = similarity_estimator.hungarian(vgraph1, vgraph2, (matchable, n1, n2), ctx=ctx)
 
     if reindex:
-        vgraph1.reindex_nodes(matched_nodes[0], inverse_lookup=True)
-        vgraph2.reindex_nodes(matched_nodes[1], inverse_lookup=True)
+        vgraph1.reindex_nodes(matched_nodes[0], inverse_lookup=True, inplace=True)
+        vgraph2.reindex_nodes(matched_nodes[1], inverse_lookup=True, inplace=True)
         matched_nodes = np.broadcast_to(np.arange(len(matched_nodes[0])), (2, len(matched_nodes[0])))
         if match_branches:
             branches_match = ctx["branches_match"]
@@ -652,8 +652,8 @@ def match_junctions_simple(
     matched_n2 = junction_id2[matched_nodes[1]]
 
     if reindex_graphs:
-        vgraph1.reindex_nodes(matched_n1, inverse_lookup=True)
-        vgraph2.reindex_nodes(matched_n2, inverse_lookup=True)
+        vgraph1.reindex_nodes(matched_n1, inverse_lookup=True, inplace=True)
+        vgraph2.reindex_nodes(matched_n2, inverse_lookup=True, inplace=True)
         matched_n1 = np.arange(len(matched_n1))
         matched_n2 = np.arange(len(matched_n2))
 
@@ -691,8 +691,8 @@ def match_junctions_by_exact_incident_branches(
         _reindex_branch_matches(matched_branch, vgraph1, vgraph2)
 
     if reindex_nodes:
-        vgraph1.reindex_nodes(matched_nodes1, inverse_lookup=True)
-        vgraph2.reindex_nodes(matched_nodes2, inverse_lookup=True)
+        vgraph1.reindex_nodes(matched_nodes1, inverse_lookup=True, inplace=True)
+        vgraph2.reindex_nodes(matched_nodes2, inverse_lookup=True, inplace=True)
         matched_nodes1 = np.arange(len(matched_nodes1))
         matched_nodes2 = np.arange(len(matched_nodes2))
 
@@ -713,7 +713,7 @@ def _reindex_branch_matches(matches: np.ndarray, graph1: VGraph, graph2: VGraph)
     Parameters
     ----------
     matches : np.ndarray
-        A list of branch matches as a matrix of shape (2, N). Each column contains a pair of index corresponding to matching branches. The first row contains indexes of the first graph, while the second row contains indexes of the second graph.
+        A list of branch matches as a matrix of shape (2, N). Each column contains a pair of index corresponding to matching branches. The first row contains indices of the first graph, while the second row contains indices of the second graph.
 
     graph1 : VGraph
         The first graph.
@@ -724,9 +724,9 @@ def _reindex_branch_matches(matches: np.ndarray, graph1: VGraph, graph2: VGraph)
     Returns
     -------
     np.ndarray
-        The indexes of the kept matches.
+        The indices of the kept matches.
 
-        This array can be used to derive the index mapping between the new and original branch indexes:
+        This array can be used to derive the index mapping between the new and original branch indices:
         .. code-block:: python
 
             valid_matches = reindex_branch_matches(matches, graph1, graph2)
@@ -738,10 +738,10 @@ def _reindex_branch_matches(matches: np.ndarray, graph1: VGraph, graph2: VGraph)
     (b1_match, b2_match), matches_id = ensure_consistent_matches(matches, return_valid_index=True)
 
     # Reindex the branches
-    b1_lookup = complete_lookup(b1_match, graph1.branches_count - 1)
-    b2_lookup = complete_lookup(b2_match, graph2.branches_count - 1)
+    b1_lookup = complete_lookup(b1_match, graph1.branch_count - 1)
+    b2_lookup = complete_lookup(b2_match, graph2.branch_count - 1)
     graph1.reindex_branches(b1_lookup, inverse_lookup=True)
     graph2.reindex_branches(b2_lookup, inverse_lookup=True)
 
-    # Return the valid matches indexes
+    # Return the valid matches indices
     return matches_id

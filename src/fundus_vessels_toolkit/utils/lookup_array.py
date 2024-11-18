@@ -108,7 +108,7 @@ def apply_lookup_on_coordinates(points_coord, lookup: np.ndarray | None, weight:
 
 def complete_lookup(lookup: npt.NDArray[np.int_], max_index: int, assume_valid=False) -> npt.NDArray[np.int_]:
     """
-    Complete a lookup table to have a full range of indexes from 0 to max_index.
+    Complete a lookup table to have a full range of indices from 0 to max_index.
     """
     lookup = np.asarray(lookup, dtype=int)
     assert lookup.ndim == 1, f"lookup must be a 1D array. Got {lookup.ndim} dimensions."
@@ -142,7 +142,7 @@ def create_removal_lookup(
     Parameters
     ----------
     removed_mask : np.ndarray
-        A boolean mask specifying which indexes were removed.
+        A boolean mask specifying which indices were removed.
 
     replace_value : Optional[int], optional
         The value to replace the removed elements.
@@ -154,12 +154,17 @@ def create_removal_lookup(
     np.ndarray
         A 1D array of the same length as the input array containing the new index of each element.
 
-    Example:
+    Examples:
     --------
-    Consider a lookup table of 6 elements where the 2nd, 5th and 6th elements are removed:
-    >>> removed_mask = np.array([False, True, False, False, True, True])
+    The following mask removes the second and fourth elements from an array of length 5:
+    >>> removed_mask = np.array([False, True, False, False, True, False])
     >>> create_removal_lookup(removed_mask)
-    array([0, 1, 1, 2, 2, 2])
+    array([0, 0, 1, 2, 2, 3])
+
+    Optionally the removed elements can be replaced by a specific value:
+
+    >>> create_removal_lookup(removed_mask, replace_value=-1)
+    array([ 0, -1,  1,  2,  -1, 3])
     """  # noqa: E501
     removed_mask = np.asarray(removed_mask)
     if length is not None:
@@ -203,16 +208,16 @@ def invert_lookup(lookup: npt.NDArray[np.int_], max_index: Optional[int] = None)
     # return inverse[unique_id >= 0]
 
 
-def reorder_array(array: npt.NDArray, indexes: npt.NDArray[np.int_], max_index=None) -> npt.NDArray:
+def reorder_array(array: npt.NDArray, indices: npt.NDArray[np.int_], max_index=None) -> npt.NDArray:
     """
     Reorder an array according to an index table.
-    This is equivalent to array[invert_lookup[indexes]].
+    This is equivalent to array[invert_lookup[indices]].
 
     """
     if max_index is None:
-        max_index = indexes.max()
+        max_index = indices.max()
     out = np.empty((max_index + 2,) + array.shape[1:], dtype=array.dtype)
-    out[indexes] = array
+    out[indices] = array
     return out[:-1]
 
 

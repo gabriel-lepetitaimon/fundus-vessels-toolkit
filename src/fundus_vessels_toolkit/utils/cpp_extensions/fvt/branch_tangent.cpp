@@ -11,7 +11,7 @@
  * @param curveYX A list of points defining the curve.
  * @param weighting A function that takes the distance between two points and returns a weight. This function must be
  * decreasing and positive.
- * @param evaluateAtID A list of indexes where the tangent should be evaluated.
+ * @param evaluateAtID A list of indices where the tangent should be evaluated.
  * If empty, the tangent is evaluated at each point.
  */
 Point curve_tangent(const CurveYX& curveYX, std::size_t i, const std::function<float(float)>& weighting,
@@ -61,8 +61,8 @@ Point adaptative_curve_tangent(const CurveYX& curveYX, std::size_t i, const floa
 Point curve_tangent(const CurveYX& curveYX, std::size_t i, const float std, const bool forward, const bool backward,
                     const std::size_t curveStart, const std::size_t curveEnd) {
     return curve_tangent(
-        curveYX, i, [std](float d) { return std::exp(-d * d / (2 * std * std)); }, 1,
-        forward, backward, curveStart, curveEnd);
+        curveYX, i, [std](float d) { return std::exp(-d * d / (2 * std * std)); }, 1, forward, backward, curveStart,
+        curveEnd);
 }
 
 /**
@@ -76,7 +76,7 @@ Point curve_tangent(const CurveYX& curveYX, std::size_t i, const float std, cons
  * @param kernelStd The standard deviation of the gaussian kernel for each point.
  *  This parameter must be of the same size as the curve if evaluateAtID is empty,
  *  or of the same size as evaluateAtID otherwise.
- * @param evaluateAtID A list of indexes where the tangent should be evaluated.
+ * @param evaluateAtID A list of indices where the tangent should be evaluated.
  * If empty, the tangent is evaluated at each point.
  */
 std::vector<Point> curve_tangent(const CurveYX& curveYX, const std::vector<float>& kernelStd,
@@ -160,7 +160,7 @@ Point fast_curve_tangent(const CurveYX& curveYX, std::size_t i, const std::vecto
  *
  * @param curveYX A list of points defining the curve.
  * @param gaussStd The standard deviation of the gaussian kernel.
- * @param evaluateAtID A list of indexes where the tangent should be evaluated.
+ * @param evaluateAtID A list of indices where the tangent should be evaluated.
  * If empty, the tangent is evaluated at each point.
  */
 std::vector<Point> fast_curve_tangent(const CurveYX& curveYX, const std::vector<float>& GaussKernel,
@@ -187,7 +187,7 @@ std::vector<Point> fast_curve_tangent(const CurveYX& curveYX, const std::vector<
  * @param K_threshold The threshold to consider a point as an inflection point.
  * If 0, the threshold is set to the 1st percentile of the absolute curvature.
  *
- * @return A list of indexes where the curve has an inflection point.
+ * @return A list of indices where the curve has an inflection point.
  */
 std::vector<std::size_t> curve_inflections_points(const std::vector<float>& signedCurvature,
                                                   const float kPercentileThreshold, int idOffset) {

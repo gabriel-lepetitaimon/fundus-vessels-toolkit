@@ -63,7 +63,7 @@ class FundusAVSegToBiomarkers:
 
         def focus_on(id):
             def callback(event):
-                coord = trees[id].nodes_coord()[bifuractions_data[id]["node"][event.row]]
+                coord = trees[id].node_coord()[bifuractions_data[id]["node"][event.row]]
                 views[id].goto(coord[::-1], scale=3)
 
             return callback
@@ -71,8 +71,8 @@ class FundusAVSegToBiomarkers:
         for i, tree in enumerate(trees):
             bifurcations = parametrize_bifurcations(tree, fundus_data=fundus_data)
             bifuractions_data.append(bifurcations)
-            nodes_rank = tree.nodes_attr["rank"].copy()
-            branches_rank = tree.branches_attr["rank"].copy()
+            nodes_rank = tree.node_attr["rank"].copy()
+            branches_rank = tree.branch_attr["rank"].copy()
 
             # Draw the image view
             view = fundus_data.draw()
@@ -84,15 +84,15 @@ class FundusAVSegToBiomarkers:
             branches_rank[branches_rank > 7] = -1
             view["graph"].edges_cmap = branches_rank.map(RANK_COLOR_MAP).to_dict()
             if show_tangents:
-                show = np.zeros((tree.branches_count, 2), dtype=bool)
-                invert = np.zeros((tree.branches_count, 2), dtype=bool)
+                show = np.zeros((tree.branch_count, 2), dtype=bool)
+                invert = np.zeros((tree.branch_count, 2), dtype=bool)
                 b0, b1, b2 = [bifurcations[_].to_numpy() for _ in ("branch0", "branch1", "branch2")]
                 show[b0, np.where(tree.branch_dirs(b0), 1, 0)] = True
                 show[b1, np.where(tree.branch_dirs(b1), 0, 1)] = True
                 show[b2, np.where(tree.branch_dirs(b2), 0, 1)] = True
                 invert[b0, np.where(tree.branch_dirs(b0), 1, 0)] = True
                 # invert[b2, np.where(tree.branch_dirs(b2), 0, 1)] = True
-                view["tangents"] = tree.geometric_data().jppype_branches_tips_tangents(
+                view["tangents"] = tree.geometric_data().jppype_branch_tip_tangent(
                     show_only=show, invert_direction=invert, scaling=10
                 )
 
@@ -187,8 +187,8 @@ class FundusAVSegToBiomarkers:
             parametrize_bifurcations(tree, fundus_data=fundus_data)  # To compute rank and strahler
             branch_info = parametrize_branches(tree, fundus_data=fundus_data)
             branch_infos.append(branch_info)
-            nodes_rank = tree.nodes_attr["rank"].copy()
-            branches_rank = tree.branches_attr["rank"].copy()
+            nodes_rank = tree.node_attr["rank"].copy()
+            branches_rank = tree.branch_attr["rank"].copy()
 
             # Draw the image view
             view = fundus_data.draw()
@@ -209,14 +209,23 @@ class FundusAVSegToBiomarkers:
                 }
             )
             branch_info.index.names = ["index"]
+
+            norm_pos = (
+                branch_info["norm_coord_x"].map("{:.2f}".format)
+                + ", "
+                + branch_info["norm_coord_y"].map("{:.2f}".format)
+            )
+            branch_info.insert(4, "norm_pos", norm_pos)
+            branch_info.drop(columns=["norm_coord_x", "norm_coord_y"], inplace=True)
+
             formatter = {}
             for col in ("μCal", "σCal"):
                 formatter[col] = ScientificFormatter(precision=2)
             for col in ("μCurv", "σCurv", "τHart", "τGrisan", "τTrucco", "τHart_bspline", "τGrisan_bspline"):
                 formatter[col] = ScientificFormatter(precision=3)
-            for col in ("n_curv", "n_bspline"):
+            for col in ("n_curv", "n_bspline", "dist_od", "dist_macula"):
                 formatter[col] = NumberFormatter(format="0")
-            for col in ("assymetry_ratio", "branching_coefficient"):
+            for col in ("assymetry_ratio", "branching_coefficient", "norm_dist_od"):
                 formatter[col] = NumberFormatter(format="0.00e")
             table = pn.widgets.Tabulator(
                 branch_info,

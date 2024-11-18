@@ -37,7 +37,7 @@ std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_
             auto const &[tipIdx, tangent, calibre, boundL, boundR] = clean_branch_skeleton_tip(
                 branchCurves, edge.id, startSide, segmentation, maxRemovedLengthEnd, adaptativeTangent);
 
-            // ... and store the tip indexes, in order to clean them later.
+            // ... and store the tip indices, in order to clean them later.
             branches_tips[edge.id][startSide ? 0 : 1] = tipIdx;
             out[edge.id][startSide ? 0 : 1] = {startSide ? tangent : -tangent, calibre, boundL, boundR};
         } else {
@@ -45,7 +45,7 @@ std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_
             auto const &tips_around_node = clean_branch_skeleton_around_node(
                 branchCurves, nodeID, node_adjacency, segmentation, maxRemovedLength, adaptativeTangent);
 
-            // ... and store the tips indexes, in order to clean them later.
+            // ... and store the tips indices, in order to clean them later.
             int i = 0;
             for (auto const &edge : node_adjacency) {
                 auto const &[tipIdx, tangent, calibre, boundL, boundR] = tips_around_node[i];

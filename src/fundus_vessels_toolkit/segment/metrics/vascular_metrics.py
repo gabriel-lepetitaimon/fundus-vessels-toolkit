@@ -202,8 +202,8 @@ class F1Topo(TorchMetric):
             ],
             strict=True,
         )
-        pred_n = [p.branches_count for p in v_preds]
-        target_n = [t.branches_count for t in v_targets]
+        pred_n = [p.branch_count for p in v_preds]
+        target_n = [t.branch_count for t in v_targets]
 
         self.correct_prediction += torch.tensor(sum(n - d for n, d in zip(pred_n, pred_diffs, strict=True)))
         self.total_prediction += torch.tensor(sum(pred_n))
@@ -275,8 +275,8 @@ class MeanF1Topo(TorchMetric):
             *[naive_edit_distance(p, t, self.max_struct_width) for p, t in zip(v_preds, v_targets, strict=True)],
             strict=True,
         )
-        pred_n = [p.branches_count for p in v_preds]
-        target_n = [t.branches_count for t in v_targets]
+        pred_n = [p.branch_count for p in v_preds]
+        target_n = [t.branch_count for t in v_targets]
 
         recall = sum((n - d) / (n + eps) for n, d in zip(pred_n, pred_diffs, strict=True))
         precision = sum((n - d) / (n + eps) for n, d in zip(target_n, target_diffs, strict=True))

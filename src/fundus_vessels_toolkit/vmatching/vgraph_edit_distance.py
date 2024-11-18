@@ -98,7 +98,7 @@ def label_edge_diff(graph_pred, graph_true, n_match):
 
     # Assign labels to prediction graph edges
     #  - False positive (default)
-    pred_edge_labels = np.zeros((graph_pred.branches_count), dtype=np.int8)
+    pred_edge_labels = np.zeros((graph_pred.branch_count), dtype=np.int8)
     #  - True positive
     pred_edge_labels[edge_id_pred[valid_edges]] = 1
     #  - Split edges (single branch in true, multiple branch in pred)
@@ -111,7 +111,7 @@ def label_edge_diff(graph_pred, graph_true, n_match):
 
     # Assign labels to true graph edges
     #  - False negative (default)
-    true_edge_labels = np.zeros((graph_true.branches_count), dtype=np.int8)
+    true_edge_labels = np.zeros((graph_true.branch_count), dtype=np.int8)
     #  - True positive
     true_edge_labels[edge_id_true[valid_edges]] = 1
     #  - Fused edges (multiple branch in true, single branch in pred)
@@ -165,14 +165,14 @@ def naive_edit_distance(
     """  # noqa: E501
     # Match nodes
     node_match_id1, node_match_id2 = match_nodes_by_distance(
-        graph1.nodes_coord(),
-        graph2.nodes_coord(),
+        graph1.node_coord(),
+        graph2.node_coord(),
         max_matching_distance=max_matching_distance,
         density_sigma=density_matching_sigma,
         min_distance=min_distance,
     )
-    graph1.reindex_nodes(node_match_id1, inverse_lookup=True)
-    graph2.reindex_nodes(node_match_id2, inverse_lookup=True)
+    graph1.reindex_nodes(node_match_id1, inverse_lookup=True, inplace=True)
+    graph2.reindex_nodes(node_match_id2, inverse_lookup=True, inplace=True)
     nb_match = len(node_match_id1)
 
     # Match edges
@@ -189,8 +189,8 @@ def naive_edit_distance(
 
     # Count branch unique to each graph
     #  - Branches are considered unique by default
-    unique_branches1 = np.ones((graph1.branches_count), dtype=np.int8)
-    unique_branches2 = np.ones((graph2.branches_count), dtype=np.int8)
+    unique_branches1 = np.ones((graph1.branch_count), dtype=np.int8)
+    unique_branches2 = np.ones((graph2.branch_count), dtype=np.int8)
 
     #  Remove branches that are matched
     unique_branches1[branches_id1[connected_matched_nodes]] = 0

@@ -238,9 +238,9 @@ def cluster_nodes_by_distance(
     """  # noqa: E501
 
     if nodes_type == "junction":
-        nodes_id = graph.junctions_nodes()
+        nodes_id = graph.junction_nodes()
     elif nodes_type == "endpoints":
-        nodes_id = graph.endpoints_nodes()
+        nodes_id = graph.endpoint_nodes()
     else:
         nodes_id = None
 
@@ -254,7 +254,7 @@ def cluster_nodes_by_distance(
             branches = graph.branch_list[branch_id]
         # Exclude branches with the same start and end nodes
         branches = branches[branches[:, 0] != branches[:, 1]]
-        nodes_coord = graph.nodes_coord()
+        nodes_coord = graph.node_coord()
         # Compute the distance between the nodes of each branch
         branch_dist = np.linalg.norm(nodes_coord[branches[:, 0]] - nodes_coord[branches[:, 1]], axis=1)
         # Reduce the clusters
@@ -266,9 +266,9 @@ def cluster_nodes_by_distance(
     elif only_connected_nodes is None:
         # --- Cluster all nodes ---
         if nodes_id is None:
-            return cluster_by_distance(graph.nodes_coord(), max_distance, iterative=iterative_clustering)
+            return cluster_by_distance(graph.node_coord(), max_distance, iterative=iterative_clustering)
         else:
-            nodes_coord = graph.nodes_coord()[nodes_id]
+            nodes_coord = graph.node_coord()[nodes_id]
             clusters = cluster_by_distance(nodes_coord, max_distance, iterative=iterative_clustering)
             return [{nodes_id[_] for _ in cluster} for cluster in clusters]
 
@@ -276,12 +276,12 @@ def cluster_nodes_by_distance(
         # --- Cluster only unconnected nodes ---
         # ... For each pair of independent subgraphs of the vessel graph, only their closest nodes can be clustered
         # Get the independent subgraphs of the vessel graph
-        connected_nodes_id = graph.nodes_connected_graphs()
+        connected_nodes_id = graph.node_connected_components()
         # Filter the nodes type
         connected_nodes_id = [np.intersect1d(_, nodes_id, assume_unique=True) for _ in connected_nodes_id]
         # Compute the distance between all these nodes
         all_nodes_id = np.concatenate(connected_nodes_id)
-        all_nodes_coord = graph.nodes_coord()[all_nodes_id]
+        all_nodes_coord = graph.node_coord()[all_nodes_id]
         distance = np.linalg.norm(all_nodes_coord[:, None] - all_nodes_coord, axis=-1)
         # and create a short id for each subgraph
         connected_nodes_short_id = []
@@ -343,7 +343,7 @@ def merge_nodes_by_distance(
         only_connected_nodes=only_connected_nodes,
         iterative_clustering=iterative_clustering,
     )
-    nodes_weight = None if nodes_type != "all" else (~graph.endpoints_nodes(as_mask=True)) * 1
+    nodes_weight = None if nodes_type != "all" else (~graph.endpoint_nodes(as_mask=True)) * 1
     return graph.merge_nodes(clusters, nodes_weight=nodes_weight, inplace=inplace, assume_reduced=True)
 
 
@@ -365,7 +365,7 @@ def merge_small_cycles(graph: VGraph, max_cycle_size: float, inplace=False) -> V
 
     """  # noqa: E501
 
-    nodes_coord = graph.nodes_coord()
+    nodes_coord = graph.node_coord()
     nx_graph = nx.from_numpy_array(graph.node_adjacency_matrix())
     cycles = [_ for _ in nx.chordless_cycles(nx_graph, length_bound=4) if len(_) > 2]
     cycles_max_dist = [distance_matrix(nodes_coord[cycle]).max() for cycle in cycles]
@@ -394,14 +394,14 @@ def merge_equivalent_branches(graph: VGraph, max_nodes_distance: float = None, i
 
     """  # noqa: E501
 
-    branches, branches_inverse, branches_count = np.unique(
+    branches, branches_inverse, branch_count = np.unique(
         graph.branch_list, return_counts=True, return_inverse=True, axis=0
     )
 
-    equi_branches_mask = branches_count > 1
+    equi_branches_mask = branch_count > 1
     if max_nodes_distance is not None:
         equi_branches = branches[equi_branches_mask]
-        nodes_coord = graph.nodes_coord()
+        nodes_coord = graph.node_coord()
         equi_branches_dist = np.linalg.norm(nodes_coord[equi_branches[:, 0]] - nodes_coord[equi_branches[:, 1]], axis=1)
         equi_branches_mask[equi_branches_mask] &= equi_branches_dist < max_nodes_distance
 
@@ -410,7 +410,7 @@ def merge_equivalent_branches(graph: VGraph, max_nodes_distance: float = None, i
         duplicate_branches_id = np.argwhere(branches_inverse.flatten() == duplicate_id).flatten()
         branch_to_remove.extend(duplicate_branches_id[1:])
 
-    return graph.delete_branches(branch_to_remove, inplace=inplace)
+    return graph.delete_branch(branch_to_remove, inplace=inplace)
 
 
 def remove_spurs(graph: VGraph, max_spurs_length: float = 0, inplace=False) -> VGraph:
@@ -431,9 +431,9 @@ def remove_spurs(graph: VGraph, max_spurs_length: float = 0, inplace=False) -> V
 
     """  # noqa: E501
 
-    terminal_branches = graph.endpoints_branches()
-    terminal_branches_length = graph.branches_arc_length(terminal_branches)
-    return graph.delete_branches(terminal_branches[terminal_branches_length < max_spurs_length], inplace=inplace)
+    terminal_branches = graph.endpoint_branches()
+    terminal_branches_length = graph.branch_arc_length(terminal_branches)
+    return graph.delete_branch(terminal_branches[terminal_branches_length < max_spurs_length], inplace=inplace)
 
 
 def remove_orphan_branches(graph: VGraph, min_length: float | bool = 0, inplace=False) -> VGraph:
@@ -457,9 +457,9 @@ def remove_orphan_branches(graph: VGraph, min_length: float | bool = 0, inplace=
         return graph
     orphan_branches = graph.orphan_branches()
     if np.isscalar(min_length):
-        single_branches_length = graph.branches_arc_length(orphan_branches)
+        single_branches_length = graph.branch_arc_length(orphan_branches)
         orphan_branches = orphan_branches[single_branches_length < min_length]
-    return graph.delete_branches(orphan_branches, inplace=inplace)
+    return graph.delete_branch(orphan_branches, inplace=inplace)
 
 
 def simplify_passing_nodes(
@@ -488,7 +488,7 @@ def simplify_passing_nodes(
 
         with_same_label:
             If not None, the nodes are merged only if they have the same label.
-            If a string, use ``graph.branches_attr[with_same_label]`` as the labels.
+            If a string, use ``graph.branch_attr[with_same_label]`` as the labels.
 
     Returns
     -------
@@ -519,7 +519,7 @@ def simplify_passing_nodes(
 
         # === Filter out nodes with a too small angle between their two incident branches ===
         geo_data = graph.geometric_data()
-        t = np.stack([geo_data.tips_tangent(b, d) for b, d in zip(incident_branches, idirs, strict=True)])
+        t = np.stack([geo_data.tip_tangent(b, d) for b, d in zip(incident_branches, idirs, strict=True)])
         cos = np.sum(t[:, 1, :] * t[:, 0, :], axis=1)
         fuseable_nodes = cos <= np.cos(np.deg2rad(min_angle))
 
@@ -533,7 +533,7 @@ def simplify_passing_nodes(
         # === Filter nodes which don't have the same label ===
         if isinstance(with_same_label, str):
             # Attempt to get the labels from the branches attributes
-            with_same_label = graph.branches_attr[with_same_label]
+            with_same_label = graph.branch_attr[with_same_label]
         with_same_label = np.asarray(with_same_label)
 
         same_label = with_same_label[incident_branches[:, 0]] == with_same_label[incident_branches[:, 1]]
@@ -579,19 +579,19 @@ def find_facing_endpoints(
     """  # noqa: E501
     geodata = graph.geometric_data()
 
-    endp_branch, endp_mask = graph.endpoints_branches(return_endpoints_mask=True)
+    endp_branch, endp_mask = graph.endpoint_branches(return_node_mask=True)
     b, endp_tip_id = np.where(endp_mask)
     endp_branch = endp_branch[b]
     endp = graph.branch_list[endp_branch, endp_tip_id]
     endp_first_tip = endp_tip_id == 0
-    endp_pos = geodata.tips_coord(endp_branch, endp_first_tip).astype(np.float64)
+    endp_pos = geodata.tip_coord(endp_branch, endp_first_tip).astype(np.float64)
 
     dist = np.linalg.norm(endp_pos[:, None, :] - endp_pos[None, :, :], axis=2)
     facing = dist <= max_distance
     facing[np.diag_indices(len(endp))] = False
 
     if max_angle > 0:
-        endp_tan = -geodata.tips_tangent(endp_branch, endp_first_tip)
+        endp_tan = -geodata.tip_tangent(endp_branch, endp_first_tip)
         endp_to_endp_dir = endp_pos[None, :, :] - endp_pos[:, None, :]  # (origin, destination, yx)
         endp_to_endp_norm = np.linalg.norm(endp_to_endp_dir, axis=2)
         endp_to_endp_dir[endp_to_endp_norm != 0] /= endp_to_endp_norm[endp_to_endp_norm != 0, None]
@@ -667,7 +667,7 @@ def find_endpoints_branches_intercept(
 
     from ..utils.cpp_extensions.fvt_cpp import find_closest_branches as find_closest_branches_cpp
 
-    endpoints, endpoints_branches, idirs = graph.endpoints_nodes_with_branch_index(return_branch_direction=True)
+    endpoints, endpoints_branches, idirs = graph.endpoint_nodes_with_branch_id(return_branch_direction=True)
     if ignore_endpoints is not None:
         ignore_endpoints = np.isin(endpoints, ignore_endpoints, assume_unique=True)
         if np.any(ignore_endpoints):
@@ -676,19 +676,19 @@ def find_endpoints_branches_intercept(
             idirs = idirs[~ignore_endpoints]
 
     gdata = graph.geometric_data()
-    nodes_yx = gdata.nodes_coord()
+    nodes_yx = gdata.node_coord()
     n_nodes = len(nodes_yx)
     endpoints_yx = nodes_yx[endpoints]
     branch_list = graph.branch_list
 
     if not isinstance(tangent, np.ndarray):
-        endpoints_t = -np.stack([gdata.tips_tangent(b, d) for b, d in zip(endpoints_branches, idirs, strict=True)])
+        endpoints_t = -np.stack([gdata.tip_tangent(b, d) for b, d in zip(endpoints_branches, idirs, strict=True)])
     else:
         endpoints_t = tangent
 
     # === Intercept all branches with the endpoints tangents ===
     nearest_branch, intercept = find_closest_branches_cpp(
-        torch.from_numpy(gdata.branches_label_map(connect_nodes=True)).int(),
+        torch.from_numpy(gdata.branch_label_map(connect_nodes=True)).int(),
         torch.from_numpy(endpoints_yx).int(),
         torch.from_numpy(endpoints_t).float(),
         max_distance,
@@ -755,11 +755,11 @@ def find_endpoints_branches_intercept(
     endp_to_intercept_nodes_edges = np.array([endpoints, new_intercept_nodes_id], dtype=int).T
     new_intercept_nodes = np.array([new_intercept_nodes_id, nearest_branch], dtype=int).T
 
-    branches, branches_count = np.unique(nearest_branch, return_counts=True)
-    if intercept_snapping_distance > 0 and np.any(branches_count > 1):
+    branches, branch_count = np.unique(nearest_branch, return_counts=True)
+    if intercept_snapping_distance > 0 and np.any(branch_count > 1):
         intercept_nodes_merge_lookup = np.arange(len(endpoints))
         intercept_to_remove = []
-        for b, count in zip(branches, branches_count, strict=True):
+        for b, count in zip(branches, branch_count, strict=True):
             if count <= 1:
                 continue
             intercept_ids = np.argwhere(nearest_branch == b).flatten()
@@ -867,9 +867,9 @@ def reconnect_endpoints(
         new_edges[:, 1] = lookup[new_edges[:, 1]]
 
     if len(new_edges):
-        graph.add_branches(new_edges, inplace=True)
+        graph.add_branch(new_edges, inplace=True)
     if len(new_endpoints_edges):
-        graph.add_branches(new_endpoints_edges, inplace=True)
+        graph.add_branch(new_endpoints_edges, inplace=True)
 
     return graph
 

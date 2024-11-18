@@ -25,7 +25,7 @@ def reduce_clusters(clusters: Iterable[Iterable[int]], drop_singleton=True) -> L
         Whether to drop clusters with only one element. By default True.
 
         .. warning::
-            If ``drop_singleton`` is False, all indexes from 0 to max(clusters) will be returned, even those omitted in ``clusters``.
+            If ``drop_singleton`` is False, all indices from 0 to max(clusters) will be returned, even those omitted in ``clusters``.
 
     Returns
     -------

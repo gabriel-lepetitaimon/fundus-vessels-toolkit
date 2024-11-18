@@ -43,7 +43,7 @@ def np_find_sorted(keys: npt.NDArray, array: npt.NDArray, assume_keys_sorted=Fal
     Returns
     -------
     int | np.ndarray:
-        The index or indexes of the keys in the array. If a key is not found, -1 is returned.
+        The index or indices of the keys in the array. If a key is not found, -1 is returned.
     """
     if np.isscalar(keys):
         if array[0] == keys:

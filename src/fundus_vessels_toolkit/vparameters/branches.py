@@ -113,10 +113,10 @@ def parametrize_branches(vgraph: VGraph, fundus_data: Optional[FundusData] = Non
         df.insert(2, "arc_bspline", df.pop("arc_bspline"))
 
     df.index = df["branch"]
-    if "strahler" in vgraph.branches_attr:
-        df.insert(1, "strahler", vgraph.branches_attr["strahler"])
-    if "rank" in vgraph.branches_attr:
-        df.insert(1, "rank", vgraph.branches_attr["rank"])
+    if "strahler" in vgraph.branch_attr:
+        df.insert(1, "strahler", vgraph.branch_attr["strahler"])
+    if "rank" in vgraph.branch_attr:
+        df.insert(1, "rank", vgraph.branch_attr["rank"])
 
     if fundus_data is not None:
         mid_yx = np.array(vgraph.geometric_data().branch_midpoint(df.index.to_numpy()))

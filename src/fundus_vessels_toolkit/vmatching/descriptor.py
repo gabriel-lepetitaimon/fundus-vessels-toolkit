@@ -68,7 +68,7 @@ def junction_incident_branches_descriptor(
 
     geo_data = vgraph.geometric_data(geometric_data_id)
     if junctions_id is None:
-        junctions_id = np.argwhere(vgraph.nodes_degree() > 2).flatten()
+        junctions_id = np.argwhere(vgraph.node_degree() > 2).flatten()
 
     N = len(junctions_id)
     COS_F, L2_F = 4, 1
@@ -81,7 +81,7 @@ def junction_incident_branches_descriptor(
 
     for junction_i, node_id in enumerate(junctions_id):
         nodes_id[junction_i] = node_id
-        p = geo_data.nodes_coord(node_id)
+        p = geo_datanode_coord(node_id)
 
         branches, are_outgoing = vgraph.incident_branches(node_id, return_branch_direction=True)
         incident_beziers: List[BezierCubic] = []
@@ -94,7 +94,7 @@ def junction_incident_branches_descriptor(
                 p0_id, p1_id = vgraph.branch_list[branch_id]
                 if not is_outgoing:
                     p0_id, p1_id = p1_id, p0_id
-                p0, p1 = Point(*geo_data.nodes_coord(p0_id)), Point(*geo_data.nodes_coord(p1_id))
+                p0, p1 = Point(*geo_datanode_coord(p0_id)), Point(*geo_datanode_coord(p1_id))
                 incident_beziers.append(BezierCubic(p0, p1, p0, p1))
                 incident_calibre.append(0)
             else:

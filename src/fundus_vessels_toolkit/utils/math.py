@@ -69,7 +69,7 @@ def quantified_roots(
     """Find the roots of a noisy signal.
 
     Below ``-threshold`` the signal values are considered negative, above ``threshold`` they are considered positive, in between they are considered zero.
-    The returned roots are the indexes where the signal changes from negative to positive or vice versa, or the indexes at the middle of the intervals where the signal is zero.
+    The returned roots are the indices where the signal changes from negative to positive or vice versa, or the indices at the middle of the intervals where the signal is zero.
 
     Parameters
     ----------
@@ -89,7 +89,7 @@ def quantified_roots(
     Returns
     -------
     np.ndarray
-        The indexes of the roots.
+        The indices of the roots.
     """  # noqa: E501
     from scipy.signal import medfilt
 

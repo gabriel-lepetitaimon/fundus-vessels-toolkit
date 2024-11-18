@@ -150,7 +150,7 @@ def extract_branch_geometry_from_skeleton(
         A 2D tensor of shape (N, 2) containing the coordinates (y, x) of the nodes.
 
     branch_list :
-        A 2D tensor of shape (B, 2) containing for each branch, the indexes of the two nodes it connects.
+        A 2D tensor of shape (B, 2) containing for each branch, the indices of the two nodes it connects.
 
     segmentation : torch.Tensor
         A 2D tensor of shape (H, W) containing the segmentation of the image.
@@ -205,7 +205,7 @@ def curve_tangent(curve_yx, std=3, eval_for=None):
     std : int, optional
         The standard deviation of the gaussian weighting the curve points. By default 3.
     eval_for : int or list[int], optional
-        The indexes of the points for which the tangent must be computed. By default None.
+        The indices of the points for which the tangent must be computed. By default None.
 
     Returns
     -------
@@ -354,7 +354,7 @@ def perimeter_from_vertices(coord: np.ndarray, close_loop: bool = True) -> float
 
 def nodes_tangent(
     nodes_coord: np.ndarray,
-    branches_label_map: np.ndarray,
+    branch_label_map: np.ndarray,
     branches_id: Iterable[int] = None,
     *,
     gaussian_offset: float = 7,
@@ -380,7 +380,7 @@ def nodes_tangent(
 
         .. warning::
 
-            The branch_id must follow the same indexing as the skeleton_map: especially the indexes must start at 1.
+            The branch_id must follow the same indexing as the skeleton_map: especially the indices must start at 1.
 
     gaussian_offset : float, optional
         The offset in pixel of the gaussian weighting the skeleton arround the node. Must be positive.
@@ -397,16 +397,16 @@ def nodes_tangent(
     assert len(nodes_coord) == len(branches_id), "coord and branch_id must have the same length"
     assert nodes_coord.ndim == 2 and nodes_coord.shape[1] == 2, "coord must be a 2D array of shape (N, 2)"
     N = len(nodes_coord)
-    assert branches_label_map.ndim == 2, "skeleton_map must be a 2D array"
-    assert branches_label_map.shape[0] > 0 and branches_label_map.shape[1] > 0, "skeleton_map must be non empty"
+    assert branch_label_map.ndim == 2, "skeleton_map must be a 2D array"
+    assert branch_label_map.shape[0] > 0 and branch_label_map.shape[1] > 0, "skeleton_map must be non empty"
     assert gaussian_offset > 0, "gaussian_offset must be positive"
     assert gaussian_std > 0, "gaussian_std must be positive"
 
     tangent_vectors = np.zeros((N, 2), dtype=np.float64)
     for i, ((y, x), branch_id) in enumerate(zip(nodes_coord, branches_id, strict=True)):
         pos = Point(y, x)
-        window_rect = Rect.from_center(pos, 2 * (2 * gaussian_std + gaussian_offset)).clip(branches_label_map.shape)
-        window = branches_label_map[window_rect.slice()]
+        window_rect = Rect.from_center(pos, 2 * (2 * gaussian_std + gaussian_offset)).clip(branch_label_map.shape)
+        window = branch_label_map[window_rect.slice()]
         pos = pos - window_rect.top_left
 
         skel_points = np.where(window == branch_id if branch_id != 0 else window > 0)

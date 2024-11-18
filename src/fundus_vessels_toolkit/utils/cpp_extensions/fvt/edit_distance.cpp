@@ -247,7 +247,7 @@ std::tuple<float, std::vector<UIntPair>, uint> djikstra_optimal_branch_matching(
 
     // Prepare index mapping utility functions
     auto true_branches_indexes = [&](DjikstraStep match) {
-        // Shift the indexes of the match to account for the initial branch index offset
+        // Shift the indices of the match to account for the initial branch index offset
         auto const& [iniB1, iniB2] = initial_pairs[match.iniPairId];
         return UIntPair{(iniB1 + match.b1) % B1, (iniB2 + match.b2) % B2};
     };
