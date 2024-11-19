@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, TypeAlias, Union
+from typing import Any, List, Mapping, TypeAlias, Union
 
 import numpy as np
 import numpy.typing as npt
 
-NumpyDict: TypeAlias = Dict[str, Union[npt.NDArray, "NumpyDict"]] | List[Union[npt.NDArray, "NumpyDict"]]
+NumpyDict: TypeAlias = Mapping[str, Union[npt.NDArray[Any], "NumpyDict"]] | List[npt.NDArray[Any]] | List["NumpyDict"]
 
 SEP = "/"
 

@@ -395,7 +395,7 @@ class BSpline(tuple[BezierCubic]):
         return self.__class__([curve.flip() for curve in reversed(self)])
 
     def filling_curves(
-        self, start: Optional[Point] = None, end: Optional[Point] = None, *, smoothing=0
+        self, start: Optional[Point] = None, end: Optional[Point] = None, *, smoothing: int | float = 0
     ) -> List[BezierCubic]:
         filling = []
         if len(self) == 0:
@@ -727,7 +727,7 @@ def fitCubic(points, leftTangent, rightTangent, error, split_on_failed=True, ret
 
     # If error not too large, try some reparameterization and iteration
     if maxError < error**2:
-        for i in range(20):
+        for _ in range(20):
             uPrime = reparameterize(bezCurve, points, u)
             bezCurve = generateBezier(points, uPrime, leftTangent, rightTangent)
             maxError, splitPoint = computeMaxError(points, bezCurve, uPrime)
@@ -802,7 +802,7 @@ def generateBezier(points, parameters, leftTangent, rightTangent):
 
 
 def reparameterize(bezier, points, parameters):
-    return [newtonRaphsonRootFind(bezier, point, u) for point, u in zip(points, parameters)]
+    return [newtonRaphsonRootFind(bezier, point, u) for point, u in zip(points, parameters, strict=True)]
 
 
 def newtonRaphsonRootFind(bez, point, u):
@@ -848,7 +848,7 @@ def chordLengthParameterize(points: npt.NDArray[np.float64]) -> npt.NDArray[np.f
 def computeMaxError(points, bez, parameters):
     maxDist = 0.0
     splitPoint = len(points) / 2
-    for i, (point, u) in enumerate(zip(points, parameters)):
+    for i, (point, u) in enumerate(zip(points, parameters, strict=True)):
         dist = np.linalg.norm(q(bez, u) - point) ** 2
         if dist > maxDist:
             maxDist = dist

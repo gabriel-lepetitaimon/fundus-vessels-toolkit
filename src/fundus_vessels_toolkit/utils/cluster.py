@@ -9,7 +9,7 @@ from .cpp_extensions.clusters_cpp import remove_consecutive_duplicates as remove
 from .cpp_extensions.clusters_cpp import solve_1d_chains as solve_1d_chains_cpp
 from .cpp_extensions.clusters_cpp import solve_clusters as solve_clusters_cpp
 from .geometric import Point
-from .torch import autocast_torch
+from .torch import TensorArray, to_torch
 
 
 def reduce_clusters(clusters: Iterable[Iterable[int]], drop_singleton=True) -> List[List[int]]:
@@ -36,21 +36,25 @@ def reduce_clusters(clusters: Iterable[Iterable[int]], drop_singleton=True) -> L
     return [c for c in solve_clusters_cpp(clusters, drop_singleton) if len(c) > 0]
 
 
-@autocast_torch
-def iterative_reduce_clusters(edge_list: torch.Tensor, edge_weight: torch.Tensor, max_weight: float) -> List[List[int]]:
+def iterative_reduce_clusters(edge_list: TensorArray, edge_weight: TensorArray, max_weight: float) -> List[List[int]]:
     """
     Reduce the number of clusters by merging clusters that share at least one element.
     """
-    edge_list = edge_list.cpu().int()
-    edge_weight = edge_weight.cpu().float()
-    clusters = iterative_reduce_clusters_cpp(edge_list, edge_weight, max_weight)
+    clusters = iterative_reduce_clusters_cpp(
+        to_torch(edge_list, dtype=torch.int), to_torch(edge_weight, dtype=torch.float), max_weight
+    )
     return [list(_) for _ in clusters]
 
 
-@autocast_torch
+@overload
+def remove_consecutive_duplicates(array: TensorArray, return_index: Literal[False] = False) -> TensorArray: ...
+@overload
 def remove_consecutive_duplicates(
-    tensor: torch.Tensor, return_index: bool = False
-) -> torch.Tensor | Tuple[torch.Tensor, torch.Tensor]:
+    array: TensorArray, return_index: Literal[True]
+) -> Tuple[TensorArray, TensorArray]: ...
+def remove_consecutive_duplicates(
+    array: TensorArray, return_index: bool = False
+) -> TensorArray | Tuple[TensorArray, TensorArray]:
     """
     Remove consecutive duplicates vectors in a tensor.
 
@@ -67,11 +71,13 @@ def remove_consecutive_duplicates(
     torch.Tensor
         The tensor with consecutive duplicates removed.
     """
-    tensor = tensor.cpu().int()
+    is_torch = isinstance(array, torch.Tensor)
+    tensor = to_torch(array, dtype=torch.int)
     if return_index:
-        tensor, ids = remove_consecutive_duplicates_cpp(tensor, True)
-        return tensor, ids
-    return remove_consecutive_duplicates_cpp(tensor, False)[0]
+        result, ids = remove_consecutive_duplicates_cpp(tensor, True)
+        return (result, ids) if is_torch else (result.numpy(force=True), ids.numpy(force=True))
+    result, _ = remove_consecutive_duplicates_cpp(tensor, False)
+    return result if is_torch else result.numpy(force=True)
 
 
 @overload
@@ -102,11 +108,10 @@ def reduce_chains(
     return (chains, chains_id) if return_index else chains
 
 
-@autocast_torch
 def cluster_by_distance(
-    coords: torch.Tensor | List[Point],
+    coords: TensorArray | List[Point],
     max_distance: float,
-    edge_list: Optional[torch.Tensor | List[Tuple[int, int]]] = None,
+    edge_list: Optional[TensorArray | List[Tuple[int, int]]] = None,
     iterative=False,
 ) -> List[List[int]]:
     """
@@ -132,28 +137,34 @@ def cluster_by_distance(
         The clusters.
     """  # noqa: E501
     if isinstance(coords, list):
-        coords = torch.tensor(coords)
-    assert coords.ndim == 2 and coords.shape[1] == 2, "Coordinates must be a 2D tensor of shape (n, 2)"
-    coords = coords.float()
+        coords_tensor = torch.tensor(coords, dtype=torch.float32)
+    else:
+        coords_tensor = to_torch(coords, dtype=torch.float32)
+    assert coords_tensor.ndim == 2 and coords_tensor.shape[1] == 2, "Coordinates must be a 2D tensor of shape (n, 2)"
 
+    edge_list_tensor = None
     if edge_list is not None:
         if isinstance(edge_list, list):
-            edge_list = torch.tensor(edge_list)
-        assert edge_list.ndim == 2 and edge_list.shape[1] == 2, "Edge list must be a 2D tensor of shape (n, 2)"
-        edge_list = edge_list.int()
+            edge_list_tensor = torch.tensor(edge_list, dtype=torch.int32)
+        else:
+            edge_list_tensor = to_torch(edge_list, dtype=torch.int32)
+        assert (
+            edge_list_tensor.ndim == 2 and edge_list_tensor.shape[1] == 2
+        ), "Edge list must be a 2D tensor of shape (n, 2)"
 
     if iterative:
-        if edge_list is None:
-            edge_list = torch.empty(0, 2, dtype=torch.int32)
-        else:
-            edge_list = edge_list.cpu()
-        clusters = iterative_cluster_by_distance_cpp(coords.cpu(), max_distance, edge_list)
-        return [list(_) for _ in clusters]
+        if edge_list_tensor is None:
+            edge_list_tensor = torch.empty(0, 2, dtype=torch.int32)
+        clusters = iterative_cluster_by_distance_cpp(coords_tensor, max_distance, edge_list_tensor)
+        return [list(_) for _ in clusters if len(_) > 1]
     else:
-        if edge_list is None:
-            dist = torch.cdist(coords, coords)
-            edge_list = torch.nonzero(dist <= max_distance, as_tuple=False)
-            edge_list = edge_list[edge_list[:, 0] < edge_list[:, 1]]
+        if edge_list_tensor is None:
+            dist = torch.cdist(coords_tensor, coords_tensor)
+            edge_list_tensor = torch.nonzero(dist <= max_distance, as_tuple=False)
+            edge_list_tensor = edge_list_tensor[edge_list_tensor[:, 0] < edge_list_tensor[:, 1]]
         else:
-            edge_list = edge_list[torch.norm(coords[edge_list[:, 0]] - coords[edge_list[:, 1]], dim=1) <= max_distance]
-        return reduce_clusters(edge_list, drop_singleton=False)
+            edge_list_tensor = edge_list_tensor[
+                torch.norm(coords_tensor[edge_list_tensor[:, 0]] - coords_tensor[edge_list_tensor[:, 1]], dim=1)
+                <= max_distance
+            ]
+        return reduce_clusters(edge_list_tensor, drop_singleton=False)  # type: ignore

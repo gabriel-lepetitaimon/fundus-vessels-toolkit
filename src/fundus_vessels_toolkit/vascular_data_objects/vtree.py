@@ -335,7 +335,7 @@ class VTree(VGraph):
             [gdata.copy(None) for gdata in self._geometric_data],
             nodes_attr=self._node_attr.copy() if self.node_attr is not None else None,
             branches_attr=self._branch_attr.copy() if self._branch_attr is not None else None,
-            node_count=self._nodes_count,
+            node_count=self._node_count,
             check_integrity=False,
         )
 
@@ -754,7 +754,7 @@ class VTree(VGraph):
     @overload
     def crossing_nodes_ids(
         self,
-        branch_ids: Optional[npt.ArrayLike[int]] = None,
+        branch_ids: Optional[npt.ArrayLike] = None,
         *,
         return_branch_ids: Literal[False] = False,
         only_traversing: bool = True,
@@ -762,16 +762,16 @@ class VTree(VGraph):
     @overload
     def crossing_nodes_ids(
         self,
-        branch_ids: Optional[npt.ArrayLike[int]] = None,
+        branch_ids: Optional[npt.ArrayLike] = None,
         *,
         return_branch_ids: Literal[True],
         only_traversing: bool = True,
     ) -> Tuple[npt.NDArray[np.int_], List[Dict[int, npt.NDArray[np.int_]]]]: ...
     def crossing_nodes_ids(
         self,
-        branch_ids: Optional[npt.ArrayLike[int]] = None,
+        branch_ids: Optional[npt.ArrayLike] = None,
         *,
-        return_branches: bool = False,
+        return_branch_ids: bool = False,
         only_traversing: bool = True,
     ) -> npt.NDArray[np.int_] | Tuple[npt.NDArray[np.int_], List[Dict[int, npt.NDArray[np.int_]]]]:
         """Return the indices of the crossing nodes.
@@ -813,7 +813,7 @@ class VTree(VGraph):
                 if (n := len(incoming_branches_with_successors)) > 1:
                     if incoming_branches_with_successors[0] != -1 or n > 2:
                         crossings.append(node_id)
-                        if return_branches:
+                        if return_branch_ids:
                             branches = {}
                             outgoing_branch_anc = self.branch_tree[outgoing_branches]
                             for b in incoming_branches_with_successors:
@@ -830,7 +830,7 @@ class VTree(VGraph):
             crossing_branches = [
                 {b: self.branch_successors(b, max_depth=1) for b in branches} for branches in crossing_incoming_branches
             ]
-        return (crossings, crossing_branches) if return_branches else crossings
+        return (crossings, crossing_branches) if return_branch_ids else crossings
 
     def node_incoming_branches(self, node_id: int | npt.ArrayLike[int]) -> npt.NDArray[np.int_]:
         """Return the ingoing branches of the given node(s).
@@ -1325,8 +1325,8 @@ class VTree(VGraph):
 
     def merge_consecutive_branches(
         self,
-        branch_pairs: npt.ArrayLike[int],
-        junction_nodes: Optional[npt.ArrayLike[int]] = None,
+        branch_pairs: npt.ArrayLike,
+        junction_nodes: Optional[npt.ArrayLike] = None,
         *,
         remove_orphan_nodes: bool = True,
         quietly_ignore_invalid_pairs: Optional[bool] = False,

@@ -245,7 +245,7 @@ def simplify_av_graph(
         graph = graph.copy()
 
     # === Fuse passing nodes of same type (pre-clustering) ===
-    simplify_passing_nodes(graph, min_angle=passing_node_min_angle, with_same_label=av_attr, inplace=True)
+    # simplify_passing_nodes(graph, min_angle=passing_node_min_angle, with_same_label=av_attr, inplace=True)
 
     # === Remove small orphan branches ===
     graph.delete_branch(
@@ -262,7 +262,7 @@ def simplify_av_graph(
     max_merge_distance = max(node_merge_distance, unknown_node_merge_distance)
     for branch in graph.branches(filter="non-endpoint"):
         if branch.node_to_node_length() < max_merge_distance:
-            n1, n2 = nodes_av_attr[list(branch.node_ids)]
+            n1, n2 = nodes_av_attr[list(branch.node_ids)]  # type: ignore
             # For this step, we consider branches with both type as unknown
             n1 = AVLabel.UNK if n1 == AVLabel.BOTH else n1
             n2 = AVLabel.UNK if n2 == AVLabel.BOTH else n2
@@ -282,12 +282,12 @@ def simplify_av_graph(
     if len(nodes_clusters) or len(unknown_nodes_clusters):
         graph.merge_nodes(nodes_clusters + unknown_nodes_clusters, inplace=True, assume_reduced=True)
 
-    # === Keep only one branch for any group of small twin branches ===
+    # === Keep only one branch for any group of small or undefined twin branches ===
     # TODO: Merge cycles?
     twin_branches = []
     for twins in graph.twin_branches():
         b0 = graph.branch(twins[0])
-        if b0.node_to_node_length() < unknown_node_merge_distance:
+        if b0.node_to_node_length() < unknown_node_merge_distance or not geodata.has_branch_curve(twins).all():
             # Keep the first branch and remove the others
             twin_branches.extend(twins[1:])
             # Label the first branch as unknown and clear its geometry data
@@ -352,7 +352,7 @@ def split_av_graph_by_subtree(
     if not inplace:
         tree = tree.copy()
 
-    tree.branch_attr[av_attr].fillna(AVLabel.UNK, inplace=True)
+    tree.branch_attr.fillna({av_attr: AVLabel.UNK}, inplace=True)
     art_branches = tree.as_branch_ids(tree.branch_attr[av_attr] == AVLabel.ART)
     vei_branches = tree.as_branch_ids(tree.branch_attr[av_attr] == AVLabel.VEI)
     geodata = tree.geometric_data()
@@ -375,7 +375,7 @@ def split_av_graph_by_subtree(
     subtrees_av = [False for _ in range(len(subtrees))]  # True: artery, False: vein
     for i, subtree in enumerate(list(subtrees)):
         if detect_major_error and len(
-            (crossings := tree.crossing_nodes_ids(subtree, return_branches=True, only_traversing=False))[0]
+            (crossings := tree.crossing_nodes_ids(subtree, return_branch_ids=True, only_traversing=False))[0]
         ):
             processed_branch = set()
             for _, branches in zip(*crossings, strict=True):
@@ -387,7 +387,7 @@ def split_av_graph_by_subtree(
                     for incoming_branch, art in [(_, True) for _ in art_b] + [(_, False) for _ in vei_b]:
                         b_label = AVLabel.ART if art else AVLabel.VEI
                         b = tree.branch(incoming_branch)
-                        while b.has_ancestor() and (b_anc := b.ancestor()).attr[av_attr] == b_label:
+                        while (b_anc := b.ancestor()) is not None and b_anc.attr[av_attr] == b_label:
                             b = b_anc
                         partial_root.append(b.id)
 
@@ -712,6 +712,8 @@ def build_line_digraph(
 
     macula_yx = fundus_data.infered_macula_center()
     od_yx = fundus_data.od_center
+    assert od_yx is not None, "The optic disc center is not defined."
+
     od_mac_dist = od_yx.distance(macula_yx) if macula_yx is not None else fundus_data.shape[0] / 2
     od_diameter = fundus_data.od_diameter
 
@@ -751,12 +753,13 @@ def build_line_digraph(
     geodata = graph.geometric_data()
 
     # === Duplicate all branch with BOTH or UNKNOWN AV label ===
+    av_col_id = graph.branch_attr.columns.get_loc(av_attr)
     branches_av = graph.branch_attr[av_attr]
     both_branches = branches_av[branches_av.isin([AVLabel.BOTH, AVLabel.UNK])].index.to_numpy()
     _, new_branches = graph.duplicate_branch(both_branches, return_branch_id=True, inplace=True)
     both_branches = np.concatenate([both_branches, new_branches])
-    graph.branch_attr[av_attr].iloc[both_branches] = AVLabel.ART
-    graph.branch_attr[av_attr].iloc[new_branches] = AVLabel.VEI
+    graph.branch_attr.iloc[both_branches, av_col_id] = AVLabel.ART  # type: ignore
+    graph.branch_attr.iloc[new_branches, av_col_id] = AVLabel.VEI  # type: ignore
 
     # graph.flip_branch_direction(graph.branch_list[:, 0] > graph.branch_list[:, 1]) # For debugging
 
@@ -797,8 +800,8 @@ def build_line_digraph(
 
     # === Compute the probability associated with the orientation of each branch ===
     branches_dir_p = np.zeros((graph.branch_count, 2), dtype=float)
-    branches_calibres = geodata.branch_data(VBranchGeoData.Fields.CALIBRES)
-    branches_tangents = geodata.branch_data(VBranchGeoData.Fields.TANGENTS)
+    branches_calibres: List[VBranchGeoData.Curve] = geodata.branch_data(VBranchGeoData.Fields.CALIBRES)  # type: ignore
+    branches_tangents: List[VBranchGeoData.Tangents] = geodata.branch_data(VBranchGeoData.Fields.TANGENTS)  # type: ignore
     branches_curves = geodata.branch_curve()
     for branch in graph.branches():
         branch_id = branch.id
@@ -1062,7 +1065,7 @@ def build_line_digraph(
     edge_through_node = np.concatenate([-np.ones(N), edge_through_node])
 
     # Relabel the branches that were duplicated
-    graph.branch_attr[av_attr].fillna(AVLabel.UNK, inplace=True)
+    graph.branch_attr.fillna({av_attr: AVLabel.UNK}, inplace=True)
     graph.branch_attr.loc[both_branches, av_attr] = AVLabel.UNK
 
     return graph, np.array(edge_list), np.array(edge_first_tip), np.array(edge_probs), edge_through_node, branches_dir_p
@@ -1111,7 +1114,11 @@ def resolve_digraph_to_vtree(
             line_total_p[id] = p
 
         # Solve the double optimal tree (using both direction for each branch)
-        optimal_tree = maximum_spanning_arborescence(digraph, attr="p", preserve_attrs=True)
+        try:
+            optimal_tree = maximum_spanning_arborescence(digraph, attr="p", preserve_attrs=True)
+        except nx.NetworkXException as e:
+            warnings.warn(f"Error while solving the optimal tree: {e}")
+            optimal_tree = digraph
 
         kept_edges = np.zeros(len(line_list), dtype=bool)
 

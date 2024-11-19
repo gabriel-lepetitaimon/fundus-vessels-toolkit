@@ -120,19 +120,20 @@ def parametrize_branches(vgraph: VGraph, fundus_data: Optional[FundusData] = Non
 
     if fundus_data is not None:
         mid_yx = np.array(vgraph.geometric_data().branch_midpoint(df.index.to_numpy()))
-        if fundus_data.has_macula:
-            df.insert(4, "dist_macula", fundus_data.macula_center.distance(mid_yx))
-        if fundus_data.has_od:
+        macula_center = fundus_data.infered_macula_center()
+        if macula_center is not None:
+            df.insert(4, "dist_macula", macula_center.distance(mid_yx))
+        if fundus_data.od_center is not None:
             from .bifurcations import node_normalized_coordinates
 
             df.insert(4, "dist_od", fundus_data.od_center.distance(mid_yx))
-            macula_center = fundus_data.macula_center if fundus_data.has_macula else fundus_data.infered_macula_center()
-            norm_coord, norm_dist_od = node_normalized_coordinates(
-                mid_yx, fundus_data.od_center, fundus_data.od_diameter, macula_center
-            )
-            df.insert(4, "norm_coord_x", norm_coord[:, 1])
-            df.insert(4, "norm_coord_y", norm_coord[:, 0])
-            df.insert(4, "norm_dist_od", norm_dist_od)
+            if macula_center is not None and fundus_data.od_diameter is not None:
+                norm_coord, norm_dist_od = node_normalized_coordinates(
+                    mid_yx, fundus_data.od_center, fundus_data.od_diameter, macula_center
+                )
+                df.insert(4, "norm_coord_x", norm_coord[:, 1])
+                df.insert(4, "norm_coord_y", norm_coord[:, 0])
+                df.insert(4, "norm_dist_od", norm_dist_od)
 
     return df
 

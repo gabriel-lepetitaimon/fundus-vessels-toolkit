@@ -37,8 +37,7 @@ class NodeSimplificationCallBack:
         node_x: npt.NDArray[np.float64],
         skeleton: npt.NDArray[np.bool_],
         branches_by_nodes: npt.NDArray[np.uint64],
-    ) -> npt.NDArray[np.bool_]:
-        pass
+    ) -> npt.NDArray[np.bool_]: ...
 
 
 SimplifyTopology: TypeAlias = Literal["node", "branch", "both"] | None
@@ -207,7 +206,7 @@ def cluster_nodes_by_distance(
     nodes_type: Literal["all", "junction", "endpoints"] = "all",
     only_connected_nodes: Optional[bool] = None,
     iterative_clustering: bool = False,
-) -> List[set[int]]:
+) -> List[List[int]]:
     """
     Cluster nodes of the vessel graph by distance.
 
@@ -270,7 +269,7 @@ def cluster_nodes_by_distance(
         else:
             nodes_coord = graph.node_coord()[nodes_id]
             clusters = cluster_by_distance(nodes_coord, max_distance, iterative=iterative_clustering)
-            return [{nodes_id[_] for _ in cluster} for cluster in clusters]
+            return [[nodes_id[_] for _ in cluster] for cluster in clusters]
 
     else:
         # --- Cluster only unconnected nodes ---
@@ -376,7 +375,7 @@ def merge_small_cycles(graph: VGraph, max_cycle_size: float, inplace=False) -> V
     return graph.merge_nodes(cycles, inplace=inplace)
 
 
-def merge_equivalent_branches(graph: VGraph, max_nodes_distance: float = None, inplace=False) -> VGraph:
+def merge_equivalent_branches(graph: VGraph, max_nodes_distance: Optional[float] = None, inplace=False) -> VGraph:
     """
     Merge equivalent branches of the vessel graph.
 
@@ -430,13 +429,13 @@ def remove_spurs(graph: VGraph, max_spurs_length: float = 0, inplace=False) -> V
         The modified graph with the spurs removed.
 
     """  # noqa: E501
-
+    geodata = graph.geometric_data()
     terminal_branches = graph.endpoint_branches()
-    terminal_branches_length = graph.branch_arc_length(terminal_branches)
+    terminal_branches_length = geodata.branch_arc_length(terminal_branches)
     return graph.delete_branch(terminal_branches[terminal_branches_length < max_spurs_length], inplace=inplace)
 
 
-def remove_orphan_branches(graph: VGraph, min_length: float | bool = 0, inplace=False) -> VGraph:
+def remove_orphan_branches(graph: VGraph, min_length: float = 0, inplace=False) -> VGraph:
     """
     Remove single branches (branches connected to no other branches) whose length is shorter than min_length.
 
@@ -453,11 +452,10 @@ def remove_orphan_branches(graph: VGraph, min_length: float | bool = 0, inplace=
     -------
         The modified graph with the single branches removed.
     """
-    if not min_length or (np.isscalar(min_length) and min_length <= 0):
-        return graph
     orphan_branches = graph.orphan_branches()
-    if np.isscalar(min_length):
-        single_branches_length = graph.branch_arc_length(orphan_branches)
+    if min_length > 0:
+        geodata = graph.geometric_data()
+        single_branches_length = geodata.branch_arc_length(orphan_branches)
         orphan_branches = orphan_branches[single_branches_length < min_length]
     return graph.delete_branch(orphan_branches, inplace=inplace)
 

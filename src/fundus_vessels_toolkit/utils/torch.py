@@ -1,9 +1,16 @@
+from __future__ import annotations
+
+import functools
+import inspect
+from typing import TypeVar, Union, get_args, get_origin
+
 import numpy as np
+import torch
+
+TensorArray = TypeVar("TensorArray", bound=torch.Tensor | np.ndarray)
 
 
 def img_to_torch(x, device="cuda"):
-    import torch
-
     if isinstance(x, np.ndarray):
         if x.dtype == np.uint8:
             x = x.astype(np.float32) / 255.0
@@ -25,8 +32,6 @@ def img_to_torch(x, device="cuda"):
 
 
 def recursive_numpy2torch(x, device=None):
-    import torch
-
     if isinstance(x, torch.Tensor):
         return x.to(device) if device is not None else x
     if isinstance(x, np.ndarray):
@@ -49,8 +54,6 @@ def recursive_numpy2torch(x, device=None):
 
 
 def recursive_torch2numpy(x):
-    import torch
-
     if isinstance(x, torch.Tensor):
         r = x.cpu().numpy()
         return r
@@ -64,8 +67,6 @@ def recursive_torch2numpy(x):
 
 
 def torch_apply(func, *args, device=None, **kwargs):
-    import torch
-
     from_numpy = None
     new_args = []
     for arg in args:
@@ -89,10 +90,28 @@ def torch_apply(func, *args, device=None, **kwargs):
 
 
 def autocast_torch(f):
-    def wrapper(*args, **kwargs):
+    def decorated_f(*args, **kwargs):
         return torch_apply(f, *args, **kwargs)
 
-    wrapper.__name__ = f.__name__
-    wrapper.__doc__ = f.__doc__
+    def recursive_replace(ann):
+        if get_origin(ann) is Union:
+            return Union[tuple(recursive_replace(a) for a in get_args(ann))]
+        return ann if ann is not torch.Tensor else TensorArray
 
-    return wrapper
+    functools.update_wrapper(decorated_f, f)
+    f_signature = inspect.signature(f)
+    decorated_f.__signature__ = f_signature.replace(
+        parameters=[
+            param.replace(annotation=recursive_replace(param.annotation)) for param in f_signature.parameters.values()
+        ],
+        return_annotation=recursive_replace(f_signature.return_annotation),
+    )
+
+    return decorated_f
+
+
+def to_torch(x: TensorArray, device: str | None = "cpu", dtype=None) -> torch.Tensor:
+    tensor = torch.from_numpy(x) if isinstance(x, np.ndarray) else x
+    if device is not None:
+        tensor = tensor.to(device)
+    return tensor if dtype is None else tensor.to(dtype)

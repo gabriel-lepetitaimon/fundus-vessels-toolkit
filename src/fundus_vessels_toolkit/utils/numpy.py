@@ -25,7 +25,7 @@ def np_isin_sorted(a, b, *, invert=False):
         return isin if not invert else not isin
 
 
-def np_find_sorted(keys: npt.NDArray, array: npt.NDArray, assume_keys_sorted=False) -> int | npt.NDArray:
+def np_find_sorted(keys: npt.NDArray, array: npt.NDArray, assume_keys_sorted=False) -> npt.NDArray[np.int_]:
     """
     Find the index of keys in an array.
 
@@ -47,10 +47,10 @@ def np_find_sorted(keys: npt.NDArray, array: npt.NDArray, assume_keys_sorted=Fal
     """
     if np.isscalar(keys):
         if array[0] == keys:
-            return 0
+            return np.zeros(1, dtype=int)
         i = np.searchsorted(array, keys)
         isin = 0 < i < len(array)
-        return i if 0 < i < len(array) else -1
+        return np.array(i, dtype=int) if 0 < i < len(array) else np.array(-1, dtype=int)
     else:
         keys = np.asarray(keys)
         if len(keys) == 0:

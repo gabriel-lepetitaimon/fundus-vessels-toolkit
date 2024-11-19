@@ -241,17 +241,18 @@ def parametrize_bifurcations(
             return df
 
         bifurcations_yx = np.stack(bifurcations_yx)
-        if fundus_data.has_macula:
-            df.insert(4, "dist_macula", fundus_data.macula_center.distance(bifurcations_yx))
-        if fundus_data.has_od:
+        macula_center = fundus_data.infered_macula_center()
+        if macula_center is not None:
+            df.insert(4, "dist_macula", macula_center.distance(bifurcations_yx))
+        if fundus_data.od_center is not None:
             df.insert(4, "dist_od", fundus_data.od_center.distance(bifurcations_yx))
-            macula_center = fundus_data.macula_center if fundus_data.has_macula else fundus_data.infered_macula_center()
-            norm_coord, norm_dist_od = node_normalized_coordinates(
-                bifurcations_yx, fundus_data.od_center, fundus_data.od_diameter, macula_center
-            )
-            df.insert(4, "norm_coord_x", norm_coord[:, 1])
-            df.insert(4, "norm_coord_y", norm_coord[:, 0])
-            df.insert(4, "norm_dist_od", norm_dist_od)
+            if macula_center is not None and fundus_data.od_diameter is not None:
+                norm_coord, norm_dist_od = node_normalized_coordinates(
+                    bifurcations_yx, fundus_data.od_center, fundus_data.od_diameter, macula_center
+                )
+                df.insert(4, "norm_coord_x", norm_coord[:, 1])
+                df.insert(4, "norm_coord_y", norm_coord[:, 0])
+                df.insert(4, "norm_dist_od", norm_dist_od)
 
     return df
 
@@ -284,6 +285,8 @@ def assign_strahler_number(vtree: VTree, field: str = "strahler") -> VTree:
             else:
                 branch.attr[field] = strahlers[0] + 1
         branch.tail_node().attr[field] = branch.attr[field]
+
+    return vtree
 
 
 def node_normalized_coordinates(
