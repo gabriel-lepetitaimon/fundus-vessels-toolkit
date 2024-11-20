@@ -1075,7 +1075,7 @@ class VTree(VGraph):
         """  # noqa: E501
         branch_tree = self._branch_tree
         ancestor, successor, ancestor_count = np.unique(branch_tree, return_index=True, return_counts=True)
-        passing_mask = ancestor_count == 1
+        passing_mask = (ancestor_count == 1) & (ancestor != -1)
         passing_branch = np.stack([ancestor[passing_mask], successor[passing_mask]], axis=1)
 
         passing_branch_list = self._branch_list[passing_branch[:, 0]]  # Shape (N, 2)

@@ -428,9 +428,11 @@ class VGeometricData:
         ids, is_single = as_1d_array(ids)
         internal_id = self._graph_to_internal_branch_ids(ids, graph_index=graph_index, check_valid=False)
         if is_single:
-            return (c := self._branch_curve[internal_id]) is not None and len(c) > 0
+            return (c := self._branch_curve[int(internal_id)]) is not None and len(c) > 0
         else:
-            return np.array([(c := self._branch_curve[i]) is not None and len(c) > 0 for i in internal_id], dtype=bool)
+            return np.array(
+                [(c := self._branch_curve[int(i)]) is not None and len(c) > 0 for i in internal_id], dtype=bool
+            )
 
     @overload
     def branch_curve(self, ids: int, *, graph_index=True) -> npt.NDArray[np.int_]: ...
@@ -1711,13 +1713,14 @@ class VGeometricData:
         if len(curve) == 0:
             split_bin = [0 for _ in range(n_splits + 2)]
             new_curves = [np.empty((0, 2), dtype=int) for _ in range(n_splits + 1)]
+
+            nodes = self.parent_graph.branch_list[branch_id]
+            n1, n2 = self.node_coord(nodes)
             if split_coord is None:
-                nodes = self.parent_graph.branch_list[branch_id]
-                n1, n2 = self.node_coord(nodes)
                 a = np.linspace(0, 1, n_splits + 2, endpoint=True)[:, None]
                 explicit_split_coord = a * n1[None, :] + (1 - a) * n2[None, :]
             else:
-                explicit_split_coord = split_coord
+                explicit_split_coord = np.concatenate([n1[None, :], split_coord, n2[None, :]])
         else:
             #: The indices in the curve where it should be splitted (including the start and last index of the curve)
             split_bin = [0]

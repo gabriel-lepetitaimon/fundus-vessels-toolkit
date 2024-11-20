@@ -130,7 +130,7 @@ class AVSegToTree(AVSegToTreeBase):
             inplace=inplace,
         )
 
-    def simplify_av_graph(self, graph: VGraph, inplace: bool = False) -> VGraph:
+    def simplify_av_graph(self, graph: VGraph, od_center: Optional[Point] = None, inplace: bool = False) -> VGraph:
         from ..segment_to_graph.av_tree_parsing import simplify_av_graph
 
         return simplify_av_graph(
@@ -177,7 +177,7 @@ class AVSegToTree(AVSegToTreeBase):
         if label_av:
             self.assign_av_labels(graph, fundus.av, inplace=True)
             if simplify:
-                self.simplify_av_graph(graph, inplace=True)
+                self.simplify_av_graph(graph, od_center=fundus.od_center, inplace=True)
         return graph
 
 

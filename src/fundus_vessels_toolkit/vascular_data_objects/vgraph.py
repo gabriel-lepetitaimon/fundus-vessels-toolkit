@@ -2691,25 +2691,23 @@ class VGraph:
 
         branches_to_delete = np.array(branches_to_delete, dtype=int)
 
-        # 3a. Update the branch references
-        if self._branch_refs:
-            for branch in self._branch_refs:
-                if (redirected_to := merged_branches_summary.get(branch._id, -1)) != -1:
-                    # Redirect the merged branches to the first ones
-                    branch._id = redirected_to
-                    branch._nodes_id = self._branch_list[branch._id]
-
-        # 3b. Update the nodes references of the reconnected nodes
+        # 3a. Update the nodes references of the reconnected nodes
         if self._node_refs:
             reconnected_nodes = np.unique(self._branch_list[[c[0] for c in consecutive_branches]])
             for node in self._node_refs:
                 if node._id in reconnected_nodes:
                     node.clear_adjacent_branch_cache()
 
-        # 3c. Remove the branches and create the merge lookup
+        # 3b. Remove the branches and create the merge lookup
         branch_merge_lookup = self._delete_branch(branches_to_delete, update_refs=False)
         for c in consecutive_branches:
             branch_merge_lookup[c[1:]] = branch_merge_lookup[c[0]]
+
+        # 3c. Update the branch references
+        if self._branch_refs:
+            for branch in self._branch_refs:
+                branch._id = branch_merge_lookup[branch._id]
+                branch._nodes_id = self._branch_list[branch._id]
 
         # 4. Remove orphan nodes
         if remove_orphan_nodes:

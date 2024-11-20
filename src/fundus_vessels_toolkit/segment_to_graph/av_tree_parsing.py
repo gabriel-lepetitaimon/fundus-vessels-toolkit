@@ -256,6 +256,9 @@ def simplify_av_graph(
     geodata = graph.geometric_data()
     nodes_av_attr = graph.node_attr[av_attr]
 
+    # === Remove geometry of branches with both type ===
+    geodata.clear_branch_gdata(graph.as_branch_ids(graph.branch_attr[av_attr] == AVLabel.BOTH))
+
     # === Merge nodes of the same type connected by a small branch ===
     nodes_clusters = []
     unknown_nodes_clusters = []
@@ -283,7 +286,6 @@ def simplify_av_graph(
         graph.merge_nodes(nodes_clusters + unknown_nodes_clusters, inplace=True, assume_reduced=True)
 
     # === Keep only one branch for any group of small or undefined twin branches ===
-    # TODO: Merge cycles?
     twin_branches = []
     for twins in graph.twin_branches():
         b0 = graph.branch(twins[0])
@@ -297,8 +299,15 @@ def simplify_av_graph(
 
     graph.delete_branch(twin_branches, inplace=True)
 
-    # === Remove passing nodes of same type (post-clustering) ===
+    # === Remove passing nodes of same type ===
+    graph.node_connected_components()
     simplify_passing_nodes(graph, min_angle=passing_node_min_angle, with_same_label=av_attr, inplace=True)
+
+    # === Delete self-loop undefined branches ===
+    self_loop = graph.self_loop_branches()
+    if len(self_loop) > 0:
+        self_loop = self_loop[geodata.has_branch_curve(self_loop)]
+        graph.delete_branch(self_loop, inplace=True)
 
     # === Relabel unknown branches ===
     if propagate_labels:
@@ -703,6 +712,8 @@ def build_line_digraph(
 
     if not inplace:
         graph = graph.copy()
+    geodata = graph.geometric_data()
+
     if opt is None:
         opt = LineDigraphOpt()
 
@@ -741,16 +752,26 @@ def build_line_digraph(
         for e, b in enumerate(branch):
             nodes = new_nodes[inv == e, 0]
             split_yx = new_nodes_yx[inv == e]
-            split_curve_id = graph.geometric_data().branch_closest_index(split_yx, b)
-            nodes_order = np.argsort(split_curve_id)
-            split_yx, split_curve_id = split_yx[nodes_order], split_curve_id[nodes_order]
+            if geodata.has_branch_curve(b):
+                split_curve_id = geodata.branch_closest_index(split_yx, b)
+                nodes_order = np.argsort(split_curve_id)
+                split_yx, split_curve_id = split_yx[nodes_order], split_curve_id[nodes_order]
+            else:
+                n0_pos, n1_pos = geodata.node_coord(graph.branch_list[b])
+                u_split = split_yx - n0_pos[None, :]
+                u_split /= np.linalg.norm(u_split, axis=1)[:, None] + 1e-3
+                u = n1_pos - n0_pos
+                u /= np.linalg.norm(u) + 1e-3
+                nodes_order = np.argsort((u_split * u[None, :]).sum(axis=1))
+                split_yx = split_yx[nodes_order]
+                split_curve_id = np.linspace(0, 1, len(nodes) + 2)[1:-1]
             _, new_nodes_id = graph.split_branch(b, split_curve_id, split_yx, return_node_ids=True, inplace=True)
+
             lookup[nodes[nodes_order]] = new_nodes_id
         virtual_edges[:, 1] = lookup[virtual_edges[:, 1]]
 
     # === Refresh the tip geometric data ===
     graph = derive_tips_geometry_from_curve_geometry(graph, inplace=True)
-    geodata = graph.geometric_data()
 
     # === Duplicate all branch with BOTH or UNKNOWN AV label ===
     av_col_id = graph.branch_attr.columns.get_loc(av_attr)
@@ -854,8 +875,8 @@ def build_line_digraph(
             node_to_node_t = node_to_node_t / node_to_node_dist
             p_tan = (
                 np.cos(
-                    np.clip(np.arccos(tip_tangents[0].dot(-node_to_node_t)), 0, np.pi / 2)
-                    + np.clip(np.arccos(tip_tangents[1].dot(node_to_node_t)), 0, np.pi / 2)
+                    np.clip(np.arccos(np.clip(tip_tangents[0].dot(-node_to_node_t), -1, 1)), 0, np.pi / 2)
+                    + np.clip(np.arccos(np.clip(tip_tangents[1].dot(node_to_node_t), -1, 1)), 0, np.pi / 2)
                 )
                 + tip_tangents[0].dot(-tip_tangents[1])
             ) / 2
@@ -1117,7 +1138,7 @@ def resolve_digraph_to_vtree(
         try:
             optimal_tree = maximum_spanning_arborescence(digraph, attr="p", preserve_attrs=True)
         except nx.NetworkXException as e:
-            warnings.warn(f"Error while solving the optimal tree: {e}")
+            warnings.warn(f"Error while presolving the optimal tree: {e}")
             optimal_tree = digraph
 
         kept_edges = np.zeros(len(line_list), dtype=bool)
@@ -1147,8 +1168,21 @@ def resolve_digraph_to_vtree(
                 if already_added["p"] >= p:
                     continue
             digraph.add_edge(*line, p=p, id=id, tips=tips_id)
-
-    optimal_tree = maximum_spanning_arborescence(digraph, attr="p", preserve_attrs=True)
+    try:
+        optimal_tree = maximum_spanning_arborescence(digraph, attr="p", preserve_attrs=True)
+    except nx.NetworkXException as e:
+        warnings.warn(f"Impossible to solve the prefiltered optimal tree: {e}. \n Fallback to single step solving.")
+        return resolve_digraph_to_vtree(
+            vgraph,
+            line_list,
+            line_tips,
+            line_probability,
+            line_through_node,
+            branches_dir_p,
+            av_attr=av_attr,
+            pre_filter_line=False,
+            debug_info=debug_info,
+        )
 
     N_ini_branch = vgraph.branch_count
     branch_tree = {}
