@@ -1,21 +1,31 @@
 import torch
 from torch import nn
-from .backbones import UNet
+
 from ..utils.torch import ConvBN, cat_crop
+from .backbones import UNet
 
 
 class OriginalHemelingNet(UNet):
     def __init__(self, n_in, n_out):
-        super(OriginalHemelingNet, self).__init__(n_in, n_out, nfeatures=16, kernel=5, upsampling='bilinear')
+        super(OriginalHemelingNet, self).__init__(n_in, n_out, nfeatures=16, kernel=5, upsampling="bilinear")
 
 
 class HemelingNet(nn.Module):
-    def __init__(self, n_in, n_out=1, nfeatures_base=16, depth=2, half_kernel_height=3,
-                 p_dropout=0, padding='same', batchnorm=True):
+    def __init__(
+        self,
+        n_in,
+        n_out=1,
+        nfeatures_base=16,
+        depth=2,
+        half_kernel_height=3,
+        p_dropout=0,
+        padding="same",
+        batchnorm=True,
+    ):
         super().__init__()
         self.n_in = n_in
         self.n_out = n_out
-        self.kernel_height = half_kernel_height*2-1
+        self.kernel_height = half_kernel_height * 2 - 1
 
         # --- MODEL ---
         n1 = nfeatures_base
@@ -29,57 +39,57 @@ class HemelingNet(nn.Module):
         # Down
         self.conv1 = nn.ModuleList(
             [ConvBN(kernel, n_in, n1, relu=True, bn=batchnorm, padding=padding)]
-            + [ConvBN(kernel, n1, n1, relu=True, bn=batchnorm, padding=padding)
-               for _ in range(depth - 1)])
+            + [ConvBN(kernel, n1, n1, relu=True, bn=batchnorm, padding=padding) for _ in range(depth - 1)]
+        )
         self.pool1 = nn.MaxPool2d(2)
 
         self.conv2 = nn.ModuleList(
             [ConvBN(kernel, n1, n2, relu=True, bn=batchnorm, padding=padding)]
-            + [ConvBN(kernel, n2, n2, relu=True, bn=batchnorm, padding=padding)
-               for _ in range(depth - 1)])
+            + [ConvBN(kernel, n2, n2, relu=True, bn=batchnorm, padding=padding) for _ in range(depth - 1)]
+        )
         self.pool2 = nn.MaxPool2d(2)
 
         self.conv3 = nn.ModuleList(
             [ConvBN(kernel, n2, n3, relu=True, bn=batchnorm, padding=padding)]
-            + [ConvBN(kernel, n3, n3, relu=True, bn=batchnorm, padding=padding)
-               for _ in range(depth - 1)])
+            + [ConvBN(kernel, n3, n3, relu=True, bn=batchnorm, padding=padding) for _ in range(depth - 1)]
+        )
         self.pool3 = nn.MaxPool2d(2)
 
         self.conv4 = nn.ModuleList(
             [ConvBN(kernel, n3, n4, relu=True, bn=batchnorm, padding=padding)]
-            + [ConvBN(kernel, n4, n4, relu=True, bn=batchnorm, padding=padding)
-               for _ in range(depth - 1)])
+            + [ConvBN(kernel, n4, n4, relu=True, bn=batchnorm, padding=padding) for _ in range(depth - 1)]
+        )
         self.pool4 = nn.MaxPool2d(2)
 
         self.conv5 = nn.ModuleList(
             [ConvBN(kernel, n4, n5, relu=True, bn=batchnorm, padding=padding)]
-            + [ConvBN(kernel, n5, n5, relu=True, bn=batchnorm, padding=padding)
-               for _ in range(depth - 1)])
+            + [ConvBN(kernel, n5, n5, relu=True, bn=batchnorm, padding=padding) for _ in range(depth - 1)]
+        )
 
         # Up
         self.upsample1 = nn.ConvTranspose2d(n5, n4, kernel_size=(2, 2), stride=(2, 2))
         self.conv6 = nn.ModuleList(
             [ConvBN(kernel, 2 * n4, n4, relu=True, bn=batchnorm, padding=padding)]
-            + [ConvBN(kernel, n4, n4, relu=True, bn=batchnorm, padding=padding)
-               for _ in range(depth - 1)])
+            + [ConvBN(kernel, n4, n4, relu=True, bn=batchnorm, padding=padding) for _ in range(depth - 1)]
+        )
 
         self.upsample2 = nn.ConvTranspose2d(n4, n3, kernel_size=(2, 2), stride=(2, 2))
         self.conv7 = nn.ModuleList(
             [ConvBN(kernel, 2 * n3, n3, relu=True, bn=batchnorm, padding=padding)]
-            + [ConvBN(kernel, n3, n3, relu=True, bn=batchnorm, padding=padding)
-               for _ in range(depth - 1)])
+            + [ConvBN(kernel, n3, n3, relu=True, bn=batchnorm, padding=padding) for _ in range(depth - 1)]
+        )
 
         self.upsample3 = nn.ConvTranspose2d(n3, n2, kernel_size=(2, 2), stride=(2, 2))
         self.conv8 = nn.ModuleList(
             [ConvBN(kernel, 2 * n2, n2, relu=True, bn=batchnorm, padding=padding)]
-            + [ConvBN(kernel, n2, n2, relu=True, bn=batchnorm, padding=padding)
-               for _ in range(depth - 1)])
+            + [ConvBN(kernel, n2, n2, relu=True, bn=batchnorm, padding=padding) for _ in range(depth - 1)]
+        )
 
         self.upsample4 = nn.ConvTranspose2d(n2, n1, kernel_size=(2, 2), stride=(2, 2))
         self.conv9 = nn.ModuleList(
             [ConvBN(kernel, 2 * n1, n1, relu=True, bn=batchnorm, padding=padding)]
-            + [ConvBN(kernel, n1, n1, relu=True, bn=batchnorm, padding=padding)
-               for _ in range(depth - 1)])
+            + [ConvBN(kernel, n1, n1, relu=True, bn=batchnorm, padding=padding) for _ in range(depth - 1)]
+        )
 
         # End
         self.final_conv = nn.Conv2d(n1, 1, kernel_size=(1, 1))
@@ -88,7 +98,7 @@ class HemelingNet(nn.Module):
 
     def forward(self, x, **kwargs):
         from functools import reduce
-        
+
         # Down
         x1 = reduce(lambda X, conv: conv(X), self.conv1, x)
 
@@ -133,6 +143,6 @@ class HemelingNet(nn.Module):
     def p_dropout(self, p):
         self.dropout.p = p
 
-        
+
 def identity(x):
     return x

@@ -5,7 +5,7 @@ def cartesian_space(size, center=None):
     if not isinstance(size, tuple):
         size = (size, size)
     if center is None:
-        center = tuple((_-1) / 2 for _ in size)
+        center = tuple((_ - 1) / 2 for _ in size)
 
     x = np.arange(-center[0], size[0] - center[0], dtype=np.float32)
     y = np.arange(-center[1], size[1] - center[1], dtype=np.float32)
@@ -24,16 +24,15 @@ def polar_space(size, center=None):
     return rho, phi
 
 
-def spectral_power(arr: 'θ.hw', plot=False, split=False, sort=True, mask=None):
-    from scipy.fftpack import fft
+def spectral_power(arr: "θ.hw", plot=False, split=False, sort=True, mask=None):
     import matplotlib.pyplot as plt
-    import plot as plot_utils
+    from scipy.fftpack import fft
 
-    if mask == 'disk':
+    if isinstance(mask, str) and mask == "disk":
         r = min(arr.shape[-2:])
-        mask = (r_space(arr.shape[-2:])*2) <= r
+        mask = (r_space(arr.shape[-2:]) * 2) <= r
     if mask is not None:
-        if mask.dtype != np.bool:
+        if mask.dtype != bool:
             mask = mask > 0
         arr = arr[..., mask != 0]
 
@@ -55,59 +54,68 @@ def spectral_power(arr: 'θ.hw', plot=False, split=False, sort=True, mask=None):
         N = spe.shape[0] // 2 + 1
 
         if split:
+            from coloraide import Color
+
+            gradient = Color.interpolate(["#2d43be", "#508de9"], space="lch")
+            gradient = [gradient(i / 11).convert("srgb").to_string(hex=True) for i in range(12)]
+
             W = 0.8
             w = W / spe.shape[1]
 
             spe = spe[:N]
-            if split == 'normed':
+            if split == "normed":
                 spe = spe / spe.sum(axis=tuple(_ for _ in range(spe.ndim) if _ != 1))[None, :]
             else:
-                spe = spe / spe.sum(axis=-1).mean(axis=tuple(_ for _ in range(spe.ndim)
-                                                             if _ not in (1, spe.ndim-1)))[None, :]
+                spe = (
+                    spe
+                    / spe.sum(axis=-1).mean(axis=tuple(_ for _ in range(spe.ndim) if _ not in (1, spe.ndim - 1)))[
+                        None, :
+                    ]
+                )
             if sort:
                 idx = spe[0].argsort()
                 spe = spe[:, idx[::-1]]
             for i in range(spe.shape[1]):
                 y = spe[:, i]
                 x = np.arange(len(y))
-                plot.bar(x + w / 2 - W / 2 + i * w, y, width=w, bottom=0.001, zorder=10)
+                plot.bar(x + w / 2 - W / 2 + i * w, y, width=w, bottom=0.001, zorder=10, color=gradient[i % 12])
         else:
             y = spe[:N] / spe[:N].sum()
             x = np.arange(N)
-            plot.bar(x, y, width=.8, bottom=0.001, zorder=10, color='gray')
+            plot.bar(x, y, width=0.8, bottom=0.001, zorder=10, color="gray")
 
-        plot.spines['top'].set_visible(False)
-        plot.spines['right'].set_visible(False)
-        plot.spines['left'].set_visible(False)
+        plot.spines["top"].set_visible(False)
+        plot.spines["right"].set_visible(False)
+        plot.spines["left"].set_visible(False)
 
         plot.set_xticks(np.arange(0, N, 1))
-        xlabels = ['Equivariant'] + [f'${repr_pi_fraction(2,k)}$' for k in range(1, N)]
+        xlabels = ["Equi."] + [f"${repr_pi_fraction(2, k)}$" for k in range(1, N)]
         plot.set_xticklabels(xlabels)
 
-        plot.set_ylabel('Polar Spectral Power Density')
+        plot.set_ylabel("Polar Spectral Power Density")
         plot.set_ylim([0.001, 1])
-        plot.set_yticks([.25, .5, .75, 1])
-        plot.set_yticklabels(['25%', '50%', '75%', '100%'])
+        plot.set_yticks([0.25, 0.5, 0.75, 1])
+        plot.set_yticklabels(["25%", "50%", "75%", "100%"])
         plot.yaxis.grid()
         if scale:
             plot.set_yscale(scale)
-        plot.grid(which='minor', color='#bbbbbb', linestyle='-', linewidth=1, zorder=1)
+        plot.grid(which="minor", color="#bbbbbb", linestyle="-", linewidth=1, zorder=1)
 
         if fig is not None:
             fig.show()
     return spe
 
 
-def polar_spectral_power(arr: np.ndarray, theta=8, plot=False, split=False, mask=None):
-    if mask == 'auto':
-        pad = 'auto'
+def polar_spectral_power(arr: np.ndarray, theta=4, plot=False, split=False, mask=None):
+    if mask == "auto":
+        pad = "auto"
         mask = None
-    elif mask == 'disk':
+    elif mask == "disk":
         r = min(arr.shape[-2:])
         mask = (r_space(arr.shape[-2:]) * 2) <= r
         pad = 0
     elif isinstance(mask, np.ndarray):
-        pad = int(np.max(mask*np.ceil(r_space(mask.shape[-2:]))))
+        pad = int(np.max(mask * np.ceil(r_space(mask.shape[-2:]))))
     else:
         pad = 0
     arr = rotate(arr, theta, pad=pad)
@@ -121,40 +129,43 @@ DEFAULT_ROT_ANGLE = np.arange(10, 360, 10)
 
 
 def rotate(arr, angles=DEFAULT_ROT_ANGLE, pad=0):
-    from skimage.transform import rotate as imrotate
     import math
-    if pad == 'auto':
-        pad = math.ceil(max(arr.shape[-2:])/math.sqrt(2))
+
+    from skimage.transform import rotate as imrotate
+
+    if pad == "auto":
+        pad = math.ceil(max(arr.shape[-2:]) / math.sqrt(2))
     if isinstance(pad, int):
-        pad = ((0, 0),)*(arr.ndim-2) + ((pad, pad),)*2
+        pad = ((0, 0),) * (arr.ndim - 2) + ((pad, pad),) * 2
         arr = np.pad(arr, pad)
 
     shape = arr.shape
     if isinstance(angles, int):
-        angles = np.linspace(0, 360, angles, endpoint=False)[1:]
+        angles = np.linspace(0, 360, angles + 1, endpoint=False)[1:]
     arr = arr.reshape((-1,) + arr.shape[-2:]).transpose((1, 2, 0))
     arr = np.stack([arr] + [imrotate(arr, -a) for a in angles])
     return arr.transpose((0, 3, 1, 2)).reshape((len(angles) + 1,) + shape)
 
 
-def unrotate(arr: 'θ.hw', angles=None, pad=0) -> 'θ.hw':
-    from skimage.transform import rotate as imrotate
+def unrotate(arr: "θ.hw", angles=None, pad=0, order=None) -> "θ.hw":
     import math
-    if pad == 'auto':
+
+    from skimage.transform import rotate as imrotate
+
+    if pad == "auto":
         pad = math.ceil(max(arr.shape[-2:]) / math.sqrt(2))
     if isinstance(pad, int):
         pad = ((0, 0),) * (arr.ndim - 2) + ((pad, pad),) * 2
         arr = np.pad(arr, pad)
 
     if angles is None:
-        angles = np.linspace(0, 360, arr.shape[0], endpoint=False)[1:]
+        angles = np.linspace(0, 360, arr.shape[0] + 1, endpoint=False)[1:]
     elif isinstance(angles, int):
-        angles = np.linspace(0, 360, angles)[1:]
+        angles = np.linspace(0, 360, angles + 1)[1:]
 
     shape = arr.shape
     arr = arr.reshape((arr.shape[0], -1) + arr.shape[-2:]).transpose((0, 2, 3, 1))
-    arr = np.stack([arr[0]] +
-                   [imrotate(ar, ang) for ar, ang in zip(arr[1:], angles)])
+    arr = np.stack([arr[0]] + [imrotate(ar, ang, order=order) for ar, ang in zip(arr[1:], angles, strict=True)])
     return arr.transpose((0, 3, 1, 2)).reshape(shape)
 
 
@@ -162,18 +173,18 @@ def rotate_vect(arr_xy, angles=DEFAULT_ROT_ANGLE, reproject=True):
     if isinstance(angles, int):
         angles = np.linspace(0, 360, angles, endpoint=False)[1:]
 
-    x,y = arr_xy
+    x, y = arr_xy
     x = rotate(x, angles)
     y = rotate(y, angles)
 
-    z = x+1j*y
+    z = x + 1j * y
     angle_offset = np.concatenate([[0], angles])
     while angle_offset.ndim < z.ndim:
         angle_offset = np.expand_dims(angle_offset, -1)
-    theta = (np.angle(z, deg=True) + angle_offset)
+    theta = np.angle(z, deg=True) + angle_offset
     r = np.abs(z)
     if reproject:
-        theta *= np.pi/180
+        theta *= np.pi / 180
         x = r * np.cos(theta)
         y = r * np.sin(theta)
         return x, y
@@ -195,7 +206,7 @@ def unrotate_vect(arr_xy, angles=None, reproject=True):
     angle_offset = np.concatenate([[0], angles])
     while angle_offset.ndim < z.ndim:
         angle_offset = np.expand_dims(angle_offset, -1)
-    theta = (np.angle(z, deg=True) - angle_offset)
+    theta = np.angle(z, deg=True) - angle_offset
     r = np.abs(z)
     if reproject:
         theta *= np.pi / 180
@@ -207,9 +218,9 @@ def unrotate_vect(arr_xy, angles=None, reproject=True):
 
 
 def simplify_angle(angles, mod=1, deg=True):
-    mod = (360 if deg else 2*np.pi)/mod
+    mod = (360 if deg else 2 * np.pi) / mod
     angles = np.mod(angles, mod)
-    angles = np.stack([angles, angles-mod])
+    angles = np.stack([angles, angles - mod])
     a_idx = np.argmin(np.abs(angles), axis=0)
     angles = np.take_along_axis(angles, np.expand_dims(a_idx, axis=0), axis=0).squeeze(0)
     return angles
@@ -222,9 +233,9 @@ def repr_pi_fraction(num, den):
         return "0"
 
     gcd = np.gcd(num, den)
-    sign = "" if num*den>0 else "-"
-    num = abs(num)//gcd
-    den = abs(den)//gcd
+    sign = "" if num * den > 0 else "-"
+    num = abs(num) // gcd
+    den = abs(den) // gcd
 
     if den > 1:
         if num > 1:
@@ -238,7 +249,7 @@ def repr_pi_fraction(num, den):
             return sign + "\\pi"
 
 
-def clip_pad_center(array, shape, pad_mode='constant', broadcastable=False, **kwargs):
+def clip_pad_center(array, shape, pad_mode="constant", broadcastable=False, **kwargs):
     s = array.shape
     h, w = shape[-2:]
 
@@ -248,9 +259,9 @@ def clip_pad_center(array, shape, pad_mode='constant', broadcastable=False, **kw
         h = 1
         yodd = 0
     else:
-        y0 = (s[-2]-h)//2
+        y0 = (s[-2] - h) // 2
         y1 = 0
-        yodd = (h-s[-2]) % 2
+        yodd = (h - s[-2]) % 2
         if y0 < 0:
             y1 = -y0
             y0 = 0
@@ -261,14 +272,14 @@ def clip_pad_center(array, shape, pad_mode='constant', broadcastable=False, **kw
         w = 1
         xodd = 0
     else:
-        x0 = (s[-1]-w)//2
+        x0 = (s[-1] - w) // 2
         x1 = 0
-        xodd = (w-s[-1]) % 2
+        xodd = (w - s[-1]) % 2
         if x0 < 0:
             x1 = -x0
             x0 = 0
 
-    tensor = array[..., y0:y0+h, x0:x0+w]
+    tensor = array[..., y0 : y0 + h, x0 : x0 + w]
     if x1 or y1:
-        tensor = np.pad(tensor, (y1-yodd, y1, x1-xodd, x1), mode=pad_mode, **kwargs)
+        tensor = np.pad(tensor, (y1 - yodd, y1, x1 - xodd, x1), mode=pad_mode, **kwargs)
     return tensor

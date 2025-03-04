@@ -175,6 +175,13 @@ class Rect(NamedTuple):
             rect = Rect(*rect)
         return isinstance(rect, tuple) and (rect.w == 0 or rect.h == 0)
 
+    def crop_pad(self, dst: Rect | Tuple[int, int]) -> Tuple[Tuple[slice, slice], Tuple[slice, slice]]:
+        dst = Rect.from_tuple(dst)
+        inter = self & dst
+        src = inter.translate(-self.y, -self.x)
+        dst = inter.translate(-dst.y, -dst.x)
+        return src.slice(), dst.slice()
+
     @classmethod
     def is_rect(cls, r) -> TypeGuard[Rect]:
         return isinstance(r, Rect) or (isinstance(r, tuple) and len(r) == 4)

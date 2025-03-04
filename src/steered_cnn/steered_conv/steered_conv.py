@@ -1,20 +1,41 @@
+from enum import Enum
+
 import torch
 from torch import nn
-import math
 
-from .steered_kbase import SteerableKernelBase
-from .ortho_kbase import OrthoKernelBase
 from ..utils.torch import normalize_vector
+from .ortho_kbase import OrthoKernelBase
+from .steered_kbase import SteerableKernelBase
 
 DEFAULT_STEERABLE_BASE = SteerableKernelBase.create_radial(3)
 DEFAULT_ATTENTION_BASE = OrthoKernelBase.create_radial(3)
 
 
+class SteeredConvOptimization(str, Enum):
+    AUTO = "auto"
+    COMPOSITE = "composite"
+    PRECONVOLVED = "preconvolved"
+
+
+DEFAULT_STEERED_CONV_OPTIMIZATION = SteeredConvOptimization.COMPOSITE
+
+
 class SteeredConv2d(nn.Module):
-    def __init__(self, n_in, n_out=None, stride=1, padding='same', dilation=1, bias=True,
-                 steerable_base: (SteerableKernelBase, int, dict) = None, rho_nonlinearity=None,
-                 attention_mode=False, attention_base: (OrthoKernelBase, int, dict) = None,
-                 nonlinearity='relu', nonlinearity_param=None):
+    def __init__(
+        self,
+        n_in,
+        n_out=None,
+        stride=1,
+        padding="same",
+        dilation=1,
+        bias=True,
+        steerable_base: (SteerableKernelBase, int, dict) = None,
+        rho_nonlinearity=None,
+        attention_mode=False,
+        attention_base: (OrthoKernelBase, int, dict) = None,
+        nonlinearity="relu",
+        nonlinearity_param=None,
+    ):
         """
 
         Args:
@@ -68,26 +89,29 @@ class SteeredConv2d(nn.Module):
 
         if n_out is None:
             n_out = n_in
-        
+
         self.stride = stride
         self.padding = padding
         self.dilation = dilation
         self.steerable_base = SteerableKernelBase.parse(steerable_base, DEFAULT_STEERABLE_BASE)
         self.attention_base = OrthoKernelBase.parse(attention_base, default=DEFAULT_ATTENTION_BASE)
+        self.conv_opti = SteeredConvOptimization.AUTO
 
         # Weight
-        self.weights = nn.Parameter(self.steerable_base.init_weights(n_in, n_out, nonlinearity, nonlinearity_param),
-                                    requires_grad=True)
+        self.weights = nn.Parameter(
+            self.steerable_base.init_weights(n_in, n_out, nonlinearity, nonlinearity_param), requires_grad=True
+        )
         self.bias = None
         if bias:
             self.bias = nn.Parameter(torch.zeros(n_out), requires_grad=True) if bias else None
             torch.nn.init.constant_(self.bias, 0)
-            
+
         self.attention_mode = attention_mode
         self.rho_nonlinearity = rho_nonlinearity
         if attention_mode:
-            w = self.attention_base.init_weights(n_in, n_out if attention_mode == 'feature' else 1,
-                                                 nonlinearity='linear')
+            w = self.attention_base.init_weights(
+                n_in, n_out if attention_mode == "feature" else 1, nonlinearity="linear"
+            )
             self.attention_weights = nn.Parameter(w, requires_grad=True)
         else:
             self.attention_base = None
@@ -127,15 +151,31 @@ class SteeredConv2d(nn.Module):
         """
         if alpha is None:
             if self.attention_base:
-                alpha = self.attention_base.ortho_conv2d(x, self.attention_weights,
-                                                         stride=self.stride, padding=self.padding)
+                alpha = self.attention_base.ortho_conv2d(
+                    x, self.attention_weights, stride=self.stride, padding=self.padding
+                )
                 alpha, rho = normalize_vector(alpha)
             else:
-                raise ValueError('Either attention_base or alpha should be provided when computing the result of a '
-                                 'SteeredConv2d module.')
+                raise ValueError(
+                    "Either attention_base or alpha should be provided when computing the result of a "
+                    "SteeredConv2d module."
+                )
 
-        out = self.steerable_base.conv2d(x, self.weights, alpha=alpha, rho=rho, rho_nonlinearity=self.rho_nonlinearity,
-                                         stride=self.stride, padding=self.padding, dilation=self.dilation)
+        out = self.steerable_base.conv2d(
+            x,
+            self.weights,
+            alpha=alpha,
+            rho=rho,
+            rho_nonlinearity=self.rho_nonlinearity,
+            stride=self.stride,
+            padding=self.padding,
+            dilation=self.dilation,
+            composite_opti=self.conv_opti == SteeredConvOptimization.COMPOSITE
+            or (
+                self.conv_opti == SteeredConvOptimization.AUTO
+                and DEFAULT_STEERED_CONV_OPTIMIZATION == SteeredConvOptimization.COMPOSITE
+            ),
+        )
 
         # Bias
         if self.bias is not None:
@@ -144,10 +184,22 @@ class SteeredConv2d(nn.Module):
 
 
 class SteeredConvTranspose2d(nn.Module):
-    def __init__(self, n_in, n_out=None, stride=2, padding='same', output_padding=0, dilation=1, bias=True,
-                 steerable_base: SteerableKernelBase = None, rho_nonlinearity=None,
-                 attention_mode='feature', attention_base: (OrthoKernelBase, int, dict) = None,
-                 nonlinearity='linear', nonlinearity_param=None):
+    def __init__(
+        self,
+        n_in,
+        n_out=None,
+        stride=2,
+        padding="same",
+        output_padding=0,
+        dilation=1,
+        bias=True,
+        steerable_base: SteerableKernelBase = None,
+        rho_nonlinearity=None,
+        attention_mode="feature",
+        attention_base: (OrthoKernelBase, int, dict) = None,
+        nonlinearity="linear",
+        nonlinearity_param=None,
+    ):
         """
 
         Args:
@@ -205,7 +257,7 @@ class SteeredConvTranspose2d(nn.Module):
 
         if n_out is None:
             n_out = n_in
-        
+
         self.stride = stride
         self.padding = padding
         self.output_padding = output_padding
@@ -214,8 +266,9 @@ class SteeredConvTranspose2d(nn.Module):
         self.attention_base = OrthoKernelBase.parse(attention_base, OrthoKernelBase.create_radial(stride))
 
         # Weight
-        self.weights = nn.Parameter(self.steerable_base.init_weights(n_out, n_in, nonlinearity, nonlinearity_param),
-                                    requires_grad=True)
+        self.weights = nn.Parameter(
+            self.steerable_base.init_weights(n_out, n_in, nonlinearity, nonlinearity_param), requires_grad=True
+        )
         self.bias = None
         if bias:
             self.bias = nn.Parameter(torch.zeros(n_out), requires_grad=True) if bias else None
@@ -225,8 +278,9 @@ class SteeredConvTranspose2d(nn.Module):
         if attention_mode:
             self.attention_mode = attention_mode
             self.rho_nonlinearity = rho_nonlinearity
-            w = self.attention_base.init_weights(n_in, n_out if attention_mode == 'feature' else 1,
-                                                 nonlinearity='linear')
+            w = self.attention_base.init_weights(
+                n_in, n_out if attention_mode == "feature" else 1, nonlinearity="linear"
+            )
             self.attention_weights = nn.Parameter(w, requires_grad=True)
 
     def forward(self, x, alpha=None, rho=None):
@@ -263,16 +317,26 @@ class SteeredConvTranspose2d(nn.Module):
         """
         if alpha is None:
             if self.attention_base:
-                alpha = self.attention_base.ortho_conv2d(x, self.attention_weights,
-                                                         stride=self.stride, padding=self.padding)
+                alpha = self.attention_base.ortho_conv2d(
+                    x, self.attention_weights, stride=self.stride, padding=self.padding
+                )
                 alpha, rho = normalize_vector(alpha)
             else:
-                raise ValueError('Either attention_base or alpha should be provided when computing the result of a '
-                                 'SteeredConv2d module.')
+                raise ValueError(
+                    "Either attention_base or alpha should be provided when computing the result of a "
+                    "SteeredConv2d module."
+                )
 
-        out = self.steerable_base.conv_transpose2d(x, self.weights, alpha=alpha, rho=rho, stride=self.stride,
-                                                   padding=self.padding, output_padding=self.output_padding,
-                                                   dilation=self.dilation)
+        out = self.steerable_base.conv_transpose2d(
+            x,
+            self.weights,
+            alpha=alpha,
+            rho=rho,
+            stride=self.stride,
+            padding=self.padding,
+            output_padding=self.output_padding,
+            dilation=self.dilation,
+        )
 
         # Bias
         if self.bias is not None:
