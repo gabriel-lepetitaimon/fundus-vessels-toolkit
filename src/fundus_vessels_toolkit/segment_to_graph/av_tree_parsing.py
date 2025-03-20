@@ -380,7 +380,7 @@ def split_av_graph_by_subtree(
         return a_weight, v_weight
 
     # === Assign one artery or vein label to each subtree ===
-    subtrees = tree.subtrees()
+    subtrees = tree.branch_ids_by_subtree()
     subtrees_av = [False for _ in range(len(subtrees))]  # True: artery, False: vein
     for i, subtree in enumerate(list(subtrees)):
         if detect_major_error and len(

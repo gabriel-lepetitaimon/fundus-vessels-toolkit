@@ -149,7 +149,7 @@ def parametrize_bifurcations(
         head_calibre = head_data.get(calibre_tip, np.nan)
 
         if np.isnan(head_tangent).any() or np.sum(head_tangent) == 0:
-            head_tangent = np.diff(gdata.node_coord(list(branch.directed_nodes_id)), axis=0)[0]
+            head_tangent = np.diff(gdata.node_coord(list(branch.directed_node_ids)), axis=0)[0]
             head_tangent /= np.linalg.norm(head_tangent)
 
         # === Get the calibres and tangents data for its successors ===
@@ -161,7 +161,7 @@ def parametrize_bifurcations(
         for i, ter_branch in enumerate(tertiary_branches):
             if np.isnan(tertiary_tangents[i]).any() or np.sum(tertiary_tangents[i]) == 0:
                 # If the tangent is not available, fallback to the difference of nodes coordinates
-                tertiary_tangents[i] = np.diff(gdata.node_coord(list(ter_branch.directed_nodes_id)), axis=0)[0]
+                tertiary_tangents[i] = np.diff(gdata.node_coord(list(ter_branch.directed_node_ids)), axis=0)[0]
                 if (tertiary_tangents[i] != 0).any():
                     tertiary_tangents[i] /= np.linalg.norm(tertiary_tangents[i])
 
@@ -276,7 +276,7 @@ def assign_strahler_number(vtree: VTree, field: str = "strahler") -> VTree:
     """
     vtree.node_attr[field] = 1
     vtree.branch_attr[field] = 1
-    reverse_depth_order = np.array(list(vtree.walk(traversal="dfs")), dtype=int)[::-1]
+    reverse_depth_order = np.array(list(vtree.walk_branch_ids(traversal="dfs")), dtype=int)[::-1]
     for branch in vtree.branches(reverse_depth_order):
         if branch.has_successors:
             strahlers = sorted([s.attr[field] for s in branch.successors()], reverse=True)

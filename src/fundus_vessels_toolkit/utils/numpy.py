@@ -1,7 +1,32 @@
-from typing import Tuple
+from __future__ import annotations
+
+from typing import List, Tuple, TypeAlias
 
 import numpy as np
 import numpy.typing as npt
+
+RecursiveIntList: TypeAlias = List[int] | List["RecursiveIntList"]
+IntArrayLike: TypeAlias = npt.NDArray[np.int_] | int | RecursiveIntList
+Int1DArrayLike: TypeAlias = npt.NDArray[np.int_] | int | List[int]
+Int2DArrayLike: TypeAlias = npt.NDArray[np.int_] | List[int] | List[List[int]]
+Int3DArrayLike: TypeAlias = npt.NDArray[np.int_] | List[List[int]] | List[List[List[int]]]
+
+RecursiveBoolList: TypeAlias = List[bool] | List["RecursiveBoolList"]
+BoolArrayLike: TypeAlias = npt.NDArray[np.bool_] | bool | RecursiveBoolList
+Bool1DArrayLike: TypeAlias = npt.NDArray[np.bool_] | bool | List[bool]
+Bool2DArrayLike: TypeAlias = npt.NDArray[np.bool_] | List[bool] | List[List[bool]]
+
+RecursiveFloatList: TypeAlias = List[float] | List["RecursiveFloatList"]
+FloatArrayLike: TypeAlias = npt.NDArray[np.float_] | float | RecursiveFloatList
+Float1DArrayLike: TypeAlias = npt.NDArray[np.float_] | float | List[float]
+Float2DArrayLike: TypeAlias = npt.NDArray[np.float_] | List[float] | List[List[float]]
+Float3DArrayLike: TypeAlias = npt.NDArray[np.float_] | List[List[float]] | List[List[List[float]]]
+
+PointArrayLike: TypeAlias = npt.NDArray[np.int_] | List[int] | List[List[int]] | Tuple[int, int] | List[Tuple[int, int]]
+
+IntPairArrayLike: TypeAlias = (
+    npt.NDArray[np.int_] | List[int] | List[List[int]] | Tuple[int, int] | List[Tuple[int, int]]
+)
 
 
 def readonly(arr: npt.NDArray) -> npt.NDArray:

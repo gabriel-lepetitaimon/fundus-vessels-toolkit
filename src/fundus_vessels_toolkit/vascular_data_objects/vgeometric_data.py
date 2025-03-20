@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import itertools
 import warnings
-from copy import copy, deepcopy
+from copy import copy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Tuple, overload
 from weakref import ref
@@ -84,7 +84,7 @@ class VGeometricData:
         nodes_coord = np.asarray(nodes_coord, dtype=np.float32)
         if not nodes_coord.ndim == 2 and nodes_coord.shape[1] == 2:
             raise ValueError("The node coordinates should be a 2D array with shape (n_nodes, 2).")
-        self._nodes_coord = nodes_coord
+        self._nodes_coord: npt.NDArray[np.float32] = nodes_coord.astype(np.float32)
 
         if nodes_id is not None:
             nodes_id = np.asarray(nodes_id, dtype=np.uint32)
@@ -154,16 +154,20 @@ class VGeometricData:
             The geometric data object.
         """  # noqa: E501
         nodes_id = np.array(list(nodes_coord.keys()), dtype=np.uint32)
-        nodes_coord = np.array(list(nodes_coord.values()), dtype=np.float32)
+        nodes_coord_array = np.array(list(nodes_coord.values()), dtype=np.float32)
         branches_id = np.array(list(branches_curve.keys()), dtype=np.uint32)
-        branches_curve = list(branches_curve.values())
+        branches_curve_array = list(branches_curve.values())
 
         if branches_attr is not None:
-            branches_attr = {
+            branch_attr_array = {
                 attr_name: [attr.get(i, None) for i in branches_id] for attr_name, attr in branches_attr.items()
             }
+        else:
+            branch_attr_array = None
 
-        return cls(nodes_coord, branches_curve, domain, branches_attr, nodes_id, branches_id, parent_graph)
+        return cls(
+            nodes_coord_array, branches_curve_array, domain, branch_attr_array, nodes_id, branches_id, parent_graph
+        )
 
     def save(self, filename: Optional[str | Path] = None) -> NumpyDict:
         """Save the geometric data to a numpy dictionary.
@@ -285,10 +289,10 @@ class VGeometricData:
         """Return the parent graph of the geometric data."""
         if self._parent_graph is None:
             raise AttributeError("The parent graph of this geometric data is not set.")
-        return self._parent_graph()
+        return self._parent_graph()  # type: ignore
 
     @parent_graph.setter
-    def parent_graph(self, graph: VGraph):
+    def parent_graph(self, graph: VGraph | None) -> None:
         """Set the parent graph of the geometric data."""
         if getattr(self, "_parent_graph", None) is not None:
             raise AttributeError("The parent graph of this geometric data is already set.")
