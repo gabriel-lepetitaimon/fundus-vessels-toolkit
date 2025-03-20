@@ -1,4 +1,4 @@
-from typing import Iterable, List
+from typing import Iterable, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -57,8 +57,8 @@ def extract_branch_geometry(
     curvature_roots_percentile_threshold: float = 0.1,
     bspline_target_error: float = 3,
     split_on_gaps: float = 2,
-) -> tuple[list[torch.Tensor], ...]:
-    """Track branches from a labels map and extract their geometry.
+) -> Tuple[List[torch.Tensor], ...]:
+    """Extract geometric properties of vascular branches from their curves coordinates and a vessel segmentation map.
 
 
     Parameters
@@ -98,15 +98,17 @@ def extract_branch_geometry(
 
     Returns
     -------
-    tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]
-    This method returns a tuple containing three lists of length B which contains, for each branch:
-    - a tensor of shape (n, 2) containing the yx coordinates of the branch curve;
-    - a tensor of shape (n,) containing the index where the curve is not contiguous;
-    - a tensor of shape (n, 2) containing the curve tangents;
-    - a tensor of shape (n,) containing the vessel calibres along the branch;
-    - a tensor of shape (n, 2, 2) the coordinates of the nearest vessel edges along the branch;
-    - a tensor of shape (n,) containing the curvature of the vessel along the branch;
-    - a tensor of shape (n,) containing the index of the curvatures roots;
+    tuple[list[torch.Tensor], ...]
+    This method returns a tuple containing at least three lists of length B which contains, for each branch:
+    - the branch curve cleaned as an integer tensor of shape (n, 2) containing the yx coordinates of each point of the branch;
+    - the index of discontinuity in the branch as an integer tensor of shape (s,);
+    - the tangent at every point of the branch curve as a float tensor of shape (n, 2);
+
+    Then depending on the options, the output may also contain for every point of the branch curve:
+    - its calibre as a float tensor of shape (n,);
+    - the coordinates of the nearest vessel edges as an integer tensor of shape (n, 2, 2) indexed as [point, (edgeside: left=0;right=1), (y=0;x=1)];
+    - its curvature as a float tensor of shape (n,);
+    - the index of the roots of the curvature as an integer tensor of shape (c,);
     """  # noqa: E501
     options = dict(
         adaptative_tangents=adaptative_tangents,
@@ -125,7 +127,7 @@ def extract_branch_geometry(
 
     branch_curves = [curve.cpu().int() for curve in branch_curves]
 
-    return extract_branches_geometry_cpp(branch_curves, segmentation, options)
+    return tuple(extract_branches_geometry_cpp(branch_curves, segmentation, options))
 
 
 @autocast_torch
