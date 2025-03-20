@@ -1325,19 +1325,25 @@ def inspect_digraph_solving(
     nodes_color[tree.root_nodes_ids()] = "black"
     m[1]["graph"].nodes_cmap = nodes_color.to_dict()
 
-    m[2]["a_tree"] = a_tree.jppype_layer(bspline=True, edge_labels=True, node_labels=True)
+    m[2]["a_tree"] = a_tree.jppype_layer(bspline=True, edge_labels=False, node_labels=False)
     m[2]["a_tree"].edges_cmap = GRAPH_AV_COLORS[AVLabel.ART]
     nodes_color = pd.Series(GRAPH_AV_COLORS[AVLabel.ART], index=a_tree.node_attr.index)
     nodes_color[a_tree.root_nodes_ids()] = "#7a1a1a"
     nodes_color[a_tree.leaf_nodes_ids()] = "#da7676"
     m[2]["a_tree"].nodes_cmap = nodes_color.to_dict()
+    m[2]["a_tangents"] = a_tree.geometric_data().jppype_branch_tip_tangent(
+        scaling=4, show_only="junctions", invert_direction="tree"
+    )
 
-    m[2]["v_tree"] = v_tree.jppype_layer(bspline=True, edge_labels=True, node_labels=True)
+    m[2]["v_tree"] = v_tree.jppype_layer(bspline=True, edge_labels=False, node_labels=False)
     m[2]["v_tree"].edges_cmap = GRAPH_AV_COLORS[AVLabel.VEI]
     nodes_color = pd.Series(GRAPH_AV_COLORS[AVLabel.VEI], index=v_tree.node_attr.index)
     nodes_color[v_tree.root_nodes_ids()] = "#1a1a7a"
     nodes_color[v_tree.leaf_nodes_ids()] = "#7676da"
     m[2]["v_tree"].nodes_cmap = nodes_color.to_dict()
+    m[2]["v_tangents"] = v_tree.geometric_data().jppype_branch_tip_tangent(
+        scaling=4, show_only="junctions", invert_direction="tree"
+    )
 
     m.show()
 
