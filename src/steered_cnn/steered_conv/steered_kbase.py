@@ -875,10 +875,27 @@ class SteerableKernelBase(KernelBase):
         else:
             return flatten_weight(weights, w_infos)
 
-    def weights_dist(self, weights, Q=3, complex=False):
+    def group_weights_by_k(self, weights, complex=False):
         import numpy as np
 
         weights, infos = self.flatten_weights(weights, complex=complex)
+        data = {k: [] for k in range(self.k_max + 1)}
+        for w, info in zip(weights.T, infos, strict=True):
+            data[info["k"]] += [w]
+        for k in range(self.k_max + 1):
+            data[k] = np.stack(data[k], axis=0).flatten()
+        return data
+
+    def weights_dist(self, weights, Q=3, complex=False, aggregate_by_k=False):
+        import numpy as np
+
+        if aggregate_by_k:
+            data = self.group_weights_by_k(weights, complex=complex)
+            weights = list(data.values())
+            infos = [{"k": k} for k in data.keys()]
+        else:
+            weights, infos = self.flatten_weights(weights, complex=complex)
+            weights = weights.T
         data = {k: [_[k] for _ in infos] for k, v in infos[0].items()}
         if isinstance(Q, int):
             Q = [(i + 1) / (Q + 1) for i in range(Q)]
@@ -886,7 +903,7 @@ class SteerableKernelBase(KernelBase):
         q = q / 2
         q = np.concatenate([50 - q[::-1], [50], 50 + q]).flatten()
 
-        perc = np.percentile(weights, q, axis=0)
+        perc = np.stack([np.percentile(w, q, axis=0) for w in weights], axis=1)
         data["median"] = perc[len(Q)]
 
         for i, q in enumerate(Q):
@@ -894,14 +911,16 @@ class SteerableKernelBase(KernelBase):
             data[f"-q{i}"] = perc[i]
         return data
 
-    def plot_weights_dist(self, weights, Q=5, complex="norm", scale_type="linear", wrange=None):
-        import pandas as pd
+    def plot_weights_dist(self, weights, Q=5, complex="norm", scale_type="linear", wrange=None, aggregate_by_k=False):
         import altair as alt
+        import pandas as pd
 
         N = len(weights) if isinstance(weights, dict) else 1
 
         def plot_dist(weights, offset=0, color=alt.Undefined, domain=None):
-            df = pd.DataFrame(data=self.weights_dist(weights, Q=Q, complex=complex))
+            df = pd.DataFrame(data=self.weights_dist(weights, Q=Q, complex=complex, aggregate_by_k=aggregate_by_k))
+            if not aggregate_by_k:
+                df["r_name"] = df["r_name"].astype(int)
             chart = alt.Chart(data=df, width=70)
 
             if domain is None:
@@ -918,7 +937,7 @@ class SteerableKernelBase(KernelBase):
                 axis = alt.Axis()
 
             plot = chart.mark_tick(width=10, thickness=2, xOffset=offset, color=color).encode(
-                x="r_name:N",
+                x="r_name:N" if not aggregate_by_k else "k:N",
                 y=alt.Y(
                     "median:Q", title="Weights " + complex, scale=alt.Scale(type=scale_type, domain=domain), axis=axis
                 ),
@@ -926,7 +945,7 @@ class SteerableKernelBase(KernelBase):
 
             for q in range(Q):
                 plot += chart.mark_bar(width=10, opacity=0.2 if q < Q - 2 else 0.3, xOffset=offset, color=color).encode(
-                    x="r_name:N",
+                    x="r_name:N" if not aggregate_by_k else "k:N",
                     y=alt.Y(
                         f"-q{q}:Q",
                         title="",
@@ -950,8 +969,9 @@ class SteerableKernelBase(KernelBase):
             if wrange is None:
                 wrange = [float(min(_.min() for _ in weights)), float(max(_.max() for _ in weights))]
             plot = plot_dist(weights=weights, domain=wrange)
-
-        return plot.facet(column="k").resolve_scale(x="independent").interactive(bind_x=False)
+        if not aggregate_by_k:
+            plot = plot.facet(column="k").resolve_scale(x="independent").interactive(bind_x=False)
+        return plot
 
     def weights_hist(
         self,

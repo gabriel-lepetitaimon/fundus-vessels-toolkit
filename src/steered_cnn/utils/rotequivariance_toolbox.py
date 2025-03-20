@@ -34,14 +34,31 @@ def spectral_power(arr: "θ.hw", plot=False, split=False, sort=True, mask=None):
     if mask is not None:
         if mask.dtype != bool:
             mask = mask > 0
+        if mask.shape != arr.shape[-2:]:
+            mask = clip_pad_center(mask, arr.shape[-2:])
         arr = arr[..., mask != 0]
 
     spe = fft(arr, axis=0)
     spe = abs(spe) ** 2
+
+    N = spe.shape[0] // 2 + 1
     if split:
         spe = spe.reshape(spe.shape[:2] + (-1,)).sum(axis=-1)
+        spe = spe[:N]
+        if split == "normed":
+            spe = spe / spe.sum(axis=tuple(_ for _ in range(spe.ndim) if _ != 1))[None, :]
+        else:
+            spe = (
+                spe
+                / spe.sum(axis=-1).mean(axis=tuple(_ for _ in range(spe.ndim) if _ not in (1, spe.ndim - 1)))[None, :]
+            )
+        if sort:
+            idx = spe[0].argsort()
+            spe = spe[:, idx[::-1]]
     else:
         spe = spe.reshape(spe.shape[:1] + (-1,)).sum(axis=1)
+        spe = spe[:N]
+
     if plot:
         fig = None
         scale = False
@@ -50,8 +67,6 @@ def spectral_power(arr: "θ.hw", plot=False, split=False, sort=True, mask=None):
             plot = True
         if plot is True:
             fig, plot = plt.subplots()
-
-        N = spe.shape[0] // 2 + 1
 
         if split:
             from coloraide import Color
@@ -62,19 +77,6 @@ def spectral_power(arr: "θ.hw", plot=False, split=False, sort=True, mask=None):
             W = 0.8
             w = W / spe.shape[1]
 
-            spe = spe[:N]
-            if split == "normed":
-                spe = spe / spe.sum(axis=tuple(_ for _ in range(spe.ndim) if _ != 1))[None, :]
-            else:
-                spe = (
-                    spe
-                    / spe.sum(axis=-1).mean(axis=tuple(_ for _ in range(spe.ndim) if _ not in (1, spe.ndim - 1)))[
-                        None, :
-                    ]
-                )
-            if sort:
-                idx = spe[0].argsort()
-                spe = spe[:, idx[::-1]]
             for i in range(spe.shape[1]):
                 y = spe[:, i]
                 x = np.arange(len(y))
@@ -141,10 +143,10 @@ def rotate(arr, angles=DEFAULT_ROT_ANGLE, pad=0):
 
     shape = arr.shape
     if isinstance(angles, int):
-        angles = np.linspace(0, 360, angles + 1, endpoint=False)[1:]
+        angles = np.linspace(0, 360, angles, endpoint=False)
     arr = arr.reshape((-1,) + arr.shape[-2:]).transpose((1, 2, 0))
-    arr = np.stack([arr] + [imrotate(arr, -a) for a in angles])
-    return arr.transpose((0, 3, 1, 2)).reshape((len(angles) + 1,) + shape)
+    arr = np.stack([imrotate(arr, -a) if a != 0 else arr for a in angles])
+    return arr.transpose((0, 3, 1, 2)).reshape((len(angles),) + shape)
 
 
 def unrotate(arr: "θ.hw", angles=None, pad=0, order=None) -> "θ.hw":
@@ -159,19 +161,19 @@ def unrotate(arr: "θ.hw", angles=None, pad=0, order=None) -> "θ.hw":
         arr = np.pad(arr, pad)
 
     if angles is None:
-        angles = np.linspace(0, 360, arr.shape[0] + 1, endpoint=False)[1:]
+        angles = np.linspace(0, 360, arr.shape[0], endpoint=False)
     elif isinstance(angles, int):
-        angles = np.linspace(0, 360, angles + 1)[1:]
+        angles = np.linspace(0, 360, angles, endpoint=False)
 
     shape = arr.shape
     arr = arr.reshape((arr.shape[0], -1) + arr.shape[-2:]).transpose((0, 2, 3, 1))
-    arr = np.stack([arr[0]] + [imrotate(ar, ang, order=order) for ar, ang in zip(arr[1:], angles, strict=True)])
+    arr = np.stack([imrotate(ar, ang, order=order) if ang != 0 else ar for ar, ang in zip(arr, angles, strict=True)])
     return arr.transpose((0, 3, 1, 2)).reshape(shape)
 
 
 def rotate_vect(arr_xy, angles=DEFAULT_ROT_ANGLE, reproject=True):
     if isinstance(angles, int):
-        angles = np.linspace(0, 360, angles, endpoint=False)[1:]
+        angles = np.linspace(0, 360, angles, endpoint=False)
 
     x, y = arr_xy
     x = rotate(x, angles)
@@ -194,9 +196,9 @@ def rotate_vect(arr_xy, angles=DEFAULT_ROT_ANGLE, reproject=True):
 
 def unrotate_vect(arr_xy, angles=None, reproject=True):
     if angles is None:
-        angles = np.linspace(0, 360, arr_xy.shape[1], endpoint=False)[1:]
+        angles = np.linspace(0, 360, arr_xy.shape[1], endpoint=False)
     elif isinstance(angles, int):
-        angles = np.linspace(0, 360, angles)[1:]
+        angles = np.linspace(0, 360, angles)
 
     x, y = arr_xy
     x = unrotate(x, angles)
@@ -281,5 +283,7 @@ def clip_pad_center(array, shape, pad_mode="constant", broadcastable=False, **kw
 
     tensor = array[..., y0 : y0 + h, x0 : x0 + w]
     if x1 or y1:
-        tensor = np.pad(tensor, (y1 - yodd, y1, x1 - xodd, x1), mode=pad_mode, **kwargs)
+        tensor = np.pad(
+            tensor, ((0, 0),) * (tensor.ndim - 2) + ((y1 - yodd, y1), (x1 - xodd, x1)), mode=pad_mode, **kwargs
+        )
     return tensor
