@@ -312,8 +312,8 @@ BSpline iterative_fit_bspline(const CurveYX& d, const std::vector<Point>& tangen
 
         // Find the split closest to the optimal split
         auto distToOptimal = [&](std::size_t i) {
-            return std::abs((2 * cumulatedSqrErrors[i] + sqrErrors[i]) / totalSqrError - 1) +
-                   std::abs((2 * cumulatedTanErrors[i] + tanErrors[i]) / totalTanError - 1);
+            return std::abs(cumulatedSqrErrors[i] / totalSqrError - .5) +
+                   std::abs(cumulatedTanErrors[i] / totalTanError - .5);
         };
         std::size_t iSplit = 0;
         float minDist = distToOptimal(validSplits.front() - first);
