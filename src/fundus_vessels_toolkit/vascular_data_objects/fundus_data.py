@@ -1,7 +1,7 @@
 from copy import copy
 from enum import IntEnum
 from pathlib import Path
-from typing import Optional, Self, Tuple
+from typing import Literal, Optional, Self, Tuple, overload
 
 import numpy as np
 import numpy.typing as npt
@@ -72,11 +72,13 @@ class FundusData:
         vessels=None,
         od=None,
         od_center=None,
+        od_size=None,
         macula=None,
         macula_center=None,
         *,
         name: Optional[str] = None,
         check: bool = True,
+        auto_resize: bool = False,
     ):
         shape = None
         if fundus is not None:
@@ -86,30 +88,40 @@ class FundusData:
             self._fundus = None
 
         if fundus_mask is not None:
-            self._fundus_mask = self.load_fundus_mask(fundus_mask, shape) if check else fundus_mask
+            self._fundus_mask = (
+                self.load_fundus_mask(fundus_mask, shape, auto_resize=auto_resize) if check else fundus_mask
+            )
             shape = self._fundus_mask.shape[:2]
         elif self._fundus is not None:
             self._fundus_mask = self.load_fundus_mask(self._fundus)
 
         #
         if vessels is not None:
-            self._vessels = self.load_vessels(vessels, shape) if check else vessels
+            self._vessels = self.load_vessels(vessels, shape, auto_resize=auto_resize) if check else vessels
             shape = self._vessels.shape[:2]
         else:
             self._vessels = None
         self._bin_vessels = None
 
         if od is not None:
-            self._od, self._od_center = self.load_od_macula(od, shape) if check else (od, None)
-            shape = self._od.shape[:2]
+            if check:
+                self._od, self._od_center, self._od_size = self.load_od_macula(
+                    od, shape, auto_resize=auto_resize, fit_ellipse=True
+                )
+                shape = self._od.shape[:2]
+            else:
+                self._od, self._od_center, self._od_size = od, od_center, od_size
         else:
-            self._od, self._od_center = None, None
+            self._od, self._od_center, self._od_size = None, od_center, od_size
 
         if macula is not None:
-            self._macula, self._macula_center = self.load_od_macula(macula, shape) if check else (macula, None)
-            shape = self._macula.shape[:2]
+            if check:
+                self._macula, self._macula_center = self.load_od_macula(macula, shape, auto_resize=auto_resize)
+                shape = self._macula.shape[:2]
+            else:
+                self._macula, self._macula_center = macula, macula_center
         else:
-            self._macula, self._macula_center = None, None
+            self._macula, self._macula_center = None, macula_center
 
         if shape is None:
             raise ValueError("No data was provided to initialize the FundusData.")
@@ -141,7 +153,7 @@ class FundusData:
             other._vessels = other.load_vessels(vessels, other.shape)
             other._bin_vessels = None
         if od is not None:
-            other._od, other._od_center = other.load_od_macula(od, other.shape)
+            other._od, other._od_center, other._od_size = other.load_od_macula(od, other.shape, fit_ellipse=True)
         if macula is not None:
             other._macula, other._macula_center = other.load_od_macula(macula, other.shape)
         if name is not None:
@@ -175,9 +187,11 @@ class FundusData:
         return fundus
 
     @staticmethod
-    def load_fundus_mask(fundus_mask, shape: Optional[Tuple[int, int]] = None) -> npt.NDArray[np.bool_]:
+    def load_fundus_mask(
+        fundus_mask, shape: Optional[Tuple[int, int]] = None, auto_resize=False
+    ) -> npt.NDArray[np.bool_]:
         if isinstance(fundus_mask, (str, Path)):
-            fundus_mask = load_image(fundus_mask, cast_to_float=False)
+            fundus_mask = load_image(fundus_mask, cast_to_float=False, resize=shape if auto_resize else None)
         elif is_torch_tensor(fundus_mask):
             fundus_mask = fundus_mask.detach().cpu().numpy()
 
@@ -186,7 +200,7 @@ class FundusData:
             if fundus_mask.dtype != bool:
                 fundus_mask = fundus_mask > 127 if fundus_mask.dtype == np.uint8 else fundus_mask > 0.5
         elif fundus_mask.ndim == 3:
-            r_hist = np.histogram(fundus_mask[:, :, 0].flatten(), bins=127, range=(0, 255))[0]
+            r_hist = np.histogram(fundus_mask[:, :, 0].flatten(), bins=32, range=(0, 255))[0]
             if r_hist[0] + r_hist[-1] == np.prod(fundus_mask.shape[:2]):
                 # If the image is binary
                 return fundus_mask[:, :, 0] > 127
@@ -197,6 +211,8 @@ class FundusData:
                 fundus_mask = fundus_ROI(fundus_mask)
         else:
             raise ValueError("Invalid fundus mask")
+
+        fundus_mask = fundus_mask.astype(np.bool_)
 
         if shape is not None and fundus_mask.shape != shape:
             H, W = shape
@@ -209,17 +225,17 @@ class FundusData:
         return fundus_mask
 
     @staticmethod
-    def load_vessels(vessels, shape=None) -> npt.NDArray[np.uint8]:
+    def load_vessels(vessels, shape=None, auto_resize=False) -> npt.NDArray[np.uint8]:
         if isinstance(vessels, (str, Path)):
-            vessels = load_image(vessels, cast_to_float=False)
+            vessels = load_image(vessels, cast_to_float=False, resize=shape if auto_resize else None)
         elif is_torch_tensor(vessels):
-            vessels = vessels.detach().cpu().numpy()
+            vessels = vessels.numpy(force=True)
 
         assert isinstance(vessels, np.ndarray), "The vessels map must be a numpy array."
         if vessels.ndim == 3:
             # Check if the image is a binary image
             MAX = 255 if vessels.dtype == np.uint8 else 1
-            r_hist, _ = np.histogram(vessels[:, :, 0].flatten(), bins=127, range=(0, MAX))
+            r_hist, _ = np.histogram(vessels[:, :, 0].flatten(), bins=32, range=(0, MAX))
             assert r_hist[0] + r_hist[-1] == np.prod(vessels.shape[:2]), "Vessels map should be binary image"
             vessels = vessels > MAX / 2
 
@@ -251,21 +267,36 @@ class FundusData:
             h, w = vessels.shape
             assert (
                 abs(h - H) < H * 0.1 and abs(w - W) < W * 0.1
-            ), "The vessels map doesn't have the same shape as the fundus image."
+            ), f"The the vessels map shape {vessels.shape} differs from the fundus image shape {shape}."
             vessels = crop_pad_center(vessels, shape)
 
         return vessels
 
+    @overload
     @staticmethod
-    def load_od_macula(seg, shape=None) -> npt.NDArray[np.uint8]:
-        from ..utils.safe_import import import_cv2 as cv2
+    def load_od_macula(
+        seg, shape: Optional[Tuple[int, int]] = None, *, auto_resize: bool = True, fit_ellipse: Literal[False] = False
+    ) -> Tuple[npt.NDArray[np.uint8], Point]: ...
+    @overload
+    @staticmethod
+    def load_od_macula(
+        seg, shape: Optional[Tuple[int, int]] = None, *, auto_resize: bool = True, fit_ellipse: Literal[True]
+    ) -> Tuple[npt.NDArray[np.uint8], Point, Point]: ...
+
+    @staticmethod
+    def load_od_macula(
+        seg, shape: Optional[Tuple[int, int]] = None, *, auto_resize: bool = True, fit_ellipse: bool = False
+    ) -> Tuple[npt.NDArray[np.uint8], Point] | Tuple[npt.NDArray[np.uint8], Point, Point]:
+        from ..utils.safe_import import import_cv2
+
+        cv2 = import_cv2()
 
         if isinstance(seg, (str, Path)):
-            seg = load_image(seg, cast_to_float=False)
+            seg = load_image(seg, cast_to_float=False, resize=shape if auto_resize else None)
         elif is_torch_tensor(seg):
             seg = seg.detach().cpu().numpy()
 
-        assert isinstance(seg, np.ndarray), "The optic disc map must be a numpy array."
+        assert isinstance(seg, np.ndarray), "The optic disc or macula map must be a numpy array."
         if seg.ndim == 3:
             seg = seg.mean(axis=2)
 
@@ -282,13 +313,17 @@ class FundusData:
             ), "The vessels map doesn't have the same shape as the fundus image."
             seg = crop_pad_center(seg, shape)
 
-        _, labels, stats, centroids = cv2().connectedComponentsWithStats(seg.astype(np.uint8), 4, cv2().CV_32S)
+        _, labels, stats, centroids = cv2.connectedComponentsWithStats(seg.astype(np.uint8), 4, cv2.CV_32S)
         if stats.shape[0] == 1:
-            return seg, ABSENT
-        if stats.shape[0] == 2:
-            return seg, Point(*centroids[1][::-1])
-        largest_cc = np.argmax(stats[1:, cv2().CC_STAT_AREA]) + 1
-        return labels == largest_cc, Point(*centroids[1][::-1])
+            return (seg, ABSENT) if not fit_ellipse else (seg, ABSENT, ABSENT)
+        largest_cc = np.argmax(stats[1:, cv2.CC_STAT_AREA]) + 1 if stats.shape[0] > 2 else 1
+        if not fit_ellipse:
+            return labels == largest_cc, Point(*centroids[1][::-1])
+        contours, _ = cv2.findContours(
+            (labels == largest_cc).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        ellipse = cv2.fitEllipse(contours[0])
+        return labels == largest_cc, Point(*ellipse[0][::-1]), Point(*ellipse[1][::-1])
 
     ####################################################################################################################
     #    === PROPERTY ACCESSORS ===
@@ -300,12 +335,6 @@ class FundusData:
     @property
     def has_name(self) -> bool:
         return self._name is not None
-
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            raise AttributeError("The name of the fundus image was not provided.")
-        return self._name
 
     @property
     def has_image(self) -> bool:
@@ -356,7 +385,7 @@ class FundusData:
         return self._od is not None
 
     @property
-    def od(self) -> npt.NDArray[np.float32]:
+    def od(self) -> npt.NDArray[np.bool_]:
         """The binary segmentation of the optic disc.
 
         Raises
@@ -383,6 +412,33 @@ class FundusData:
             else:
                 _, self._od_center = self._check_od(self._od, self.shape)
         return None if self._od_center is ABSENT else self._od_center
+
+    @property
+    def od_size(self) -> Optional[Point]:
+        """The size (width, height) of the optic disc or None if the optic disc is not visible in this fundus.
+
+        Raises
+        ------
+        AttributeError
+            If the optic disc segmentation was not provided.
+        """
+        if self._od_size is None:
+            if self._od is None:
+                raise AttributeError("The optic disc segmentation was not provided.")
+            else:
+                self._od_size = self._check_od(self._od, self.shape, return_diameter=True)
+        return None if self._od_size is ABSENT else self._od_size
+
+    @property
+    def od_diameter(self) -> Optional[float]:
+        """The diameter of the optic disc or None if the optic disc is not visible in this fundus.
+
+        Raises
+        ------
+        AttributeError
+            If the optic disc segmentation was not provided.
+        """
+        return None if self._od_size is None else self._od_size.max
 
     @property
     def has_macula(self) -> bool:
@@ -416,6 +472,18 @@ class FundusData:
             else:
                 _, self._macula_center = self._check_od(self._macula, self.shape)
         return None if self._macula_center is ABSENT else self._macula_center
+
+    def infered_macula_center(self) -> Optional[Point]:
+        """The center of the macula or the center of the fundus if the macula is not visible."""
+        if self._macula_center is not None:
+            return None if self._macula_center is ABSENT else self._macula_center
+        if self._od_center is None:
+            return None
+
+        half_weight = self._shape[1] * 0.4  # Assume 45° fundus image
+        if self._od_center[1] > half_weight:
+            half_weight = -half_weight
+        return Point(self._od_center.y, x=self._od_center.x + half_weight)
 
     @property
     def name(self) -> str:
@@ -456,7 +524,7 @@ class FundusData:
 
         labels = np.zeros(self.shape, dtype=np.uint8)
         if self._vessels is not None:
-            labels = self._vessels
+            labels = self._vessels.copy()
 
         if self._od is not None:
             labels[self._od] = 10

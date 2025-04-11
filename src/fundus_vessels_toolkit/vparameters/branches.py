@@ -6,10 +6,10 @@ import pandas as pd
 
 from ..utils.bezier import BSpline
 from ..utils.math import quantified_roots
-from ..vascular_data_objects import VBranchGeoData, VGraph
+from ..vascular_data_objects import FundusData, VBranchGeoData, VGraph
 
 
-def parametrize_branches(vgraph: VGraph) -> pd.DataFrame:
+def parametrize_branches(vgraph: VGraph, fundus_data: Optional[FundusData] = None) -> pd.DataFrame:
     """Extract parameters and biomarkers from the branches of a VGraph.
 
     The parameters extracted are:
@@ -24,6 +24,11 @@ def parametrize_branches(vgraph: VGraph) -> pd.DataFrame:
     ----------
     vgraph : VGraph
         The VGraph to analyze.
+
+    fundus_data : Optional[FundusData], optional
+        The fundus data associated with the VGraph, by default None.
+        If provided, the distance to the optic disc and macula, and the normalized coordinates of the bifurcations
+        are computed.
 
     Returns
     -------
@@ -66,8 +71,20 @@ def parametrize_branches(vgraph: VGraph) -> pd.DataFrame:
         std_calibre = np.std(calibres)
         mean_curvature = np.mean(curvature)
         std_curvature = np.std(curvature)
+        curve_arc = arc(curve)
 
-        params = [branch.id, arc(curve), chord(curve), mean_calibre, std_calibre, mean_curvature, std_curvature]
+        length_diameter_ratio = curve_arc / mean_calibre
+
+        params = [
+            branch.id,
+            curve_arc,
+            chord(curve),
+            mean_calibre,
+            std_calibre,
+            mean_curvature,
+            std_curvature,
+            length_diameter_ratio,
+        ]
         tortuosities = branch_tortuosity(curve, curvature, curv_roots, as_dict=False)
 
         if all_bsplines is not None:
@@ -78,7 +95,16 @@ def parametrize_branches(vgraph: VGraph) -> pd.DataFrame:
 
         branches_params.append(params + tortuosities + bspline_tortuosities)
 
-    columns = ["branch", "arc", "chord", "mean_calibre", "std_calibre", "mean_curvature", "std_curvature"]
+    columns = [
+        "branch",
+        "arc",
+        "chord",
+        "mean_calibre",
+        "std_calibre",
+        "mean_curvature",
+        "std_curvature",
+        "length_diameter_ratio",
+    ]
     columns += TORTUOSITY_KEYS
     if all_bsplines is not None:
         columns += BSPLINE_TORTUOSITY_KEYS
@@ -87,10 +113,27 @@ def parametrize_branches(vgraph: VGraph) -> pd.DataFrame:
         df.insert(2, "arc_bspline", df.pop("arc_bspline"))
 
     df.index = df["branch"]
-    if "strahler" in vgraph.branches_attr:
-        df.insert(1, "strahler", vgraph.branches_attr["strahler"])
-    if "rank" in vgraph.branches_attr:
-        df.insert(1, "rank", vgraph.branches_attr["rank"])
+    if "strahler" in vgraph.branch_attr:
+        df.insert(1, "strahler", vgraph.branch_attr["strahler"])
+    if "rank" in vgraph.branch_attr:
+        df.insert(1, "rank", vgraph.branch_attr["rank"])
+
+    if fundus_data is not None:
+        mid_yx = np.array(vgraph.geometric_data().branch_midpoint(df.index.to_numpy()))
+        macula_center = fundus_data.infered_macula_center()
+        if macula_center is not None:
+            df.insert(4, "dist_macula", macula_center.distance(mid_yx))
+        if fundus_data.od_center is not None:
+            from .bifurcations import node_normalized_coordinates
+
+            df.insert(4, "dist_od", fundus_data.od_center.distance(mid_yx))
+            if macula_center is not None and fundus_data.od_diameter is not None:
+                norm_coord, norm_dist_od = node_normalized_coordinates(
+                    mid_yx, fundus_data.od_center, fundus_data.od_diameter, macula_center
+                )
+                df.insert(4, "norm_coord_x", norm_coord[:, 1])
+                df.insert(4, "norm_coord_y", norm_coord[:, 0])
+                df.insert(4, "norm_dist_od", norm_dist_od)
 
     return df
 
@@ -99,8 +142,8 @@ TORTUOSITY_KEYS = ["τHart", "τGrisan", "τTrucco", "n_curvatures_roots"]
 
 
 def branch_tortuosity(
-    curve: npt.NDArray[np.float_],
-    curvature: npt.NDArray[np.float_],
+    curve: npt.NDArray[np.float64],
+    curvature: npt.NDArray[np.float64],
     curvature_roots: Optional[npt.NDArray[np.int_]] = None,
     as_dict=True,
 ) -> Dict[str, float] | List[float]:
@@ -108,10 +151,10 @@ def branch_tortuosity(
 
     Parameters
     ----------
-    curve : npt.NDArray[np.float_]
+    curve : npt.NDArray[np.float64]
         The skeleton of the branch as a 2D array of shape (n, 2).
 
-    curvature : npt.NDArray[np.float_]
+    curvature : npt.NDArray[np.float64]
         The curvature of the branch as a 1D array of shape (n,).
 
     Returns

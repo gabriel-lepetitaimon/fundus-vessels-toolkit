@@ -10,9 +10,8 @@ import torch
 from fundus_vessels_toolkit.utils import if_none
 
 from ..segment_to_graph import (
-    NodeMergeDistanceParam,
-    NodeMergeDistances,
-    SimplifyTopology,
+    GraphSimplifyArg,
+    ReconnectEndpointsArg,
     SkeletonizeMethod,
 )
 from ..vascular_data_objects import VGraph
@@ -31,13 +30,11 @@ class SegToGraph:
         min_terminal_branch_length=4,
         min_terminal_branch_calibre_ratio=1,
         max_spurs_length=30,
-        min_orphan_branch_length=0,
-        nodes_merge_distance: NodeMergeDistanceParam = True,
-        merge_small_cycles: float = 0,
-        simplify_topology: SimplifyTopology = "node",
-        parse_geometry=False,
-        adaptative_tangents=False,
-        bspline_target_error=3,
+        simplify_graph: bool = True,
+        simplify_graph_arg: Optional[GraphSimplifyArg] = None,
+        parse_geometry=True,
+        adaptative_tangents=True,
+        bspline_target_error=1.5,
     ):
         """
 
@@ -98,13 +95,8 @@ class SegToGraph:
         self.min_terminal_branch_calibre_ratio = min_terminal_branch_calibre_ratio
         self.max_spurs_length = max_spurs_length
 
-        self.simplification_enabled = True
-        self.min_orphan_branch_length = min_orphan_branch_length
-        self.nodes_merge_distance = nodes_merge_distance
-        self.iterative_nodes_merge = True
-        self.merge_small_cycles = merge_small_cycles
-        self.simplify_topology = simplify_topology
-        self.node_simplification_criteria = None
+        self.simplify_graph = simplify_graph
+        self.simplify_graph_arg = simplify_graph_arg
 
         self.geometry_parsing_enabled = parse_geometry
         self.adaptative_tangents = adaptative_tangents
@@ -113,6 +105,8 @@ class SegToGraph:
     def __call__(
         self,
         vessel_mask: npt.NDArray[np.bool_] | torch.Tensor | str | Path,
+        simplify: Optional[bool] = None,
+        parse_geometry: Optional[bool] = None,
     ) -> VGraph:
         """
         Extract the graph of the skeleton from a binary image.
@@ -130,9 +124,9 @@ class SegToGraph:
         seg = self.img_to_seg(vessel_mask)
         skel = self.skeletonize(seg)
         graph = self.skel_to_vgraph(skel, vessel_mask)
-        if self.simplification_enabled:
+        if if_none(simplify, self.simplify_graph):
             self.simplify(graph, inplace=True)
-        if self.geometry_parsing_enabled:
+        if if_none(parse_geometry, self.geometry_parsing_enabled):
             graph = self.populate_geometry(graph, vessel_mask)
         return graph
 
@@ -155,11 +149,17 @@ class SegToGraph:
                 img = segment_vessels(img)
         return img
 
-    def skeletonize(self, vessel_mask: npt.NDArray[np.bool_] | torch.Tensor) -> npt.NDArray[np.bool_] | torch.Tensor:
+    def skeletonize(
+        self,
+        vessel_seg: npt.NDArray[np.bool_] | torch.Tensor,
+        mask: Optional[npt.NDArray[np.bool_] | torch.Tensor] = None,
+    ) -> npt.NDArray[np.bool_] | torch.Tensor:
         from ..segment_to_graph.skeleton_parsing import detect_skeleton_nodes
         from ..segment_to_graph.skeletonize import skeletonize
 
-        binary_skel = skeletonize(vessel_mask, method=self.skeletonize_method) > 0
+        binary_skel = skeletonize(vessel_seg, method=self.skeletonize_method) > 0
+        if mask is not None:
+            binary_skel[~mask] = 0
         remove_endpoint_branches = self.min_terminal_branch_length > 0 or self.min_terminal_branch_calibre_ratio > 0
         return detect_skeleton_nodes(
             binary_skel, fix_hollow=self.fix_hollow, remove_endpoint_branches=remove_endpoint_branches
@@ -187,12 +187,7 @@ class SegToGraph:
 
         return simplify_graph(
             graph,
-            nodes_merge_distance=self.nodes_merge_distance,
-            iterative_nodes_merge=self.iterative_nodes_merge,
-            max_cycles_length=self.merge_small_cycles,
-            simplify_topology=self.simplify_topology,
-            min_orphan_branches_length=self.min_orphan_branch_length,
-            # node_simplification_criteria=self.node_simplification_criteria,
+            self.simplify_graph_arg,
             inplace=inplace,
         )
 
@@ -215,13 +210,13 @@ class SegToGraph:
         skel: npt.NDArray[np.bool_] | torch.Tensor,
         vessels: npt.NDArray[np.bool_] | torch.Tensor,
         simplify: bool = None,
-        populate_geometry: bool = None,
+        parse_geometry: bool = None,
     ) -> VGraph:
         vgraph = self.skel_to_vgraph(skel, vessels)
-        if if_none(simplify, self.simplification_enabled):
+        if if_none(simplify, self.simplify_graph):
             self.simplify(vgraph, inplace=True)
 
-        if if_none(populate_geometry, self.geometry_parsing_enabled):
+        if if_none(parse_geometry, self.geometry_parsing_enabled):
             vgraph = self.populate_geometry(vgraph, vessels)
 
         return vgraph
@@ -232,13 +227,12 @@ class FundusVesselSegToGraph(SegToGraph):
     Specialization of Seg2Graph for retinal vessels.
     """
 
-    def __init__(self, max_vessel_diameter=20, prevent_node_simplification_on_borders=35, parse_geometry=False):
+    def __init__(self, max_vessel_diameter=20, prevent_node_simplification_on_borders=35, parse_geometry=True):
         super(FundusVesselSegToGraph, self).__init__(
             fix_hollow=True,
             skeletonize_method="lee",
             min_terminal_branch_length=4,
             min_terminal_branch_calibre_ratio=1,
-            simplify_topology="node",
             parse_geometry=parse_geometry,
         )
         self.max_vessel_diameter = max_vessel_diameter
@@ -252,11 +246,17 @@ class FundusVesselSegToGraph(SegToGraph):
     def max_vessel_diameter(self, diameter):
         self._max_vessel_diameter = diameter
 
-        self.min_orphan_branch_length = diameter * 1.5
-        self.clean_branches_tips = diameter * 1.5
-        self.nodes_merge_distance = NodeMergeDistances(junction=diameter * 2 / 3, tip=diameter, node=0)
-        self.merge_small_cycles = diameter
-        self.max_spurs_length = diameter * 1.5
+        self.simplify_graph_arg = GraphSimplifyArg(
+            max_spurs_length=0,
+            # reconnect_endpoints=ReconnectEndpointsArg(
+            #    max_distance=diameter * 2, max_angle=20, intercept_snapping_distance=diameter / 2
+            # ),
+            max_cycles_length=diameter,
+            junctions_merge_distance=diameter * 2 / 3,
+            min_orphan_branches_length=diameter * 1.5,
+            simplify_topology="node",
+            passing_node_min_angle=110,
+        )
 
     @property
     def prevent_node_simplification_on_borders(self):

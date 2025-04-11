@@ -1,0 +1,2 @@
+class GeometryParserWarning(Warning):
+    pass

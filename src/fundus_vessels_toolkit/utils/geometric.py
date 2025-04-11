@@ -92,11 +92,9 @@ class Rect(NamedTuple):
     @overload
     @classmethod
     def from_points(cls, bottom_right: Tuple[float | int, float | int]) -> Rect: ...
-
     @overload
     @classmethod
     def from_points(cls, bottom: float | int, right: float | int) -> Rect: ...
-
     @overload
     @classmethod
     def from_points(
@@ -112,13 +110,11 @@ class Rect(NamedTuple):
     def from_points(
         cls, top: float | int, left: float | int, bottom: float | int, right: float | int, *, ensure_positive: bool
     ) -> Rect: ...
-
     @overload
     @classmethod
     def from_points(
         cls, top_left_bottom_right: Tuple[float | int, float | int, float | int, float | int], *, ensure_positive: bool
     ) -> Rect: ...
-
     @classmethod
     def from_points(
         cls,
@@ -160,6 +156,14 @@ class Rect(NamedTuple):
     def empty(cls) -> Rect:
         return cls(0, 0, 0, 0)
 
+    @classmethod
+    def bounding_box(cls, points: npt.ArrayLike[float]) -> Rect:
+        points = np.atleast_2d(points)
+        assert points.ndim == 2 and points.shape[-1] == 2, "Array must have shape (n, 2)"
+        min_y, min_x = points.min(axis=0)
+        max_y, max_x = points.max(axis=0)
+        return cls(h=max_y - min_y, w=max_x - min_x, y=min_y, x=min_x)
+
     def is_self_empty(self) -> bool:
         return self.w == 0 or self.h == 0
 
@@ -170,6 +174,13 @@ class Rect(NamedTuple):
         if isinstance(rect, tuple) and len(rect) == 4:
             rect = Rect(*rect)
         return isinstance(rect, tuple) and (rect.w == 0 or rect.h == 0)
+
+    def crop_pad(self, dst: Rect | Tuple[int, int]) -> Tuple[Tuple[slice, slice], Tuple[slice, slice]]:
+        dst = Rect.from_tuple(dst)
+        inter = self & dst
+        src = inter.translate(-self.y, -self.x)
+        dst = inter.translate(-dst.y, -dst.x)
+        return src.slice(), dst.slice()
 
     @classmethod
     def is_rect(cls, r) -> TypeGuard[Rect]:
@@ -294,6 +305,39 @@ class Rect(NamedTuple):
         r = self.to_int()
         return slice(r.y, r.y + r.h), slice(r.x, r.x + r.w)
 
+    @overload
+    def contains(self, other: Point | Rect) -> bool: ...
+    @overload
+    def contains(self, other: npt.ArrayLike) -> npt.NDArray[np.bool_]: ...
+    def contains(self, other: Point | Rect | npt.ArrayLike) -> bool | npt.NDArray[np.bool_]:
+        if isinstance(other, Point):
+            return self.y <= other.y <= self.y + self.h and self.x <= other.x <= self.x + self.w
+        elif isinstance(other, Rect):
+            return (
+                (self.y <= other.y)
+                & (self.x <= other.x)
+                & (self.y + self.h >= other.y + other.h)
+                & (self.x + self.w >= other.x + other.w)
+            )
+        elif isinstance(other, np.ndarray):
+            other = np.atleast_2d(other)
+            assert other.shape[-1] in (2, 4), "Array must have shape (n, 2) or (n, 4)"
+            if other.shape[-1] == 2:
+                return (
+                    np.isfinite(other).all(axis=-1)
+                    & (self.y <= other[..., 0])
+                    & (self.x <= other[..., 1])
+                    & (self.y + self.h >= other[..., 0])
+                    & (self.x + self.w >= other[..., 1])
+                )
+            return (
+                np.isfinite(other).all(axis=-1)
+                & (self.y <= other[..., 0])
+                & (self.x <= other[..., 1])
+                & (self.y + self.h >= other[..., 0] + other[..., 2])
+                & (self.x + self.w >= other[..., 1] + other[..., 3])
+            )
+
     @staticmethod
     def union(*rects: Tuple[Iterable[Rect] | Rect, ...]) -> Rect:
         rects = sum(((r,) if isinstance(r, Rect) else tuple(r) for r in rects), ())
@@ -394,7 +438,7 @@ class Point(NamedTuple):
     @overload
     def distance(self, other: npt.NDArray[np.float]) -> npt.NDArray[np.float]: ...
 
-    def distance(self, other: Point | Iterable[Point]) -> float | Iterable[float]:
+    def distance(self, other: Point | Iterable[Point]) -> float | Iterable[float] | npt.NDArray[np.float]:
         import numpy as np
 
         if isinstance(other, np.ndarray):
@@ -424,11 +468,23 @@ class Point(NamedTuple):
 
     @property
     def norm(self) -> float:
+        """The norm of the point"""
         return math.sqrt(self.x * self.x + self.y * self.y)
 
     @property
     def angle(self) -> float:
+        """The angle of the point in radians"""
         return math.atan2(self.y, self.x)
+
+    @property
+    def max(self) -> float:
+        """The maximum of y and x"""
+        return max(self.y, self.x)
+
+    @property
+    def min(self) -> float:
+        """The minimum of y and x"""
+        return min(self.y, self.x)
 
     def normalized(self) -> Point:
         norm = self.norm
@@ -439,6 +495,22 @@ class Point(NamedTuple):
             self = self.normalized()
             other = other.normalized()
         return self.x * other.y - self.y * other.x
+
+    def dot(self, other: Point, normalize=False) -> float:
+        if normalize:
+            self = self.normalized()
+            other = other.normalized()
+        return self.x * other.x + self.y * other.y
+
+    def rot90(self) -> Point:
+        """Rotate the point by 90 degrees counter-clockwise
+
+        Returns
+        -------
+        Point
+            The rotated point
+        """
+        return Point(-self.x, self.y)
 
 
 def distance_matrix(points_coord: np.ndarray):

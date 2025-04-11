@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, TypeAlias, Union
+from typing import TYPE_CHECKING, Any, List, Mapping, Optional, Tuple, TypeAlias, TypeVar, Union
 
 import numpy as np
 import numpy.typing as npt
 
-NumpyDict: TypeAlias = Dict[str, Union[npt.NDArray, "NumpyDict"]] | List[Union[npt.NDArray, "NumpyDict"]]
+NumpyDict: TypeAlias = Mapping[str, Union[npt.NDArray[Any], "NumpyDict"]] | List[npt.NDArray[Any]] | List["NumpyDict"]
 
 SEP = "/"
+
+if TYPE_CHECKING:
+    import cv2.typing as cvt
 
 
 def save_numpy_dict(data_dict: NumpyDict, file_path: str | Path, compress=False):
@@ -104,7 +107,7 @@ def load_image(path: str | Path, binarize=False, resize=None, pad=None, cast_to_
         raise ValueError(f"Could not load image from {path}")
 
     if resize is not None:
-        img = cv2.resize(img, resize)
+        img = resize_image(img, resize)
 
     if binarize:
         img = img.mean(axis=2) > 127 if img.ndim == 3 else img > 127
@@ -119,3 +122,45 @@ def load_image(path: str | Path, binarize=False, resize=None, pad=None, cast_to_
         img = np.pad(img, pad, mode="constant", constant_values=0)
 
     return img
+
+
+def resize_image(image: cvt.MatLike, size: Tuple[int, int], interpolation: Optional[bool] = None) -> cvt.MatLike:
+    """Resize an image to a given size.
+
+    Parameters
+    ----------
+    image : npt.NDArray[np.float  |  np.uint8  |  np.bool_]
+        The image to resize.
+    size : Tuple[int, int]
+        The size to which the image should be resized as (height, width).
+    interpolation : Optional[bool], optional
+        Wether to use interpolation or not:
+        - if False, the image is resized using the nearest neighbor interpolation;
+        # - if True, the image is resized using the linear interpolation for upscaling and the area interpolation for down-sampling;
+        - if None, the interpolation is automatically selected based on the image type.
+        The default is None.
+
+    Returns
+    -------
+    npt.NDArray[np.float  |  np.uint8  |  np.bool_]
+        The resized image.
+    """  # noqa: E501
+    from .safe_import import import_cv2
+
+    cv2 = import_cv2()
+
+    is_image_bool = image.dtype == np.bool_
+    in_img = image.astype(np.uint8) * 255 if is_image_bool else image
+
+    if interpolation is None:
+        interpolation = image.dtype == np.float_ or (image.dtype == np.uint8 and image.max() > 10)
+    interpol_mode = cv2.INTER_NEAREST
+    if interpolation:
+        interpol_mode = cv2.INTER_LINEAR if size[0] > image.shape[0] or size[1] > image.shape[1] else cv2.INTER_AREA
+
+    image = cv2.resize(in_img, (size[1], size[0]), interpolation=interpol_mode)
+
+    if is_image_bool:
+        image = image > 127
+
+    return image

@@ -1,16 +1,16 @@
-from typing import Iterable, List
+from typing import Iterable, List, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
 
-from ..cpp_extensions.graph_cpp import extract_branches_geometry as extract_branches_geometry_cpp
-from ..cpp_extensions.graph_cpp import (
+from ..cpp_extensions.fvt_cpp import extract_branches_geometry as extract_branches_geometry_cpp
+from ..cpp_extensions.fvt_cpp import (
     extract_branches_geometry_from_skeleton as extract_branches_geometry_from_skeleton_cpp,
 )
-from ..cpp_extensions.graph_cpp import fast_branch_boundaries as fast_branch_boundaries_cpp
-from ..cpp_extensions.graph_cpp import fast_curve_tangent as fast_curve_tangent_cpp
-from ..cpp_extensions.graph_cpp import track_branches as track_branches_cpp
+from ..cpp_extensions.fvt_cpp import fast_branch_boundaries as fast_branch_boundaries_cpp
+from ..cpp_extensions.fvt_cpp import fast_curve_tangent as fast_curve_tangent_cpp
+from ..cpp_extensions.fvt_cpp import track_branches as track_branches_cpp
 from ..geometric import Point, Rect
 from ..torch import autocast_torch
 
@@ -48,7 +48,7 @@ def track_branches(edge_labels_map, nodes_yx, edge_list) -> list[list[int]]:
 def extract_branch_geometry(
     branch_curves: List[torch.Tensor],
     segmentation: torch.Tensor,
-    adaptative_tangent: bool = True,
+    adaptative_tangents: bool = True,
     return_calibre: bool = True,
     return_boundaries: bool = False,
     return_curvature: bool = False,
@@ -56,9 +56,9 @@ def extract_branch_geometry(
     extract_bspline: bool = True,
     curvature_roots_percentile_threshold: float = 0.1,
     bspline_target_error: float = 3,
-    bspline_max_gap: float = 2,
-) -> tuple[list[torch.Tensor], ...]:
-    """Track branches from a labels map and extract their geometry.
+    split_on_gaps: float = 2,
+) -> Tuple[List[torch.Tensor], ...]:
+    """Extract geometric properties of vascular branches from their curves coordinates and a vessel segmentation map.
 
 
     Parameters
@@ -69,7 +69,7 @@ def extract_branch_geometry(
     segmentation : torch.Tensor
         A 2D tensor of shape (H, W) containing the segmentation of the image.
 
-    adaptative_tangent : bool, optional
+    adaptative_tangents : bool, optional
         If True, the standard deviation of the gaussian weighting the curve points is set to the vessel calibre.
 
     return_calibre : bool, optional
@@ -90,30 +90,35 @@ def extract_branch_geometry(
     bspline_target_error : float, optional
         The maximum error allowed for the bspline interpolation. By default 10.
 
-    bspline_max_gap : float, optional
-        The maximum gap (in pixels) between two points of the skeleton above which the bspline is necessarily split. By default 2.
+    split_on_gaps : float, optional
+        The maximum gap (in pixels) between two points of the skeleton above which the curve is split. By default 2.
 
     curvature_roots_percentile_threshold : float, optional
         The percentile of the curvature values used to threshold the curvature roots. By default 0.15.
 
     Returns
     -------
-    tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]
-    This method returns a tuple containing three lists of length B which contains, for each branch:
-    - a 2D tensor of shape (n, 2) containing the coordinates of the branch points (where n is the branch length).
-    - a 2D tensor of shape (n, 2) containing the tangent vectors at each branch point.
-    - a 2D tensor of shape (n,) containing the branch width (or calibre) at each branch point.
+    tuple[list[torch.Tensor], ...]
+    This method returns a tuple containing at least three lists of length B which contains, for each branch:
+    - the branch curve cleaned as an integer tensor of shape (n, 2) containing the yx coordinates of each point of the branch;
+    - the index of discontinuity in the branch as an integer tensor of shape (s,);
+    - the tangent at every point of the branch curve as a float tensor of shape (n, 2);
 
+    Then depending on the options, the output may also contain for every point of the branch curve:
+    - its calibre as a float tensor of shape (n,);
+    - the coordinates of the nearest vessel edges as an integer tensor of shape (n, 2, 2) indexed as [point, (edgeside: left=0;right=1), (y=0;x=1)];
+    - its curvature as a float tensor of shape (n,);
+    - the index of the roots of the curvature as an integer tensor of shape (c,);
     """  # noqa: E501
     options = dict(
-        adaptative_tangent=adaptative_tangent,
+        adaptative_tangents=adaptative_tangents,
         return_calibre=return_calibre,
         return_boundaries=return_boundaries,
         return_curvature=return_curvature,
         return_curvature_roots=return_curvature_roots,
         extract_bspline=extract_bspline,
         bspline_target_error=bspline_target_error,
-        bspline_max_gap=bspline_max_gap,
+        split_on_gaps=split_on_gaps,
         curvature_roots_percentile_threshold=curvature_roots_percentile_threshold,
     )
 
@@ -122,7 +127,7 @@ def extract_branch_geometry(
 
     branch_curves = [curve.cpu().int() for curve in branch_curves]
 
-    return extract_branches_geometry_cpp(branch_curves, segmentation, options)
+    return tuple(extract_branches_geometry_cpp(branch_curves, segmentation, options))
 
 
 @autocast_torch
@@ -132,8 +137,8 @@ def extract_branch_geometry_from_skeleton(
     edge_list: torch.Tensor,
     segmentation: torch.Tensor,
     clean_branches_tips: int = 20,
+    adaptative_tangents: bool = True,
     return_labels: bool = False,
-    adaptative_tangent: bool = True,
 ) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor], torch.Tensor]:
     """Track branches from a labels map and extract their geometry.
 
@@ -147,13 +152,16 @@ def extract_branch_geometry_from_skeleton(
         A 2D tensor of shape (N, 2) containing the coordinates (y, x) of the nodes.
 
     branch_list :
-        A 2D tensor of shape (B, 2) containing for each branch, the indexes of the two nodes it connects.
+        A 2D tensor of shape (B, 2) containing for each branch, the indices of the two nodes it connects.
 
     segmentation : torch.Tensor
         A 2D tensor of shape (H, W) containing the segmentation of the image.
 
     clean_branches_tips : int, optional
         The maximum number of pixels removable at branches tips. By default 20.
+
+    adaptative_tangents : bool, optional
+        If True, the standard deviation of the gaussian weighting the curve points is set to the vessel cal
 
     return_labels : bool, optional
 
@@ -170,7 +178,7 @@ def extract_branch_geometry_from_skeleton(
 
     """
     options = dict(
-        clean_branches_tips=float(clean_branches_tips), bspline_max_error=4, adaptative_tangent=adaptative_tangent
+        clean_branches_tips=float(clean_branches_tips), bspline_max_error=4, adaptative_tangents=adaptative_tangents
     )
 
     branch_labels = branch_labels.int()
@@ -199,7 +207,7 @@ def curve_tangent(curve_yx, std=3, eval_for=None):
     std : int, optional
         The standard deviation of the gaussian weighting the curve points. By default 3.
     eval_for : int or list[int], optional
-        The indexes of the points for which the tangent must be computed. By default None.
+        The indices of the points for which the tangent must be computed. By default None.
 
     Returns
     -------
@@ -348,7 +356,7 @@ def perimeter_from_vertices(coord: np.ndarray, close_loop: bool = True) -> float
 
 def nodes_tangent(
     nodes_coord: np.ndarray,
-    branches_label_map: np.ndarray,
+    branch_label_map: np.ndarray,
     branches_id: Iterable[int] = None,
     *,
     gaussian_offset: float = 7,
@@ -374,7 +382,7 @@ def nodes_tangent(
 
         .. warning::
 
-            The branch_id must follow the same indexing as the skeleton_map: especially the indexes must start at 1.
+            The branch_id must follow the same indexing as the skeleton_map: especially the indices must start at 1.
 
     gaussian_offset : float, optional
         The offset in pixel of the gaussian weighting the skeleton arround the node. Must be positive.
@@ -391,16 +399,16 @@ def nodes_tangent(
     assert len(nodes_coord) == len(branches_id), "coord and branch_id must have the same length"
     assert nodes_coord.ndim == 2 and nodes_coord.shape[1] == 2, "coord must be a 2D array of shape (N, 2)"
     N = len(nodes_coord)
-    assert branches_label_map.ndim == 2, "skeleton_map must be a 2D array"
-    assert branches_label_map.shape[0] > 0 and branches_label_map.shape[1] > 0, "skeleton_map must be non empty"
+    assert branch_label_map.ndim == 2, "skeleton_map must be a 2D array"
+    assert branch_label_map.shape[0] > 0 and branch_label_map.shape[1] > 0, "skeleton_map must be non empty"
     assert gaussian_offset > 0, "gaussian_offset must be positive"
     assert gaussian_std > 0, "gaussian_std must be positive"
 
     tangent_vectors = np.zeros((N, 2), dtype=np.float64)
     for i, ((y, x), branch_id) in enumerate(zip(nodes_coord, branches_id, strict=True)):
         pos = Point(y, x)
-        window_rect = Rect.from_center(pos, 2 * (2 * gaussian_std + gaussian_offset)).clip(branches_label_map.shape)
-        window = branches_label_map[window_rect.slice()]
+        window_rect = Rect.from_center(pos, 2 * (2 * gaussian_std + gaussian_offset)).clip(branch_label_map.shape)
+        window = branch_label_map[window_rect.slice()]
         pos = pos - window_rect.top_left
 
         skel_points = np.where(window == branch_id if branch_id != 0 else window > 0)

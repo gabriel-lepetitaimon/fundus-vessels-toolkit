@@ -1,18 +1,18 @@
+from collections import OrderedDict
+from typing import Dict, List, Union
+
 import numpy as np
 import torch
-from torch import nn
 import torch.nn.functional as F
+from torch import nn
 
 from ..kbase_conv import KernelBase
-from .steerable_filters import max_steerable_harmonics, radial_steerable_filter, cos_sin_ka
-from ..utils.torch import normalize_vector, torch_norm2d, crop_pad
-
-from collections import OrderedDict
-from typing import Union, Dict, List
+from ..utils.torch import crop_pad, normalize_vector, torch_norm2d
+from .steerable_filters import cos_sin_ka, radial_steerable_filter
 
 
 class SteerableKernelBase(KernelBase):
-    def __init__(self, base: 'list(np.array) [K,n,m]', n_kernel_by_k: 'dict {k -> n_k}'):
+    def __init__(self, base: "list(np.array) [K,n,m]", n_kernel_by_k: "dict {k -> n_k}"):
         """
 
         Args:
@@ -49,11 +49,13 @@ class SteerableKernelBase(KernelBase):
 
         self.K_equi = self._n_k0
         self.K_steer = self._start_idx_by_k[-1] - self.K_equi
-        self.K = self.K_equi + 2*self.K_steer
+        self.K = self.K_equi + 2 * self.K_steer
 
-        assert self.K == base.shape[0], 'The sum of n_kernel_by_k must be equal ' \
-                                        'to the number of kernel in base (base.shape[0]).\n ' \
-                                        f'(base.shape: {base.shape}, n_kernel_by_k sum: {self._start_idx_by_k[-1]})'
+        assert self.K == base.shape[0], (
+            "The sum of n_kernel_by_k must be equal "
+            "to the number of kernel in base (base.shape[0]).\n "
+            f"(base.shape: {base.shape}, n_kernel_by_k sum: {self._start_idx_by_k[-1]})"
+        )
 
         self.kernels_info = []
         self.kernels_label = []
@@ -66,17 +68,17 @@ class SteerableKernelBase(KernelBase):
 
     def idx_real(self, k=None):
         if k is None:
-            return slice(self.K_equi, self.K_equi+self.K_steer)
+            return slice(self.K_equi, self.K_equi + self.K_steer)
         if k > self.k_max:
-            return slice(self.K, self.K)    # Empty slice at the end of the list of kernels
-        return slice(self._start_idx_by_k[k], self._start_idx_by_k[k+1])
+            return slice(self.K, self.K)  # Empty slice at the end of the list of kernels
+        return slice(self._start_idx_by_k[k], self._start_idx_by_k[k + 1])
 
     def idx_imag(self, k=None):
         if k is None:
-            return slice(self.K_equi+self.K_steer, None)
+            return slice(self.K_equi + self.K_steer, None)
         if k > self.k_max or k <= 0:
-            return slice(self.K, self.K)    # Empty slice at the end of the list of kernels
-        return slice(self.K_steer+self._start_idx_by_k[k], self.K_steer+self._start_idx_by_k[k+1])
+            return slice(self.K, self.K)  # Empty slice at the end of the list of kernels
+        return slice(self.K_steer + self._start_idx_by_k[k], self.K_steer + self._start_idx_by_k[k + 1])
 
     @property
     def base_equi(self):
@@ -92,12 +94,10 @@ class SteerableKernelBase(KernelBase):
 
     @property
     def base_complex(self):
-        return torch.cat([self.base_equi,
-                          self.base_real+1j*self.base_imag], dim=0)
+        return torch.cat([self.base_equi, self.base_real + 1j * self.base_imag], dim=0)
 
     def complex_weights(self, weights):
-        return torch.cat([weights[self.idx_equi()],
-                          weights[self.idx_real()]+1j*weights[self.idx_imag()]], dim=0)
+        return torch.cat([weights[self.idx_equi()], weights[self.idx_real()] + 1j * weights[self.idx_imag()]], dim=0)
 
     def expand_r(self, arr, dim=0):
         l = []
@@ -105,10 +105,10 @@ class SteerableKernelBase(KernelBase):
         for ki, r in enumerate(self.r_values):
             if self.k_values[ki] == 0:
                 continue
-            l += [arr[ki]]*r
+            l += [arr[ki]] * r
         return torch.cat(l, dim=dim)
 
-    def init_weights(self, n_in, n_out, nonlinearity='relu', nonlinearity_param=None, dist='normal', std_theta=0):
+    def init_weights(self, n_in, n_out, nonlinearity="relu", nonlinearity_param=None, dist="normal", std_theta=0):
         """
         Create and randomly initialize a weight tensor accordingly to this kernel base.
 
@@ -128,36 +128,46 @@ class SteerableKernelBase(KernelBase):
         Returns:
             A weight tensor of shape (n_out, n_in, self.K).
         """
-        from torch.nn.init import calculate_gain
         import math
+
+        from torch.nn.init import calculate_gain
 
         if self.K_equi:
             w_equi = torch.empty((n_out, n_in, self.K_equi))
 
         if self.K_steer:
-            w_steer_theta = self.expand_r(torch.rand((n_out, n_in, self.k_len))*(2*math.pi), dim=2)
+            w_steer_theta = self.expand_r(torch.rand((n_out, n_in, self.k_len)) * (2 * math.pi), dim=2)
             if std_theta:
                 w_steer_theta += torch.normal(0, std=std_theta, size=(n_out, n_in, self.K_steer))
 
         gain = calculate_gain(nonlinearity, nonlinearity_param)
-        std = gain*math.sqrt(1/(n_in*(self.K_equi+self.K_steer)))
+        std = gain * math.sqrt(1 / (n_in * (self.K_equi + self.K_steer)))
 
-        if dist == 'normal':
+        def gain_correction(kernel):
+            return float(torch.sqrt(1 / (1 + 2 / math.pi * (kernel.sum().square() - 1))))
+
+        if dist == "normal":
             if self.K_equi:
                 nn.init.normal_(w_equi, std=std)
+                for r in range(self.K_equi):
+                    w_equi[:, :, r] *= gain_correction(self.base_equi[r])
             if self.K_steer:
-                w_steer_rho = torch.abs(torch.randn((n_out, n_in, self.K_steer)))*std*math.sqrt(2)
-                w_steer = w_steer_rho * torch.exp(1j*w_steer_theta)
-        elif dist == 'uniform':
+                w_steer_rho = (
+                    torch.abs(torch.randn((n_out, n_in, self.K_steer))) * std * 2 * math.sqrt(math.pi / (math.pi + 2))
+                )
+                w_steer = w_steer_rho * torch.exp(1j * w_steer_theta)
+        elif dist == "uniform":
             bound = std * math.sqrt(3)
             if self.K_equi:
                 nn.init.uniform_(w_equi, 0, bound)
             if self.K_steer:
-                w_steer_rho = torch.rand((n_out, n_in, self.K_steer))*bound*math.sqrt(2)
-                w_steer = w_steer_rho * torch.exp(1j*w_steer_theta)
+                w_steer_rho = torch.rand((n_out, n_in, self.K_steer)) * bound * math.sqrt(2)
+                w_steer = w_steer_rho * torch.exp(1j * w_steer_theta)
         else:
-            raise NotImplementedError(f'Unsupported distribution for the random initialization of weights: "{dist}". \n'
-                                      f'(Supported distribution are "normal" or "uniform"')
+            raise NotImplementedError(
+                f'Unsupported distribution for the random initialization of weights: "{dist}". \n'
+                f'(Supported distribution are "normal" or "uniform"'
+            )
         w = []
         if self.K_equi:
             w += [w_equi]
@@ -175,14 +185,15 @@ class SteerableKernelBase(KernelBase):
         if isinstance(info, int):
             return SteerableKernelBase.create_radial(info)
         if isinstance(info, dict):
-            if 'kr' in info:
+            if "kr" in info:
                 return SteerableKernelBase.create_radial(**info)
             else:
                 return SteerableKernelBase.create_radial(info)
 
     @staticmethod
-    def create_radial(kr: Union[int, Dict[int, List[int]]], std=.5, size=None, oversample=16,
-                      phase=None, max_k=None, cap_k=True):
+    def create_radial(
+        kr: Union[int, Dict[int, List[int]]], std=0.5, size=None, oversample=16, phase=None, max_k=None, cap_k=True
+    ):
         """
 
 
@@ -207,30 +218,30 @@ class SteerableKernelBase(KernelBase):
 
         if size is None:
             if isinstance(kr, int):
-                size = int(np.round(kr*np.sqrt(2)))
+                size = int(np.round(kr * np.sqrt(2)))
                 if (size % 2) ^ (kr % 2):
                     size += 1
             else:
                 r_max = max(R if np.isscalar(R) else max(R) for R in kr.values())
-                size = int(np.ceil(2*(r_max+std)))
+                size = int(np.ceil(2 * (r_max + std)))
 
         if isinstance(kr, int):
             # --- Automatically generate kr to cover a kernel of size kr ---
             if not kr % 2 and phase is None:
-                phase = np.pi/4  # Shift phase by 45° when kernel size is even.
-                
+                phase = np.pi / 4  # Shift phase by 45° when kernel size is even.
+
             r, _ = polar_space(kr) if cap_k else polar_space(size)
             r = r.flatten()
             rk = {}
-            for i in np.arange(1, kr/np.sqrt(2)+1):
-                r_in_interval = (i-1 <= r) & (r < i)
+            for i in np.arange(1, kr / np.sqrt(2) + 1):
+                r_in_interval = (i - 1 <= r) & (r < i)
                 if r_in_interval.sum():
-                    k = (r_in_interval.sum())//2
+                    k = (r_in_interval.sum()) // 2
                     rk[r[r_in_interval].mean()] = int(k)
 
             kr = {}
             for r, K in rk.items():
-                for k in range(K+1):
+                for k in range(K + 1):
                     if max_k is not None and k > max_k:
                         break
                     if k in kr:
@@ -240,7 +251,7 @@ class SteerableKernelBase(KernelBase):
 
         if phase is None:
             phase = 0
-        
+
         kernels_real, kernels_imag = [], []
         labels_real, labels_imag = [], []
         info_real, info_imag = [], []
@@ -258,12 +269,12 @@ class SteerableKernelBase(KernelBase):
 
                 psi = radial_steerable_filter(size, k, r, std=std, oversampling=oversample, phase=phase, normalize=True)
 
-                labels_real += [f'k{k}r{r:.4g}'+('R' if k > 0 else '')]
-                info_real += [{'k': k, 'r': r, 'type': 'R'}]
+                labels_real += [f"k{k}r{r:.4g}" + ("R" if k > 0 else "")]
+                info_real += [{"k": k, "r": r, "type": "R"}]
                 kernels_real += [psi.real]
                 if k > 0:
-                    labels_imag += [f'k{k}r{r:.4g}I']
-                    info_imag += [{'k': k, 'r': r, 'type': 'I'}]
+                    labels_imag += [f"k{k}r{r:.4g}I"]
+                    info_imag += [{"k": k, "r": r, "type": "I"}]
                     kernels_imag += [psi.imag]
 
         K = np.stack(kernels_real + kernels_imag)
@@ -273,10 +284,18 @@ class SteerableKernelBase(KernelBase):
         B.kernels_info = info_real + info_imag
         return B
 
-    def conv2d(self, input: torch.Tensor, weight: torch.Tensor,
-               alpha: Union[int, float, torch.Tensor] = None,
-               rho: Union[int, float, torch.Tensor] = 1, rho_nonlinearity: str = None,
-               stride=1, padding='same', dilation=1, ) -> torch.Tensor:
+    def conv2d(
+        self,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        alpha: Union[int, float, torch.Tensor] = None,
+        rho: Union[int, float, torch.Tensor] = 1,
+        rho_nonlinearity: str = None,
+        stride=1,
+        padding="same",
+        dilation=1,
+        composite_opti=True,
+    ) -> torch.Tensor:
         """
         Compute the convolution of `input` and this base's kernels steered by the angle `alpha`
         and premultiplied by `weight`.
@@ -331,15 +350,33 @@ class SteerableKernelBase(KernelBase):
             return: (b, n_out, ~h, ~w)
 
         """
-        conv_opts = dict(input=input, weight=weight, alpha=alpha, rho=rho, rho_nonlinearity=rho_nonlinearity,
-                         stride=stride, padding=padding, dilation=dilation)
-        return self.composite_kernels_conv2d(**conv_opts)
-        # return self.preconvolved_base_conv2d(**conv_opts)
-        
-    def conv_transpose2d(self, input: torch.Tensor, weight: torch.Tensor,
-                         alpha: Union[int, float, torch.Tensor] = None,
-                         rho: Union[int, float, torch.Tensor] = 1, rho_nonlinearity: str = None,
-                         stride=None, padding='same', output_padding=0, dilation=1) -> torch.Tensor:
+        conv_opts = dict(
+            input=input,
+            weight=weight,
+            alpha=alpha,
+            rho=rho,
+            rho_nonlinearity=rho_nonlinearity,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+        )
+        if composite_opti:
+            return self.composite_kernels_conv2d(**conv_opts)
+        else:
+            return self.preconvolved_base_conv2d(**conv_opts)
+
+    def conv_transpose2d(
+        self,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        alpha: Union[int, float, torch.Tensor] = None,
+        rho: Union[int, float, torch.Tensor] = 1,
+        rho_nonlinearity: str = None,
+        stride=None,
+        padding="same",
+        output_padding=0,
+        dilation=1,
+    ) -> torch.Tensor:
         """
         Compute the transposed convolution of `input` and kernels described by this base premultiplied by `weight` and
         steered by the angle `alpha`. The resulting features are multiplied by the attention map `rho`.
@@ -397,20 +434,37 @@ class SteerableKernelBase(KernelBase):
             return: (b, n_out, ~h*stride, ~w*stride)
 
         """
-        conv_opts = dict(input=input, weight=weight, alpha=alpha, rho=rho, rho_nonlinearity=rho_nonlinearity,
-                         stride=stride, padding=padding, dilation=dilation,
-                         transpose=True, output_padding=output_padding)
+        conv_opts = dict(
+            input=input,
+            weight=weight,
+            alpha=alpha,
+            rho=rho,
+            rho_nonlinearity=rho_nonlinearity,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            transpose=True,
+            output_padding=output_padding,
+        )
         return self.composite_kernels_conv2d(**conv_opts)
         # return self.preconvolved_base_conv2d(**conv_opts)
 
-    def _prepare_steered_conv(self, input, weight, alpha, rho, rho_nonlinearity,
-                              stride, padding, dilation, transpose=False, output_padding=0):
+    def _prepare_steered_conv(
+        self, input, weight, alpha, rho, rho_nonlinearity, stride, padding, dilation, transpose=False, output_padding=0
+    ):
         """
         Prepare module for the convolution operation.
         Returns alpha, conv_opts, (b, n_in, n_out, k, h, w)
         """
-        conv_opts, shapes = self._prepare_conv(input=input, weight=weight, transpose=transpose, stride=stride,
-                                               padding=padding, output_padding=output_padding, dilation=dilation)
+        conv_opts, shapes = self._prepare_conv(
+            input=input,
+            weight=weight,
+            transpose=transpose,
+            stride=stride,
+            padding=padding,
+            output_padding=output_padding,
+            dilation=dilation,
+        )
         b, n_in, n_out, k, h, w = shapes
 
         if not self.K_steer:
@@ -427,41 +481,57 @@ class SteerableKernelBase(KernelBase):
         if alpha is not None:
             alpha = crop_pad(alpha, (h, w), broadcastable=True)
 
-            assert 4 <= alpha.dim() <= 6, f'Invalid number of dimensions for alpha: alpha.shape={alpha.shape}.\n' \
-                                          'alpha shape should be like ([2, [k_max]], b, n_out, h, w)'
+            assert 4 <= alpha.dim() <= 6, (
+                f"Invalid number of dimensions for alpha: alpha.shape={alpha.shape}.\n"
+                "alpha shape should be like ([2, [k_max]], b, n_out, h, w)"
+            )
             if alpha.dim() == 4:
                 b_a, n_out_a, h_a, w_a = alpha.shape
                 alpha = torch.stack((torch.cos(alpha), torch.sin(alpha)))
             elif alpha.dim() == 5:
                 cossin, b_a, n_out_a, h_a, w_a = alpha.shape
-                assert cossin == 2, f'Invalid first dimensions for alpha: alpha.shape[0]={cossin} but should be 2.\n' \
-                                    f'(if alpha is a 5D matrix its shape should be: (2, b, n_out, h, w),' \
-                                    f' with alpha[0]=cos(α) and alpha[1]=sin(α)\n' \
-                                    f'alpha.shape={alpha.shape})'
+                assert cossin == 2, (
+                    f"Invalid first dimensions for alpha: alpha.shape[0]={cossin} but should be 2.\n"
+                    f"(if alpha is a 5D matrix its shape should be: (2, b, n_out, h, w),"
+                    f" with alpha[0]=cos(α) and alpha[1]=sin(α)\n"
+                    f"alpha.shape={alpha.shape})"
+                )
             else:
                 cossin, k_max_a, b_a, n_out_a, h_a, w_a = alpha.shape
-                assert cossin == 2, f'Invalid first dimensions for alpha: alpha.shape[0]={cossin} but should be 2.\n' \
-                                    f'(if alpha is a 6D matrix its shape should be: (2, k_max, b, n_out, h, w),' \
-                                    f' with alpha[0]=cos(α) and alpha[1]=sin(α)\n' \
-                                    f'alpha.shape={alpha.shape})'
-                assert k_max_a >= self.k_max, f'Invalid k dimension for alpha: alpha.shape[1]={k_max_a} but should be equal to k_max={self.k_max}.\n' \
-                                            f'(alpha.shape={alpha.shape})'
+                assert cossin == 2, (
+                    f"Invalid first dimensions for alpha: alpha.shape[0]={cossin} but should be 2.\n"
+                    f"(if alpha is a 6D matrix its shape should be: (2, k_max, b, n_out, h, w),"
+                    f" with alpha[0]=cos(α) and alpha[1]=sin(α)\n"
+                    f"alpha.shape={alpha.shape})"
+                )
+                assert k_max_a >= self.k_max, (
+                    f"Invalid k dimension for alpha: alpha.shape[1]={k_max_a} but should be equal to k_max={self.k_max}.\n"
+                    f"(alpha.shape={alpha.shape})"
+                )
                 if k_max_a < self.k_max:
-                    alpha = alpha[:, :self.k_max]
-            assert b_a == 1 or b == b_a, f'Invalid batch size for alpha: alpha.shape[{alpha.dim()-4}]={b_a} but should be {b} (or  1 for broadcast)\n' \
-                                         f'(alpha.shape={alpha.shape}, input.shape={input.shape}'
-            assert n_out_a == 1 or n_out == n_out_a, f'Invalid number of output features for alpha: ' \
-                                                     f'alpha.shape[{alpha.dim() - 3}]={n_out_a} but should be {n_out} (or  1 for broadcast)\n' \
-                                                     f'(alpha.shape={alpha.shape}, input.shape={input.shape}'
-            assert h_a == 1 or h_a == h, f'Invalid height for alpha: alpha.shape[{alpha.dim()-2}]={h_a} but should be {h} (or  1 for broadcast)\n' \
-                                         f'(alpha.shape={alpha.shape}, input.shape={input.shape}'
-            assert w_a == 1 or w_a == w, f'Invalid width for alpha: alpha.shape[{alpha.dim() - 1}]={w_a} but should be {w} (or  1 for broadcast)\n' \
-                                         f'(alpha.shape={alpha.shape}, input.shape={input.shape}'
+                    alpha = alpha[:, : self.k_max]
+            assert b_a == 1 or b == b_a, (
+                f"Invalid batch size for alpha: alpha.shape[{alpha.dim() - 4}]={b_a} but should be {b} (or  1 for broadcast)\n"
+                f"(alpha.shape={alpha.shape}, input.shape={input.shape}"
+            )
+            assert n_out_a == 1 or n_out == n_out_a, (
+                f"Invalid number of output features for alpha: "
+                f"alpha.shape[{alpha.dim() - 3}]={n_out_a} but should be {n_out} (or  1 for broadcast)\n"
+                f"(alpha.shape={alpha.shape}, input.shape={input.shape}"
+            )
+            assert h_a == 1 or h_a == h, (
+                f"Invalid height for alpha: alpha.shape[{alpha.dim() - 2}]={h_a} but should be {h} (or  1 for broadcast)\n"
+                f"(alpha.shape={alpha.shape}, input.shape={input.shape}"
+            )
+            assert w_a == 1 or w_a == w, (
+                f"Invalid width for alpha: alpha.shape[{alpha.dim() - 1}]={w_a} but should be {w} (or  1 for broadcast)\n"
+                f"(alpha.shape={alpha.shape}, input.shape={input.shape}"
+            )
 
             if rho is None:
                 if alpha.dim() == 6:
                     rho = torch_norm2d(alpha[:, 0])
-                    alpha /= rho[None, None, :, :, :, :]+1e-8
+                    alpha /= rho[None, None, :, :, :, :] + 1e-8
                 else:
                     alpha, rho = normalize_vector(alpha)
 
@@ -474,27 +544,37 @@ class SteerableKernelBase(KernelBase):
         elif rho is not None:
             rho = crop_pad(rho, (h, w), broadcastable=True)
 
-            assert 3 <= rho.dim() <= 4, f'Invalid number of dimensions for rho: rho.shape={rho.shape}.\n' \
-                                          'rho shape should be like (b, [n_out], h, w)'
+            assert 3 <= rho.dim() <= 4, (
+                f"Invalid number of dimensions for rho: rho.shape={rho.shape}.\n"
+                "rho shape should be like (b, [n_out], h, w)"
+            )
             if rho.dim() == 3:
                 b_r, h_r, w_r = rho.shape
                 n_out_r = 1
                 rho = rho[:, None, :, :]
             else:
                 b_r, n_out_r, h_r, w_r = rho.shape
-                assert b_r == 1 or b == b_r, f'Invalid batch size for rho: rho.shape[0]={b_r} but should be {b} (or  1 for broadcast)\n' \
-                                             f'(rho.shape={rho.shape}, input.shape={input.shape}'
-            assert n_out_r == 1 or n_out == n_out_r, f'Invalid number of output features for rho: ' \
-                                                     f'rho.shape[{rho.dim() - 3}]={n_out_r} but should be {n_out} (or  1 for broadcast)\n' \
-                                                     f'(rho.shape={rho.shape}, input.shape={input.shape}'
-            assert h_r == 1 or h_r == h, f'Invalid height for rho: rho.shape[{rho.dim()-2}]={h_r} but should be {h} (or  1 for broadcast)\n' \
-                                         f'(rho.shape={rho.shape}, input.shape={input.shape}'
-            assert w_r == 1 or w_r == w, f'Invalid width for rho: rho.shape[{rho.dim() - 1}]={w_r} but should be {w} (or  1 for broadcast)\n' \
-                                         f'(rho.shape={rho.shape}, input.shape={input.shape}'
+                assert b_r == 1 or b == b_r, (
+                    f"Invalid batch size for rho: rho.shape[0]={b_r} but should be {b} (or  1 for broadcast)\n"
+                    f"(rho.shape={rho.shape}, input.shape={input.shape}"
+                )
+            assert n_out_r == 1 or n_out == n_out_r, (
+                f"Invalid number of output features for rho: "
+                f"rho.shape[{rho.dim() - 3}]={n_out_r} but should be {n_out} (or  1 for broadcast)\n"
+                f"(rho.shape={rho.shape}, input.shape={input.shape}"
+            )
+            assert h_r == 1 or h_r == h, (
+                f"Invalid height for rho: rho.shape[{rho.dim() - 2}]={h_r} but should be {h} (or  1 for broadcast)\n"
+                f"(rho.shape={rho.shape}, input.shape={input.shape}"
+            )
+            assert w_r == 1 or w_r == w, (
+                f"Invalid width for rho: rho.shape[{rho.dim() - 1}]={w_r} but should be {w} (or  1 for broadcast)\n"
+                f"(rho.shape={rho.shape}, input.shape={input.shape}"
+            )
         if rho is not None:
-            if rho_nonlinearity == 'normalize':
+            if rho_nonlinearity == "normalize":
                 rho = 1
-            elif rho_nonlinearity == 'tanh':
+            elif rho_nonlinearity == "tanh":
                 rho = torch.tanh(rho)
 
         return alpha, rho, conv_opts, shapes
@@ -574,18 +654,27 @@ class SteerableKernelBase(KernelBase):
 
         return KernelBase.composite_kernels(w_real, psi_imag) - KernelBase.composite_kernels(w_imag, psi_real)
 
-    def composite_kernels_conv2d(self, input: torch.Tensor, weight: torch.Tensor,
-                                 alpha: Union[int, float, torch.Tensor] = None,
-                                 rho: Union[int, float, torch.Tensor] = None, rho_nonlinearity: str = None,
-                                 stride=1, padding='same', output_padding=0, dilation=1, transpose=False):
-        alpha, rho, conv_opts, (b, n_in, n_out, K, h, w) = self._prepare_steered_conv(input, weight, alpha,
-                                                                                      rho, rho_nonlinearity,
-                                                                                      stride, padding, dilation,
-                                                                                      transpose, output_padding)
+    def composite_kernels_conv2d(
+        self,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        alpha: Union[int, float, torch.Tensor] = None,
+        rho: Union[int, float, torch.Tensor] = None,
+        rho_nonlinearity: str = None,
+        stride=1,
+        padding="same",
+        output_padding=0,
+        dilation=1,
+        transpose=False,
+    ):
+        alpha, rho, conv_opts, (b, n_in, n_out, K, h, w) = self._prepare_steered_conv(
+            input, weight, alpha, rho, rho_nonlinearity, stride, padding, dilation, transpose, output_padding
+        )
         if alpha is None or not self.K_steer:
-            return super(SteerableKernelBase, self).composite_kernels_conv2d(input, weight, transpose=transpose,
-                                                                             **conv_opts)
-        
+            return super(SteerableKernelBase, self).composite_kernels_conv2d(
+                input, weight, transpose=transpose, **conv_opts
+            )
+
         conv2d = F.conv2d if not transpose else F.conv_transpose2d
 
         # f = X⊛K_equi + Σk[ cos(kα)(X⊛K_kreal) + sin(kα) (X⊛K_kimag)]
@@ -593,8 +682,7 @@ class SteerableKernelBase(KernelBase):
         if self._n_k0:
             f = conv2d(input, self.composite_equi_kernels(weight), **conv_opts)
         else:
-            f = torch.zeros((b, n_out, h, w),
-                            device=self.base.device, dtype=self.base.dtype)
+            f = torch.zeros((b, n_out, h, w), device=self.base.device, dtype=self.base.dtype)
 
         # then: f += Σk[ cos(kα)(X⊛K_kreal) + sin(kα) (X⊛K_kimag)]
         for k in self.k_values:
@@ -606,9 +694,13 @@ class SteerableKernelBase(KernelBase):
                 else:
                     cos_sin_kalpha = cos_sin_ka(alpha, cos_sin_kalpha)
             else:
-                cos_sin_kalpha = alpha[:, k-1]
-            f.addcmul_(cos_sin_kalpha[0], conv2d(input, self.composite_steerable_kernels_real(weight, k=k), **conv_opts))
-            f.addcmul_(cos_sin_kalpha[1], conv2d(input, self.composite_steerable_kernels_imag(weight, k=k), **conv_opts))
+                cos_sin_kalpha = alpha[:, k - 1]
+            f.addcmul_(
+                cos_sin_kalpha[0], conv2d(input, self.composite_steerable_kernels_real(weight, k=k), **conv_opts)
+            )
+            f.addcmul_(
+                cos_sin_kalpha[1], conv2d(input, self.composite_steerable_kernels_imag(weight, k=k), **conv_opts)
+            )
 
         if rho is not None:
             f *= rho
@@ -623,22 +715,32 @@ class SteerableKernelBase(KernelBase):
         W = torch.flatten(weight[..., idx_w], start_dim=-2).transpose(0, 1)
         return K, W
 
-    def preconvolved_base_conv2d(self, input: torch.Tensor, weight: torch.Tensor,
-                                 alpha: Union[int, float, torch.Tensor] = None,
-                                 rho: Union[int, float, torch.Tensor] = None, rho_nonlinearity: str = None,
-                                 stride=1, padding='same', output_padding=0, dilation=1, transpose=False):
-        alpha, rho, conv_opts, (b, n_in, n_out, K, h, w) = self._prepare_steered_conv(input, weight, alpha,
-                                                                                      rho, rho_nonlinearity,
-                                                                                      stride, padding, dilation,
-                                                                                      transpose, output_padding)
+    def preconvolved_base_conv2d(
+        self,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        alpha: Union[int, float, torch.Tensor] = None,
+        rho: Union[int, float, torch.Tensor] = None,
+        rho_nonlinearity: str = None,
+        stride=1,
+        padding="same",
+        output_padding=0,
+        dilation=1,
+        transpose=False,
+    ):
+        alpha, rho, conv_opts, (b, n_in, n_out, K, h, w) = self._prepare_steered_conv(
+            input, weight, alpha, rho, rho_nonlinearity, stride, padding, dilation, transpose, output_padding
+        )
         if alpha is None or not self.K_steer:
-            return super(SteerableKernelBase, self).preconvolved_base_conv2d(input, weight, transpose=transpose, **conv_opts)
+            return super(SteerableKernelBase, self).preconvolved_base_conv2d(
+                input, weight, transpose=transpose, **conv_opts
+            )
 
         # alpha shape: (2, [k_max], b, n_out, ~h, ~w)
         if alpha.dim() == 5:
-            alpha = alpha.permute(0, 1, 3, 4, 2)    # (2, b, ~h, ~w, n_out)
-        else:   #alpha.dim() == 6
-            alpha = alpha.permute(0, 1, 2, 4, 5, 3)       # (2, k_max, b, ~h, ~w, n_out)
+            alpha = alpha.permute(0, 1, 3, 4, 2)  # (2, b, ~h, ~w, n_out)
+        else:  # alpha.dim() == 6
+            alpha = alpha.permute(0, 1, 2, 4, 5, 3)  # (2, k_max, b, ~h, ~w, n_out)
 
         xbase = KernelBase.preconvolve_base(input, self.base, transpose=transpose, **conv_opts)
         # f = X⊛K_equi + Σk[ cos(kα)(X⊛K_kreal) + sin(kα) (X⊛K_kimag)]
@@ -647,8 +749,7 @@ class SteerableKernelBase(KernelBase):
             K, W = self._preconvolved_KW(xbase, weight, self.idx_equi())
             f = torch.matmul(K, W)  # K:[b,h,w,n_in*k] x W:[n_in*k, n_out] -> [b,h,w,n_out]
         else:
-            f = torch.zeros((b, h, w, n_out),
-                            device=self.base.device, dtype=self.base.dtype)
+            f = torch.zeros((b, h, w, n_out), device=self.base.device, dtype=self.base.dtype)
 
         # then: f += Σk[ cos(kα)(X⊛K_kreal) + sin(kα) (X⊛K_kimag)]
         for k in self.k_values:
@@ -657,17 +758,17 @@ class SteerableKernelBase(KernelBase):
             if alpha.dim() == 5:
                 if k == 1:
                     cos_sin_kalpha = alpha
-                    alpha_norm = torch.linalg.norm(alpha, dim=0)+1e-8
+                    alpha_norm = torch.linalg.norm(alpha, dim=0) + 1e-8
                 else:
                     cos_sin_kalpha = cos_sin_ka(alpha, cos_sin_kalpha) / alpha_norm
             else:
-                cos_sin_kalpha = alpha[:, k-1]
+                cos_sin_kalpha = alpha[:, k - 1]
             KR, WR = self._preconvolved_KW(xbase, weight, self.idx_real(k=k))
             KI, WI = self._preconvolved_KW(xbase, weight, self.idx_imag(k=k))
             f.addcmul_(cos_sin_kalpha[0], (torch.matmul(KR, WR) + torch.matmul(KI, WI)))
             f.addcmul_(cos_sin_kalpha[1], torch.matmul(KI, WR) - torch.matmul(KR, WI))
 
-        f = f.permute(0, 3, 1, 2)    # [b,n_out,h,w]
+        f = f.permute(0, 3, 1, 2)  # [b,n_out,h,w]
         if rho is not None:
             f *= rho
         return f
@@ -677,20 +778,23 @@ class SteerableKernelBase(KernelBase):
         from pandas import DataFrame
         import numpy as np
         from ..utils import iter_index
-        data = dict(r=[_['r'] for _ in self.kernels_info],
-                    k=[_['k'] for _ in self.kernels_info],
-                    type=[_['type'] for _ in self.kernels_info])
+
+        data = dict(
+            r=[_["r"] for _ in self.kernels_info],
+            k=[_["k"] for _ in self.kernels_info],
+            type=[_["type"] for _ in self.kernels_info],
+        )
         if isinstance(weights, torch.Tensor):
             weights = weights.detach().cpu().numpy()
         s = weights.shape[:-1]
         if not len(s) or np.prod(s) == 1:
-            data['weight'] = weights.flatten()
+            data["weight"] = weights.flatten()
         else:
             for idx in iter_index(weights.shape):
-                data[f'weights{list(idx)}'] = weights[idx]
+                data[f"weights{list(idx)}"] = weights[idx]
             if mean:
-                data['weights_mean'] = weights.mean(axis=tuple(range(len(s))))
-                data['weights_std'] = weights.std(axis=tuple(range(len(s))))
+                data["weights_mean"] = weights.mean(axis=tuple(range(len(s))))
+                data["weights_std"] = weights.std(axis=tuple(range(len(s))))
         return DataFrame(data=data)
 
     def complex_kernels_couple(self):
@@ -705,24 +809,37 @@ class SteerableKernelBase(KernelBase):
             for i2, info2 in enumerate(infos):
                 if i2 is None:
                     continue
-                if info1['r'] == info2['r'] and info1['k'] == info2['k']:
+                if info1["r"] == info2["r"] and info1["k"] == info2["k"]:
                     infos[i2] = None
                     couples += [(i2, i1)]
                     break
             else:
                 couples += [(i1, None)]
-            couples_info += [{'r_name': round(info1['r']*1e4)/1e4, 'k':info1['k'], 'r': info1['r'],
-                              'name': f'k={info1["k"]} r={info1["r"]}'}]
+            couples_info += [
+                {
+                    "r_name": round(info1["r"] * 1e4) / 1e4,
+                    "k": info1["k"],
+                    "r": info1["r"],
+                    "name": f"k={info1['k']} r={info1['r']}",
+                }
+            ]
         return tuple(reversed(couples)), tuple(reversed(couples_info))
 
     def flatten_weights(self, weights, complex=False):
         import numpy as np
+
         if complex:
             complex_couples, w_infos = self.complex_kernels_couple()
         else:
-            w_infos = [{'r_name': f'r={_["r"]:.4g} {("R" if _["type"]=="R" else " I") if _["k"]>0 else ""}',
-                        'name': f'k={_["k"]} r={_["r"]} {("R" if _["type"]=="R" else " I") if _["k"]>0 else ""}',
-                        'k': _['k'], 'r': _['r']} for _ in self.kernels_info]
+            w_infos = [
+                {
+                    "r_name": f"r={_['r']:.4g} {('R' if _['type'] == 'R' else ' I') if _['k'] > 0 else ''}",
+                    "name": f"k={_['k']} r={_['r']} {('R' if _['type'] == 'R' else ' I') if _['k'] > 0 else ''}",
+                    "k": _["k"],
+                    "r": _["r"],
+                }
+                for _ in self.kernels_info
+            ]
             complex_couples = None
 
         def flatten_weight(w, w_infos):
@@ -736,12 +853,12 @@ class SteerableKernelBase(KernelBase):
             l = []
             for w1, w2 in complex_couples:
                 if w2 is None:
-                    if complex == 'angle':
+                    if complex == "angle":
                         continue
                     w0 = w[:, w1]
                 else:
-                    w0 = w[:, w1]+1j*w[:, w2]
-                if complex == 'angle':
+                    w0 = w[:, w1] + 1j * w[:, w2]
+                if complex == "angle":
                     l += [np.angle(w0)]
                 else:
                     l += [np.abs(w0)]
@@ -758,157 +875,194 @@ class SteerableKernelBase(KernelBase):
         else:
             return flatten_weight(weights, w_infos)
 
-    def weights_dist(self, weights, Q=3, complex=False):
+    def group_weights_by_k(self, weights, complex=False):
         import numpy as np
 
         weights, infos = self.flatten_weights(weights, complex=complex)
-        data = {k: [_[k] for _ in infos] for k, v in infos[0].items()}
-        if isinstance(Q, int):
-            Q = [(i+1)/(Q+1) for i in range(Q)]
-        q = np.array(Q)*100
-        q = q/2
-        q = np.concatenate([50-q[::-1], [50], 50+q]).flatten()
-
-        perc = np.percentile(weights, q, axis=0)
-        data['median'] = perc[len(Q)]
-
-        for i, q in enumerate(Q):
-            data[f'q{i}'] = perc[-i-1]
-            data[f'-q{i}'] = perc[i]
+        data = {k: [] for k in range(self.k_max + 1)}
+        for w, info in zip(weights.T, infos, strict=True):
+            data[info["k"]] += [w]
+        for k in range(self.k_max + 1):
+            data[k] = np.stack(data[k], axis=0).flatten()
         return data
 
-    def plot_weights_dist(self, weights, Q=5, complex='norm', scale_type='linear', wrange=None):
-        import pandas as pd
+    def weights_dist(self, weights, Q=3, complex=False, aggregate_by_k=False):
+        import numpy as np
+
+        if aggregate_by_k:
+            data = self.group_weights_by_k(weights, complex=complex)
+            weights = list(data.values())
+            infos = [{"k": k} for k in data.keys()]
+        else:
+            weights, infos = self.flatten_weights(weights, complex=complex)
+            weights = weights.T
+        data = {k: [_[k] for _ in infos] for k, v in infos[0].items()}
+        if isinstance(Q, int):
+            Q = [(i + 1) / (Q + 1) for i in range(Q)]
+        q = np.array(Q) * 100
+        q = q / 2
+        q = np.concatenate([50 - q[::-1], [50], 50 + q]).flatten()
+
+        perc = np.stack([np.percentile(w, q, axis=0) for w in weights], axis=1)
+        data["median"] = perc[len(Q)]
+
+        for i, q in enumerate(Q):
+            data[f"q{i}"] = perc[-i - 1]
+            data[f"-q{i}"] = perc[i]
+        return data
+
+    def plot_weights_dist(self, weights, Q=5, complex="norm", scale_type="linear", wrange=None, aggregate_by_k=False):
         import altair as alt
+        import pandas as pd
+
         N = len(weights) if isinstance(weights, dict) else 1
+
         def plot_dist(weights, offset=0, color=alt.Undefined, domain=None):
-            df = pd.DataFrame(data=self.weights_dist(weights, Q=Q, complex=complex))
+            df = pd.DataFrame(data=self.weights_dist(weights, Q=Q, complex=complex, aggregate_by_k=aggregate_by_k))
+            if not aggregate_by_k:
+                df["r_name"] = df["r_name"].astype(int)
             chart = alt.Chart(data=df, width=70)
 
             if domain is None:
-                domain = df.loc[:, 'w'].min(), df.loc[:, 'w'].max()
+                domain = df.loc[:, "w"].min(), df.loc[:, "w"].max()
 
-            if scale_type == 'log':
-                axis = alt.Axis(format='e', values=[10**_
-                                                    for _ in range(int(np.floor(np.log10(domain[0]))),
-                                                                   int(np.ceil(np.log10(domain[1]))))])
+            if scale_type == "log":
+                axis = alt.Axis(
+                    format="e",
+                    values=[
+                        10**_ for _ in range(int(np.floor(np.log10(domain[0]))), int(np.ceil(np.log10(domain[1]))))
+                    ],
+                )
             else:
                 axis = alt.Axis()
 
-            plot = chart.mark_tick(width=10, thickness=2, xOffset=offset, color=color
-                                   ).encode(
-                x='r_name:N',
-                y=alt.Y('median:Q', title='Weights '+complex,
-                        scale=alt.Scale(type=scale_type, domain=domain),
-                        axis=axis)
+            plot = chart.mark_tick(width=10, thickness=2, xOffset=offset, color=color).encode(
+                x="r_name:N" if not aggregate_by_k else "k:N",
+                y=alt.Y(
+                    "median:Q", title="Weights " + complex, scale=alt.Scale(type=scale_type, domain=domain), axis=axis
+                ),
             )
 
             for q in range(Q):
-                plot += chart.mark_bar(width=10, opacity=.2 if q < Q-2 else .3, xOffset=offset, color=color
-                                       ).encode(
-                    x='r_name:N',
-                    y=alt.Y(f'-q{q}:Q', title='',
-                            #axis=alt.Axis(tickCount=7)
-                            ),
-                    y2=f'q{q}:Q',
+                plot += chart.mark_bar(width=10, opacity=0.2 if q < Q - 2 else 0.3, xOffset=offset, color=color).encode(
+                    x="r_name:N" if not aggregate_by_k else "k:N",
+                    y=alt.Y(
+                        f"-q{q}:Q",
+                        title="",
+                        # axis=alt.Axis(tickCount=7)
+                    ),
+                    y2=f"q{q}:Q",
                 )
             return plot
 
         if isinstance(weights, dict):
             i = 0
-            tableau10 = '#4E79A7 #F28E2B #E15759 #76B6B2 #59A14F #EDC948 #B07AA1 #FF9DA7 #9C755F #BAB0AC'.split(' ')
+            tableau10 = "#4E79A7 #F28E2B #E15759 #76B6B2 #59A14F #EDC948 #B07AA1 #FF9DA7 #9C755F #BAB0AC".split(" ")
             plots = []
             if wrange is None:
                 wrange = [float(min(_.min() for _ in weights.values())), float(max(_.max() for _ in weights.values()))]
             for k, w in weights.items():
-                plots += [plot_dist(weights=w, offset=10*i, color=tableau10[i], domain=wrange)]
+                plots += [plot_dist(weights=w, offset=10 * i, color=tableau10[i], domain=wrange)]
                 i += 1
             plot = alt.LayerChart(plots)
         else:
             if wrange is None:
                 wrange = [float(min(_.min() for _ in weights)), float(max(_.max() for _ in weights))]
             plot = plot_dist(weights=weights, domain=wrange)
+        if not aggregate_by_k:
+            plot = plot.facet(column="k").resolve_scale(x="independent").interactive(bind_x=False)
+        return plot
 
-        return plot.facet(column='k').resolve_scale(x='independent').interactive(bind_x=False)
-
-    def weights_hist(self, weights, bins=100, wrange=None, binspace='linear', complex=False, norm='sum',
-                     symlog_C=None, displayable=True):
+    def weights_hist(
+        self,
+        weights,
+        bins=100,
+        wrange=None,
+        binspace="linear",
+        complex=False,
+        norm="sum",
+        symlog_C=None,
+        displayable=True,
+    ):
         import pandas as pd
+
         weights, w_infos = self.flatten_weights(weights, complex=complex)
         if isinstance(bins, int):
             if wrange is None:
                 wrange = weights.min(), weights.max()
-            if binspace == 'linear':
+            if binspace == "linear":
                 bins = np.linspace(wrange[0], wrange[1], num=bins)
-            elif binspace == 'log':
+            elif binspace == "log":
                 bins = np.logspace(np.log10(wrange[0]), np.log10(wrange[1]), num=bins)
-            elif binspace == 'symlog':
+            elif binspace == "symlog":
                 if symlog_C is None:
-                    symlog_C = np.abs(np.diff(wrange))*2/bins
-                wrange = np.sign(wrange)*np.log10(1 + np.abs(wrange)/symlog_C)
+                    symlog_C = np.abs(np.diff(wrange)) * 2 / bins
+                wrange = np.sign(wrange) * np.log10(1 + np.abs(wrange) / symlog_C)
                 bins = np.linspace(wrange[0], wrange[1], endpoint=True)
-                bins = np.sign(bins)*symlog_C*(np.power(10, np.abs(bins))-1)
+                bins = np.sign(bins) * symlog_C * (np.power(10, np.abs(bins)) - 1)
             else:
-                raise NotImplementedError(f'{binspace} scale is not implemented yet. '
-                                          f'Valid binspace is "linear", "log" or "symlog".')
+                raise NotImplementedError(
+                    f'{binspace} scale is not implemented yet. Valid binspace is "linear", "log" or "symlog".'
+                )
         else:
             wrange = np.min(bins), np.max(bins)
 
         hists = []
         for i in range(weights.shape[1]):
             hist, bins_edge = np.histogram(weights[:, i], bins=bins, range=wrange)
-            if norm == 'max':
+            if norm == "max":
                 hist = hist / hist.max()
-            elif norm == 'sum':
+            elif norm == "sum":
                 hist = hist / hist.sum()
             hists += [hist]
-        bins = (bins_edge[:-1] + bins_edge[1:])/2
+        bins = (bins_edge[:-1] + bins_edge[1:]) / 2
 
         if displayable:
-            idx = pd.MultiIndex.from_tuples([(_['k'], _['r_name']) for _ in w_infos], names=['k', 'r'])
+            idx = pd.MultiIndex.from_tuples([(_["k"], _["r_name"]) for _ in w_infos], names=["k", "r"])
             return pd.DataFrame(data=hists, index=idx, columns=bins)
         else:
-            dfs = [pd.DataFrame(h, index=pd.Index(bins, name='w'), columns=['density']) for h in hists]
-            return pd.concat(dfs, keys=[(_['k'], _['r'], _['name']) for _ in w_infos], names=['k', 'r', 'name'])
+            dfs = [pd.DataFrame(h, index=pd.Index(bins, name="w"), columns=["density"]) for h in hists]
+            return pd.concat(dfs, keys=[(_["k"], _["r"], _["name"]) for _ in w_infos], names=["k", "r", "name"])
 
-    def plot_weights_hist(self, weights, bins=100, binspace=None, wrange=None, complex='norm', norm='max'):
+    def plot_weights_hist(self, weights, bins=100, binspace=None, wrange=None, complex="norm", norm="max"):
         import altair as alt
+
         if binspace is None:
-            if complex is False or complex=='angle':
-                binspace = 'linear'
+            if complex is False or complex == "angle":
+                binspace = "linear"
             else:
-                binspace = 'symlog'
-        elif binspace == 'log' and complex != 'norm':
-            binspace = 'symlog'
+                binspace = "symlog"
+        elif binspace == "log" and complex != "norm":
+            binspace = "symlog"
         if not isinstance(bins, int):
-            binspace = 'linear'
-        df = self.weights_hist(weights, bins=bins, binspace=binspace, wrange=wrange, norm=norm,
-                               complex=complex, displayable=False)\
-                 .reset_index(['r', 'k', 'name', 'w'])
-        wrange = df.loc[:, 'w'].min(), df.loc[:, 'w'].max()
+            binspace = "linear"
+        df = self.weights_hist(
+            weights, bins=bins, binspace=binspace, wrange=wrange, norm=norm, complex=complex, displayable=False
+        ).reset_index(["r", "k", "name", "w"])
+        wrange = df.loc[:, "w"].min(), df.loc[:, "w"].max()
         chart = alt.Chart(data=df, width=50)
 
-        plot = chart.mark_area(orient='horizontal').encode(
-            y=alt.Y('w:Q', scale=alt.Scale(type=binspace, domain=wrange, constant=(wrange[1]-wrange[0])/20),
-                    axis=alt.Axis(title="Weights Distribution")),
+        plot = chart.mark_area(orient="horizontal").encode(
+            y=alt.Y(
+                "w:Q",
+                scale=alt.Scale(type=binspace, domain=wrange, constant=(wrange[1] - wrange[0]) / 20),
+                axis=alt.Axis(title="Weights Distribution"),
+            ),
             x=alt.X(
-                'density:Q',
-                stack='center',
+                "density:Q",
+                stack="center",
                 title=None,
                 impute=None,
                 axis=alt.Axis(labels=False, values=[0], grid=False, ticks=True),
             ),
             column=alt.Column(
-                'name:N',
+                "name:N",
                 title="Basis Kernel",
                 header=alt.Header(
-                    titleOrient='bottom',
-                    labelOrient='bottom',
+                    titleOrient="bottom",
+                    labelOrient="bottom",
                     labelPadding=0,
                 ),
-            ))
-        return plot.configure_facet(
-            spacing=0
-        ).configure_view(
-            stroke=None
-        ).interactive(bind_x=False)
+            ),
+        )
+        return plot.configure_facet(spacing=0).configure_view(stroke=None).interactive(bind_x=False)

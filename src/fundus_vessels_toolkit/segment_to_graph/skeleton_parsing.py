@@ -1,12 +1,13 @@
+import warnings
 from typing import List, Optional, Tuple
 
 import numpy as np
-import scipy.ndimage as scimage
 import torch
 
-from ..utils.cpp_extensions.graph_cpp import detect_skeleton_nodes as detect_skeleton_nodes_cpp
-from ..utils.cpp_extensions.graph_cpp import parse_skeleton as parse_skeleton_cpp
-from ..utils.cpp_extensions.graph_cpp import parse_skeleton_with_cleanup as parse_skeleton_with_cleanup_cpp
+from ..utils.cpp_extensions.fvt_cpp import detect_skeleton_nodes as detect_skeleton_nodes_cpp
+from ..utils.cpp_extensions.fvt_cpp import detect_skeleton_nodes_debug as detect_skeleton_nodes_debug_cpp
+from ..utils.cpp_extensions.fvt_cpp import parse_skeleton as parse_skeleton_cpp
+from ..utils.cpp_extensions.fvt_cpp import parse_skeleton_with_cleanup as parse_skeleton_with_cleanup_cpp
 from ..utils.lookup_array import create_removal_lookup
 from ..utils.torch import autocast_torch
 from ..vascular_data_objects import FundusData, VBranchGeoData, VGeometricData, VGraph
@@ -17,6 +18,7 @@ def skeleton_to_vgraph(
     vessels: Optional[torch.Tensor | np.ndarray | FundusData] = None,
     fix_hollow=True,
     clean_branches_tips=20,
+    clean_terminal_branches_tips=15,
     min_terminal_branch_length=4,
     min_terminal_branch_calibre_ratio=1,
     max_spurs_length=30,
@@ -79,6 +81,7 @@ def skeleton_to_vgraph(
         skeleton_map,
         segmentation_map=vessels,
         clean_branches_tips=clean_branches_tips,
+        clean_terminal_branches_tips=clean_terminal_branches_tips,
         min_terminal_branch_length=min_terminal_branch_length,
         min_terminal_branch_calibre_ratio=min_terminal_branch_calibre_ratio,
         max_spurs_length=max_spurs_length,
@@ -90,6 +93,19 @@ def skeleton_to_vgraph(
     nodes_indexes = np.unique(branch_list)
     if len(nodes_indexes) != len(nodes_yx):
         orphan_nodes = np.setdiff1d(np.arange(len(nodes_indexes)), nodes_indexes)
+        del_lookup = create_removal_lookup(orphan_nodes, length=len(nodes_yx))
+        branch_list = del_lookup[branch_list]
+        nodes_yx = np.delete(nodes_yx, orphan_nodes, axis=0)
+
+    branch_list = branch_list.numpy()
+    nodes_indexes = np.unique(branch_list)
+    if len(nodes_indexes) != len(nodes_yx):
+        orphan_nodes = np.setdiff1d(np.arange(len(nodes_indexes)), nodes_indexes)
+        warnings.warn(
+            f"Nodes {orphan_nodes} are not connected to any branch and will be ignored. "
+            "This is however an abnormal behavior as they should have been removed already.",
+            stacklevel=2,
+        )
         del_lookup = create_removal_lookup(orphan_nodes, length=len(nodes_yx))
         branch_list = del_lookup[branch_list]
         nodes_yx = np.delete(nodes_yx, orphan_nodes, axis=0)
@@ -110,17 +126,19 @@ def skeleton_to_vgraph(
         geo_data.set_branch_data(VBranchGeoData.Fields.TIPS_CALIBRE, calibres)
         geo_data.set_branch_data(VBranchGeoData.Fields.TIPS_BOUNDARIES, boundaries)
 
-    return VGraph(branch_list, geo_data, nodes_count=len(nodes_yx))
+    return VGraph(branch_list, geo_data, node_count=len(nodes_yx))
 
 
 @autocast_torch
 def parse_skeleton(
     skeleton_map: torch.Tensor,
     segmentation_map: Optional[torch.Tensor] = None,
-    clean_branches_tips=0,
+    clean_branches_tips=20,
+    clean_terminal_branches_tips=10,
     min_terminal_branch_length=3,
     min_terminal_branch_calibre_ratio=1,
     max_spurs_length=30,
+    adaptative_tangents=True,
 ) -> Tuple[torch.Tensor, torch.Tensor, List[torch.Tensor], torch.Tensor, torch.Tensor]:
     """
     Label the skeleton map with the junctions and endpoints.
@@ -137,7 +155,10 @@ def parse_skeleton(
         The segmentation map of the image as a binary image.
 
     clean_branches_tips :
-        If > 0, clean at most this number of pixels at the extremities of each branches.
+        If > 0, clean at most this number of pixels at the node extremities of each branches.
+
+    clean_terminal_branches_tips :
+        If > 0, clean at most this number of pixels at the extremities of terminal branches.
 
     min_terminal_branch_length :
         If > 0, remove terminal branches that are shorter than this value in pixel.
@@ -181,9 +202,11 @@ def parse_skeleton(
         segmentation_map = segmentation_map.cpu().bool()
         opts = dict(
             clean_branches_tips=clean_branches_tips,
+            clean_terminal_branches_tips=clean_terminal_branches_tips,
             min_spurs_length=min_terminal_branch_length,
             spurs_calibre_factor=min_terminal_branch_calibre_ratio,
             max_spurs_length=max_spurs_length,
+            adaptative_tangents=adaptative_tangents,
         )
         out = parse_skeleton_with_cleanup_cpp(skeleton_map, segmentation_map, opts)
     else:
@@ -196,6 +219,8 @@ def detect_skeleton_nodes(
     skeleton_map: np.ndarray | torch.Tensor,
     fix_hollow=True,
     remove_endpoint_branches=True,
+    *,
+    debug=False,
 ):
     """
     Parse a skeleton mask to detect junctions and endpoints.
@@ -219,143 +244,9 @@ def detect_skeleton_nodes(
             - 0: background
             - 1: Vessel branch
             - 2: Vessel endpoint or junction
-    """
-    cast_numpy = isinstance(skeleton_map, np.ndarray)
-    if cast_numpy:
-        skeleton_map = torch.from_numpy(skeleton_map)
-
+    """  # noqa: E501
+    if debug:
+        return detect_skeleton_nodes_debug_cpp(skeleton_map)
     skeleton_rank = detect_skeleton_nodes_cpp(skeleton_map.cpu().bool(), fix_hollow, remove_endpoint_branches)
     rank_lookup = torch.tensor([0, 3, 1, 2, 2, 2], dtype=torch.uint8)
-    out = rank_lookup[skeleton_rank]
-
-    return out.numpy() if cast_numpy else out
-
-
-########################################################################################################################
-#       LEGACY IMPLEMENTATION
-########################################################################################################################
-def parse_skeleton_legacy(skeleton_map: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Parse a skeleton image into a graph of branches and nodes.
-
-    .. warning::
-        This function use a python legacy implementation and is slower than the C++ implementation. Use :meth:`label_skeleton` instead.
-
-    Parameters
-    ----------
-
-    skeleton_map : np.ndarray
-        Binary image of the vessel skeleton.
-
-    Returns
-    -------
-    branch list : np.ndarray
-        Array of shape [B, 2] Adjacency list of the skeleton graph.
-
-    branch labels : np.ndarray
-        Label of each branch in the skeleton.
-
-    node coordinates : np.ndarray
-        Array of shape [N, 2]: the (y, x) positions of the nodes in the skeleton.
-    """  # noqa: E501
-    from ..utils.graph.graph_cy import label_skeleton
-
-    if skeleton_map.dtype == bool:
-        skeleton_map = detect_skeleton_nodes_legacy(skeleton_map)
-
-    branch_labels, branch_list, node_yx = label_skeleton(skeleton_map)
-
-    return branch_list, branch_labels, node_yx
-
-
-def detect_skeleton_nodes_legacy(
-    skeleton_map: np.ndarray,
-    fix_hollow=True,
-    remove_endpoint_branches=True,
-) -> np.ndarray:
-    """
-    Parse a skeleton mask to detect junctions and endpoints and remove small branches.
-
-    .. warning::
-        This function use a python legacy implementation and is slower than the C++ implementation. Use :meth:`parse_skeleton_rank` instead.
-
-    Parameters
-    ----------
-    skeleton_map : np.ndarray | torch.Tensor
-        Binary image of the vessel skeleton.
-
-    fix_hollow:
-        If True (by default), hollow cross pattern are filled and replaced by a 4-branches junction.
-
-    remove_endpoint_branches:
-        If True (by default), remove terminal branches that are made of only an endpoint.
-
-    Returns
-    -------
-        The skeletonized image where each pixel is described by an integer value as:
-            - 0: background
-            - 1: Vessel branch
-            - 2: Vessel endpoint or junction
-    """  # noqa: E501
-    from skimage.morphology import remove_small_objects
-
-    from ..utils.binary_mask import extract_patches, fast_hit_or_miss
-    from ..utils.skeleton_legacy import (
-        compute_junction_endpoint_masks,
-        remove_1px_endpoints,
-    )
-
-    junction_3lines_masks, junction_4lines_masks, hollow_cross_mask, endpoint_masks = compute_junction_endpoint_masks()
-    sqr3 = np.ones((3, 3), dtype=bool)
-
-    # === Compute the medial axis ===
-    # with LogTimer("Compute skeleton"):
-    bin_skel = skeleton_map.astype(bool)
-    remove_small_objects(bin_skel, min_size=3, connectivity=2, out=bin_skel)
-    skel = bin_skel.astype(np.int8)
-    bin_skel_patches = extract_patches(bin_skel, bin_skel, (3, 3), True)
-
-    # === Build the skeleton with junctions and endpoints ===
-    # with LogTimer("Detect junctions"):
-    # Detect junctions
-    skel[fast_hit_or_miss(bin_skel, bin_skel_patches, *junction_3lines_masks)] = 2
-    skel[fast_hit_or_miss(bin_skel, bin_skel_patches, *junction_4lines_masks)] = 3
-
-    # Fix hollow cross junctions
-    if fix_hollow:
-        # with LogTimer("Fix hollow cross") as log:
-        junction_hollow_cross = scimage.morphology.binary_hit_or_miss(bin_skel, *hollow_cross_mask)
-        # log.print('Hollow cross found')
-        skel -= scimage.convolve(junction_hollow_cross.astype(np.int8), sqr3.astype(np.int8))
-        skel = skel.clip(0) + junction_hollow_cross
-
-        # log.print('Hollow cross quick fix, starting post fix')
-        for y, x in zip(*np.where(junction_hollow_cross), strict=True):
-            neighborhood = skel[y - 1 : y + 2, x - 1 : x + 2]
-            if np.sum(neighborhood) == 1:
-                skel[y, x] = 0
-            if any(
-                scimage.binary_hit_or_miss(neighborhood, *m)[1, 1] for m in zip(*junction_4lines_masks, strict=True)
-            ):
-                skel[y, x] = 3
-            elif any(
-                scimage.binary_hit_or_miss(neighborhood, *m)[1, 1] for m in zip(*junction_3lines_masks, strict=True)
-            ):
-                skel[y, x] = 2
-            else:
-                skel[y, x] = 1
-
-    skel += skel.astype(bool)
-
-    # Detect endpoints
-    # with LogTimer('Detect endpoints') as log:
-    bin_skel = skel > 0
-    skel -= fast_hit_or_miss(bin_skel, bin_skel, *endpoint_masks)
-
-    # with LogTimer('Remove 1px small end branches'):
-    if remove_endpoint_branches:
-        # Remove small end branches
-        skel = remove_1px_endpoints(skel, endpoint_masks, sqr3)
-
-    parsed_lookup = np.array([0, 2, 1, 2, 2], dtype=skel.dtype)
-    return parsed_lookup[skel]
+    return rank_lookup[skeleton_rank]

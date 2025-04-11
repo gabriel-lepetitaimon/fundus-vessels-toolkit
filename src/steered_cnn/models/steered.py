@@ -1,31 +1,47 @@
 import torch
 from torch import nn
-from ..utils import cat_crop, pyramid_pool2d, normalize_vector
-from ..steered_conv import SteeredConvBN, SteeredConvTranspose2d, SteerableKernelBase, OrthoKernelBase
-from ..steered_conv.steerable_filters import cos_sin_ka_stack
-from .backbones import UNet, HemelingNet
 
-DEFAULT_STEERABLE_BASE = SteerableKernelBase.create_radial(5, max_k=5)
+from ..steered_conv import OrthoKernelBase, SteerableKernelBase, SteeredConvBN, SteeredConvTranspose2d
+from ..steered_conv.steerable_filters import cos_sin_ka_stack
+from ..utils.torch.convbn import pyramid_pool2d
+from ..utils.torch.crop_pad import cat_crop
+from ..utils.torch.normalize import normalize_vector
+from .backbones import HemelingNet, UNet
+
+DEFAULT_STEERABLE_BASE = SteerableKernelBase.create_radial(5, max_k=2)
 DEFAULT_ATTENTION_BASE = OrthoKernelBase.create_radial(5)
 DEFAULT_STEERABLE_RESAMPLING_BASE = SteerableKernelBase.create_radial(2)
 DEFAULT_ATTENTION_RESAMPLING_BASE = OrthoKernelBase.create_radial(3)
 
 
 class SteeredUNet(UNet):
-    def __init__(self, n_in, n_out, nfeatures=6, depth=2, nscale=5, padding='same',
-                 p_dropout=0, batchnorm=True, downsampling='maxpooling', upsampling='conv',
-                 base=DEFAULT_STEERABLE_BASE, rho_nonlinearity=False,
-                 attention_mode=False, attention_base=DEFAULT_ATTENTION_BASE):
+    def __init__(
+        self,
+        n_in,
+        n_out,
+        nfeatures=6,
+        depth=2,
+        nscale=5,
+        padding="same",
+        p_dropout=0,
+        batchnorm=True,
+        downsampling="maxpooling",
+        upsampling="conv",
+        base=DEFAULT_STEERABLE_BASE,
+        rho_nonlinearity=False,
+        attention_mode=False,
+        attention_base=DEFAULT_ATTENTION_BASE,
+    ):
         """
 
         Args:
             n_in (int): Number of channels in the input image.
             n_out (int): Number of channels produced by the convolution.
             nfeatures (int or tuple, optional): Base number of features for each layer. Namely the number of features of the first scale.
-            depth (int, optional): 
-            nscale (int, optional): 
-            
-            
+            depth (int, optional):
+            nscale (int, optional):
+
+
             padding (int, tuple or str, optional):
                 Implicit paddings on both sides of the input. Can be a single number, a tuple (padH, padW) or
                 one of 'true', 'same' and 'full'.
@@ -35,13 +51,13 @@ class SteeredUNet(UNet):
             batchnorm (bool, optional): If True, adds batch normalization between the convolution layers and the activation functions.
                                         It also disables bias on convolution layers.
                    Default: True
-            downsampling (str, optional): 
+            downsampling (str, optional):
                 Specify how the downsampling is performed. Can be one of:
                    - 'maxpooling': Maxpooling Layer.
                    - 'averagepooling': Average Pooling.
                    - 'conv': Stride on the last convolution.
                    Default: 'maxpooling'
-           upsampling (str, optional): 
+           upsampling (str, optional):
                 Specify how the downsampling is performed. Can be one of:
                    - 'conv': Deconvolution with stride
                    - 'bilinear': Bilinear upsampling
@@ -75,36 +91,57 @@ class SteeredUNet(UNet):
                 See the documentation of OrthoKernelBase.parse() for more details on OrthoKernelBase specs.
                     Default: SteerableKernelBase.create_radial(5)
         """
-        
+
         self.base = SteerableKernelBase.parse(base, default=DEFAULT_STEERABLE_BASE)
         self.attention_base = OrthoKernelBase.parse(attention_base, default=DEFAULT_ATTENTION_BASE)
-        
-        super(SteeredUNet, self).__init__(n_in, n_out, nfeatures=nfeatures, depth=depth,
-                                          nscale=nscale, padding=padding, p_dropout=p_dropout, batchnorm=batchnorm,
-                                          downsampling=downsampling, upsampling=upsampling,
-                                          attention_mode=attention_mode, rho_nonlinearity=rho_nonlinearity)
+
+        super(SteeredUNet, self).__init__(
+            n_in,
+            n_out,
+            nfeatures=nfeatures,
+            depth=depth,
+            nscale=nscale,
+            padding=padding,
+            p_dropout=p_dropout,
+            batchnorm=batchnorm,
+            downsampling=downsampling,
+            upsampling=upsampling,
+            attention_mode=attention_mode,
+            rho_nonlinearity=rho_nonlinearity,
+        )
 
     def setup_convbn(self, n_in, n_out, kernel=None, stride=1):
         if kernel is None:
             kernel = self.kernel
-        opts = dict(attention_mode=self.attention_mode, rho_nonlinearity=self.rho_nonlinearity, stride=stride,
-                    relu=True, bn=self.batchnorm, padding=self.padding)
+        opts = dict(
+            attention_mode=self.attention_mode,
+            rho_nonlinearity=self.rho_nonlinearity,
+            stride=stride,
+            relu=True,
+            bn=self.batchnorm,
+            padding=self.padding,
+        )
         if kernel == 2:
-            return SteeredConvBN(n_in, n_out,
-                                 steerable_base=DEFAULT_STEERABLE_RESAMPLING_BASE,
-                                 attention_base=DEFAULT_ATTENTION_RESAMPLING_BASE,
-                                 **opts)
+            return SteeredConvBN(
+                n_in,
+                n_out,
+                steerable_base=DEFAULT_STEERABLE_RESAMPLING_BASE,
+                attention_base=DEFAULT_ATTENTION_RESAMPLING_BASE,
+                **opts,
+            )
         else:
-            return SteeredConvBN(n_in, n_out,
-                                 steerable_base=self.base,
-                                 attention_base=self.attention_base,
-                                 **opts)
+            return SteeredConvBN(n_in, n_out, steerable_base=self.base, attention_base=self.attention_base, **opts)
 
     def setup_convtranspose(self, n_in, n_out):
-        return SteeredConvTranspose2d(n_in, n_out, stride=2,
-                                      steerable_base=DEFAULT_STEERABLE_RESAMPLING_BASE,
-                                      attention_base=DEFAULT_ATTENTION_RESAMPLING_BASE,
-                                      attention_mode=self.attention_mode, rho_nonlinearity='normalize')
+        return SteeredConvTranspose2d(
+            n_in,
+            n_out,
+            stride=2,
+            steerable_base=DEFAULT_STEERABLE_RESAMPLING_BASE,
+            attention_base=DEFAULT_ATTENTION_RESAMPLING_BASE,
+            attention_mode=self.attention_mode,
+            rho_nonlinearity="normalize",
+        )
 
     def forward(self, x, alpha=None, rho=None):
         """
@@ -139,9 +176,12 @@ class SteeredUNet(UNet):
         xscale = []
         for i, (conv_stack, downsample) in enumerate(zip(self.down_conv[:-1], self.downsample)):
             x = self.reduce_stack(conv_stack, x, alpha=alpha_pyramid[i], rho=rho_pyramid[i])
-            xscale += [self.dropout(x)] if self.dropout_mode == 'shortcut' else [x]
-            x = downsample(x, alpha=alpha_pyramid[i], rho=rho_pyramid[i])\
-                if self.downsampling == 'conv' else downsample(x)
+            xscale += [self.dropout(x)] if self.dropout_mode == "shortcut" else [x]
+            x = (
+                downsample(x, alpha=alpha_pyramid[i], rho=rho_pyramid[i])
+                if self.downsampling == "conv"
+                else downsample(x)
+            )
 
         x = self.reduce_stack(self.down_conv[-1], x, alpha=alpha_pyramid[-1], rho=rho_pyramid[-1])
         x = self.dropout(x)
@@ -154,35 +194,70 @@ class SteeredUNet(UNet):
 
 
 class SteeredHemelingNet(HemelingNet):
-    def __init__(self, n_in, n_out, nfeatures=6, depth=2, nscale=5, padding='same',
-                 p_dropout=0, batchnorm=True, downsampling='maxpooling', upsampling='conv',
-                 base=DEFAULT_STEERABLE_BASE, attention_base=False, attention_mode='shared', rho_nonlinearity=False):
+    def __init__(
+        self,
+        n_in,
+        n_out,
+        nfeatures=6,
+        depth=2,
+        nscale=5,
+        padding="same",
+        p_dropout=0,
+        batchnorm=True,
+        downsampling="maxpooling",
+        upsampling="conv",
+        base=DEFAULT_STEERABLE_BASE,
+        attention_base=False,
+        attention_mode=False,
+        rho_nonlinearity=False,
+    ):
         self.base = SteerableKernelBase.parse(base, default=DEFAULT_STEERABLE_BASE)
         self.attention_base = OrthoKernelBase.parse(attention_base, default=DEFAULT_ATTENTION_BASE)
-        super(SteeredHemelingNet, self).__init__(n_in, n_out, nfeatures=nfeatures, depth=depth,
-                                          nscale=nscale, padding=padding, p_dropout=p_dropout, batchnorm=batchnorm,
-                                          downsampling=downsampling, upsampling=upsampling,
-                                          attention_mode=attention_mode, rho_nonlinearity=rho_nonlinearity)
+        super(SteeredHemelingNet, self).__init__(
+            n_in,
+            n_out,
+            nfeatures=nfeatures,
+            depth=depth,
+            nscale=nscale,
+            padding=padding,
+            p_dropout=p_dropout,
+            batchnorm=batchnorm,
+            downsampling=downsampling,
+            upsampling=upsampling,
+            attention_mode=attention_mode,
+            rho_nonlinearity=rho_nonlinearity,
+        )
 
     def setup_convbn(self, n_in, n_out, kernel, stride=1):
-        opts = dict(attention_mode=self.attention_mode, rho_nonlinearity=self.rho_nonlinearity, stride=stride,
-                    relu=True, bn=self.batchnorm, padding=self.padding)
+        opts = dict(
+            attention_mode=self.attention_mode,
+            rho_nonlinearity=self.rho_nonlinearity,
+            stride=stride,
+            relu=True,
+            bn=self.batchnorm,
+            padding=self.padding,
+        )
         if kernel == 2:
-            return SteeredConvBN(n_in, n_out,
-                                 steerable_base=DEFAULT_STEERABLE_RESAMPLING_BASE,
-                                 attention_base=DEFAULT_ATTENTION_RESAMPLING_BASE,
-                                 **opts)
+            return SteeredConvBN(
+                n_in,
+                n_out,
+                steerable_base=DEFAULT_STEERABLE_RESAMPLING_BASE,
+                attention_base=DEFAULT_ATTENTION_RESAMPLING_BASE,
+                **opts,
+            )
         else:
-            return SteeredConvBN(n_in, n_out,
-                                 steerable_base=self.base,
-                                 attention_base=self.attention_base,
-                                 **opts)
+            return SteeredConvBN(n_in, n_out, steerable_base=self.base, attention_base=self.attention_base, **opts)
 
     def setup_convtranspose(self, n_in, n_out):
-        return SteeredConvTranspose2d(n_in, n_out, stride=2,
-                                      steerable_base=DEFAULT_STEERABLE_RESAMPLING_BASE,
-                                      attention_base=DEFAULT_ATTENTION_RESAMPLING_BASE,
-                                      attention_mode=self.attention_mode, rho_nonlinearity='normalize')
+        return SteeredConvTranspose2d(
+            n_in,
+            n_out,
+            stride=2,
+            steerable_base=DEFAULT_STEERABLE_RESAMPLING_BASE,
+            attention_base=DEFAULT_ATTENTION_RESAMPLING_BASE,
+            attention_mode=self.attention_mode,
+            rho_nonlinearity="normalize",
+        )
 
     def forward(self, x, alpha=None, rho=None):
         """
@@ -217,16 +292,18 @@ class SteeredHemelingNet(HemelingNet):
         xscale = []
         for i, (conv_stack, downsample) in enumerate(zip(self.down_conv[:-1], self.downsample)):
             x = self.reduce_stack(conv_stack, x, alpha=alpha_pyramid[i], rho=rho_pyramid[i])
-            xscale += [self.dropout(x)] if self.dropout_mode == 'shortcut' else [x]
-            x = downsample(x, alpha=alpha_pyramid[i], rho=rho_pyramid[i]) \
-                if self.downsampling == 'conv' else downsample(x)
+            xscale += [self.dropout(x)] if self.dropout_mode == "shortcut" else [x]
+            x = (
+                downsample(x, alpha=alpha_pyramid[i], rho=rho_pyramid[i])
+                if self.downsampling == "conv"
+                else downsample(x)
+            )
 
         x = self.reduce_stack(self.down_conv[-1], x, alpha=alpha_pyramid[-1], rho=rho_pyramid[-1])
         x = self.dropout(x)
 
         for conv_stack, upsample in zip(self.up_conv, self.upsample):
-            x = upsample(x, alpha=alpha_pyramid[i], rho=rho_pyramid[i]) \
-                if self.upsampling == 'conv' else upsample(x)
+            x = upsample(x, alpha=alpha_pyramid[i], rho=rho_pyramid[i]) if self.upsampling == "conv" else upsample(x)
             x = cat_crop(xscale.pop(), x)
             x = self.reduce_stack(conv_stack, x, alpha=alpha_pyramid[-i], rho=rho_pyramid[-i])
 
@@ -235,13 +312,13 @@ class SteeredHemelingNet(HemelingNet):
 
 def attention_pyramid(alpha, rho, module, device=None):
     k_max = module.base.k_max
-    if getattr(module, 'downsampling', None) == 'conv':
+    if getattr(module, "downsampling", None) == "conv":
         k_max = max(k_max, DEFAULT_STEERABLE_RESAMPLING_BASE.k_max)
     N = module.nscale
     if alpha is None:
         if module.attention_base is None:
-            raise ValueError('If no attention base is specified, a steering angle alpha should be provided.')
-        return [None]*N, [None]*N
+            raise ValueError("If no attention base is specified, a steering angle alpha should be provided.")
+        return [None] * N, [None] * N
     else:
         with torch.no_grad():
             if isinstance(alpha, (int, float)):
@@ -259,8 +336,10 @@ def attention_pyramid(alpha, rho, module, device=None):
                 alpha, alpha_rho = normalize_vector(alpha)
                 cos_sin_kalpha = cos_sin_ka_stack(alpha[0], alpha[1], k=k_max)
             else:
-                raise ValueError(f'alpha shape should be either [b, h, w] or [b, 2, h, w] '
-                                 f'but provided tensor shape is {alpha.shape}.')
+                raise ValueError(
+                    f"alpha shape should be either [b, h, w] or [b, 2, h, w] "
+                    f"but provided tensor shape is {alpha.shape}."
+                )
             cos_sin_kalpha = cos_sin_kalpha.unsqueeze(3)
             alpha_pyramid = pyramid_pool2d(cos_sin_kalpha, n=N)
             alpha_pyramid, _ = normalize_vector(alpha_pyramid)
@@ -271,17 +350,28 @@ def attention_pyramid(alpha, rho, module, device=None):
                 rho = torch.Tensor([rho]).to(device=device)
                 rho = torch.stack((torch.cos(rho), torch.sin(rho)))[:, None, None, None]
 
-            if module.rho_nonlinearity == 'normalize':
+            if module.rho_nonlinearity == "normalize":
                 rho = 1
-            elif module.rho_nonlinearity == 'tanh':
+            elif module.rho_nonlinearity == "tanh":
                 rho = torch.tanh(rho)
-            rho_pyramid = [rho]*N if not isinstance(rho, torch.Tensor) else pyramid_pool2d(rho, n=N)
+            rho_pyramid = [rho] * N if not isinstance(rho, torch.Tensor) else pyramid_pool2d(rho, n=N)
         return alpha_pyramid, rho_pyramid
 
 
 class SteeredHemelingNetOld(nn.Module):
-    def __init__(self, n_in, n_out=1, nfeatures_base=6, depth=2, base=None, attention=None,
-                 p_dropout=0, padding='same', batchnorm=True, upsample='conv'):
+    def __init__(
+        self,
+        n_in,
+        n_out=1,
+        nfeatures_base=6,
+        depth=2,
+        base=None,
+        attention=None,
+        p_dropout=0,
+        padding="same",
+        batchnorm=True,
+        upsample="conv",
+    ):
         super().__init__()
         self.n_in = n_in
         self.n_out = n_out
@@ -296,70 +386,151 @@ class SteeredHemelingNetOld(nn.Module):
 
         # Down
         self.conv1 = nn.ModuleList(
-            [SteeredConvBN(n_in, n1, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention)]
-            + [SteeredConvBN(n1, n1, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention)
-               for _ in range(depth - 1)])
+            [
+                SteeredConvBN(
+                    n_in, n1, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention
+                )
+            ]
+            + [
+                SteeredConvBN(
+                    n1, n1, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention
+                )
+                for _ in range(depth - 1)
+            ]
+        )
         self.pool1 = nn.MaxPool2d(2)
 
         self.conv2 = nn.ModuleList(
-            [SteeredConvBN(n1, n2, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention)]
-            + [SteeredConvBN(n2, n2, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention)
-               for _ in range(depth - 1)])
+            [
+                SteeredConvBN(
+                    n1, n2, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention
+                )
+            ]
+            + [
+                SteeredConvBN(
+                    n2, n2, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention
+                )
+                for _ in range(depth - 1)
+            ]
+        )
         self.pool2 = nn.MaxPool2d(2)
 
         self.conv3 = nn.ModuleList(
-            [SteeredConvBN(n2, n3, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention)]
-            + [SteeredConvBN(n3, n3, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention)
-               for _ in range(depth - 1)])
+            [
+                SteeredConvBN(
+                    n2, n3, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention
+                )
+            ]
+            + [
+                SteeredConvBN(
+                    n3, n3, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention
+                )
+                for _ in range(depth - 1)
+            ]
+        )
         self.pool3 = nn.MaxPool2d(2)
 
         self.conv4 = nn.ModuleList(
-            [SteeredConvBN(n3, n4, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention)]
-            + [SteeredConvBN(n4, n4, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention)
-               for _ in range(depth - 1)])
+            [
+                SteeredConvBN(
+                    n3, n4, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention
+                )
+            ]
+            + [
+                SteeredConvBN(
+                    n4, n4, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention
+                )
+                for _ in range(depth - 1)
+            ]
+        )
         self.pool4 = nn.MaxPool2d(2)
 
         self.conv5 = nn.ModuleList(
-            [SteeredConvBN(n4, n5, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention)]
-            + [SteeredConvBN(n5, n5, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention)
-               for _ in range(depth - 1)])
+            [
+                SteeredConvBN(
+                    n4, n5, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention
+                )
+            ]
+            + [
+                SteeredConvBN(
+                    n5, n5, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention
+                )
+                for _ in range(depth - 1)
+            ]
+        )
 
         # Up
-        if upsample == 'nearest':
+        if upsample == "nearest":
             self.upsample1 = nn.Sequential(nn.Conv2d(n5, n4, kernel_size=(1, 1)), nn.Upsample(scale_factor=2))
         else:
             self.upsample1 = nn.ConvTranspose2d(n5, n4, kernel_size=(2, 2), stride=(2, 2))
         self.conv6 = nn.ModuleList(
-            [SteeredConvBN(2 * n4, n4, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention)]
-            + [SteeredConvBN(n4, n4, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention)
-               for _ in range(depth - 1)])
+            [
+                SteeredConvBN(
+                    2 * n4, n4, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention
+                )
+            ]
+            + [
+                SteeredConvBN(
+                    n4, n4, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention
+                )
+                for _ in range(depth - 1)
+            ]
+        )
 
-        if upsample == 'nearest':
+        if upsample == "nearest":
             self.upsample2 = nn.Sequential(nn.Conv2d(n4, n3, kernel_size=(1, 1)), nn.Upsample(scale_factor=2))
         else:
             self.upsample2 = nn.ConvTranspose2d(n4, n3, kernel_size=(2, 2), stride=(2, 2))
         self.conv7 = nn.ModuleList(
-            [SteeredConvBN(2 * n3, n3, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention)]
-            + [SteeredConvBN(n3, n3, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention)
-               for _ in range(depth - 1)])
+            [
+                SteeredConvBN(
+                    2 * n3, n3, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention
+                )
+            ]
+            + [
+                SteeredConvBN(
+                    n3, n3, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention
+                )
+                for _ in range(depth - 1)
+            ]
+        )
 
-        if upsample == 'nearest':
+        if upsample == "nearest":
             self.upsample3 = nn.Sequential(nn.Conv2d(n3, n2, kernel_size=(1, 1)), nn.Upsample(scale_factor=2))
         else:
             self.upsample3 = nn.ConvTranspose2d(n3, n2, kernel_size=(2, 2), stride=(2, 2))
         self.conv8 = nn.ModuleList(
-            [SteeredConvBN(2 * n2, n2, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention)]
-            + [SteeredConvBN(n2, n2, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention)
-               for _ in range(depth - 1)])
+            [
+                SteeredConvBN(
+                    2 * n2, n2, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention
+                )
+            ]
+            + [
+                SteeredConvBN(
+                    n2, n2, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention
+                )
+                for _ in range(depth - 1)
+            ]
+        )
 
-        if upsample == 'nearest':
+        if upsample == "nearest":
             self.upsample4 = nn.Sequential(nn.Conv2d(n2, n1, kernel_size=(1, 1)), nn.Upsample(scale_factor=2))
         else:
             self.upsample4 = nn.ConvTranspose2d(n2, n1, kernel_size=(2, 2), stride=(2, 2))
         self.conv9 = nn.ModuleList(
-            [SteeredConvBN(2 * n1, n1, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention)]
-            + [SteeredConvBN(n1, n1, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention)
-               for _ in range(depth - 1)])
+            [
+                SteeredConvBN(
+                    2 * n1, n1, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention
+                )
+            ]
+            + [
+                SteeredConvBN(
+                    n1, n1, relu=True, bn=batchnorm, padding=padding, steerable_base=base, attention_base=attention
+                )
+                for _ in range(depth - 1)
+            ]
+        )
 
         # End
         self.final_conv = nn.Conv2d(n1, 1, kernel_size=(1, 1))
@@ -400,8 +571,8 @@ class SteeredHemelingNetOld(nn.Module):
             if self.attention is None:
                 raise NotImplementedError()
             else:
-                alpha_pyramid = [None]*N
-                rho_pyramid = [None]*N
+                alpha_pyramid = [None] * N
+                rho_pyramid = [None] * N
         else:
             with torch.no_grad():
                 k_max = self.base.k_max
@@ -414,12 +585,14 @@ class SteeredHemelingNetOld(nn.Module):
                     alpha, rho = normalize_vector(alpha)
                     cos_sin_kalpha = cos_sin_ka_stack(alpha[0], alpha[1], k=k_max)
                 else:
-                    raise ValueError(f'alpha shape should be either [b, h, w] or [b, 2, h, w] '
-                                     f'but provided tensor shape is {alpha.shape}.')
+                    raise ValueError(
+                        f"alpha shape should be either [b, h, w] or [b, 2, h, w] "
+                        f"but provided tensor shape is {alpha.shape}."
+                    )
                 cos_sin_kalpha = cos_sin_kalpha.unsqueeze(3)
 
                 alpha_pyramid = pyramid_pool2d(cos_sin_kalpha, n=N)
-                rho_pyramid = [rho]*N if not isinstance(rho, torch.Tensor) else pyramid_pool2d(rho, n=N)
+                rho_pyramid = [rho] * N if not isinstance(rho, torch.Tensor) else pyramid_pool2d(rho, n=N)
 
         # Down
         x1 = reduce(lambda X, conv: conv(X, alpha=alpha_pyramid[0], rho=rho_pyramid[0]), self.conv1, x)
@@ -465,6 +638,6 @@ class SteeredHemelingNetOld(nn.Module):
     def p_dropout(self, p):
         self.dropout.p = p
 
-        
+
 def identity(x):
     return x

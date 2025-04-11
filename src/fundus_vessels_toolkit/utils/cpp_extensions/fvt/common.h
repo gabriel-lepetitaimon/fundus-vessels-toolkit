@@ -79,11 +79,15 @@ struct IntPoint {
     bool operator!=(const IntPoint& p) const;
 
     bool is_inside(int H, int W) const;
+    bool is_inside(int y0, int x0, int y1, int x1) const;
     bool is_inside(const IntPoint& p) const;
     inline bool is_valid() const { return y != INT_MIN && x != INT_MAX; }
+    bool is_adjacent(const IntPoint& p) const;
     bool is_null();
 
     IntPair toIntPair() const;
+    int max() const;
+    int min() const;
 
     friend std::ostream& operator<<(std::ostream& os, const IntPoint& p) {
         os << "(" << p.y << ", " << p.x << ")";
@@ -92,8 +96,9 @@ struct IntPoint {
 };
 
 /// @brief Point structure with double coordinates.
-/// The coordinates are stored as (row, column), i.e. (y, x). The geometric operation assume a Cartesian coordinate
-/// system defined by a x (positive right) and y (positive down) axis. Direct rotations are therefore clockwise.
+/// The coordinates are stored as (row, column), i.e. (y, x). The geometric
+/// operation assume a Cartesian coordinate system defined by a x (positive
+/// right) and y (positive down) axis. Direct rotations are therefore clockwise.
 struct Point {
     double y;
     double x;
@@ -110,6 +115,7 @@ struct Point {
     Point& operator=(const Point& p);
     Point& operator+=(const Point& p);
     Point& operator-=(const Point& p);
+    Point& operator/=(const double& p);
     Point operator+(const Point& p) const;
     Point operator+(const IntPoint& p) const;
     Point operator-(const Point& p) const;
@@ -124,10 +130,13 @@ struct Point {
 
     Point normalize() const;
     double dot(const Point& p) const;
-    double cos(const Point& p) const;
+    double cosSim(const Point& p) const;
     double cross(const Point& p) const;
     double squaredNorm() const;
     double norm() const;
+    Point abs() const;
+    double max() const;
+    double min() const;
     Point positiveCoordinates() const;
     Point rot90() const;
     Point rot270() const;
@@ -138,6 +147,7 @@ struct Point {
     Point rotate_neg(const Point& u) const;
 
     bool is_inside(double H, double W) const;
+    bool is_inside(double y0, double x0, double y1, double x1) const;
     bool is_inside(const Point& p) const;
     bool is_null() const;
 
@@ -147,6 +157,8 @@ struct Point {
     }
 
     IntPoint toInt() const;
+    IntPoint floor() const;
+    IntPoint ceil() const;
     IntPair toIntPair() const;
     FloatPair toFloatPair() const;
 };
@@ -159,6 +171,7 @@ struct Point {
         merge : std::vector<IntPoint> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
 #pragma omp declare reduction( \
         merge : std::vector<std::vector<IntPoint>> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
+#pragma omp declare reduction(merge : std::vector<int> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
 
 using CurveYX = std::vector<IntPoint>;
 using Vector = Point;
@@ -270,7 +283,8 @@ std::vector<T> abs(const std::vector<T>& x) {
 static const float SQRT2 = sqrt(2);
 
 /// @brief Compute the index of the lower triangular matrix.
-/// The lower triangular matrix is stored in a 1D array. The index of the element (i, j) is given by:
+/// The lower triangular matrix is stored in a 1D array. The index of the
+/// element (i, j) is given by:
 ///     index = i * (i + 1) / 2 + j
 ///
 /// Example:
@@ -363,7 +377,8 @@ using EdgeList = std::vector<Edge>;
 using GraphAdjList = std::vector<std::set<Edge>>;
 #pragma omp declare reduction(merge : std::vector<Edge> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
 
-GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N = -1, bool directed = false);
+GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N = -1, bool directed = false,
+                                  bool keep_orientation = true);
 GraphAdjList edge_list_to_adjlist(const EdgeList& edges, int N = -1, bool directed = false);
 GraphAdjList edge_list_to_adjlist(const Tensor2DAcc<int>& edges, int N = -1, bool directed = false);
 
@@ -373,7 +388,8 @@ torch::Tensor edge_list_to_tensor(const EdgeList& vec);
  *             === NEIGHBORS ===
  *******************************************************************************************************************/
 /**
- * @brief Structure representing neighborhood coordinates: (y, x) and the id of the neighbor.
+ * @brief Structure representing neighborhood coordinates: (y, x) and the id of
+ * the neighbor.
  *
  * The id of the neighbor is in the following order:
  *    0 1 2
@@ -385,8 +401,8 @@ static const std::array<PointWithID, 8> NEIGHBORHOOD = {
     {{-1, -1, 0}, {-1, 0, 1}, {-1, 1, 2}, {0, 1, 3}, {1, 1, 4}, {1, 0, 5}, {1, -1, 6}, {0, -1, 7}}};
 
 /**
- * @brief Structure representing neighborhood coordinates: (y, x) and the id of the neighbor. The close neighbors
- * (horizontal and vertical) are listed first.
+ * @brief Structure representing neighborhood coordinates: (y, x) and the id of
+ * the neighbor. The close neighbors (horizontal and vertical) are listed first.
  *
  * The neighbors are listed in the following order:
  *    0 4 1
@@ -398,30 +414,38 @@ static const std::array<PointWithID, 8> CLOSE_NEIGHBORHOOD = {
     {{-1, -1, 0}, {-1, 1, 2}, {1, 1, 4}, {1, -1, 6}, {-1, 0, 1}, {0, 1, 3}, {1, 0, 5}, {0, -1, 7}}};
 
 /**
- * @brief Array containing the possible next neighbors id given the previous neighbor id in a tracking process.
+ * @brief Array containing the possible next neighbors id given the previous
+ * neighbor id in a tracking process.
  *
- * When tracking a branch the neighbor pixels (x) adjacent to the previous pixel (p) are by construction not part of the
- * branch. The most likely next pixels are the ones in the opposite direction of the previous pixel (p). (The fourth and
- * fifth neighbors should theoretically never be the next pixel if the skeleton is valid.) x 4 1
+ * When tracking a branch the neighbor pixels (x) adjacent to the previous pixel
+ * (p) are by construction not part of the branch. The most likely next pixels
+ * are the ones in the opposite direction of the previous pixel (p). (The fourth
+ * and fifth neighbors should theoretically never be the next pixel if the
+ * skeleton is valid.) x 4 1
  *  ->  p c 0   (c is the current pixel and p is the previous pixel,
  *      x 5 2    in this example the neighbor id of c relative to p is 3.)
  */
 static const std::array<std::array<int, 5>, 8> TRACK_NEXT_NEIGHBORS = {{
-    {0, 1, 7, 2, 6},  // neighbor index of c relative to p is 0 (previous pixel is bottom-right)
+    {0, 1, 7, 2, 6},  // neighbor index of c relative to p is 0 (previous pixel
+                      // is bottom-right)
     {1, 2, 0, 3, 7},  // neighbor index of c relative to p is 1 (previous pixel is bottom)
-    {2, 3, 1, 4, 0},  // neighbor index of c relative to p is 2 (previous pixel is bottom-left)
+    {2, 3, 1, 4, 0},  // neighbor index of c relative to p is 2 (previous pixel
+                      // is bottom-left)
     {3, 4, 2, 5, 1},  // neighbor index of c relative to p is 3 (previous pixel is left)
     {4, 5, 3, 6, 2},  // neighbor index of c relative to p is 4 (previous pixel is top-left)
     {5, 6, 4, 7, 3},  // neighbor index of c relative to p is 5 (previous pixel is top)
-    {6, 7, 5, 0, 4},  // neighbor index of c relative to p is 6 (previous pixel is top-right)
+    {6, 7, 5, 0, 4},  // neighbor index of c relative to p is 6 (previous pixel
+                      // is top-right)
     {7, 0, 6, 1, 5}   // neighbor index of c relative to p is 7 (previous pixel is right)
 }};
 
 /**
- * @brief Array containing the possible next neighbors id given the previous neighbor id in a tracking process.
+ * @brief Array containing the possible next neighbors id given the previous
+ * neighbor id in a tracking process.
  *
- * When tracking a branch the neighbor pixels (x) adjacent to the previous pixel (p) are by construction not part of the
- * branch. The closest pixels (vertical and horizontal) are listed first (The fourth and fifth neighbors should
+ * When tracking a branch the neighbor pixels (x) adjacent to the previous pixel
+ * (p) are by construction not part of the branch. The closest pixels (vertical
+ * and horizontal) are listed first (The fourth and fifth neighbors should
  * theoretically never be the next pixel if the skeleton is valid.) x 1 3
  *  ->  p c 0   (c is the current pixel and p is the previous pixel,
  *      x 2 4    in this example the neighbor id of c relative to p is 3.)
@@ -431,13 +455,16 @@ static const std::array<std::array<int, 5>, 8> TRACK_NEXT_NEIGHBORS = {{
  *      5 2 3    in this example the neighbor id of c relative to p is 4.)
  */
 static const std::array<std::array<int, 5>, 8> TRACK_CLOSE_NEIGHBORS = {{
-    {7, 1, 0, 6, 2},  // neighbor index of c relative to p is 0 (previous pixel is bottom-right)
+    {7, 1, 0, 6, 2},  // neighbor index of c relative to p is 0 (previous pixel
+                      // is bottom-right)
     {1, 7, 3, 0, 2},  // neighbor index of c relative to p is 1 (previous pixel is bottom)
-    {1, 3, 2, 0, 4},  // neighbor index of c relative to p is 2 (previous pixel is bottom-left)
+    {1, 3, 2, 0, 4},  // neighbor index of c relative to p is 2 (previous pixel
+                      // is bottom-left)
     {3, 1, 5, 2, 4},  // neighbor index of c relative to p is 3 (previous pixel is left)
     {3, 5, 4, 2, 6},  // neighbor index of c relative to p is 4 (previous pixel is top-left)
     {5, 3, 7, 4, 6},  // neighbor index of c relative to p is 5 (previous pixel is top)
-    {5, 7, 6, 4, 0},  // neighbor index of c relative to p is 6 (previous pixel is top-right)
+    {5, 7, 6, 4, 0},  // neighbor index of c relative to p is 6 (previous pixel
+                      // is top-right)
     {7, 5, 1, 6, 0}   // neighbor index of c relative to p is 7 (previous pixel is right)
 }};
 
@@ -473,7 +500,8 @@ uint8_t roll_neighbors(uint8_t neighborhood, uint8_t n);
  * @param z Binary image.
  * @param y Row of the pixel.
  * @param x Column of the pixel.
- * @return unsigned short Value of the 8 neighbors of the pixel. The top-left neighbor is the most significant bit.
+ * @return unsigned short Value of the 8 neighbors of the pixel. The top-left
+ * neighbor is the most significant bit.
  */
 template <typename T>
 uint8_t get_neighborhood_safe(const Tensor2DAcc<T>& z, int y, int x) {
@@ -504,12 +532,14 @@ uint8_t get_neighborhood_safe(const Tensor2DAcc<T>& z, int y, int x) {
  *  8 . 4 -> 0x80  .   0x08
  *  7 6 5    0x40 0x20 0x10
  *
- * Assume that z contains a pixel at the position (y, x) and that the pixel is not at the border of the image.
+ * Assume that z contains a pixel at the position (y, x) and that the pixel is
+ * not at the border of the image.
  *
  * @param z Binary image.
  * @param y Row of the pixel.
  * @param x Column of the pixel.
- * @return unsigned short Value of the 8 neighbors of the pixel. The top-left neighbor is the most significant bit.
+ * @return unsigned short Value of the 8 neighbors of the pixel. The top-left
+ * neighbor is the most significant bit.
  */
 template <typename T>
 uint8_t get_neighborhood(const Tensor2DAcc<T>& z, int y, int x) {

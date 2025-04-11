@@ -24,9 +24,13 @@ Point IntPoint::operator/(double f) const { return Point(y / f, x / f); }
 bool IntPoint::operator==(const IntPoint& p) const { return (x == p.x && y == p.y); }
 bool IntPoint::operator!=(const IntPoint& p) const { return (x != p.x || y != p.y); }
 bool IntPoint::is_inside(int h, int w) const { return (x >= 0 && x < w && y >= 0 && y < h); }
+bool IntPoint::is_inside(int y0, int x0, int y1, int x1) const { return (x >= x0 && x < x1 && y >= y0 && y < y1); }
 bool IntPoint::is_inside(const IntPoint& p) const { return (x >= 0 && x < p.x && y >= 0 && y < p.y); }
+bool IntPoint::is_adjacent(const IntPoint& p) const { return (std::abs(x - p.x) <= 1 && std::abs(y - p.y) <= 1); }
 
 IntPair IntPoint::toIntPair() const { return {y, x}; }
+int IntPoint::max() const { return std::max(y, x); }
+int IntPoint::min() const { return std::min(y, x); }
 
 // === Point ===
 Point::Point(double y, double x) : y(y), x(x) {}
@@ -51,6 +55,12 @@ Point& Point::operator-=(const Point& p) {
     this->y -= p.y;
     return *this;
 }
+Point& Point::operator/=(const double& p) {
+    if (p == 0 && x == 0 && y == 0) return *this;
+    this->x /= p;
+    this->y /= p;
+    return *this;
+}
 
 Point Point::operator+(const Point& p) const { return Point(p.y + y, p.x + x); }
 Point Point::operator+(const IntPoint& p) const { return Point(p.y + y, p.x + x); }
@@ -58,7 +68,10 @@ Point Point::operator-(const Point& p) const { return Point(y - p.y, x - p.x); }
 Point Point::operator-(const IntPoint& p) const { return Point(y - p.y, x - p.x); }
 Point Point::operator-() const { return Point(-y, -x); }
 Point Point::operator*(double s) const { return Point(y * s, x * s); }
-Point Point::operator/(double s) const { return Point(y / s, x / s); }
+Point Point::operator/(double s) const {
+    if (s == 0 && x == 0 && y == 0) return *this;
+    return Point(y / s, x / s);
+}
 
 bool Point::operator==(const Point& p) const { return (x == p.x && y == p.y); }
 bool Point::operator==(const IntPoint& p) const { return (x == p.x && y == p.y); }
@@ -72,34 +85,44 @@ Point Point::normalize() const {
 }
 
 double Point::dot(const Point& p) const { return y * p.y + x * p.x; }
-double Point::cos(const Point& p) const { return dot(p) / (norm() * p.norm()); }
+double Point::cosSim(const Point& p) const { return dot(p) / (norm() * p.norm()); }
 double Point::cross(const Point& p) const { return y * p.x - x * p.y; }
 double Point::squaredNorm() const { return y * y + x * x; }
 Point Point::positiveCoordinates() const { return Point(std::abs(y), std::abs(x)); }
 Point Point::rot90() const { return Point(-x, y); }
 Point Point::rot270() const { return Point(x, -y); }
 double Point::norm() const { return sqrt(y * y + x * x); }
+Point Point::abs() const { return Point(std::abs(y), std::abs(x)); }
+double Point::max() const { return std::max(y, x); }
+double Point::min() const { return std::min(y, x); }
 double Point::angle() const { return atan2(y, x); }
 double Point::angle(const Point& p) const { return acos(dot(p) / (norm() * p.norm())); }
-/// @brief Rotate the point by an angle in radians. Positive rotation is clockwise.
+/// @brief Rotate the point by an angle in radians. Positive rotation is
+/// clockwise.
 /// @param angle
 /// @return The rotated point.
 Point Point::rotate(double angle) const { return rotate(Point(sin(angle), cos(angle))); }
-/// @brief Rotate the point by the angle from the positive x-axis to the u vector.
+/// @brief Rotate the point by the angle from the positive x-axis to the u
+/// vector.
 /// @param u A unitary vector.
 /// @return The rotated point.
 Point Point::rotate(const Point& u) const { return Point(y * u.x + x * u.y, x * u.x - y * u.y); }
-/// @brief Rotate the point by the angle from the u vector to the positive x-axis (effectively using u as the new
-/// base vector for the x-axis).
+/// @brief Rotate the point by the angle from the u vector to the positive
+/// x-axis (effectively using u as the new base vector for the x-axis).
 /// @param u A unitary vector.
 /// @return The rotated point.
 Point Point::rotate_neg(const Point& u) const { return Point(y * u.x - x * u.y, x * u.x + y * u.y); }
 
 bool Point::is_inside(double h, double w) const { return (x >= 0 && x < w && y >= 0 && y < h); }
+bool Point::is_inside(double y0, double x0, double y1, double x1) const {
+    return (x >= x0 && x < x1 && y >= y0 && y < y1);
+}
 bool Point::is_inside(const Point& p) const { return (x >= 0 && x < p.x && y >= 0 && y < p.y); }
 bool Point::is_null() const { return (x == 0 && y == 0); }
 
 IntPoint Point::toInt() const { return IntPoint((int)round(y), (int)round(x)); }
+IntPoint Point::floor() const { return IntPoint((int)std::floor(y), (int)std::floor(x)); }
+IntPoint Point::ceil() const { return IntPoint((int)std::ceil(y), (int)std::ceil(x)); }
 IntPair Point::toIntPair() const { return {(int)round(y), (int)round(x)}; }
 FloatPair Point::toFloatPair() const { return {(float)y, (float)x}; }
 
@@ -426,9 +449,9 @@ bool Edge::operator==(const Edge& e) const { return (start == e.start && end == 
 bool Edge::operator!=(const Edge& e) const { return (start != e.start || end != e.end || id != e.id); }
 bool Edge::operator<(const Edge& e) const { return id < e.id; }
 
-GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N, bool directed) {
+GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N, bool directed, bool keep_orientation) {
     if (N < 0) {
-        N = 0;
+        N = -1;
         for (const IntPair& e : edges) N = std::max(N, std::max(e[0], e[1]));
         N++;
     }
@@ -438,7 +461,13 @@ GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N, bool
     for (const IntPair& e : edges) {
         const Edge edge(e[0], e[1], i);
         graph[edge.start].insert(edge);
-        if (!directed) graph[edge.end].insert(edge);
+        if (!directed) {
+            if (keep_orientation) {
+                graph[edge.end].insert(edge);
+            } else {
+                graph[edge.end].insert(Edge(e[1], e[0], i));
+            }
+        }
         i++;
     }
     return graph;

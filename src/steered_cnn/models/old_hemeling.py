@@ -1,6 +1,7 @@
 import torch
 from torch import nn
-from ..utils import ConvBN, cat_crop
+
+from ..utils.torch import ConvBN, cat_crop
 
 
 class OldHemelingNet(nn.Module):
@@ -16,7 +17,7 @@ class OldHemelingNet(nn.Module):
         n4 = nfeatures_base * 8
         n5 = nfeatures_base * 16
 
-        kernel_height = half_kernel_height*2-1
+        kernel_height = half_kernel_height * 2 - 1
 
         # Down
         self.conv1 = ConvBN(kernel_height, n_in, n1, relu=True, padding=padding)
@@ -61,7 +62,6 @@ class OldHemelingNet(nn.Module):
         self.dropout = torch.nn.Dropout(p_dropout) if p_dropout else lambda x: x
 
     def forward(self, x):
-
         # Down
         x1 = self.conv2(self.conv1(x))
 

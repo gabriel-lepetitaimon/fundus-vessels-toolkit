@@ -1,2 +1,2 @@
-from .bifurcations import bifurcations_biomarkers
-from .branches import branch_tortuosity
+from .bifurcations import assign_strahler_number, bifurcations_biomarkers, parametrize_bifurcations
+from .branches import branch_bspline_tortuosity, branch_tortuosity, parametrize_branches

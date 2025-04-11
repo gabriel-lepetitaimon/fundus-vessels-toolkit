@@ -123,7 +123,7 @@ def multi_vgraph_registration(
 
     # Accumulate the transformation from all other graphs to the center of the spanning tree
     root = nx.center(ST)[0]
-    yx0 = vgraphs[root].nodes_coord()
+    yx0 = vgraphs[root].node_coord()
     transformations = {root: FundusProjection.identity()}
 
     if iterative:
@@ -160,14 +160,14 @@ def multi_vgraph_registration(
             ):
                 # Apply the already established transformation to the matched node of the adjacent fundus
                 T_adj_0 = transformations[adj_fundus]
-                adj_transformed_coord = T_adj_0.transform(vgraphs[adj_fundus].nodes_coord()[adj_match])
+                adj_transformed_coord = T_adj_0.transform(vgraphs[adj_fundus].node_coord()[adj_match])
                 # Accumulate the transformed coordinates
                 extended_adj_coord[match_id] += adj_transformed_coord
             # Normalize the accumulated coordinates by the number of fundus where each node was matched
             extended_adj_coord /= ext_match_count[:, None]
 
             # Return the matched nodes coordinates in the current fundus and in the already transformed fundus
-            return vgraphs[fundus_id].nodes_coord()[ext_match], extended_adj_coord
+            return vgraphs[fundus_id].node_coord()[ext_match], extended_adj_coord
 
     else:
         priority = None
@@ -200,13 +200,13 @@ def multi_vgraph_registration(
 
         # If the transformation is inexact and we want to ensure exactness, recompute it from scratch
         if ensure_exact == "inverse" and not T21.is_inverse_exact:
-            yx2 = vgraphs[i2].nodes_coord()[match2]
-            yx1 = vgraphs[i1].nodes_coord()[match1]
+            yx2 = vgraphs[i2].node_coord()[match2]
+            yx1 = vgraphs[i1].node_coord()[match1]
             T12 = FundusProjection.fit_to_projection(yx1, yx2, projection=projection)[0]
             T21 = T12.invert()
         elif ensure_exact == "direct" and not T21.is_exact:
-            yx2 = vgraphs[i2].nodes_coord()[match2]
-            yx1 = vgraphs[i1].nodes_coord()[match1]
+            yx2 = vgraphs[i2].node_coord()[match2]
+            yx1 = vgraphs[i1].node_coord()[match1]
             T21 = FundusProjection.fit_to_projection(yx2, yx1, projection=projection)[0]
 
         # Compose the transformation with the already computed one

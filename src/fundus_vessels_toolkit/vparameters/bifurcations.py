@@ -1,7 +1,11 @@
-from typing import Dict, List, Optional
+import warnings
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
+
+from fundus_vessels_toolkit.utils.geometric import Point
 
 from ..utils.graph.measures import extract_bifurcations_parameters as extract_bifurcations_parameters
 from ..utils.math import modulo_pi
@@ -24,8 +28,16 @@ def bifurcations_biomarkers(d0, d1, d2, θ1, θ2, *, as_dict=True) -> Dict[str, 
     """
     θ_branching = θ1 + θ2
     θ_assymetry = abs(θ1 - θ2)
+
     assymetry_ratio = d2**2 / d1**2
     branching_coefficient = (d1 + d2) ** 2 / d0**2
+    area_ratio = d1**2 + d2**2 / d0**2
+
+    # Optimality Ratio: https://link.springer.com/content/pdf/10.1016/j.artres.2010.06.003.pdf
+    optimality_ratio = ((d1**3 + d2**3) / 2 * d0**3) ** (1 / 3)
+    optimality_dev = abs(optimality_ratio - 1 / 2 ** (1 / 3))
+
+    junctional_exponent_dev = (abs(d0**3 - d1**3 - d2**3) ** (1 / 3)) / d0
 
     if as_dict:
         return {
@@ -33,8 +45,21 @@ def bifurcations_biomarkers(d0, d1, d2, θ1, θ2, *, as_dict=True) -> Dict[str, 
             "θ_assymetry": θ_assymetry,
             "assymetry_ratio": assymetry_ratio,
             "branching_coefficient": branching_coefficient,
+            "area_ratio": area_ratio,
+            "optimality_ratio": optimality_ratio,
+            "optimality_dev": optimality_dev,
+            "junctional_exponent_dev": junctional_exponent_dev,
         }
-    return [θ_branching, θ_assymetry, assymetry_ratio, branching_coefficient]
+    return [
+        θ_branching,
+        θ_assymetry,
+        assymetry_ratio,
+        branching_coefficient,
+        area_ratio,
+        optimality_ratio,
+        optimality_dev,
+        junctional_exponent_dev,
+    ]
 
 
 def parametrize_bifurcations(
@@ -91,17 +116,21 @@ def parametrize_bifurcations(
         A DataFrame containing the parameters of the bifurcations
     """  # noqa: E501
 
+    from ..segment_to_graph.geometry_parsing import derive_tips_geometry_from_curve_geometry
+
+    derive_tips_geometry_from_curve_geometry(vtree, tangent=True, calibre=True, inplace=True)
+
     gdata = vtree.geometric_data()
-    nodes_yx = gdata.nodes_coord()
+    nodes_yx = gdata.node_coord()
     bifurcations = []
     bifurcations_yx = []
 
-    if strahler_field is not None and strahler_field not in vtree.branches_attr:
+    if strahler_field is not None and strahler_field not in vtree.branch_attr:
         assign_strahler_number(vtree, field=strahler_field)
 
-    if branch_rank_field is not None and branch_rank_field not in vtree.branches_attr:
-        vtree.branches_attr[branch_rank_field] = 1
-        vtree.nodes_attr[branch_rank_field] = 0
+    if branch_rank_field is not None and branch_rank_field not in vtree.branch_attr:
+        vtree.branch_attr[branch_rank_field] = 1
+        vtree.node_attr[branch_rank_field] = 0
 
     for branch in vtree.walk_branches():
         if branch_rank_field is not None:
@@ -120,7 +149,7 @@ def parametrize_bifurcations(
         head_calibre = head_data.get(calibre_tip, np.nan)
 
         if np.isnan(head_tangent).any() or np.sum(head_tangent) == 0:
-            head_tangent = np.diff(gdata.nodes_coord(list(branch.directed_nodes_id)), axis=0)[0]
+            head_tangent = np.diff(gdata.node_coord(list(branch.directed_node_ids)), axis=0)[0]
             head_tangent /= np.linalg.norm(head_tangent)
 
         # === Get the calibres and tangents data for its successors ===
@@ -132,8 +161,9 @@ def parametrize_bifurcations(
         for i, ter_branch in enumerate(tertiary_branches):
             if np.isnan(tertiary_tangents[i]).any() or np.sum(tertiary_tangents[i]) == 0:
                 # If the tangent is not available, fallback to the difference of nodes coordinates
-                tertiary_tangents[i] = np.diff(gdata.nodes_coord(list(ter_branch.directed_nodes_id)), axis=0)[0]
-                tertiary_tangents[i] /= np.linalg.norm(tertiary_tangents[i])
+                tertiary_tangents[i] = np.diff(gdata.node_coord(list(ter_branch.directed_node_ids)), axis=0)[0]
+                if (tertiary_tangents[i] != 0).any():
+                    tertiary_tangents[i] /= np.linalg.norm(tertiary_tangents[i])
 
         # === Select the secondary branch (main successor) ===
         second_branch_i = 0
@@ -202,10 +232,27 @@ def parametrize_bifurcations(
     df = pd.DataFrame(bifurcations, columns=columns)
 
     if fundus_data is not None:
-        if fundus_data.has_macula:
-            df.insert(4, "dist_macula", fundus_data.macula_center.distance(bifurcations_yx))
-        if fundus_data.has_od:
+        if len(bifurcations_yx) == 0 or all(len(_) == 0 for _ in bifurcations_yx):
+            warnings.warn(
+                "No bifurcations was found in the provided VTree"
+                + (f" (for image: {fundus_data.name})" if fundus_data.has_name else "")
+                + "."
+            )
+            return df
+
+        bifurcations_yx = np.stack(bifurcations_yx)
+        macula_center = fundus_data.infered_macula_center()
+        if macula_center is not None:
+            df.insert(4, "dist_macula", macula_center.distance(bifurcations_yx))
+        if fundus_data.od_center is not None:
             df.insert(4, "dist_od", fundus_data.od_center.distance(bifurcations_yx))
+            if macula_center is not None and fundus_data.od_diameter is not None:
+                norm_coord, norm_dist_od = node_normalized_coordinates(
+                    bifurcations_yx, fundus_data.od_center, fundus_data.od_diameter, macula_center
+                )
+                df.insert(4, "norm_coord_x", norm_coord[:, 1])
+                df.insert(4, "norm_coord_y", norm_coord[:, 0])
+                df.insert(4, "norm_dist_od", norm_dist_od)
 
     return df
 
@@ -227,9 +274,9 @@ def assign_strahler_number(vtree: VTree, field: str = "strahler") -> VTree:
     VTree
         The VTree with the Strahler numbers assigned.
     """
-    vtree.nodes_attr[field] = 1
-    vtree.branches_attr[field] = 1
-    reverse_depth_order = np.array(list(vtree.walk(depth_first=True)), dtype=int)[::-1]
+    vtree.node_attr[field] = 1
+    vtree.branch_attr[field] = 1
+    reverse_depth_order = np.array(list(vtree.walk_branch_ids(traversal="dfs")), dtype=int)[::-1]
     for branch in vtree.branches(reverse_depth_order):
         if branch.has_successors:
             strahlers = sorted([s.attr[field] for s in branch.successors()], reverse=True)
@@ -238,3 +285,45 @@ def assign_strahler_number(vtree: VTree, field: str = "strahler") -> VTree:
             else:
                 branch.attr[field] = strahlers[0] + 1
         branch.tail_node().attr[field] = branch.attr[field]
+
+    return vtree
+
+
+def node_normalized_coordinates(
+    yx: npt.NDArray[np.float64], od_center: Point, od_diameter: float, macula_center: Point
+) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """
+    Compute the normalized coordinates of the nodes of a VTree.
+
+    Parameters
+    ----------
+    yx: npt.NDArray[np.float64]
+        The coordinates of the nodes as a 2D array of shape (n, 2).
+
+    od_center: Point
+        The center of the optic disc.
+
+    od_diameter: float
+        The diameter of the optic disc.
+
+    macula_center: Point
+        The center of the macula.
+
+    Returns
+    -------
+    normalized_coord: npt.NDArray[np.float64]
+        The normalized coordinates of the nodes as a 2D array of shape (n, 2).
+
+    normalized_od_dist: npt.NDArray[np.float64]
+        The normalized distance of the nodes to the optic disc as a 1D array of shape (n,).
+    """
+    normalized_od_dist = od_center.distance(yx) / od_diameter - 0.5
+    centered_coord = yx - od_center.numpy()[None, :]
+    normalized_coord = centered_coord / od_center.distance(macula_center)
+    u = (macula_center - od_center).normalized()
+    y, x = normalized_coord.T
+    rotated_coord = np.stack([y * u.x + x * u.y, x * u.x - y * u.y], axis=1)
+    if od_center.x < macula_center.x:
+        rotated_coord[:, 0] = -rotated_coord[:, 0]
+
+    return rotated_coord, normalized_od_dist

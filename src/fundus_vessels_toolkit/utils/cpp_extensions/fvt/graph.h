@@ -7,10 +7,14 @@
  *              === GRAPH_UTILS.CPP ===
  **************************************************************************************/
 EdgeList terminal_edges(const EdgeList &edgeList, bool directed = false);
-EdgeList terminal_edges(const GraphAdjList &edgeList);
+EdgeList terminal_edges(const GraphAdjList &adjList);
 std::vector<int> nodes_rank(const EdgeList &edgeList, bool onlyIncoming = false);
 std::vector<int> nodes_rank(const GraphAdjList &edgeList);
 std::size_t nodesCount(const EdgeList &edgeList);
+
+std::vector<std::list<int>> connected_components(const EdgeList &edgeList, int N = -1);
+std::vector<std::list<int>> connected_components(const GraphAdjList &adjList);
+std::vector<int> maximum_weighted_independent_set(std::vector<IntPair> edges, std::vector<float> weights);
 
 /**************************************************************************************
  *              === GRAPH_FIXING.CPP ===

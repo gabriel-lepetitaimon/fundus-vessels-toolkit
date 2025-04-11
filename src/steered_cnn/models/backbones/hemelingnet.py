@@ -1,14 +1,29 @@
+from collections import OrderedDict
+
 import torch
 from torch import nn
-from collections import OrderedDict
-from ...utils.torch import cat_crop, ConvBN
+
+from ...utils.torch import ConvBN, cat_crop
 from .model import Model
 
 
 class HemelingNet(Model):
-    def __init__(self, n_in, n_out=1, nfeatures=64, kernel=3, depth=2, nscale=5, padding='same',
-                 p_dropout=0, dropout_mode='shortcut', batchnorm=True, downsampling='maxpooling', upsampling='conv',
-                 **kwargs):
+    def __init__(
+        self,
+        n_in,
+        n_out=1,
+        nfeatures=64,
+        kernel=3,
+        depth=2,
+        nscale=5,
+        padding="same",
+        p_dropout=0,
+        dropout_mode="shortcut",
+        batchnorm=True,
+        downsampling="maxpooling",
+        upsampling="conv",
+        **kwargs,
+    ):
         """
         :param n_in: Number of input features (or channels).
         :param n_out: Number of output features (or classes).
@@ -30,67 +45,88 @@ class HemelingNet(Model):
             - bilinear: Bilinear upsampling
             - nearest: Nearest upsampling
         """
-        super().__init__(n_in=n_in, n_out=n_out, nfeatures=nfeatures, depth=depth, nscale=nscale,
-                         kernel=kernel, padding=padding, p_dropout=p_dropout, dropout_mode=dropout_mode.lower(),
-                         batchnorm=batchnorm, downsampling=downsampling.lower(), upsampling=upsampling.lower(),
-                         **kwargs)
+        super().__init__(
+            n_in=n_in,
+            n_out=n_out,
+            nfeatures=nfeatures,
+            depth=depth,
+            nscale=nscale,
+            kernel=kernel,
+            padding=padding,
+            p_dropout=p_dropout,
+            dropout_mode=dropout_mode.lower(),
+            batchnorm=batchnorm,
+            downsampling=downsampling.lower(),
+            upsampling=upsampling.lower(),
+            **kwargs,
+        )
 
         if isinstance(nfeatures, int):
-            nfeatures = [nfeatures*(2**scale) for scale in range(nscale)]
+            nfeatures = [nfeatures * (2**scale) for scale in range(nscale)]
         if isinstance(nfeatures, (tuple, list)):
             if len(nfeatures) == nscale:
                 nfeatures = nfeatures + list(reversed(nfeatures[:-1]))
-            elif len(nfeatures) != nscale*2-1:
-                raise ValueError(f'Invalid length for nfeatures: {nfeatures}.\n '
-                                 f'Should be nscale={nscale} or nscale*2-1={nscale*2-1}.')
+            elif len(nfeatures) != nscale * 2 - 1:
+                raise ValueError(
+                    f"Invalid length for nfeatures: {nfeatures}.\n "
+                    f"Should be nscale={nscale} or nscale*2-1={nscale*2-1}."
+                )
 
         # Down
         self.down_conv = []
         self.downsample = []
-        if downsampling.lower() not in ('maxpooling', 'averagepooling', 'conv'):
-            raise ValueError(f'downsampling must be one of: "maxpooling", "averagepooling", "conv". '
-                             f'Provided: {downsampling}.')
+        if downsampling.lower() not in ("maxpooling", "averagepooling", "conv"):
+            raise ValueError(
+                f'downsampling must be one of: "maxpooling", "averagepooling", "conv". ' f"Provided: {downsampling}."
+            )
         for i in range(nscale):
-            nf_prev = n_in if i == 0 else nfeatures[i-1]
+            nf_prev = n_in if i == 0 else nfeatures[i - 1]
             nf_scale = nfeatures[i]
             conv_stack = [self.setup_convbn(nf_prev, nf_scale, kernel)]
-            conv_stack += [self.setup_convbn(nf_scale, nf_scale, kernel) for _ in range(depth-1)]
+            conv_stack += [self.setup_convbn(nf_scale, nf_scale, kernel) for _ in range(depth - 1)]
             self.down_conv += [conv_stack]
             for j, mod in enumerate(conv_stack):
-                self.add_module(f'downconv{i}-{j}', mod)
+                self.add_module(f"downconv{i}-{j}", mod)
 
-            if i != nscale-1:
-                if downsampling.lower() == 'conv':
+            if i != nscale - 1:
+                if downsampling.lower() == "conv":
                     downsample = self.setup_convbn(nf_scale, nf_scale, kernel=2, stride=2)
                 else:
-                    downsample = nn.MaxPool2d(2) if downsampling.lower()=='maxpooling' else nn.AvgPool2d(2)
+                    downsample = nn.MaxPool2d(2) if downsampling.lower() == "maxpooling" else nn.AvgPool2d(2)
                 self.downsample += [downsample]
-                self.add_module(f'downsample{i}', downsample)
+                self.add_module(f"downsample{i}", downsample)
 
         # Up Conv
         self.up_conv = []
         self.upsample = []
-        if upsampling.lower() not in ('conv', 'linear', 'bilinear', 'bicubic', 'nearest'):
-            raise ValueError(f'upsampling must be one of: "linear", "bilinear", "bicubic", "nearest", "conv". '
-                             f'Provided: {upsampling}.')
-        for i in range(nscale, 2*nscale-1):
-            nf_prev = nfeatures[i-1]
+        if upsampling.lower() not in ("conv", "linear", "bilinear", "bicubic", "nearest"):
+            raise ValueError(
+                f'upsampling must be one of: "linear", "bilinear", "bicubic", "nearest", "conv". '
+                f"Provided: {upsampling}."
+            )
+        for i in range(nscale, 2 * nscale - 1):
+            nf_prev = nfeatures[i - 1]
             nf_scale = nfeatures[i]
-            nf_concat = nf_scale + nfeatures[2*nscale-i-2]
-            if upsampling.lower() == 'conv':
+            nf_concat = nf_scale + nfeatures[2 * nscale - i - 2]
+            if upsampling.lower() == "conv":
                 upsample = self.setup_convtranspose(nf_prev, nf_scale)
             else:
-                upsample = nn.Sequential(OrderedDict({
-                        'conv': ConvBN(1, nf_prev, nf_scale, bn=False, relu=False),
-                        'upsample': torch.nn.Upsample(scale_factor=2, mode=upsampling.lower())}))
+                upsample = nn.Sequential(
+                    OrderedDict(
+                        {
+                            "conv": ConvBN(1, nf_prev, nf_scale, bn=False, relu=False),
+                            "upsample": torch.nn.Upsample(scale_factor=2, mode=upsampling.lower()),
+                        }
+                    )
+                )
             self.upsample += [upsample]
-            self.add_module(f'upsample{i}', upsample)
+            self.add_module(f"upsample{i}", upsample)
 
             conv_stack = [self.setup_convbn(nf_concat, nf_scale, kernel)]
-            conv_stack += [self.setup_convbn(nf_scale, nf_scale, kernel) for _ in range(depth-1)]
+            conv_stack += [self.setup_convbn(nf_scale, nf_scale, kernel) for _ in range(depth - 1)]
             self.up_conv += [conv_stack]
             for j, mod in enumerate(conv_stack):
-                self.add_module(f'upconv{i}-{j}', mod)
+                self.add_module(f"upconv{i}-{j}", mod)
 
         # End
         self.final_conv = ConvBN(1, nfeatures[-1], n_out, relu=False, bn=False)
@@ -124,7 +160,7 @@ class HemelingNet(Model):
         xscale = []
         for conv_stack, downsample in zip(self.down_conv[:-1], self.downsample):
             x = self.reduce_stack(conv_stack, x)
-            xscale += [self.dropout(x)] if self.dropout_mode == 'shortcut' else [x]
+            xscale += [self.dropout(x)] if self.dropout_mode == "shortcut" else [x]
             x = downsample(x)
 
         x = self.reduce_stack(self.down_conv[-1], x)

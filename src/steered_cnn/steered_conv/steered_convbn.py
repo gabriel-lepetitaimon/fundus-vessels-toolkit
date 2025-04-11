@@ -1,11 +1,23 @@
 from torch import nn
+
 from .steered_conv import SteeredConv2d
 
 
 class SteeredConvBN(nn.Module):
-    def __init__(self, n_in, n_out=None, stride=1, padding='same', dilation=1, bn=False, relu=True,
-                 steerable_base=None, rho_nonlinearity=None,
-                 attention_mode=False, attention_base=None):
+    def __init__(
+        self,
+        n_in,
+        n_out=None,
+        stride=1,
+        padding="same",
+        dilation=1,
+        bn=False,
+        relu=True,
+        steerable_base=None,
+        rho_nonlinearity=None,
+        attention_mode=False,
+        attention_base=None,
+    ):
         """
 
         Args:
@@ -61,10 +73,19 @@ class SteeredConvBN(nn.Module):
         if n_out is None:
             n_out = n_in
         self.n_out = n_out
-        self.conv = SteeredConv2d(n_in, n_out, steerable_base=steerable_base, stride=stride,
-                                  padding=padding, bias=not bn, dilation=dilation, attention_base=attention_base,
-                                  attention_mode=attention_mode, rho_nonlinearity=rho_nonlinearity,
-                                  nonlinearity=('relu' if bn else 'selu') if relu else 'linear')
+        self.conv = SteeredConv2d(
+            n_in,
+            n_out,
+            steerable_base=steerable_base,
+            stride=stride,
+            padding=padding,
+            bias=not bn,
+            dilation=dilation,
+            attention_base=attention_base,
+            attention_mode=attention_mode,
+            rho_nonlinearity=rho_nonlinearity,
+            nonlinearity=("relu" if bn else "selu") if relu else "linear",
+        )
         bn_relu = []
         if bn:
             bn_relu += [nn.BatchNorm2d(n_out)]
@@ -92,12 +113,12 @@ class SteeredConvBN(nn.Module):
         return None
 
     def __getattr__(self, item):
-        if item in ('stride', 'padding', 'dilation'):
+        if item in ("stride", "padding", "dilation"):
             return getattr(self.conv, item)
         return super().__getattr__(item)
 
     def __setattr__(self, key, value):
-        if key in ('stride', 'padding', 'dilation'):
+        if key in ("stride", "padding", "dilation"):
             setattr(self.conv, key, value)
         else:
             super().__setattr__(key, value)

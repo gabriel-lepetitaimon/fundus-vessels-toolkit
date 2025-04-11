@@ -5,7 +5,7 @@ from torch.__config__ import parallel_info
 from torch.utils import cpp_extension
 
 DEBUG = False
-OPEN_MP = True
+OPEN_MP = not DEBUG
 
 WORKSPACE_FOLDER = Path(__file__).parent
 
@@ -19,7 +19,7 @@ def get_torch_extensions():
         extra_link_args = ["-s"]
 
     info = parallel_info()
-    if OPEN_MP and not DEBUG and "backend: OpenMP" in info and "OpenMP not found" not in info:
+    if OPEN_MP and "backend: OpenMP" in info and "OpenMP not found" not in info:
         extra_compile_args["cxx"] += ["-DAT_PARALLEL_OPENMP"]
         extra_compile_args["cxx"] += ["-fopenmp"]
         extra_link_args += ["-lgomp"]
@@ -29,7 +29,7 @@ def get_torch_extensions():
 
     extra_compile_args["cxx"] += ["-fdiagnostics-color=always"]  # Colorize the output
     extra_compile_args["cxx"] += ["-Wno-dangling-reference"]  # Remove dangling reference warning from torch
-    #extra_link_args += ["-lsupc++"]  # Fix import error: "undefined symbol: __cxa_call_terminate"
+    # extra_link_args += ["-lsupc++"]  # Fix import error: "undefined symbol: __cxa_call_terminate"
 
     CPP_FOLDER = Path("src/fundus_vessels_toolkit/utils/cpp_extensions")
 

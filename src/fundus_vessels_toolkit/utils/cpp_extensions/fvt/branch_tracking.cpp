@@ -1,4 +1,5 @@
 #include "branch.h"
+#include "ray_iterators.h"
 
 /**
  * @brief Find the first and last endpoint of each branch.
@@ -163,18 +164,20 @@ std::vector<CurveYX> track_branches(const torch::Tensor &branch_labels, const to
 }
 
 /**
- * @brief Track the not-segmented pixel on a semi-infinite line defined by a start point and a direction.
+ * @brief Track the not-segmented pixel on a semi-infinite line defined by a
+ * start point and a direction.
  *
  * @param start The start point of the line.
  * @param direction The direction of the line.
- * @param segmentation An accessor to a 2D tensor of shape (H, W) containing the binary segmentation.
+ * @param segmentation An accessor to a 2D tensor of shape (H, W) containing the
+ * binary segmentation.
  * @param max_distance The maximum distance to track.
  *
- * @return The first point of the line for which the segmentation is false. If no such point is found, return
- * IntPoint::Invalid().
+ * @return The first point of the line for which the segmentation is false. If
+ * no such point is found, return IntPoint::Invalid().
  */
-IntPoint track_nearest_border(const IntPoint &start, const Point &direction, const Tensor2DAcc<bool> &segmentation,
-                              int max_distance) {
+IntPoint track_nearest_edge(const IntPoint &start, const Point &direction, const Tensor2DAcc<bool> &segmentation,
+                            int max_distance) {
     if (direction.is_null()) return IntPoint::Invalid();
     const int H = segmentation.size(0), W = segmentation.size(1);
 
@@ -196,18 +199,20 @@ IntPoint track_nearest_border(const IntPoint &start, const Point &direction, con
  * @brief Find the closest pixel to a point in a curve.
  *
  * This method returns the index of the closest pixel to a point in a curve.
- * The search is performed between the start and end indexes.
+ * The search is performed between the start and end indices.
  *
  * @param curve A list of points defining the curve.
  * @param p The point to which the distance should be computed.
  * @param start The start index of the search.
  * @param end The end index of the search.
- * @param findFirstLocalMinimum If true, the search stops at the first local minimum.
+ * @param findFirstLocalMinimum If true, the search stops at the first local
+ * minimum.
  *
- * @return A tuple containing the index of the closest pixel and the distance to the point.
+ * @return A tuple containing the index of the closest pixel and the distance to
+ * the point.
  */
-std::tuple<int, float> findClosestPixel(const CurveYX &curve, const Point &p, int start, int end,
-                                        bool findFirstLocalMinimum) {
+std::tuple<int, float> find_closest_pixel(const CurveYX &curve, const Point &p, int start, int end,
+                                          bool findFirstLocalMinimum) {
     const int inc = (start < end) ? 1 : -1;
     std::tuple<int, float> min_point = {0, distance(curve[start], p)};
     for (int i = start + inc; i != end; i += inc) {
@@ -221,17 +226,51 @@ std::tuple<int, float> findClosestPixel(const CurveYX &curve, const Point &p, in
     return min_point;
 }
 
+std::pair<torch::Tensor, torch::Tensor> find_closest_branches(const torch::Tensor &branch_labels,
+                                                              const torch::Tensor &points,
+                                                              const torch::Tensor &direction, float max_dist,
+                                                              float angle) {
+    TORCH_CHECK(points.ndimension() == 2 && points.size(1) == 2,
+                "Invalid argument points: should have a shape of (N, 2) instead of", points.sizes());
+    const std::size_t N = points.size(0);
+    TORCH_CHECK(direction.ndimension() == 2 && (std::size_t)direction.size(0) == N && direction.size(1) == 2,
+                "Invalid argument direction: should have a shape of (", N, ", 2) instead of", direction.sizes());
+
+    auto points_acc = points.accessor<int, 2>();
+    auto direction_acc = direction.accessor<float, 2>();
+    auto branch_labels_acc = branch_labels.accessor<int, 2>();
+    std::vector<std::pair<uint, IntPoint>> out(N);
+
+    auto branch = torch::empty({(long)N}, torch::kInt);
+    auto intercept = torch::empty({(long)N, 2}, torch::kInt);
+    auto branch_acc = branch.accessor<int, 1>();
+    auto intercept_acc = intercept.accessor<int, 2>();
+
+#pragma omp parallel for
+    for (std::size_t i = 0; i < N; i++) {
+        auto start = IntPoint(points_acc[i][0], points_acc[i][1]);
+        auto dir = Point(direction_acc[i][0], direction_acc[i][1]);
+        const auto &[b, p] = track_nearest_branch(start, dir, angle, max_dist, branch_labels_acc);
+        branch_acc[i] = b - 1;
+        intercept_acc[i][0] = p.y;
+        intercept_acc[i][1] = p.x;
+    }
+
+    return {branch, intercept};
+}
+
 /**
  * @brief Split a curve into contiguous curves.
  *
- * All points of the returned contiguous curves are adjacent (horizontally, vertically or diagonally).
+ * All points of the returned contiguous curves are adjacent (horizontally,
+ * vertically or diagonally).
  *
  * @param curve The curve to split.
  *
  * @return A list of contiguous curves.
  *
  */
-std::list<SizePair> splitInContiguousCurves(const CurveYX &curve) {
+std::list<SizePair> split_contiguous_curves(const CurveYX &curve) {
     if (curve.size() < 2) return {{0, curve.size()}};
 
     std::list<SizePair> curvesBoundaries;
@@ -246,4 +285,59 @@ std::list<SizePair> splitInContiguousCurves(const CurveYX &curve) {
     curvesBoundaries.push_back(SizePair{start, curve.size()});
 
     return curvesBoundaries;
+}
+
+torch::Tensor draw_branches_labels(const std::vector<torch::Tensor> &branchCurves, const torch::Tensor &out,
+                                   const torch::Tensor &nodeCoords, const torch::Tensor &branchList, bool interpolate) {
+    const std::size_t B = branchCurves.size();
+    auto branchesLabels = out.accessor<int, 2>();
+
+    const auto &size = branchesLabels.sizes();
+    int H = size[0], W = size[1];
+
+    for (std::size_t b = 0; b < B; b++) {
+        const auto &curveT = branchCurves[b];
+        TORCH_CHECK(curveT.ndimension() == 2 && curveT.size(1) == 2, "Invalid argument branchCurves: branch ", b,
+                    " should have a shape of (N, 2) instead of ", curveT.sizes());
+        const auto &curve = curveT.accessor<int, 2>();
+        const std::size_t N = curve.size(0);
+        if (N == 0) continue;
+
+        IntPoint prev = {curve[0][0], curve[0][1]};
+        for (std::size_t i = 0; i < N; i++) {
+            IntPoint p = {curve[i][0], curve[i][1]};
+            if (interpolate && !p.is_adjacent(prev)) {
+                draw_line(prev, p, branchesLabels, b + 1, H, W);
+            } else {
+                branchesLabels[p.y][p.x] = b + 1;
+            }
+            prev = p;
+        }
+    }
+
+    if (nodeCoords.numel() == 0 || branchList.numel() == 0) return out;
+
+    TORCH_CHECK(branchList.ndimension() == 2 && branchList.size(1) == 2,
+                "Invalid argument branchList: should have a shape of (B, 2) instead of", branchList.sizes());
+    TORCH_CHECK(
+        nodeCoords.ndimension() == 2 && nodeCoords.size(1) == 2 && nodeCoords.size(0) >= branchList.max().item<int>(),
+        "Invalid argument branchList: should have a shape of (B, 2) instead of", branchList.sizes());
+    auto branchList_acc = branchList.accessor<int, 2>();
+    auto nodeCoords_acc = nodeCoords.accessor<int, 2>();
+
+    for (std::size_t b = 0; b < B; b++) {
+        const IntPoint start = {nodeCoords_acc[branchList_acc[b][0]][0], nodeCoords_acc[branchList_acc[b][0]][1]};
+        const IntPoint end = {nodeCoords_acc[branchList_acc[b][1]][0], nodeCoords_acc[branchList_acc[b][1]][1]};
+        const auto &curve = branchCurves[b].accessor<int, 2>();
+        if (curve.size(0) == 0) {
+            draw_line(start, end, branchesLabels, b + 1);
+        } else {
+            const IntPoint p1 = {curve[0][0], curve[0][1]};
+            const IntPoint p2 = {curve[curve.size(0) - 1][0], curve[curve.size(0) - 1][1]};
+            if (p1 != start) draw_line(start, p1, branchesLabels, b + 1);
+            if (p2 != end) draw_line(p2, end, branchesLabels, b + 1);
+        }
+    }
+
+    return out;
 }
