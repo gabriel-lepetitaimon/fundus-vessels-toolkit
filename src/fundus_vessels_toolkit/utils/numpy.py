@@ -27,6 +27,9 @@ PointArrayLike: TypeAlias = npt.NDArray[np.int_] | List[int] | List[List[int]] |
 IntPairArrayLike: TypeAlias = (
     npt.NDArray[np.int_] | List[int] | List[List[int]] | Tuple[int, int] | List[Tuple[int, int]]
 )
+BoolPairArrayLike: TypeAlias = (
+    npt.NDArray[np.bool_] | List[bool] | List[List[bool]] | Tuple[bool, bool] | List[Tuple[bool, bool]]
+)
 
 
 def readonly(arr: npt.NDArray) -> npt.NDArray:

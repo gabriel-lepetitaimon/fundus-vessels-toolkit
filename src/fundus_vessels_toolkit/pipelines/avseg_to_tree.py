@@ -173,7 +173,7 @@ class AVSegToTree(AVSegToTreeBase):
         mask = None if self.mask_optic_disc is None else ~fundus.od
         skel = self.segToGraph.skeletonize(fundus.vessels, mask=mask)
         vessels = fundus.vessels if self.mask_optic_disc is None else fundus.vessels * ~fundus.od
-        graph = self.segToGraph.from_skel(skel=skel, vessels=vessels, parse_geometry=True, simplify=True)
+        graph = self.segToGraph.from_skel(skel=skel, vessels=vessels, parse_geometry=True, simplify=False)
         if label_av:
             self.assign_av_labels(graph, fundus.av, inplace=True)
             if simplify:

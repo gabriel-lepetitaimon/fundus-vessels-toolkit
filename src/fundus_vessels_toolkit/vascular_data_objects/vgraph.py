@@ -6,7 +6,21 @@ import itertools
 import re
 import warnings
 from pathlib import Path
-from typing import (Any, Dict, Generator, Iterable, List, Literal, Optional, Self, Tuple, Type, TypeAlias, Union, overload)  # noqa: I001 #fmt: skip
+from typing import (
+    Any,
+    Dict,
+    Generator,
+    Iterable,
+    List,
+    Literal,
+    Optional,
+    Self,
+    Tuple,
+    Type,
+    TypeAlias,
+    Union,
+    overload,
+)
 from weakref import WeakSet
 
 import numpy as np
@@ -639,6 +653,43 @@ class VGraph:
                         f"Invalid branch definition: {branch}: {n1} or {n2} is not a valid node index."
                     ) from None
         return cls(branches)
+
+    def subgraph(self, nodes: NodeIndices) -> VGraph:
+        """Create a subgraph from the current graph.
+
+        Parameters
+        ----------
+        ids : NodeIndices
+            The indices of the nodes to include in the subgraph.
+
+        Returns
+        -------
+        VGraph
+            The subgraph created from the current graph.
+        """
+        nodes = np.sort(self.as_node_ids(nodes))
+        if len(nodes) == 0:
+            return VGraph.empty_like(self)
+
+        nodes_lookup = create_removal_lookup(nodes, length=self._node_count, invert=True, replace_value=-1)
+
+        subgraph_branches = np.isin(self._branch_list, nodes).all(axis=1)
+        branch_list = nodes_lookup[self._branch_list[subgraph_branches]]
+        branch_lookup = create_removal_lookup(subgraph_branches, invert=True, replace_value=-1)
+
+        geodata = [gdata.copy() for gdata in self._geometric_data]
+        for gdata in geodata:
+            gdata._reindex_nodes(nodes_lookup)
+            gdata._reindex_branches(branch_lookup)
+
+        return VGraph(
+            branch_list,
+            geodata,
+            self._node_attr.loc[nodes].reset_index(drop=True),
+            self._branch_attr.loc[subgraph_branches].reset_index(drop=True),
+            len(nodes),
+            check_integrity=False,
+        )
 
     ####################################################################################################################
     #  === PROPERTIES ===

@@ -136,6 +136,7 @@ def create_removal_lookup(
     length: Optional[int] = None,
     replace_value: Optional[int] = None,
     add_empty: bool = False,
+    invert: bool = False,
 ) -> npt.NDArray[np.int_]:
     """Create a lookup table to reorder index after having removed elements from an array.
 
@@ -177,6 +178,9 @@ def create_removal_lookup(
     elif removed_mask.dtype != bool:
         raise ValueError("If length is not provided, removed_mask must be a boolean mask.")
 
+    if invert:
+        removed_mask = ~removed_mask
+
     if add_empty:
         lookup = np.concatenate(([0 if replace_value is None else replace_value], np.cumsum(~removed_mask)))
         if replace_value is not None:
@@ -211,7 +215,7 @@ def invert_lookup(lookup: npt.NDArray[np.int_], max_index: Optional[int] = None)
 def reorder_array(array: npt.NDArray, indices: npt.NDArray[np.int_], max_index=None) -> npt.NDArray:
     """
     Reorder an array according to an index table.
-    This is equivalent to array[invert_lookup[indices]].
+    This is equivalent to array[invert_lookup(indices].
 
     """
     if max_index is None:

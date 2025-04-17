@@ -1266,7 +1266,34 @@ def inspect_digraph_solving(
     graph: VGraph,
     *,
     av_attr: str = "av",
-):
+) -> Tuple[Any, VGraph, Tuple[VTree, VTree], Dict[str, Any]]:
+    """
+    Inspect the digraph solving process.
+    This function is used to visualize the digraph solving process and the resulting trees.
+    It creates a mosaic of 3 views:
+    1. The original graph with the AV labels
+    2. The tree with each subtree colored by its label
+    3. The art and vein trees with the AV labels
+
+    Parameters
+    ----------
+    fundus_data : FundusData
+        The fundus data to use for the visualization.
+    graph : VGraph
+        The vascular graph to inspect.
+    av_attr : str
+        The attribute for the vascular graph under which the AV labels are stored.
+        Default is "av".
+
+    Returns
+    -------
+    Tuple
+        A tuple containing the following elements:
+        - The mosaic of the views.
+        - The graph with the AV labels.
+        - The artery and vein trees.
+        - Debug info about the line graph.
+    """
     import pandas as pd
     import panel as pn
     from bokeh.models.widgets.tables import BooleanFormatter, NumberFormatter

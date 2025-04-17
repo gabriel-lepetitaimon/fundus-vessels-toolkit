@@ -164,7 +164,7 @@ class VBranchCurveData(VBranchGeoDataBase):
 
     def __init__(self, data: np.ndarray) -> None:
         super().__init__()
-        self.data = data
+        self.data: npt.NDArray = data
         self.data.flags.writeable = False
 
     def copy(self) -> Self:
@@ -562,6 +562,7 @@ class VBranchGeoData:
 
     Type: TypeAlias = Type[VBranchGeoDataBase]
     Base = VBranchGeoDataBase
+    CurveData = VBranchCurveData
     Descriptor = VBranchGeoDescriptor
     Fields = VBranchGeoField
 

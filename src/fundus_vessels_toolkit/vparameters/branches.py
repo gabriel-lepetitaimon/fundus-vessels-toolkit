@@ -1,11 +1,14 @@
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Literal, Optional
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+from fundus_vessels_toolkit.vascular_data_objects.vgeometric_data import VGeometricData
+
 from ..utils.bezier import BSpline
 from ..utils.math import quantified_roots
+from ..utils.numpy import Bool2DArrayLike
 from ..vascular_data_objects import FundusData, VBranchGeoData, VGraph
 
 
@@ -225,3 +228,91 @@ def chord(curve: np.ndarray):
 
 def arc(curve: np.ndarray):
     return np.sum(np.linalg.norm(np.diff(curve, axis=0), axis=1))
+
+
+def aggregate_branch_attributes(
+    vgraph: VGraph,
+    mask: Optional[Bool2DArrayLike | Callable[[npt.NDArray[np.int_]], npt.NDArray[np.bool_]]] = None,
+    attr_name: VBranchGeoData.Key = VBranchGeoData.Fields.CALIBRES,
+    aggregation: Literal["mean", "median"] = "mean",
+    geodata: VGeometricData | int = 0,
+) -> pd.DataFrame:
+    is_in_mask: Optional[Callable[[npt.NDArray[np.int_]], npt.NDArray[np.bool_]]] = None
+    if isinstance(mask, np.ndarray):
+
+        def filter_by_mask(curve: npt.NDArray[np.int_]) -> npt.NDArray[np.bool_]:
+            return mask[tuple(curve.T)]
+
+        is_in_mask = filter_by_mask
+    elif callable(mask):
+        is_in_mask = mask
+
+    agg_attributes = []
+    branch_ids = []
+    for branch in vgraph.branches():
+        if is_in_mask is not None:
+            curve = branch.curve(geodata=geodata)
+            curve_mask = is_in_mask(curve)
+            if not np.any(curve_mask):
+                continue
+        else:
+            curve_mask = None
+
+        attr = branch.geodata(attr_name)
+        assert isinstance(attr, VBranchGeoData.CurveData), f"Impossible to aggregate attributes {attr_name}"
+        attr_data = attr.data
+
+        if curve_mask is not None:
+            attr_data = attr_data[curve_mask]
+
+        if aggregation == "mean":
+            agg_attr = np.mean(attr_data, axis=0)
+        else:
+            agg_attr = np.median(attr_data, axis=0)
+
+        branch_ids.append(branch.id)
+        agg_attributes.append(agg_attr)
+
+    return pd.DataFrame({attr_name: agg_attributes}, index=branch_ids)
+
+
+def central_equivalent_calibre(
+    graph: VGraph,
+    region: npt.NDArray[np.bool_],
+    av: Literal["artery", "vein"],
+    method: Literal["hubbard", "knudtson"] = "knudtson",
+):
+    calibres = aggregate_branch_attributes(graph, region, attr_name=VBranchGeoData.Fields.CALIBRES, aggregation="mean")
+    top_calibres = calibres[calibres.columns[0]].sort_values().head(6).to_numpy()
+
+    if method == "hubbard":
+        if av == "artery":
+
+            def reduce_cal(w1, w2):
+                return np.sqrt(0.87 * np.square(w1) + 1.01 * np.square(w2) - 0.22 * w1 * w2 - 10.76)
+        else:
+
+            def reduce_cal(w1, w2):
+                return np.sqrt(0.72 * np.square(w1) + 0.91 * np.square(w2) + 450.05)
+    elif method == "knudtson":
+        if av == "artery":
+
+            def reduce_cal(w1, w2):
+                return 0.88 * np.sqrt(np.square(w1) + np.square(w2))
+        else:
+
+            def reduce_cal(w1, w2):
+                return 0.95 * np.sqrt(np.square(w1) + np.square(w2))
+
+    c1, c2, c3 = [reduce_cal(*top_calibres[[i1, i2]]) for i1, i2 in [(0, 5), (1, 4), (2, 3)]]
+    c2bis = reduce_cal(c1, c3)
+    return reduce_cal(*sorted([c2, c2bis]))
+
+
+def AVR(
+    a_graph: VGraph, v_graph: VGraph, region: npt.NDArray[np.bool_], method: Literal["hubbard", "knudtson"] = "knudtson"
+):
+    crae = central_equivalent_calibre(a_graph, region=region, av="artery", method=method)
+    crve = central_equivalent_calibre(v_graph, region=region, av="vein", method=method)
+    avr = crae / crve
+    return avr, crae, crve
