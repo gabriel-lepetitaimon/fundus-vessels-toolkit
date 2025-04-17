@@ -68,3 +68,14 @@ from steered_cnn.models import SteeredUNet
 model = SteeredUNet(3, 2, nfeatures=6, depth=2, nscale=5, base=steerable_base)
 pred = model(x, alpha=α)
 ```
+
+
+## Topological Analysis of the Vascular Graph
+
+*The related code is currently in the `dev/experimental` branch while I'm righting my thesis. I'll merge it to the main branch at the end of April when I'll have time to ensure the installation is working on all platforms.*
+
+- [x] Extraction of the vascular graph from vessels segmentation;
+- [x] Robust extraction of the vascular trees from imperfect A/V segmentation;
+- [x] Vascular Biomarkers computation (AVR, tortuosity, branching parameters, etc.);
+- [x] Vascular graph visualization;
+- [ ] Vascular graph matching and edit distance.
