@@ -17,10 +17,10 @@ Bool1DArrayLike: TypeAlias = npt.NDArray[np.bool_] | bool | List[bool]
 Bool2DArrayLike: TypeAlias = npt.NDArray[np.bool_] | List[bool] | List[List[bool]]
 
 RecursiveFloatList: TypeAlias = List[float] | List["RecursiveFloatList"]
-FloatArrayLike: TypeAlias = npt.NDArray[np.float_] | float | RecursiveFloatList
-Float1DArrayLike: TypeAlias = npt.NDArray[np.float_] | float | List[float]
-Float2DArrayLike: TypeAlias = npt.NDArray[np.float_] | List[float] | List[List[float]]
-Float3DArrayLike: TypeAlias = npt.NDArray[np.float_] | List[List[float]] | List[List[List[float]]]
+FloatArrayLike: TypeAlias = npt.NDArray[np.float64] | float | RecursiveFloatList
+Float1DArrayLike: TypeAlias = npt.NDArray[np.float64] | float | List[float]
+Float2DArrayLike: TypeAlias = npt.NDArray[np.float64] | List[float] | List[List[float]]
+Float3DArrayLike: TypeAlias = npt.NDArray[np.float64] | List[List[float]] | List[List[List[float]]]
 
 PointArrayLike: TypeAlias = npt.NDArray[np.int_] | List[int] | List[List[int]] | Tuple[int, int] | List[Tuple[int, int]]
 

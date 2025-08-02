@@ -31,7 +31,6 @@ dev = [
 	'ipython'           # (also required to parse notebook)
 ]
 examples = ['jppype>=0.2.0a6']
-experimentations = ['nntemplate']
 
 [project.urls]
 Homepage = 'https://github.com/gabriel-lepetitaimon/fundus-vessels-toolkit'
@@ -39,7 +38,7 @@ Source = 'https://github.com/gabriel-lepetitaimon/fundus-vessels-toolkit'
 
 
 [build-system]
-requires = ["wheel", "setuptools", "Cython~=3.0.0b3", "numpy", "torch"]
+requires = ["setuptools >= 77.0.3", "numpy", "torch", "ninja"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
