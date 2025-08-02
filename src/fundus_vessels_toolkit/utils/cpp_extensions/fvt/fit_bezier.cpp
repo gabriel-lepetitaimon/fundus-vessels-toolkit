@@ -295,7 +295,7 @@ std::tuple<std::vector<double>, double, std::size_t> computeMaxError(const Curve
     sqrErrors.reserve(last - first + 1);
     std::size_t splitPoint = (last - first + 1) / 2;
     maxDist = 0.0;
-    for (std::size_t i = first + 1; i < last; i++) {
+    for (std::size_t i = first; i <= last; i++) {
         P = BezierPolynomialTriangle(bezCurve, u[i - first]);
         v = P - d[i];
         dist = v.squaredNorm();

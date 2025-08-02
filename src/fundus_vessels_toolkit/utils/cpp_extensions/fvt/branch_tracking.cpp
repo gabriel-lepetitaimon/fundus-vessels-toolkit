@@ -213,6 +213,8 @@ IntPoint track_nearest_edge(const IntPoint &start, const Point &direction, const
  */
 std::tuple<int, float> find_closest_pixel(const CurveYX &curve, const Point &p, int start, int end,
                                           bool findFirstLocalMinimum) {
+    if (start == end) return {start, distance(curve[start], p)};
+
     const int inc = (start < end) ? 1 : -1;
     std::tuple<int, float> min_point = {0, distance(curve[start], p)};
     for (int i = start + inc; i != end; i += inc) {

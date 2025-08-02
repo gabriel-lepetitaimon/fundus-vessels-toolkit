@@ -728,6 +728,11 @@ bool SimpleTriangleIterator::iter() {
 }
 
 void SimpleTriangleIterator::updateTraversalLength() {
+    if (_v1 == _v2) {
+        _traversalLength = 0;  // If v1 and v2 are the same, no traversal is needed
+        return;
+    }
+
     if (_edge01.step() < e02width) {
         // == Compute the traversal length from edge 01 to edge 02 ==
         IntPoint lastP = *_edge02;

@@ -4,7 +4,7 @@ from setuptools import setup
 from torch.__config__ import parallel_info
 from torch.utils import cpp_extension
 
-DEBUG = False
+DEBUG = True
 OPEN_MP = not DEBUG
 
 WORKSPACE_FOLDER = Path(__file__).parent
