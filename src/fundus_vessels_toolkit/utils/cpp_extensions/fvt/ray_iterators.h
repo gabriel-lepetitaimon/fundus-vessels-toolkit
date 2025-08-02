@@ -53,13 +53,29 @@ void draw_line(IntPoint start, IntPoint end, Tensor2DAcc<int>& tensor, int value
  *            === RAY ITERATORS ===
  **********************************************************************************************************************/
 
-enum class Octant { SWW = 0, SSW = 1, SSE = 2, SEE = 3, NEE = 4, NNE = 5, NNW = 6, NWW = 7 };
+enum class Octant { SEE = 0, SSE = 1, SSW = 2, SWW = 3, NWW = 4, NNW = 5, NNE = 6, NEE = 7 };
+
+inline bool isPositiveVertically(Octant octant) { return octant >= Octant::NWW; }
+inline bool isPositiveHorizontally(Octant octant) { return octant <= Octant::SSE || octant >= Octant::NNE; }
+
+struct Incrementor {
+    void (*incr)(IntPoint& p, int primary, int secondary);
+    void (*stepMain)(IntPoint& p);
+    void (*incrSecondary)(IntPoint& p, int value);
+};
+
+class Incrementors {
+   public:
+    static Incrementor SEE, SSE, SSW, SWW, NWW, NNW, NNE, NEE;
+    static Incrementor* get(Octant octant);
+};
 
 class RayIterator {
    public:
     RayIterator();
     RayIterator(const IntPoint& start, Point direction);
-    RayIterator(const IntPoint& start, float delta, bool (RayIterator::*iter)());
+    RayIterator(const IntPoint& start, float delta, Octant octant = Octant::SEE);
+    RayIterator(const IntPoint& start, float delta, Octant octant, Incrementor* incrementor);
     void reset(const IntPoint& start);
     void reset_error();
 
@@ -68,31 +84,41 @@ class RayIterator {
     const int& x() const;
     const float& delta() const;
     const Octant& octant() const;
+    const float& error() const;
 
     bool operator!=(const RayIterator& other);
     const IntPoint& operator++();
 
-    bool iterSWW();
-    bool iterSSW();
-    bool iterSSE();
-    bool iterSEE();
-    bool iterNEE();
-    bool iterNNE();
-    bool iterNNW();
-    bool iterNWW();
-
     bool iter();
     IntPoint previousHalfStep() const;
     IntPoint extrapolate(int step) const;
+    void skip(int step);
     int stepTo(const IntPoint& p) const;
 
    private:
     float _delta;
-    bool (RayIterator::*_iter)();
+    Incrementor* _incrementor;
     Octant _octant;
 
     IntPoint point;
-    float error;
+    float _error;
+};
+
+class CountingRayIterator : public RayIterator {
+   public:
+    CountingRayIterator();
+    CountingRayIterator(const IntPoint& start, Point direction);
+
+    bool operator!=(const RayIterator& other);
+    const IntPoint& operator++();
+
+    bool iter();
+    void skip(int step);
+    void reset(const IntPoint& start);
+    int step() const;
+
+   private:
+    int _count = 0;
 };
 
 class ConeIterator {
@@ -118,6 +144,61 @@ class ConeIterator {
     RayIterator _leftRayIter, transversalIter;
     bool interstice = false;
     int _height = 0;
+};
+
+class TriangleIterator {
+   public:
+    TriangleIterator(const IntPoint& v0, const IntPoint& v1, const IntPoint& v2);
+    const IntPoint& operator*() const;
+    const IntPoint& operator++();
+    const IntPoint& point() const;
+
+    bool iter();
+    bool finished() const;
+
+    const IntPoint& start() const;
+    const RayIterator& mainRay() const;
+    const RayIterator& transversalRay() const;
+    const Point& oppositeEdgeDirection() const;
+
+    float relativeTraversalHeight() const;
+
+   protected:
+    bool nextStepBeyondOppositeEdge();
+
+   private:
+    IntPoint _v0, _v1, _v2;
+    Point _oppositeEdgeDir;
+    CountingRayIterator _mainRay, _transversalRay;
+    int _traversalHeight = 1;
+    float _ratioTransverseMain = 0;
+    bool interstice = false, v2Reached = false;
+};
+
+class SimpleTriangleIterator {
+   public:
+    SimpleTriangleIterator(const IntPoint& v0, const IntPoint& v1, const IntPoint& v2);
+    const IntPoint& operator*() const;
+    const IntPoint& operator++();
+    const IntPoint& point() const;
+
+    bool iter();
+    bool finished() const;
+
+    float relativeHeight() const;
+
+   private:
+    void updateTraversalLength();
+
+    IntPoint _v0, _v1, _v2, _point;
+    bool traverseVertically;
+
+    CountingRayIterator _edge01;
+    RayIterator _edge02, _edge12;
+    Incrementor* _traversalIncr;
+    int _traversalStep = 0, _traversalLength = 0;
+
+    int width, e01width, e02width;
 };
 
 #endif  // RAY_ITERATORS_H

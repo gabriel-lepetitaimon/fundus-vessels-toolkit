@@ -5,6 +5,7 @@
 // === IntPoint ===
 IntPoint::IntPoint(int y, int x) : y(y), x(x) {}
 IntPoint::IntPoint(IntPair yx) : y(yx[0]), x(yx[1]) {}
+IntPoint::IntPoint(const Tensor1DAcc<int>& yx) : y(yx[0]), x(yx[1]) {}
 
 IntPoint& IntPoint::operator=(const IntPoint& p) {
     this->x = p.x;
@@ -31,13 +32,21 @@ bool IntPoint::is_adjacent(const IntPoint& p) const { return (std::abs(x - p.x) 
 IntPair IntPoint::toIntPair() const { return {y, x}; }
 int IntPoint::max() const { return std::max(y, x); }
 int IntPoint::min() const { return std::min(y, x); }
+IntPoint IntPoint::abs() const { return IntPoint(std::abs(y), std::abs(x)); }
+int IntPoint::squaredNorm() const { return y * y + x * x; }
+double IntPoint::norm() const { return sqrt(y * y + x * x); }
+Point IntPoint::normalize() const {
+    double n = std::sqrt(y * y + x * x);
+    if (n != 0) return Point(y / n, x / n);
+    return Point(0, 0);
+}
 
 // === Point ===
 Point::Point(double y, double x) : y(y), x(x) {}
 Point::Point(const IntPair& yx) : y(yx[0]), x(yx[1]) {}
 Point::Point(const FloatPair& yx) : y(yx[0]), x(yx[1]) {}
 Point::Point(const IntPoint& yx) : y(yx.y), x(yx.x) {}
-Point::Point(const at::TensorAccessor<float, 1UL, at::DefaultPtrTraits, signed long>& yx) : y(yx[0]), x(yx[1]) {}
+Point::Point(const Tensor1DAcc<float>& yx) : y(yx[0]), x(yx[1]) {}
 
 // assignment operator modifies object, therefore non-const
 Point& Point::operator=(const Point& p) {
@@ -112,6 +121,8 @@ Point Point::rotate(const Point& u) const { return Point(y * u.x + x * u.y, x * 
 /// @param u A unitary vector.
 /// @return The rotated point.
 Point Point::rotate_neg(const Point& u) const { return Point(y * u.x - x * u.y, x * u.x + y * u.y); }
+
+Point Point::transpose() const { return Point(x, y); }
 
 bool Point::is_inside(double h, double w) const { return (x >= 0 && x < w && y >= 0 && y < h); }
 bool Point::is_inside(double y0, double x0, double y1, double x1) const {

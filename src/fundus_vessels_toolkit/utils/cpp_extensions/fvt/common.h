@@ -48,6 +48,18 @@ class no_init {
     T v_;
 };
 
+template <typename T>
+using Tensor1DAcc = at::TensorAccessor<T, 1UL, at::DefaultPtrTraits, signed long>;
+
+template <typename T>
+using Tensor2DAcc = at::TensorAccessor<T, 2UL, at::DefaultPtrTraits, signed long>;
+
+template <typename T>
+using Tensor3DAcc = at::TensorAccessor<T, 3UL, at::DefaultPtrTraits, signed long>;
+
+template <typename T>
+using Tensor4DAcc = at::TensorAccessor<T, 4UL, at::DefaultPtrTraits, signed long>;
+
 /*******************************************************************************************************************
  *             === MATH ===
  *******************************************************************************************************************/
@@ -64,6 +76,7 @@ struct IntPoint {
 
     IntPoint(int y = 0, int x = 0);
     IntPoint(IntPair yx);
+    IntPoint(const Tensor1DAcc<int>& yx);
     static IntPoint Invalid() { return IntPoint(INT_MIN, INT_MAX); }
     IntPoint& operator=(const IntPoint& p);
 
@@ -88,6 +101,11 @@ struct IntPoint {
     IntPair toIntPair() const;
     int max() const;
     int min() const;
+    IntPoint abs() const;
+    int squaredNorm() const;
+    double norm() const;
+
+    Point normalize() const;
 
     friend std::ostream& operator<<(std::ostream& os, const IntPoint& p) {
         os << "(" << p.y << ", " << p.x << ")";
@@ -109,7 +127,7 @@ struct Point {
     Point(const IntPair& yx);
     Point(const FloatPair& yx);
     Point(const IntPoint& yx);
-    Point(const at::TensorAccessor<float, 1UL, at::DefaultPtrTraits, signed long>& yx);
+    Point(const Tensor1DAcc<float>& yx);
 
     // assignment operator modifies object, therefore non-const
     Point& operator=(const Point& p);
@@ -145,6 +163,7 @@ struct Point {
     Point rotate(double angle) const;
     Point rotate(const Point& u) const;
     Point rotate_neg(const Point& u) const;
+    Point transpose() const;
 
     bool is_inside(double H, double W) const;
     bool is_inside(double y0, double x0, double y1, double x1) const;
@@ -176,6 +195,7 @@ struct Point {
 using CurveYX = std::vector<IntPoint>;
 using Vector = Point;
 using PointList = std::vector<Point>;
+using CurveTangents = std::vector<Point>;
 using IntPointPair = std::array<IntPoint, 2>;
 using IntPointPairs = std::vector<IntPointPair>;
 
@@ -316,17 +336,6 @@ inline std::size_t matrix_index(const std::array<uint, N>& index, std::array<std
 /*******************************************************************************************************************
  *             === TORCH ===
  *******************************************************************************************************************/
-template <typename T>
-using Tensor1DAcc = at::TensorAccessor<T, 1UL, at::DefaultPtrTraits, signed long>;
-
-template <typename T>
-using Tensor2DAcc = at::TensorAccessor<T, 2UL, at::DefaultPtrTraits, signed long>;
-
-template <typename T>
-using Tensor3DAcc = at::TensorAccessor<T, 3UL, at::DefaultPtrTraits, signed long>;
-
-template <typename T>
-using Tensor4DAcc = at::TensorAccessor<T, 4UL, at::DefaultPtrTraits, signed long>;
 
 torch::Tensor vector_to_tensor(const std::vector<int>& vec);
 torch::Tensor vector_to_tensor(const std::vector<float>& vec);
@@ -377,6 +386,15 @@ using EdgeList = std::vector<Edge>;
 using GraphAdjList = std::vector<std::set<Edge>>;
 #pragma omp declare reduction(merge : std::vector<Edge> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
 
+/**
+ * @brief Convert an edge list to an adjacency list representation.
+ *
+ * @param edges The edge list to convert.
+ * @param N The number of nodes in the graph (optional, inferred from edges if not provided).
+ * @param directed Whether the graph is directed (default: false).
+ * @param keep_orientation Whether to keep the original orientation of edges (default: true).
+ * @return The adjacency list representation of the graph.
+ */
 GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N = -1, bool directed = false,
                                   bool keep_orientation = true);
 GraphAdjList edge_list_to_adjlist(const EdgeList& edges, int N = -1, bool directed = false);
