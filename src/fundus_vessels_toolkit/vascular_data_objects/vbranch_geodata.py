@@ -4,7 +4,7 @@ import itertools
 from abc import ABC, ABCMeta, abstractmethod
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional, Self, Tuple, Type, TypeAlias
+from typing import Any, Dict, List, NamedTuple, Optional, Self, Sequence, Tuple, Type, TypeAlias
 
 import numpy as np
 import numpy.typing as npt
@@ -100,7 +100,7 @@ class VBranchGeoDataBase(ABC, metaclass=MetaVBranchGeoDataBase):
 
     @classmethod
     @abstractmethod
-    def merge(cls, others: List[Self], ctx: BranchGeoDataEditContext) -> Self:
+    def merge(cls, others: Sequence[Self], ctx: BranchGeoDataEditContext) -> Self:
         """Merge the parametric data .
 
         Parameters
@@ -127,7 +127,7 @@ class VBranchGeoDataBase(ABC, metaclass=MetaVBranchGeoDataBase):
         ...
 
     @abstractmethod
-    def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
+    def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> Sequence[Self]:
         """Split the parametric data at a given position.
 
         Parameters
@@ -183,17 +183,34 @@ class VBranchCurveData(VBranchGeoDataBase):
         return not len(self.data)
 
     @classmethod
-    def merge(cls, others: List[VBranchCurveData], ctx: BranchGeoDataEditContext) -> VBranchCurveData:
+    def merge(cls, others: Sequence[Self], ctx: BranchGeoDataEditContext) -> Self:
         if all(_ is None for _ in others):
             raise ValueError("Cannot merge empty data.")
         return cls(np.concatenate([_.data for _ in others if _ is not None], axis=0))
 
-    def flip(self, ctx: BranchGeoDataEditContext) -> VBranchCurveData:
+    def flip(self, ctx: BranchGeoDataEditContext) -> Self:
         data = np.flip(self.data, axis=0)
         return self.__class__(data)
 
-    def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
+    def split(self, splits_point: Sequence[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:  # noqa: F821
         return [self.__class__(self.data[start:end]) for start, end in itertools.pairwise(splits_id)]
+
+
+####################################################################################################
+class LeftRightCurveData(VBranchCurveData):
+    """``LeftRightCurveData`` is a class that stores the parametric data of a vascular graph."""
+
+    def __init__(self, data: np.ndarray) -> None:
+        super().__init__(data)
+
+    def is_invalid(self, ctx: BranchGeoDataEditContext) -> str:
+        if self.data.ndim < 2 or self.data.shape[1] != 2:
+            return "LeftRightCurveData must be a 2D array with 2 columns."
+        return super().is_invalid(ctx)
+
+    def flip(self, ctx: BranchGeoDataEditContext) -> Self:
+        data = np.flip(self.data, axis=(0, 1))
+        return self.__class__(data)
 
 
 ####################################################################################################
@@ -220,7 +237,7 @@ class VBranchCurveIndex(VBranchGeoDataBase):
         return not len(self.data)
 
     @classmethod
-    def merge(cls, others: List[VBranchCurveData], ctx: BranchGeoDataEditContext) -> Self:
+    def merge(cls, others: Sequence[Self], ctx: BranchGeoDataEditContext) -> Self:
         if all(_ is None for _ in others):
             raise ValueError("Cannot merge empty data.")
         curves_start_index = np.cumsum(
@@ -299,9 +316,9 @@ class VBranchTipsData(VBranchGeoDataBase):
         super().__init__()
         data = np.asarray(data, dtype=self.dtype())
         expected_shape = (2, *self.data_shape())
-        assert (
-            data.shape == expected_shape
-        ), f"{self.__class__.__qualname__} data shape must be {expected_shape} but {data.shape} was provided."
+        assert data.shape == expected_shape, (
+            f"{self.__class__.__qualname__} data shape must be {expected_shape} but {data.shape} was provided."
+        )
         self.data = data
         self.data.flags.writeable = False
 
@@ -506,7 +523,7 @@ class VBranchGeoField(Enum):
     CALIBRES = VBranchGeoDescriptor("CALIBRES", VBranchCurveData)
 
     #: The position of the left and right boundaries of the branch.
-    BOUNDARIES = VBranchGeoDescriptor("BOUNDARIES", VBranchCurveData)
+    BOUNDARIES = VBranchGeoDescriptor("BOUNDARIES", LeftRightCurveData)
 
     #: The curvature of the branch at each skeleton point.
     CURVATURES = VBranchGeoDescriptor("CURVATURES", VBranchCurveData)
@@ -710,9 +727,9 @@ class VBranchGeoData:
         data = {}
         for k, v in file_data.items():
             type_name, k = k.split("::")
-            assert (
-                type_name in _registered_vbranch_geo_data_types
-            ), f"Unknown type: {type_name}. Make sure corresponding type was imported."
+            assert type_name in _registered_vbranch_geo_data_types, (
+                f"Unknown type: {type_name}. Make sure corresponding type was imported."
+            )
             data[k] = [VBranchGeoData.from_data(_, _registered_vbranch_geo_data_types[type_name]) for _ in v]
 
         return data
