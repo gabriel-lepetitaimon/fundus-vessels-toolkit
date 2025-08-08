@@ -407,9 +407,9 @@ class VGraph:
         """  # noqa: E501
         # === Check and store branches list ===
         branch_list = np.asarray(branch_list)
-        assert (
-            branch_list.ndim == 2 and branch_list.shape[1] == 2
-        ), "branch_list must be a 2D array of shape (B, 2) where B is the number of branches"
+        assert branch_list.ndim == 2 and branch_list.shape[1] == 2, (
+            "branch_list must be a 2D array of shape (B, 2) where B is the number of branches"
+        )
         self._branch_list = branch_list
         B = branch_list.shape[0]
 
@@ -417,8 +417,8 @@ class VGraph:
         if node_count is None:
             nodes_indexes = np.unique(branch_list)
             assert len(nodes_indexes) == nodes_indexes[-1] + 1, (
-                f"The branches list must contain every node id at least once (from 0 to {len(nodes_indexes)-1}).\n"
-                f"\t Nodes {sorted([int(_) for _ in np.setdiff1d(np.arange(len(nodes_indexes)), nodes_indexes)]) }"
+                f"The branches list must contain every node id at least once (from 0 to {len(nodes_indexes) - 1}).\n"
+                f"\t Nodes {sorted([int(_) for _ in np.setdiff1d(np.arange(len(nodes_indexes)), nodes_indexes)])}"
                 " are missing."
             )
             N = len(nodes_indexes)
@@ -439,9 +439,9 @@ class VGraph:
             geometric_data = list(geometric_data)
 
         for i, gdata in enumerate(geometric_data):
-            assert isinstance(
-                gdata, VGeometricData
-            ), "geometric_data must be a VGeometricData object or a list of VGeometricData objects."
+            assert isinstance(gdata, VGeometricData), (
+                "geometric_data must be a VGeometricData object or a list of VGeometricData objects."
+            )
             if gdata._parent_graph is not None:
                 geometric_data[i] = gdata.copy(self)
             else:
@@ -487,19 +487,19 @@ class VGraph:
             nodes_idx.update(gdata.node_ids)
 
         branches_idx.difference_update(np.arange(B))
-        assert (
-            len(branches_idx) == 0
-        ), f"Geometric data contains branches indices that are not in the branch list: {branches_idx}."
+        assert len(branches_idx) == 0, (
+            f"Geometric data contains branches indices that are not in the branch list: {branches_idx}."
+        )
 
         nodes_idx.difference_update(np.arange(N))
-        assert (
-            len(nodes_idx) == 0
-        ), f"Geometric data contains nodes indices that are above the nodes count: {nodes_idx}."
+        assert len(nodes_idx) == 0, (
+            f"Geometric data contains nodes indices that are above the nodes count: {nodes_idx}."
+        )
 
         # --- Check nodes attributes ---
-        assert (
-            self._node_attr.index.inferred_type == "integer"
-        ), "The index of nodes_attr dataframe must be nodes Index."
+        assert self._node_attr.index.inferred_type == "integer", (
+            "The index of nodes_attr dataframe must be nodes Index."
+        )
         assert self._node_attr.index.max() < N and self._node_attr.index.min() >= 0, (
             "The maximum value in nodes_attr index must be lower than the number of nodes."
             f" Got {self._node_attr.index.max()} instead of {N}"
@@ -508,9 +508,9 @@ class VGraph:
             self._node_attr.reindex(np.arange(N))
 
         # --- Check branches attributes ---
-        assert (
-            self._branch_attr.index.inferred_type == "integer"
-        ), "The index of branches_attr dataframe must be branches Index."
+        assert self._branch_attr.index.inferred_type == "integer", (
+            "The index of branches_attr dataframe must be branches Index."
+        )
         assert self._branch_attr.index.max() < B and self._branch_attr.index.min() >= 0, (
             "The maximum value in branches_attr index must be lower than the number of branches."
             f" Got {self._branch_attr.index.max()} instead of {B}"
@@ -1489,8 +1489,7 @@ class VGraph:
 
         branch_direction: npt.NDArray[np.bool_] (optional)
             An array of shape (N,2) indicating the direction of the branches according to :attr:`VGraph.branch_list`:
-            - For each first branch, True indicates that the branch is directed towards the passing node
-            - For each second branch, True indicates that the branch is directed away from the passing node.
+            True indicates that the branch is outgoing from the node, False indicates that the branch is incoming to the node.
 
             (This is only returned if ``return_branch_direction`` is True.)
 
@@ -2612,12 +2611,12 @@ class VGraph:
                         del branch_pairs[i]
         else:
             branch_pairs = np.atleast_2d(incident_branches)
-            assert (
-                branch_pairs.ndim == 2 and branch_pairs.shape[1] == 2
-            ), "incident_branches must be a 2D array of shape (N, 2)."
-            assert branch_pairs.shape[0] == len(
-                node_id
-            ), "The number of incident branches must match the number of nodes."
+            assert branch_pairs.ndim == 2 and branch_pairs.shape[1] == 2, (
+                "incident_branches must be a 2D array of shape (N, 2)."
+            )
+            assert branch_pairs.shape[0] == len(node_id), (
+                "The number of incident branches must match the number of nodes."
+            )
 
         return self._merge_consecutive_branches(
             branch_pairs=branch_pairs,  # type: ignore

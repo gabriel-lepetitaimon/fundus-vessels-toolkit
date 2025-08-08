@@ -498,7 +498,6 @@ def simplify_passing_nodes(
     nodes_to_fuse, incident_branches, idirs = graph.passing_nodes_with_branch_index(
         exclude_loop=True, return_branch_direction=True
     )
-    idirs[:, 0] = ~idirs[:, 0]
 
     if len(nodes_to_fuse) == 0:
         return graph
@@ -518,7 +517,7 @@ def simplify_passing_nodes(
         # === Filter out nodes with a too small angle between their two incident branches ===
         geo_data = graph.geometric_data()
         t = np.stack([geo_data.tip_tangent(b, d) for b, d in zip(incident_branches, idirs, strict=True)])
-        cos = np.sum(t[:, 1, :] * t[:, 0, :], axis=1)
+        cos = np.sum(t[:, 1, :] * t[:, 0, :], axis=1)  # Dot product between the two tangents
         fuseable_nodes = cos <= np.cos(np.deg2rad(min_angle))
 
         unknown_t = np.isin(incident_branches, geo_data.branch_with_unknown_curve())

@@ -4,14 +4,14 @@ from ..vascular_data_objects import AVLabel, VTree
 from .graph_simplification import simplify_passing_nodes
 
 
-def clean_vtree(vtree: VTree, *, av_attr: str = "av") -> VTree:
+def clean_vtree(vtree: VTree, *, passing_node_min_angle: float = 0, av_attr: str = "av") -> VTree:
     # === Remove terminal branches with unknown type ===
     if av_attr in vtree.branch_attr:
         while to_delete := [b.id for b in vtree.branches() if not b.has_successors and b.attr[av_attr] == AVLabel.UNK]:
             vtree.delete_branch(to_delete, inplace=True)
 
     # === Remove passing nodes ===
-    simplify_passing_nodes(vtree, inplace=True)
+    simplify_passing_nodes(vtree, min_angle=passing_node_min_angle, inplace=True)
 
     return vtree
 

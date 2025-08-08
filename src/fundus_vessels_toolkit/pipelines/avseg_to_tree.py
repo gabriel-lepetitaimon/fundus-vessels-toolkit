@@ -221,7 +221,7 @@ class NaiveAVSegToTree(AVSegToTreeBase):
         *,
         av: Optional[npt.NDArray[np.int_] | torch.Tensor | str | Path] = None,
         od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
-    ) -> Tuple[VGraph, VGraph]:
+    ) -> Tuple[VTree, VTree]:
         fundus = self.prepare_data(fundus, av=av, od=od)
         if fundus.od_center is None:
             raise NotImplementedError("Parsing tree of image without optic disc is not implemented.")
@@ -280,7 +280,7 @@ class NaiveAVSegToTree(AVSegToTreeBase):
         from ..segment_to_graph.tree_simplification import clean_vtree
 
         tree = naive_vgraph_to_vtree(graph, od_pos)
-        tree = clean_vtree(tree)
+        tree = clean_vtree(tree, passing_node_min_angle=self.segToGraph.simplify_graph_arg.passing_node_min_angle)
         return tree
 
     # --- Utility methods ---

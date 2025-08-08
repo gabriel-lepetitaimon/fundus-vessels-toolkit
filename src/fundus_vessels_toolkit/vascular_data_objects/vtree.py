@@ -1166,8 +1166,7 @@ class VTree(VGraph):
 
         branch_direction : npt.NDArray[np.bool_] (optional)
             An array of shape (N,2) indicating the direction of the branches according to :attr:`VGraph.branch_list`:
-            - For the first branches, True indicates that the passing node is the second node of the branch
-            - For the second branches, True indicates that the passing node is the first node of the branch.
+            True indicates that the branch is outgoing from the node, False indicates that the branch is incoming to the node.
 
             (This is only returned if ``return_branch_direction`` is True.)
 
@@ -1182,8 +1181,11 @@ class VTree(VGraph):
             passing_branch_dirs = self._branch_dir[passing_branch]  # Shape (N,)
             inverted_inc_branch = ~passing_branch_dirs[:, 0]
             passing_branch_list[inverted_inc_branch] = passing_branch_list[inverted_inc_branch][:, ::-1]
-        elif return_branch_direction:
-            passing_branch_dirs = np.ones((passing_branch.shape[0], 2), dtype=bool)
+            passing_branch_dirs[:, 0] = ~passing_branch_dirs[:, 0]  # Invert the direction of the incoming branch
+        else:
+            # If the branch are well directed, the first is incoming (False) and the second is outgoing (True).
+            passing_branch_dirs = np.zeros((passing_branch.shape[0], 2), dtype=bool)
+            passing_branch_dirs[:, 1] = True
         passing_nodes = passing_branch_list[:, 1]
 
         if not return_branch_direction:
@@ -1253,7 +1255,7 @@ class VTree(VGraph):
         super(tree.__class__, tree).reindex_nodes(indices, inverse_lookup=inverse_lookup, inplace=True)  # type: ignore
         return tree
 
-    def flip_branch_to_tree_dir(self) -> VTree:
+    def flip_branch_to_tree_dir(self, inplace=False) -> VTree:
         """Flip the direction of the branches to match the tree structure.
 
         Returns
@@ -1263,7 +1265,7 @@ class VTree(VGraph):
         """
         if self._branch_dir is None:
             return self
-        return self.flip_branch_direction(np.argwhere(~self._branch_dir).flatten())
+        return self.flip_branch_direction(np.argwhere(~self._branch_dir).flatten(), inplace=inplace)
 
     def flip_branch_direction(self, branch_id: BranchIndices, inplace=False) -> VTree:
         tree = self.copy() if not inplace else self
