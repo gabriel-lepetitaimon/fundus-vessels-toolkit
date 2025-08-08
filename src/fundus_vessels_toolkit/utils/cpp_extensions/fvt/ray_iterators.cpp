@@ -486,131 +486,6 @@ const RayIterator& ConeIterator::transversalRay() const { return transversalIter
  *            === Triangle ITERATOR ===
  **********************************************************************************************************************/
 TriangleIterator::TriangleIterator(const IntPoint& v0, const IntPoint& v1, const IntPoint& v2)
-    : _v0(v0), _v1(v1), _v2(v2) {
-    if (v0 == v1) {
-        _ratioTransverseMain = 0;
-        v2Reached = true;
-        return;
-    }
-
-    Point main = Point(v1 - v0);
-    _mainRay = CountingRayIterator(v0, main.normalize());
-
-    if (v1 == v2) {
-        _ratioTransverseMain = 0;
-        _oppositeEdgeDir = main.normalize();
-        _transversalRay = CountingRayIterator(v0, Point(1, 0));
-        return;
-    }
-
-    Point transverse = Point(v2 - v1);
-    Point opposite = Point(v2 - v0);
-    _ratioTransverseMain = transverse.abs().max() / main.abs().max();
-    _oppositeEdgeDir = opposite.normalize();
-    _transversalRay = CountingRayIterator(v0, transverse.normalize());
-}
-
-const IntPoint& TriangleIterator::operator*() const { return *_transversalRay; }
-const IntPoint& TriangleIterator::point() const { return *_transversalRay; }
-const IntPoint& TriangleIterator::start() const { return _v0; }
-const RayIterator& TriangleIterator::mainRay() const { return _mainRay; }
-const RayIterator& TriangleIterator::transversalRay() const { return _transversalRay; }
-const Point& TriangleIterator::oppositeEdgeDirection() const { return _oppositeEdgeDir; }
-bool TriangleIterator::finished() const { return v2Reached; }
-float TriangleIterator::relativeTraversalHeight() const { return (float)_transversalRay.step() / _traversalHeight; }
-
-const IntPoint& TriangleIterator::operator++() {
-    iter();
-    return *_transversalRay;
-}
-
-bool TriangleIterator::iter() {
-    if (v2Reached) return false;
-
-    if (interstice) {
-        // If we are filling interstices, find the next gap to fill...
-        while (_transversalRay.step() + 2 < _traversalHeight) {
-            if (!_transversalRay.iter()) {
-                std::cout << "(" << point().y << ", " << point().x << "| " << relativeTraversalHeight() << " ) inter2"
-                          << std::endl;
-                return true;
-            }
-        }
-    } else if (_transversalRay.step() + 1 < _traversalHeight) {
-        // Otherwise walk along the transversal ray
-        _transversalRay.iter();
-        std::cout << "(" << point().y << ", " << point().x << "| " << relativeTraversalHeight() << " ) main"
-                  << std::endl;
-        return true;
-    }
-
-    // In either case, if we reached the opposite edge, attempt to start a new line
-    if (!interstice) {
-        // Check first if we reached the end of the main ray
-        if (*_mainRay == _v1) {
-            v2Reached = true;
-            return false;  // We reached the end of the triangle
-        }
-
-        // Then advance the main ray to a new line and check if we need to fill interstices
-        IntPoint shiftedP = *_mainRay;
-        interstice = _mainRay.iter();
-        _traversalHeight = floor(_mainRay.step() * _ratioTransverseMain) + 1;
-
-        if (interstice) {
-            // To fill interstice:
-            // - Shift the current main ray pixel a "half step" in the major direction of the main ray
-            switch (_mainRay.octant()) {
-                case Octant::SSE:
-                case Octant::SSW:
-                    shiftedP.y++;  // Shift down
-                    break;
-                case Octant::NNW:
-                case Octant::NNE:
-                    shiftedP.y--;  // Shift up
-                    break;
-                case Octant::SEE:
-                case Octant::NEE:
-                    shiftedP.x++;  // Shift right
-                    break;
-                case Octant::SWW:
-                case Octant::NWW:
-                    shiftedP.x--;  // Shift left
-                    break;
-            }
-
-            // - Place the transversal iterator at the shifted pixel and find the next gap to fill
-            _transversalRay.reset(shiftedP);
-            std::cout << "T: (" << point().y << ", " << point().x << " )" << std::endl;
-            while (_transversalRay.step() + 2 < _traversalHeight) {
-                if (_transversalRay.iter()) {
-                    std::cout << "(" << point().y << ", " << point().x << "| " << relativeTraversalHeight()
-                              << " ) inter" << std::endl;
-                    return true;
-                }
-            }
-            // - If the next gap is beyond the right ray, proceed normally
-            interstice = false;
-        }
-    } else {
-        interstice = false;
-    }
-
-    // If we don't need to fill interstices, place the transversal iterator on the
-    // main ray pixel (previously advanced) and start a new line
-    _transversalRay.reset(*_mainRay);
-    std::cout << "(" << point().y << ", " << point().x << "| " << relativeTraversalHeight() << " ) newline"
-              << std::endl;
-    return true;
-}
-
-bool TriangleIterator::nextStepBeyondOppositeEdge() { return _transversalRay.step() + 1 >= _traversalHeight; }
-
-/**********************************************************************************************************************
- *            === Simple Triangle ITERATOR ===
- **********************************************************************************************************************/
-
-SimpleTriangleIterator::SimpleTriangleIterator(const IntPoint& v0, const IntPoint& v1, const IntPoint& v2)
     : _v0(v0), _v1(v1), _v2(v2), _point(v0) {
     if (v0 == v1) {
         width = 0;
@@ -679,16 +554,16 @@ SimpleTriangleIterator::SimpleTriangleIterator(const IntPoint& v0, const IntPoin
     updateTraversalLength();
 }
 
-const IntPoint& SimpleTriangleIterator::operator*() const { return _point; }
-const IntPoint& SimpleTriangleIterator::operator++() {
+const IntPoint& TriangleIterator::operator*() const { return _point; }
+const IntPoint& TriangleIterator::operator++() {
     iter();
     return _point;
 }
-const IntPoint& SimpleTriangleIterator::point() const { return _point; }
+const IntPoint& TriangleIterator::point() const { return _point; }
 
-bool SimpleTriangleIterator::finished() const { return _edge01.step() > width; }
+bool TriangleIterator::finished() const { return _edge01.step() > width; }
 
-bool SimpleTriangleIterator::iter() {
+bool TriangleIterator::iter() {
     // If we reached the height, move to a new line
     if (_traversalStep >= _traversalLength) {
         // - Advance along edge 01
@@ -727,7 +602,7 @@ bool SimpleTriangleIterator::iter() {
     return true;
 }
 
-void SimpleTriangleIterator::updateTraversalLength() {
+void TriangleIterator::updateTraversalLength() {
     if (_v1 == _v2) {
         _traversalLength = 0;  // If v1 and v2 are the same, no traversal is needed
         return;
@@ -759,7 +634,7 @@ void SimpleTriangleIterator::updateTraversalLength() {
     }
 }
 
-float SimpleTriangleIterator::relativeHeight() const {
+float TriangleIterator::relativeHeight() const {
     if (_traversalLength == 0) return 0.0f;
     return static_cast<float>(_traversalStep) / static_cast<float>(_traversalLength);
 }

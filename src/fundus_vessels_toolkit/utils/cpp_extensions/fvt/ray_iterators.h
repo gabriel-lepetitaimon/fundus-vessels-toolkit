@@ -156,35 +156,6 @@ class TriangleIterator {
     bool iter();
     bool finished() const;
 
-    const IntPoint& start() const;
-    const RayIterator& mainRay() const;
-    const RayIterator& transversalRay() const;
-    const Point& oppositeEdgeDirection() const;
-
-    float relativeTraversalHeight() const;
-
-   protected:
-    bool nextStepBeyondOppositeEdge();
-
-   private:
-    IntPoint _v0, _v1, _v2;
-    Point _oppositeEdgeDir;
-    CountingRayIterator _mainRay, _transversalRay;
-    int _traversalHeight = 1;
-    float _ratioTransverseMain = 0;
-    bool interstice = false, v2Reached = false;
-};
-
-class SimpleTriangleIterator {
-   public:
-    SimpleTriangleIterator(const IntPoint& v0, const IntPoint& v1, const IntPoint& v2);
-    const IntPoint& operator*() const;
-    const IntPoint& operator++();
-    const IntPoint& point() const;
-
-    bool iter();
-    bool finished() const;
-
     float relativeHeight() const;
 
    private:

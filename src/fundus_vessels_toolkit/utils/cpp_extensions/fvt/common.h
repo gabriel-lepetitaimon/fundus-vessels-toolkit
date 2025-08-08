@@ -104,6 +104,11 @@ struct IntPoint {
     IntPoint abs() const;
     int squaredNorm() const;
     double norm() const;
+    int cross(const IntPoint& p) const;
+    int dot(const IntPoint& p) const;
+
+    IntPoint clamp(IntPoint max) const;
+    IntPoint clamp(IntPoint min, IntPoint max) const;
 
     Point normalize() const;
 
@@ -364,6 +369,9 @@ std::vector<CurveYX> tensors_to_curves(const std::vector<torch::Tensor>& tensors
 std::vector<IntPair> tensor_to_vectorIntPair(const torch::Tensor& tensor);
 PointList tensor_to_pointList(const torch::Tensor& tensor);
 Scalars tensor_to_scalars(const torch::Tensor& tensor);
+template <typename T>
+std::vector<T> tensor_to_vector(const torch::Tensor& tensor);
+
 /*******************************************************************************************************************
  *             === GRAPH ===
  *******************************************************************************************************************/
@@ -384,6 +392,7 @@ struct Edge {
 
 using EdgeList = std::vector<Edge>;
 using GraphAdjList = std::vector<std::set<Edge>>;
+using AdjList = std::vector<std::set<int>>;
 #pragma omp declare reduction(merge : std::vector<Edge> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
 
 /**
@@ -399,6 +408,8 @@ GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N = -1,
                                   bool keep_orientation = true);
 GraphAdjList edge_list_to_adjlist(const EdgeList& edges, int N = -1, bool directed = false);
 GraphAdjList edge_list_to_adjlist(const Tensor2DAcc<int>& edges, int N = -1, bool directed = false);
+
+AdjList graph_adjlist_to_edge_adjlist(const GraphAdjList& adjlist, int N = -1);
 
 torch::Tensor edge_list_to_tensor(const EdgeList& vec);
 

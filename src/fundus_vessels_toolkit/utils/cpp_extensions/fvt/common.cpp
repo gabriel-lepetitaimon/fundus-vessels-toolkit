@@ -40,6 +40,13 @@ Point IntPoint::normalize() const {
     if (n != 0) return Point(y / n, x / n);
     return Point(0, 0);
 }
+int IntPoint::cross(const IntPoint& p) const { return y * p.x - x * p.y; }
+int IntPoint::dot(const IntPoint& p) const { return y * p.y + x * p.x; }
+
+IntPoint IntPoint::clamp(IntPoint max) const { return IntPoint(std::clamp(y, 0, max.y), std::clamp(x, 0, max.x)); }
+IntPoint IntPoint::clamp(IntPoint min, IntPoint max) const {
+    return IntPoint(std::clamp(y, min.y, max.y), std::clamp(x, min.x, max.x));
+}
 
 // === Point ===
 Point::Point(double y, double x) : y(y), x(x) {}
@@ -443,6 +450,15 @@ Scalars tensor_to_scalars(const torch::Tensor& tensor) {
     return vec;
 }
 
+template <typename T>
+std::vector<T> tensor_to_vector(const torch::Tensor& tensor) {
+    auto accessor = tensor.accessor<T, 1>();
+    std::vector<T> vec;
+    vec.reserve(tensor.size(0));
+    for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) vec.push_back(accessor[i]);
+    return vec;
+}
+
 /*******************************************************************************************************************
  *             === GRAPH ===
  *******************************************************************************************************************/
@@ -514,6 +530,29 @@ GraphAdjList edge_list_to_adjlist(const Tensor2DAcc<int>& edges, int N, bool dir
         graph[edge.start].insert(edge);
         if (!directed) graph[edge.end].insert(edge);
         i++;
+    }
+    return graph;
+}
+
+AdjList graph_adjlist_to_edge_adjlist(const GraphAdjList& graph_adjlist, int N) {
+    if (N < 0) {
+        N = 0;
+        for (const auto& neighbors : graph_adjlist) {
+            for (const auto& edge : neighbors) N = std::max(N, edge.id + 1);
+        }
+    }
+
+    AdjList graph(N);
+
+    for (const auto& neighbors : graph_adjlist) {
+        std::vector<int> neighbor_edges;
+        neighbor_edges.reserve(neighbors.size());
+        for (const auto& edge : neighbors) neighbor_edges.push_back(edge.id);
+        for (auto it1 = neighbor_edges.begin(); it1 != neighbor_edges.end(); ++it1) {
+            for (auto it2 = neighbor_edges.begin(); it2 != neighbor_edges.end(); ++it2) {
+                if (*it1 != *it2) graph[*it1].insert(*it2);
+            }
+        }
     }
     return graph;
 }

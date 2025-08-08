@@ -281,7 +281,7 @@ torch::Tensor drawCone(std::array<int, 2> tip, std::array<float, 2> direction, f
 torch::Tensor drawTriangle(std::array<int, 2> v0, std::array<int, 2> v1, std::array<int, 2> v2) {
     auto scene = torch::zeros({30, 30}, torch::kFloat);
     auto sceneAcc = scene.accessor<float, 2>();
-    auto triangleIter = SimpleTriangleIterator(v0, v1, v2);
+    auto triangleIter = TriangleIterator(v0, v1, v2);
     // Draw the triangle edges
     while (!triangleIter.finished()) {
         auto const &p = triangleIter.point();
@@ -416,6 +416,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // === rasterize_topo.h ===
     m.def("rasterize_topology", &rasterize_topology, "Rasterize the topology of a set of branches.");
     m.def("rasterize_branch", &rasterize_branch, "Rasterize a branch from its curve and boundaries.");
+    m.def("drawQuad", &drawQuad, "Draw a quadrilateral in a 2D image.");
 
     // === disjoint_set.h ===
     m.def("has_cycle", &has_cycle, "Find cycles in a list of parent.");
