@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, List, Mapping, TypeAlias, Union
+from typing import Any, List, Mapping, Optional, Sequence, Tuple, TypeAlias, Union
 
 import numpy as np
 import numpy.typing as npt
@@ -120,3 +120,50 @@ def load_image(path: str | Path, binarize=False, resize=None, pad=None, cast_to_
         img = np.pad(img, pad, mode="constant", constant_values=0)
 
     return img
+
+
+ColorSpec: TypeAlias = Union[str, Tuple[int, int, int], Tuple[float, float, float]]
+
+
+def parse_color(color: ColorSpec) -> npt.NDArray[np.uint8]:
+    if isinstance(color, str):
+        from coloraide import Color
+
+        return np.array([(c * 255) for c in Color(color).convert("srgb").coords()], dtype=np.uint8)
+    elif isinstance(color, tuple) and len(color) == 3:
+        if all(isinstance(c, float) for c in color):
+            return (np.clip(color, 0, 1) * 255).astype(np.uint8)
+        elif all(isinstance(c, int) for c in color):
+            return np.clip(color, 0, 255).astype(np.uint8)
+    raise ValueError(f"Invalid color specification: {color}")
+
+
+def load_label_image(
+    path: str | Path, labels: Mapping[int, ColorSpec] | Sequence[Optional[ColorSpec]], resize=None, pad=None
+) -> npt.NDArray[np.uint8]:
+    if isinstance(labels, Mapping):
+        colors = []
+        labels_mapping = []
+        for label, color in labels.items():
+            if color is not None:
+                colors.append(parse_color(color))
+                labels_mapping.append(label)
+        labels_mapping = np.array(labels_mapping, dtype=np.uint8)
+        colors = np.array(colors, dtype=np.uint8)
+    elif isinstance(labels, Sequence):
+        colors = []
+        labels_mapping = []
+        for i, label in enumerate(labels):
+            if label is not None:
+                colors.append(parse_color(label))
+                labels_mapping.append(i)
+        labels_mapping = np.array(labels_mapping, dtype=np.uint8)
+        colors = np.array(colors, dtype=np.uint8)
+    else:
+        raise ValueError(f"Invalid labels specification: {labels}")
+
+    img = load_image(path, binarize=False, resize=resize, pad=pad, cast_to_float=False)
+    if img.ndim == 2:
+        img = img[:, :, None]
+    img = img.transpose(2, 0, 1)[None]  # HWC to BCHW
+    return labels_mapping[np.linalg.norm(img - colors[:, :, None, None], axis=1).argmin(axis=0)]
