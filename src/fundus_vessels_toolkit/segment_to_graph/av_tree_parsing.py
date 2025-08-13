@@ -664,7 +664,7 @@ class LineDigraphOpt:
     b2b_p_tangent_w: float = 0.8
 
     #: Offset added to the root candidate probability
-    root_p_offset: float = 1.5
+    root_p_offset: float = 0.5
 
     #: Any nodes closer than this distance to the center of the optic disc will automatically be considered
     #: as a root candidates
@@ -674,7 +674,7 @@ class LineDigraphOpt:
     #: Any nodes closer than this distance to the border of the image will automatically be considered
     #: as a root candidates
     #: (The distance is in pixel)
-    root_candidates_border_dist: float = 10
+    root_candidates_border_dist: float = 1e-3
 
     #: The distance threshold to consider two branches as connected.
     # reconnect_dist_penalty_coef: float = 80
@@ -858,7 +858,7 @@ def build_line_digraph(
 
         p_dist = opt.root_p_offset
         p_dist -= sigmoid(od_dist / od_mac_dist, antisymmetric=True)
-        p_dist -= np.clip((border_dist - opt.root_candidates_border_dist) / opt.root_candidates_border_dist, 0.1, 1)
+        # p_dist -= np.clip((border_dist - opt.root_candidates_border_dist) / opt.root_candidates_border_dist, 0.1, 1)
         p_dist = np.clip(p_dist, -1, 1)
 
         # 2. ... based on the angle between the tangent of the tip and the expected tangent

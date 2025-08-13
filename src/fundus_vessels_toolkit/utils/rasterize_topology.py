@@ -15,7 +15,7 @@ def rasterize_topology(
     curves: List[torch.Tensor],
     boundaries: List[torch.Tensor],
     shape: Tuple[int, int],
-    N_nodes: int = -1,
+    node_count: int = -1,
     bridge_gap_smaller_than: float = 2,
     fill_junctions: bool = True,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -61,15 +61,15 @@ def rasterize_topology(
     branchLabelsMap = torch.from_numpy(np.zeros(shape, dtype=np.int32)).int()
     topoMap = torch.from_numpy(np.zeros(shape, dtype=np.float32))
 
-    if N_nodes == -1:
-        N_nodes = int(branch_list.max().item() + 1)
+    if node_count == -1:
+        node_count = int(branch_list.max().item() + 1)
 
     rasterize_topology_cpp(
         branch_list.cpu().int(),
         root_branches.cpu().int(),
-        curves,
-        boundaries,
-        N_nodes,
+        [c.cpu().int() for c in curves],
+        [b.cpu().int() for b in boundaries],
+        node_count,
         bridge_gap_smaller_than,
         fill_junctions,
         branchLabelsMap,

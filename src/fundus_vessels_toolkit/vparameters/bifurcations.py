@@ -1,5 +1,5 @@
 import warnings
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -9,7 +9,7 @@ from fundus_vessels_toolkit.utils.geometric import Point
 
 from ..utils.graph.measures import extract_bifurcations_parameters as extract_bifurcations_parameters
 from ..utils.math import modulo_pi
-from ..vascular_data_objects import FundusData, VBranchGeoData, VTree
+from ..vascular_data_objects import FundusData, VBranchGeoData, VGeometricData, VTree
 
 
 def bifurcations_biomarkers(d0, d1, d2, θ1, θ2, *, as_dict=True) -> Dict[str, float] | List[float]:
@@ -128,6 +128,7 @@ def parametrize_bifurcations(
     if strahler_field is not None and strahler_field not in vtree.branch_attr:
         assign_strahler_number(vtree, field=strahler_field)
 
+    branch_rank = 1
     if branch_rank_field is not None and branch_rank_field not in vtree.branch_attr:
         vtree.branch_attr[branch_rank_field] = 1
         vtree.node_attr[branch_rank_field] = 0
@@ -255,6 +256,112 @@ def parametrize_bifurcations(
                 df.insert(4, "norm_dist_od", norm_dist_od)
 
     return df
+
+
+def reorder_branch_by_bifurcations(
+    vtree: VTree,
+    rank_field: Optional[str] = None,
+    *,
+    geodata: Optional[VGeometricData | int] = None,
+    calibre_tip=VBranchGeoData.Fields.TIPS_CALIBRE,
+    tangent_tip=VBranchGeoData.Fields.TIPS_TANGENT,
+    apply_branch_reordering: bool = True,
+) -> npt.NDArray[np.int_]:
+    """Sort the branch IDs by bifurcations.
+    This sort ensure that, in a bifurcation, the indexes of the secondary branches is always higher than the main branches.
+
+    Returns
+    -------
+    VTree
+        The binary tree.
+    """  # noqa: E501
+    from ..segment_to_graph.geometry_parsing import derive_tips_geometry_from_curve_geometry
+
+    derive_tips_geometry_from_curve_geometry(vtree, tangent=True, calibre=True, inplace=True)
+    gdata = vtree.geometric_data(geodata)
+    branch_lookup = np.arange(vtree.branch_count, dtype=np.int_)
+
+    if rank_field is not None and rank_field not in vtree.branch_attr:
+        vtree.branch_attr[rank_field] = 1
+        vtree.node_attr[rank_field] = 0
+
+    def recursive_reorder_successors(branch_id: int, rank: int):
+        branch = vtree.branch(branch_id)
+
+        # === Assign branch and node rank ===
+        if rank_field is not None:
+            branch.attr[rank_field] = rank
+            branch.head_node().attr[rank_field] = rank
+
+        # === If 0 or 1 successor don't reorder, ... ===
+        if branch.n_successors == 1:
+            recursive_reorder_successors(branch.successors_ids[0], rank)
+        if branch.n_successors <= 1:
+            return
+
+        # === ..., otherwise, get the calibres and tangents data for this branch head ===
+        head_tangent = -branch.head_tip_geodata(tangent_tip, geodata=gdata)
+
+        if np.isnan(head_tangent).any() or np.sum(head_tangent) == 0:
+            head_tangent = np.diff(gdata.node_coord(branch.directed_node_ids), axis=0)[0]
+            head_tangent /= np.linalg.norm(head_tangent)
+
+        # === Get the calibres and tangents data for its successor tails ===
+        class Successors(NamedTuple):
+            branch: VTree.Branch
+            calibre: npt.NDArray[np.int_]
+            tangent: npt.NDArray[np.int_]
+
+        successors_calibres = branch.successors_tip_geodata(calibre_tip, geodata=gdata)
+        successors_tangents = branch.successors_tip_geodata(tangent_tip, geodata=gdata)
+        successors = [
+            Successors(branch=b, calibre=c, tangent=t)
+            for b, c, t in zip(branch.successors(), successors_calibres, successors_tangents, strict=True)
+        ]
+
+        for succ_id in successors:
+            if np.isnan(succ_id.tangent).any() or np.sum(succ_id.tangent) == 0:
+                # If the tangent is not available, fallback to the difference of nodes coordinates
+                succ_id.tangent[:] = np.diff(gdata.node_coord(succ_id.branch.directed_node_ids), axis=0)[0]
+                if (succ_id.tangent != 0).any():
+                    succ_id.tangent[:] /= np.linalg.norm(succ_id.tangent)
+
+        # === Sort the successors ===
+        sorted_successors = []
+        while successors:
+            if not np.isnan(successors_calibres).any():
+                # If the calibres are available, select the one with the highest calibre
+                main_succ_id = np.argmax([_.calibre for _ in successors])
+                main_succ = successors[main_succ_id]
+                # Check that it is at least 1.5px larger than any other tertiary branches
+                if all(main_succ.calibre - 1.5 > _.calibre for _ in successors if _ is not main_succ):
+                    sorted_successors.append(successors.pop(main_succ_id))
+                    continue
+
+            # If calibres are not available or not decisive, select the branch with the closest angle
+            main_succ_id = np.argmax([np.dot(head_tangent, _.tangent) for _ in successors])
+            sorted_successors.append(successors.pop(main_succ_id))
+
+        # === Reindex branches ===
+        old_succ_ids = np.array([succ.branch.id for succ in sorted_successors], dtype=np.int_)
+        new_succ_ids = np.sort(old_succ_ids)
+        branch_lookup[old_succ_ids] = new_succ_ids
+        # Deallocate references to branches before reindexing
+        del sorted_successors
+        del branch
+
+        # === Process successors recursively ===
+        recursive_reorder_successors(new_succ_ids[0], rank)
+        for succ_id in new_succ_ids[1:]:
+            recursive_reorder_successors(succ_id, rank + 1)
+
+    for i in vtree.root_branches_ids():
+        recursive_reorder_successors(i, 0)
+
+    if apply_branch_reordering:
+        vtree.reindex_branches(branch_lookup)
+
+    return branch_lookup
 
 
 def assign_strahler_number(vtree: VTree, field: str = "strahler") -> VTree:
