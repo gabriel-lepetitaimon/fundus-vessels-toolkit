@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import itertools
 from abc import ABC, ABCMeta, abstractmethod
+from copy import copy
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional, Self, Sequence, Tuple, Type, TypeAlias
+from typing import Any, Dict, Generic, List, NamedTuple, Optional, Self, Sequence, Tuple, Type, TypeAlias, TypeVar
 
 import numpy as np
 import numpy.typing as npt
@@ -14,7 +15,7 @@ from ..utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
 from ..utils.fundus_projections import FundusProjection
 from ..utils.geometric import Point
 
-_registered_vbranch_geo_data_types: Dict[str, Type[VBranchGeoDataBase]] = {}
+_registered_vbranch_geo_data_types: Dict[str, MetaVBranchGeoDataBase] = {}
 
 
 class BranchGeoDataEditContext(NamedTuple):
@@ -54,6 +55,10 @@ class MetaVBranchGeoDataBase(ABCMeta):
         if name != "VBranchGeoDataBase" and name not in _registered_vbranch_geo_data_types:
             _registered_vbranch_geo_data_types[name] = cls
         return cls
+
+
+T_VBranchGeoData = TypeVar("T_VBranchGeoData", bound="VBranchGeoDataBase")
+T_VBranchTipsData = TypeVar("T_VBranchTipsData", bound="VBranchTipsData")
 
 
 class VBranchGeoDataBase(ABC, metaclass=MetaVBranchGeoDataBase):
@@ -100,7 +105,9 @@ class VBranchGeoDataBase(ABC, metaclass=MetaVBranchGeoDataBase):
 
     @classmethod
     @abstractmethod
-    def merge(cls, others: Sequence[Self], ctx: BranchGeoDataEditContext) -> Self:
+    def merge(
+        cls: Type[T_VBranchGeoData], others: Sequence[T_VBranchGeoData], ctx: BranchGeoDataEditContext
+    ) -> T_VBranchGeoData:
         """Merge the parametric data .
 
         Parameters
@@ -183,7 +190,7 @@ class VBranchCurveData(VBranchGeoDataBase):
         return not len(self.data)
 
     @classmethod
-    def merge(cls, others: Sequence[Self], ctx: BranchGeoDataEditContext) -> Self:
+    def merge(cls, others: Sequence[Self], ctx: BranchGeoDataEditContext) -> Self:  # type: ignore
         if all(_ is None for _ in others):
             raise ValueError("Cannot merge empty data.")
         return cls(np.concatenate([_.data for _ in others if _ is not None], axis=0))
@@ -237,7 +244,7 @@ class VBranchCurveIndex(VBranchGeoDataBase):
         return not len(self.data)
 
     @classmethod
-    def merge(cls, others: Sequence[Self], ctx: BranchGeoDataEditContext) -> Self:
+    def merge(cls, others: Sequence[Self], ctx: BranchGeoDataEditContext) -> Self:  # type: ignore
         if all(_ is None for _ in others):
             raise ValueError("Cannot merge empty data.")
         curves_start_index = np.cumsum(
@@ -295,12 +302,12 @@ class VBranchTangents(VBranchGeoDataBase):
         return not len(self.data)
 
     @classmethod
-    def merge(cls, others: List[VBranchTangents], ctx: BranchGeoDataEditContext) -> VBranchTangents:
+    def merge(cls, others: List[Self], ctx: BranchGeoDataEditContext) -> Self:  # type: ignore
         if all(_ is None for _ in others):
             raise ValueError("Cannot merge empty data.")
         return cls(np.concatenate([_.data for _ in others if _ is not None], axis=0))
 
-    def flip(self, ctx: BranchGeoDataEditContext) -> VBranchTangents:
+    def flip(self, ctx: BranchGeoDataEditContext) -> Self:
         data = -np.flip(self.data, axis=0)
         return self.__class__(data)
 
@@ -347,7 +354,7 @@ class VBranchTipsData(VBranchGeoDataBase):
         return not np.all(np.isnan(self.data))
 
     @classmethod
-    def merge(cls, others: List[VBranchTipsData], ctx: BranchGeoDataEditContext) -> VBranchTipsData:
+    def merge(cls, others: List[Self], ctx: BranchGeoDataEditContext) -> Self:  # type: ignore
         if all(_ is None for _ in others):
             return cls.create_empty()
         return cls(
@@ -448,7 +455,7 @@ class VBranchBSpline(VBranchGeoDataBase):
         return not len(self.data)
 
     @classmethod
-    def merge(cls, others: List[VBranchBSpline], ctx: BranchGeoDataEditContext) -> VBranchBSpline:
+    def merge(cls, others: List[Self], ctx: BranchGeoDataEditContext) -> Self:  # type: ignore
         bspline = BSpline()
         for other in others:
             if other is not None:
@@ -465,55 +472,62 @@ class VBranchBSpline(VBranchGeoDataBase):
         return f"VBranchBSpline({self.data})"
 
     def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
-        bspline_data = [projection.transform(_.to_array()) for _ in self.data]
+        bspline_data = np.stack([projection.transform(_.to_array()) for _ in self.data])
         return self.__class__(BSpline.from_array(bspline_data))
 
 
 ####################################################################################################
-class VBranchGeoDescriptor(NamedTuple):
-    name: str
-    geo_type: Optional[Type[VBranchGeoDataBase]] = None
+class VBranchGeoDescriptor(str, Generic[T_VBranchGeoData]):
+    """``VBranchGeoDescriptor`` is a class that describes a branch geometrical attribute."""
 
-    def __str__(self) -> str:
-        return self.name
+    def __new__(cls, name: str, geo_type: Optional[Type[T_VBranchGeoData]] = None) -> Self:
+        name = copy(name)
+        return str.__new__(cls, name)
+
+    def __init__(self, name: str, geo_type: Optional[Type[T_VBranchGeoData]] = None) -> None:
+        self.geo_type = geo_type
+
+    @property
+    def name(self) -> str:
+        return str(self)
 
     def __hash__(self) -> int:
-        return hash(self.name)
+        return super().__hash__()
 
     def __eq__(self, value: object) -> bool:
         if isinstance(value, VBranchGeoDescriptor):
-            return self.name == value.name and self.geo_type == value.geo_type
-        return self.name == str(value)
+            return super().__eq__(value) and self.geo_type == value.geo_type
+        elif isinstance(value, str):
+            return super().__eq__(value)
+        return False
 
     @staticmethod
     def parse(key: VBranchGeoDataKey, geo_type: Optional[Type[VBranchGeoDataBase]] = None) -> VBranchGeoDescriptor:
         if isinstance(key, Type) and issubclass(key, VBranchGeoDataBase):
-            key = VBranchGeoField.by_type(key).value
-        elif isinstance(key, VBranchGeoField):
-            key = key.value
+            key = VBranchGeoData.Fields.by_type(key)
         if isinstance(key, VBranchGeoDescriptor):
             if geo_type is not None and (key.geo_type is None or not issubclass(key.geo_type, geo_type)):
                 raise ValueError(
                     f"Invalid branch geometrical attribute type: "
-                    f"{None if key.geo_type is None else key.geo_type.__name__} (for attribute: {key.name}). "
+                    f"{None if key.geo_type is None else key.geo_type.__name__} (for attribute: {key}). "
                     f"Expected type is: {geo_type.__name__}."
                 )
             return key
         elif isinstance(key, str):
-            if geo_type is not None and key in VBranchGeoField.__members__:
-                key = VBranchGeoField[key].value
-                if key.geo_type is None or not issubclass(key.geo_type, geo_type):
+            if geo_type is not None and VBranchGeoData.Fields.has_name(key):
+                desc = VBranchGeoData.Fields.by_name(key)
+                if desc.geo_type is None or not issubclass(desc.geo_type, geo_type):
                     raise ValueError(
                         "Invalid branch geometrical attribute type: "
-                        f"{None if key.geo_type is None else key.geo_type.__name__} "
-                        f"(for attribute: {key.name}). Expected type is: {geo_type.__name__}."
+                        f"{None if desc.geo_type is None else desc.geo_type.__name__} "
+                        f"(for attribute: {key}). Expected type is: {geo_type.__name__}."
                     )
-                return key
+                return desc
             return VBranchGeoDescriptor(key, geo_type)
         raise ValueError(f"Invalid type for geo descriptor: {type(key)}")
 
 
-class VBranchGeoField(Enum):
+class VBranchGeoFields:
     """``VBranchGeoFields`` is an enumeration of the fields of a branch of a vascular graph."""
 
     #: The tangent of the branch at each skeleton point.
@@ -544,31 +558,71 @@ class VBranchGeoField(Enum):
     TIPS_BOUNDARIES = VBranchGeoDescriptor("TIPS_BOUNDARIES", VBranchTipsDoublePointsData)
 
     @classmethod
-    def by_type(cls, geo_type: Type[VBranchGeoDataBase]) -> VBranchGeoField:
-        if issubclass(geo_type, VBranchTangents):
+    def by_type(cls, geo_type: type[T_VBranchGeoData]) -> VBranchGeoDescriptor[T_VBranchGeoData]:
+        if geo_type is VBranchTangents:
             return cls.TANGENTS
-        if issubclass(geo_type, VBranchBSpline):
+        if geo_type is VBranchBSpline:
             return cls.BSPLINE
-        if issubclass(geo_type, VBranchTipsTangents):
+        if geo_type is VBranchTipsTangents:
             return cls.TIPS_TANGENT
 
         raise ValueError(f"Impossible to infer VBranchGeoField from geo type: {geo_type}.")
 
-    def __hash__(self) -> int:
-        return hash(self.name)
+    @classmethod
+    def has_name(cls, name: str) -> bool:
+        """Check if a field with the given name exists.
 
-    def __eq__(self, value: object) -> bool:
-        return self.name == str(value)
+        Parameters
+        ----------
+        name : str
+            The name of the field.
+
+        Returns
+        -------
+        bool
+            True if the field exists, False otherwise.
+        """
+        return isinstance(cls.__dict__.get(name), VBranchGeoDescriptor)
+
+    @classmethod
+    def by_name(cls, name: str) -> VBranchGeoDescriptor[T_VBranchGeoData]:
+        """Get a VBranchGeoDescriptor by its name.
+
+        Parameters
+        ----------
+        name : str
+            The name of the field.
+
+        Returns
+        -------
+        VBranchGeoDescriptor[T_VBranchGeoData]
+            The corresponding VBranchGeoDescriptor.
+
+        Raises
+        ------
+        ValueError
+            If the field name is unknown.
+
+        Examples
+        --------
+        >>> VBranchGeoFields.by_name("TANGENTS").geo_type == VBranchTangents
+        True
+        >>> VBranchGeoFields.by_name("BSPLINE").geo_type == VBranchBSpline
+        True
+        """
+        if name in cls.__dict__:
+            return cls.__dict__[name]
+        raise ValueError(f"Unknown VBranchGeoField name: {name}")
 
 
 #: The type of curated dictionary of geometric data for branches.
-VBranchGeoDict: TypeAlias = Dict[str, List[VBranchGeoDataBase | None]]
+VBranchGeoDict: TypeAlias = Dict[str, List[T_VBranchGeoData | None]]
 
 #: All the types which may be converted to a VBranchGeoData object.
 VBranchGeoDataLike: TypeAlias = np.ndarray | BSpline | VBranchGeoDataBase
 
 #: All the types which may be used to refer to a VBranchGeoData object.
-VBranchGeoDataKey: TypeAlias = VBranchGeoDescriptor | str | Type[VBranchGeoDataBase] | VBranchGeoField
+VBranchGeoDataKey: TypeAlias = VBranchGeoDescriptor[T_VBranchGeoData] | str | T_VBranchGeoData
 
 #: The type of uncurated dictionary of geometric data for branches.
 VBranchGeoDictUncurated: TypeAlias = Dict[VBranchGeoDataKey, List[Optional[VBranchGeoDataLike]]]
@@ -581,7 +635,7 @@ class VBranchGeoData:
     Base = VBranchGeoDataBase
     CurveData = VBranchCurveData
     Descriptor = VBranchGeoDescriptor
-    Fields = VBranchGeoField
+    Fields = VBranchGeoFields
 
     Dict = VBranchGeoDict
     DataLike = VBranchGeoDataLike
@@ -672,9 +726,9 @@ class VBranchGeoData:
                 if is_invalid:
                     raise ValueError(f"Invalid attribute {geo_desc} of branch {branch_id}.\n{is_invalid}")
             if geo_desc.geo_type is None:
-                geo_desc = VBranchGeoDescriptor(geo_desc.name, geo_type)
-            branches_geo_data[geo_desc.name] = branches_data
-            branches_geo_descriptors[geo_desc.name] = geo_desc
+                geo_desc = VBranchGeoDescriptor(geo_desc, geo_type)
+            branches_geo_data[geo_desc] = branches_data
+            branches_geo_descriptors[geo_desc] = geo_desc
 
         return branches_geo_data, branches_geo_descriptors
 

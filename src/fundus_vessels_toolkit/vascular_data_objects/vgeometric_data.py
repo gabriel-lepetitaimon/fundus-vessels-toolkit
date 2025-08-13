@@ -17,10 +17,13 @@ from ..utils.fundus_projections import FundusProjection
 from ..utils.geometric import Point, Rect
 from ..utils.lookup_array import invert_lookup, reorder_array
 from ..utils.numpy import as_1d_array, np_find_sorted, readonly
+from ..utils.typing import Bool1DArrayLike, IndicesLike, Int1DArray
 from .fundus_data import FundusData
 from .vbranch_geodata import (
     BranchGeoDataEditContext,
+    T_VBranchGeoData,
     VBranchGeoData,
+    VBranchGeoDataBase,
     VBranchGeoDataKey,
     VBranchGeoDataLike,
     VBranchGeoDescriptor,
@@ -30,6 +33,8 @@ from .vbranch_geodata import (
 
 if TYPE_CHECKING:
     from .vgraph import VGraph
+
+    # T_VBranchGeoData = TypeVar("T_VBranchGeoData", bound=VBranchGeoData)
 
 EMPTY_CURVE = readonly(np.empty((0, 2), dtype=np.int_))
 
@@ -357,9 +362,9 @@ class VGeometricData:
         assert coord.ndim == 2, "The coordinates should be a 2D array."
         if ids is None:
             if graph_index is False:
-                assert (
-                    coord.shape[0] == self.node_count
-                ), "The number of coordinates should be the same as the number of nodes."
+                assert coord.shape[0] == self.node_count, (
+                    "The number of coordinates should be the same as the number of nodes."
+                )
                 self._nodes_coord = np.asarray(coord, dtype=np.float32)
                 return
             else:
@@ -670,9 +675,9 @@ class VGeometricData:
                         raise KeyError("No calibre attribute found.") from None
             else:
                 calibre_desc = self._fetch_branch_data_descriptor(calibre_attr)
-            assert issubclass(
-                calibre_desc.geo_type, (VBranchGeoData.TipsData, VBranchGeoData.Curve)
-            ), f"Invalid attribute for boundaries of branches tips: {calibre_desc.name}."
+            assert issubclass(calibre_desc.geo_type, (VBranchGeoData.TipsData, VBranchGeoData.Curve)), (
+                f"Invalid attribute for boundaries of branches tips: {calibre_desc.name}."
+            )
             boundaries = self.branch_data(calibre_desc)
 
             lines = []
@@ -781,7 +786,7 @@ class VGeometricData:
     ####################################################################################################################
     #  === BRANCH GEOMETRIC ATTRIBUTES ===
     ####################################################################################################################
-    def list_branch_data(self, branch_id: int, *, graph_index=True) -> Dict[str, VBranchGeoData.Base]:
+    def list_branch_data(self, branch_id: int, *, graph_index=True) -> Dict[str, VBranchGeoDataBase]:
         """Return the attributes of a branch.
 
         Parameters
@@ -798,10 +803,11 @@ class VGeometricData:
             internal_id = self._graph_to_internal_branch_ids(branch_id, graph_index=True, check_valid=False)
         else:
             internal_id = branch_id
+
         return {
-            attr: attr_data[internal_id]
+            attr: data
             for attr, attr_data in self._branch_data_dict.items()
-            if attr_data[internal_id] is not None
+            if (data := attr_data[internal_id]) is not None
         }
 
     def has_branch_data(self, attr_name: VBranchGeoDataKey) -> bool:
@@ -813,29 +819,36 @@ class VGeometricData:
             return False
 
     @overload
-    def branch_data(self, attr_name: VBranchGeoDataKey, branch_id: int, *, graph_index=True) -> VBranchGeoData.Base: ...
-    @overload
     def branch_data(
-        self, attr_name: VBranchGeoDataKey, branch_id: Optional[npt.ArrayLike[int]] = None, *, graph_index=True
-    ) -> List[VBranchGeoData.Base]: ...
+        self, attr_name: VBranchGeoDescriptor[T_VBranchGeoData], branch_id: int, *, graph_index=True
+    ) -> T_VBranchGeoData: ...
     @overload
-    def branch_data(self, *, branch_id: int, graph_index=True) -> Dict[str, VBranchGeoData.Base]: ...
+    def branch_data(self, attr_name: VBranchGeoDataKey, branch_id: int, *, graph_index=True) -> VBranchGeoDataBase: ...
     @overload
-    def branch_data(
-        self, *, branch_id: Optional[npt.ArrayLike[int]] = None, graph_index=True
-    ) -> Dict[str, List[VBranchGeoData.Base]]: ...
     def branch_data(
         self,
-        attr_name: VBranchGeoDataKey = None,
-        branch_id: Optional[int | npt.NDArray[np.int32]] = None,
+        attr_name: VBranchGeoDescriptor[T_VBranchGeoData],
+        branch_id: Optional[Int1DArray] = None,
         *,
         graph_index=True,
-    ) -> (
-        VBranchGeoData.Base
-        | List[VBranchGeoData.Base]
-        | Dict[str, VBranchGeoData.Base]
-        | Dict[str, List[VBranchGeoData.Base]]
-    ):
+    ) -> List[T_VBranchGeoData]: ...
+    @overload
+    def branch_data(
+        self, attr_name: VBranchGeoDataKey, branch_id: Optional[Int1DArray] = None, *, graph_index=True
+    ) -> List[T_VBranchGeoData]: ...
+    @overload
+    def branch_data(self, *, branch_id: int, graph_index=True) -> Dict[str, VBranchGeoDataBase]: ...
+    @overload
+    def branch_data(
+        self, *, branch_id: Optional[Int1DArray] = None, graph_index=True
+    ) -> Dict[str, List[VBranchGeoDataBase]]: ...
+    def branch_data(
+        self,
+        attr_name: Optional[VBranchGeoDataKey] = None,
+        branch_id: Optional[int | Int1DArray] = None,
+        *,
+        graph_index=True,
+    ) -> VBranchGeoDataBase | List[T_VBranchGeoData] | Dict[str, T_VBranchGeoData] | Dict[str, List[T_VBranchGeoData]]:
         """Return the attribute of a branch.
 
         Parameters
@@ -852,45 +865,45 @@ class VGeometricData:
             The attribute of the branch.
         """
         if attr_name is None:
-            return self._branch_data_dict if branch_id is None else self.list_branch_data(branch_id, graph_index=True)
+            return self._branch_data_dict if branch_id is None else self.list_branch_data(branch_id, graph_index=True)  # type: ignore
 
         attr = self._fetch_branch_data(attr_name)
         if branch_id is None:
-            return attr
+            return attr  # type: ignore
 
         branch_id, is_single = as_1d_array(branch_id)
 
         internal_id = self._graph_to_internal_branch_ids(branch_id, graph_index=graph_index, check_valid=False)
         if is_single:
-            return attr[internal_id[0]] if internal_id[0] >= 0 else None
-        return [attr[i] if i >= 0 else None for i in internal_id]
+            return attr[internal_id[0]] if internal_id[0] >= 0 else None  # type: ignore
+        return [attr[i] if i >= 0 else None for i in internal_id]  # type: ignore
 
     @overload
     def tip_data(
         self,
         attrs: VBranchGeoDataKey,
-        branch_ids: Optional[int | npt.ArrayLike[int]] = None,
-        first_tip: Optional[bool | npt.ArrayLike[bool]] = None,
+        branch_id: Optional[IndicesLike] = None,
+        first_tip: Optional[Bool1DArrayLike] = None,
         *,
         graph_index=True,
-    ) -> np.ndarray: ...
+    ) -> npt.NDArray: ...
     @overload
     def tip_data(
         self,
         attrs: Optional[List[VBranchGeoDataKey]] = None,
-        branch_ids: Optional[int | npt.ArrayLike[int]] = None,
-        first_tip: Optional[bool | npt.ArrayLike[bool]] = None,
+        branch_id: Optional[IndicesLike] = None,
+        first_tip: Optional[Bool1DArrayLike] = None,
         *,
         graph_index=True,
-    ) -> Dict[str, np.ndarray]: ...
+    ) -> Dict[str, npt.NDArray]: ...
     def tip_data(
         self,
         attrs: Optional[VBranchGeoDataKey | List[VBranchGeoDataKey]] = None,
-        branch_id: Optional[int | npt.ArrayLike[int]] = None,
-        first_tip: Optional[bool | npt.ArrayLike[bool]] = None,
+        branch_id: Optional[IndicesLike] = None,
+        first_tip: Optional[Bool1DArrayLike] = None,
         *,
         graph_index=True,
-    ) -> np.ndarray | Dict[str, np.ndarray]:
+    ) -> npt.NDArray | Dict[str, npt.NDArray]:
         """Return the geometric data of the tips of the given branch(es).
 
         Parameters
@@ -923,13 +936,17 @@ class VGeometricData:
         """  # noqa: E501
         attr_single = False
         if attrs is None:
-            attrs = self._branches_attrs_descriptors.values()
+            attrs_desc = self._branches_attrs_descriptors.values()
         elif isinstance(attrs, list):
-            attrs = [self._fetch_branch_data_descriptor(attr) for attr in attrs]
+            attrs_desc = [self._fetch_branch_data_descriptor(attr) for attr in attrs]
         else:
-            attrs = [self._fetch_branch_data_descriptor(attrs)]
+            attrs_desc = [self._fetch_branch_data_descriptor(attrs)]
             attr_single = True
-        attrs = [attr.name for attr in attrs if issubclass(attr.geo_type, VBranchGeoData.TipsData)]
+        attrs_desc = [
+            attr
+            for attr in attrs_desc
+            if attr.geo_type is not None and issubclass(attr.geo_type, VBranchGeoData.TipsData)
+        ]
 
         if branch_id is None:
             branch_id = np.arange(self.branch_count)
@@ -937,7 +954,7 @@ class VGeometricData:
         branch_ids = self._graph_to_internal_branch_ids(branch_ids, graph_index=graph_index)
 
         if attr_single:
-            attr_data = self._branch_data_dict[attrs[0]]
+            attr_data = self._branch_data_dict[attrs_desc[0]]
             data = [attr_data[_].data for _ in branch_ids]
             if first_tip is not None:
                 if type(first_tip) in (bool, np.bool_):
@@ -948,7 +965,7 @@ class VGeometricData:
 
         else:
             curves = self.branch_curve(branch_ids, graph_index=False)
-            out = {attr: [] for attr in attrs}
+            out = {attr: [] for attr in attrs_desc}
 
             nan = np.array([np.nan, np.nan], dtype=np.float32)
             if first_tip is not None:
@@ -962,7 +979,7 @@ class VGeometricData:
             else:
                 out["yx"] = [curve[[0, -1]] if len(curve) else np.array((nan, nan)) for curve in curves]
 
-            for attr in attrs:
+            for attr in attrs_desc:
                 attr_data = self._branch_data_dict[attr]
                 data = [attr_data[_].data for _ in branch_ids]
 
@@ -1118,9 +1135,9 @@ class VGeometricData:
         unknown_tips: npt.NDArray[np.bool_] = np.isnan(tips_coord).any(axis=2)
 
         if unknown_tips.any() and use_nodes_if_missing:
-            assert (
-                self.parent_graph is not None
-            ), "The parent graph is not set, impossible to infer the branch tip coordinates."
+            assert self.parent_graph is not None, (
+                "The parent graph is not set, impossible to infer the branch tip coordinates."
+            )
             branch_ids = np.asarray(branch_id) if branch_id is not None else self.branch_ids
             unk_branches, unk_tips = np.where(unknown_tips)
             unk_branches = branch_ids[unk_branches]
@@ -1190,9 +1207,9 @@ class VGeometricData:
             unknown_tangents = np.ones(B, dtype=bool)
 
         if unknown_tangents.any() and infer_from_nodes_if_missing:
-            assert (
-                self.parent_graph is not None
-            ), "The parent graph is not set, impossible to infer the branch directions."
+            assert self.parent_graph is not None, (
+                "The parent graph is not set, impossible to infer the branch directions."
+            )
             branch_list = self.parent_graph.branch_list
 
             return_both_tips = first_tip is None
@@ -1280,7 +1297,7 @@ class VGeometricData:
             branch_id = self._graph_to_internal_branch_ids(branch_id, graph_index=graph_index)
 
         # Check: attr_data
-        if isinstance(attr_data, VBranchGeoData.Base):
+        if isinstance(attr_data, VBranchGeoDataBase):
             assert len(branch_id) == 1, "Invalid number of branches for attribute data."
             attr_data = [attr_data]
         else:
@@ -1306,7 +1323,7 @@ class VGeometricData:
                     f"Inconsistent type for attribute {attr_name} of branch {branch_id[i]}: {type(data)}. "
                     f"Previous branches were of type: {attr_type}."
                 )
-            elif isinstance(data, VBranchGeoData.Base):
+            elif isinstance(data, VBranchGeoDataBase):
                 attr_type = type(data)
             else:
                 raise ValueError(f"Invalid type for attribute data: {type(data)}.")
@@ -1325,7 +1342,7 @@ class VGeometricData:
 
     def _fetch_branch_data(
         self, attr_name: VBranchGeoDataKey, attr_type: Optional[VBranchGeoData.Type] = None, *, emplace: bool = False
-    ) -> List[Optional[VBranchGeoData.Base]]:
+    ) -> List[Optional[VBranchGeoDataBase]]:
         """Fetch the attribute data of a branch."""
         desc = self._fetch_branch_data_descriptor(attr_name, attr_type, emplace=emplace)
         attr_data = self._branch_data_dict.get(desc.name, None)
@@ -1357,9 +1374,7 @@ class VGeometricData:
                 raise KeyError(f"Attribute {attr_name} not found.")
         elif attr_type is not None:
             if not issubclass(attr_type, desc.geo_type):
-                raise TypeError(
-                    f"Invalid type for attribute {attr_name}: {attr_type}. " f"Expected type: {desc.geo_type}."
-                )
+                raise TypeError(f"Invalid type for attribute {attr_name}: {attr_type}. Expected type: {desc.geo_type}.")
         return desc
 
     def _remove_branch_data(self, attr_name: VBranchGeoDataKey) -> None:
@@ -1370,7 +1385,7 @@ class VGeometricData:
     ####################################################################################################################
     #  === BRANCHES GEOMETRIC ATTRIBUTES SPECIALIZATION  ===
     ####################################################################################################################
-    def branch_data_by_types(self, attr_type: VBranchGeoData.Type) -> Dict[str, VBranchGeoData.Base]:
+    def branch_data_by_types(self, attr_type: VBranchGeoData.Type) -> Dict[str, VBranchGeoDataBase]:
         """Return the attributes of a branch.
 
         Parameters
@@ -1697,12 +1712,12 @@ class VGeometricData:
         """  # noqa: E501
         if len(new_branch_ids) == 0:
             return
-        assert bool(
-            len(split_curve_ids) == len(new_branch_ids)
-        ), f"Invalid number of new branch ids. (Got {len(new_branch_ids)} but expected {len(split_curve_ids)})"
-        assert bool(
-            len(split_curve_ids) == len(new_node_ids)
-        ), f"Invalid number of new node ids. (Got {len(new_node_ids)} but expected {len(split_curve_ids)})"
+        assert bool(len(split_curve_ids) == len(new_branch_ids)), (
+            f"Invalid number of new branch ids. (Got {len(new_branch_ids)} but expected {len(split_curve_ids)})"
+        )
+        assert bool(len(split_curve_ids) == len(new_node_ids)), (
+            f"Invalid number of new node ids. (Got {len(new_node_ids)} but expected {len(split_curve_ids)})"
+        )
 
         internal_id = int(self._graph_to_internal_branch_ids(branch_id))
         curve = self.branch_curve(internal_id, graph_index=False)

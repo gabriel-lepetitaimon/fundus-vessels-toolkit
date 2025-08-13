@@ -1,9 +1,7 @@
-import warnings
 from typing import Literal, Optional
 
 import numpy as np
 
-from ..utils.exceptions import GeometryParserWarning
 from ..utils.geometric import Rect
 from ..utils.graph.measures import extract_branch_geometry
 from ..utils.math import intercept_segment
@@ -130,6 +128,7 @@ def derive_tips_geometry_from_curve_geometry(
     boundaries: bool | None = None,
     tangent_from_nodes: bool | int = True,
     inplace: bool = False,
+    override: bool = True,
 ) -> VGraph:
     """Derive the geometry of tips from the curve geometry of the branches.
 
@@ -158,6 +157,9 @@ def derive_tips_geometry_from_curve_geometry(
 
     inplace : bool, optional
         If True, the graph is modified in place, by default False.
+
+    override: bool, optional
+        If False, the existing tips geometry will not be overridden.
 
     Returns
     -------
@@ -201,7 +203,7 @@ def derive_tips_geometry_from_curve_geometry(
         elif gdata.has_branch_data(VBranchGeoData.Fields.TANGENTS):
             tangent = True
 
-    if tangent:
+    if tangent and (override or not gdata.has_branch_data(VBranchGeoData.Fields.TIPS_TANGENT)):
         tips_tangents = []
         nodes_coord = gdata.node_coord()
         branch_list = vgraph.branch_list  # TODO: transpose to graph_index=False

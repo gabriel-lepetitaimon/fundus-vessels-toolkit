@@ -1,12 +1,15 @@
+from __future__ import annotations
+
 import abc
 from typing import Dict, List, Mapping, Optional, Self, Tuple, Type
 
 import numpy as np
+import numpy.typing as npt
 
 from .geometric import Rect
 
 
-def _np_short_str(arr: np.ndarray) -> str:
+def _np_short_str(arr: npt.NDArray[np.floating]) -> str:
     if arr.ndim == 2:
         return "[" + "| ".join([" ".join(f"{v:.2f}" for v in row) for row in arr]) + "]"
     elif arr.ndim == 1:
@@ -16,28 +19,28 @@ def _np_short_str(arr: np.ndarray) -> str:
 
 class FundusProjection(abc.ABC):
     @classmethod
-    def identity(cls) -> Self:
+    def identity(cls) -> FundusProjection:
         """
         Returns the identity projection model.
 
         Returns
         -------
-        projection : Self
+        projection : FundusProjection
             The identity projection model.
         """
         return IdentityProjection()
 
     @classmethod
-    def fit(cls, src: np.ndarray, dst: np.ndarray) -> Tuple[Self, float]:
+    def fit(cls, src: npt.NDArray[np.floating], dst: npt.NDArray[np.floating]) -> Tuple[Self, float]:
         """
         Fits a projection model to map points from ``src`` to ``dst``.
 
         Parameters
         ----------
-        src : np.ndarray
+        src : npt.NDArray[np.floating]
             The source points coordinates (N x 2) where N is the number of points.
 
-        dst : np.ndarray
+        dst : npt.NDArray[np.floating]
             The destination points coordinates (N x 2).
 
         Returns
@@ -50,18 +53,21 @@ class FundusProjection(abc.ABC):
         """
         raise NotImplementedError(f"{cls.__name__} does not implement the 'fit' method")
 
-    @staticmethod
+    @classmethod
     def fit_to_projection(
-        src: np.ndarray, dst: np.ndarray, projection: Type[Self] | Dict[int, Type[Self]]
+        cls,
+        src: npt.NDArray[np.floating],
+        dst: npt.NDArray[np.floating],
+        projection: Type[Self] | Dict[int, Type[Self]],
     ) -> Tuple[Self, float]:
         """Fits a given projection model to map points from ``src`` to ``dst``.
 
         Parameters
         ----------
-        src : np.ndarray
+        src : npt.NDArray[np.floating]
             The source points coordinates (N, 2) where N is the number of points.
 
-        dst : np.ndarray
+        dst : npt.NDArray[np.floating]
             The destination points coordinates (N, 2).
 
         projection : Type[Self] | Dict[int, Type[Self]]
@@ -91,7 +97,7 @@ class FundusProjection(abc.ABC):
 
         raise ValueError("projection must be a projection model or a dictionary of projection models")
 
-    def compose(self, T1: Self) -> Self:
+    def compose(self, T1: Self) -> FundusProjection:
         """
         Composes this projection model with another one.
 
@@ -107,7 +113,7 @@ class FundusProjection(abc.ABC):
         """
         return ProjectionComposition.simplify_composition(self, T1)
 
-    def invert(self) -> Self:
+    def invert(self) -> FundusProjection:
         """
         Inverts this projection model.
 
@@ -134,34 +140,34 @@ class FundusProjection(abc.ABC):
         return True
 
     @abc.abstractmethod
-    def transform(self, src: np.ndarray) -> np.ndarray:
+    def transform(self, src: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         """
         Transforms a set of points with this projection model.
 
         Parameters
         ----------
-        src : np.ndarray
+        src : npt.NDArray[np.floating]
             The source points coordinates (N x 2) where N is the number of points.
 
         Returns
         -------
-        dst : np.ndarray
+        dst : npt.NDArray[np.floating]
             The transformed points coordinates (N x 2).
         """
         pass
 
-    def transform_inverse(self, dst: np.ndarray) -> np.ndarray:
+    def transform_inverse(self, dst: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         """
         Transforms a set of points with the inverse of this projection model.
 
         Parameters
         ----------
-        dst : np.ndarray
+        dst : npt.NDArray[np.floating]
             The destination points coordinates (N x 2) where N is the number of points.
 
         Returns
         -------
-        src : np.ndarray
+        src : npt.NDArray[np.floating]
             The source points coordinates (N x 2).
         """
         invert_t = self.invert()
@@ -185,19 +191,21 @@ class FundusProjection(abc.ABC):
         Rect
             The transformed domain.
         """
-        corners = self.transform(moving_domain.corners())
+        corners = self.transform(np.array(moving_domain.corners()))
         return Rect.from_points(tuple(np.amin(corners, axis=0)), tuple(np.amax(corners, axis=0))).to_int()
 
-    def quadratic_error(self, src: np.ndarray, dst: np.ndarray, mean: bool = False) -> np.ndarray | float:
+    def quadratic_error(
+        self, src: npt.NDArray[np.floating], dst: npt.NDArray[np.floating], mean: bool = False
+    ) -> npt.NDArray[np.floating] | float:
         """
         Calculates the quadratic error of the projection model when mapping points from ``src`` to ``dst``.
 
         Parameters
         ----------
-        src : np.ndarray
+        src : npt.NDArray[np.floating]
             The source points coordinates (N x 2) where N is the number of points.
 
-        dst : np.ndarray
+        dst : npt.NDArray[np.floating]
             The destination points coordinates (N x 2).
 
         mean : bool, optional
@@ -205,21 +213,24 @@ class FundusProjection(abc.ABC):
 
         Returns
         -------
-        error : np.ndarray | float
+        error : npt.NDArray[np.floating] | float
             The quadratic error of each point or the mean error if ``mean`` is True.
         """
         errors = np.sum((dst - self.transform(src)) ** 2, axis=1)
         return np.mean(errors) if mean else errors
 
     def warp(
-        self, src_img: np.ndarray, src_domain: Optional[Rect] = None, warped_domain: Optional[Rect] = None
-    ) -> Tuple[np.ndarray, Rect]:
+        self,
+        src_img: npt.NDArray[np.uint8] | npt.NDArray[np.float32],
+        src_domain: Optional[Rect] = None,
+        warped_domain: Optional[Rect] = None,
+    ) -> Tuple[npt.NDArray[np.uint8] | npt.NDArray[np.float32], Rect]:
         """
         Warps an image using this projection model.
 
         Parameters
         ----------
-        src_img : np.ndarray
+        src_img : npt.NDArray[np.uint8] | npt.NDArray[np.float32]
             The source image to warp. The image must be cv2 compatible: shape=(H x W [x C]) and dtype=np.uint8|np.float32.
 
         src_domain : Rect
@@ -230,7 +241,7 @@ class FundusProjection(abc.ABC):
 
         Returns
         -------
-        dst_img : np.ndarray
+        dst_img : npt.NDArray[np.uint8] | npt.NDArray[np.float32]
             The warped image.
 
         warped_domain : Rect
@@ -315,12 +326,12 @@ class ProjectionComposition(FundusProjection):
     def invert(self) -> Self:
         return ProjectionComposition(*(T.invert() for T in reversed(self.Ts)))
 
-    def transform(self, src: np.ndarray) -> np.ndarray:
+    def transform(self, src: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         for T in self.Ts:
             src = T.transform(src)
         return src
 
-    def transform_inverse(self, dst: np.ndarray) -> np.ndarray:
+    def transform_inverse(self, dst: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         for T in reversed(self.Ts):
             dst = T.transform_inverse(dst)
         return dst
@@ -348,10 +359,10 @@ class ProjectionInverse(FundusProjection):
     def is_inverse_exact(self) -> bool:
         return self.T.is_exact
 
-    def transform(self, src: np.ndarray) -> np.ndarray:
+    def transform(self, src: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         return self.T.transform_inverse(src)
 
-    def transform_inverse(self, dst: np.ndarray) -> np.ndarray:
+    def transform_inverse(self, dst: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         return self.T.transform(dst)
 
 
@@ -371,15 +382,15 @@ class IdentityProjection(FundusProjection):
     def compose(self, T1: Self) -> Self:
         return T1
 
-    def transform(self, src: np.ndarray) -> np.ndarray:
+    def transform(self, src: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         return src
 
-    def transform_inverse(self, dst: np.ndarray) -> np.ndarray:
+    def transform_inverse(self, dst: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         return dst
 
 
 class AffineProjection(FundusProjection):
-    def __init__(self, R: np.ndarray, t: np.ndarray) -> None:
+    def __init__(self, R: npt.NDArray[np.floating], t: npt.NDArray[np.floating]) -> None:
         assert R.shape == (2, 2) and t.shape == (2,), "R must be a 2x2 matrix and t must be a 2D vector"
         self.R = R
         self.t = t
@@ -392,15 +403,15 @@ class AffineProjection(FundusProjection):
         return f"Affine(R={_np_short_str(self.R)}, t={_np_short_str(self.t)})"
 
     @classmethod
-    def rotate(cls, theta: float, center: np.ndarray = (0, 0)) -> Self:
+    def rotate(cls, theta: float, center: npt.NDArray[np.floating] = (0, 0)) -> Self:
         """Create an affine transformation that rotates by theta and translates by t.
 
         Parameters
         ----------
         theta : float
             Rotation angle in degrees. Positive values rotate clockwise.
-        t : np.ndarray
-            Translation vector.
+        center : npt.NDArray[np.floating]
+            Center of rotation.
 
         Returns
         -------
@@ -414,7 +425,7 @@ class AffineProjection(FundusProjection):
         return cls(R, t)
 
     @classmethod
-    def fit(cls, src: np.ndarray, dst: np.ndarray) -> Tuple[Self, float]:
+    def fit(cls, src: npt.NDArray[np.floating], dst: npt.NDArray[np.floating]) -> Tuple[Self, float]:
         src, dst = np.asarray(src), np.asarray(dst)
         assert src.ndim == 2 and src.shape[1] == 2, "src must be a 2D array of 2D coordinates"
         assert src.shape == dst.shape, "src and dst must have the same shape"
@@ -436,16 +447,22 @@ class AffineProjection(FundusProjection):
         R_inv, t_inv = X_inv[:2, :2], X_inv[:2, 2]
         return self.__class__(R_inv, t_inv)
 
-    def transform(self, src: np.ndarray) -> np.ndarray:
+    def transform(self, src: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         src = np.asarray(src)
         return (self.R @ src.T + self.t[:, None]).T
 
     def warp(
         self,
-        src_img: np.ndarray | List[np.ndarray],
+        src_img: npt.NDArray[np.uint8]
+        | npt.NDArray[np.float32]
+        | List[npt.NDArray[np.uint8]]
+        | List[npt.NDArray[np.float32]],
         src_domain: Optional[Rect] = None,
         warped_domain: Optional[Rect] = None,
-    ) -> Tuple[np.ndarray, Rect]:
+    ) -> Tuple[
+        npt.NDArray[np.uint8] | npt.NDArray[np.float32] | List[npt.NDArray[np.uint8]] | List[npt.NDArray[np.float32]],
+        Rect,
+    ]:
         from ..utils.safe_import import import_cv2
 
         cv2 = import_cv2()
@@ -473,11 +490,11 @@ class QuadraticProjection(FundusProjection):
 
     """
 
-    def __init__(self, Q: np.ndarray, R: np.ndarray, t: np.ndarray) -> None:
+    def __init__(self, Q: npt.NDArray[np.floating], R: npt.NDArray[np.floating], t: npt.NDArray[np.floating]) -> None:
         Q, R, t = np.asarray(Q), np.asarray(R), np.asarray(t)
-        assert (
-            Q.shape == (2, 3) and R.shape == (2, 2) and t.shape == (2,)
-        ), "Q must be a 2x3 matrix, R must be a 2x2 matrix and t must be a 2D vector"
+        assert Q.shape == (2, 3) and R.shape == (2, 2) and t.shape == (2,), (
+            "Q must be a 2x3 matrix, R must be a 2x2 matrix and t must be a 2D vector"
+        )
         self.Q = Q
         self.R = R
         self.t = t
@@ -495,7 +512,7 @@ class QuadraticProjection(FundusProjection):
         return False
 
     @classmethod
-    def fit(cls, src: np.ndarray, dst: np.ndarray) -> Tuple[Self, float]:
+    def fit(cls, src: npt.NDArray[np.floating], dst: npt.NDArray[np.floating]) -> Tuple[Self, float]:
         src_y = src[:, 0]
         src_x = src[:, 1]
         src_ = np.stack((src_y**2, src_x**2, src_x * src_y, src_y, src_x, np.ones((src.shape[0],))), axis=1)
@@ -509,13 +526,13 @@ class QuadraticProjection(FundusProjection):
         #    T = AffineProjection(R.T, t)
         #    return T, np.mean(T.quadratic_error(src, dst))
 
-    def transform(self, src: np.ndarray) -> np.ndarray:
+    def transform(self, src: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         src = np.asarray(src)
         src_y, src_x = src[:, 0], src[:, 1]
         src_yy_xx_yx = np.stack((src_y**2, src_x**2, src_x * src_y), axis=1)
         return (self.Q @ src_yy_xx_yx.T + self.R @ src.T + self.t[:, None]).T
 
-    def jacobian(self, src: np.ndarray) -> np.ndarray:
+    def jacobian(self, src: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         src = np.asarray(src)
         return self.R[None, :, :] + (self.Q[None, :, 2, None] + 2 * self.Q[None, :, :2]) * src[:, None, :]
 
@@ -527,7 +544,7 @@ class QuadraticProjection(FundusProjection):
         invT._inverse_transform = self
         return None if error > 1 else invT
 
-    def transform_inverse_newton(self, dst: np.ndarray) -> np.ndarray:
+    def transform_inverse_newton(self, dst: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         # initial guess using only the affine part
         x = AffineProjection(self.R, self.t).transform_inverse(dst)
 
@@ -549,7 +566,7 @@ class QuadraticProjection(FundusProjection):
 
         return x
 
-    def transform_inverse(self, dst: np.ndarray) -> np.ndarray:
+    def transform_inverse(self, dst: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         if self._inverse_transform is False:
             self._inverse_transform = self._eval_inverse_transform()
         if self._inverse_transform is None:
@@ -558,9 +575,9 @@ class QuadraticProjection(FundusProjection):
 
 
 def ransac_fit_projection(
-    fix: np.ndarray,
-    moving: np.ndarray,
-    sampling_probability: Optional[np.ndarray] = None,
+    fix: npt.NDArray[np.floating],
+    moving: npt.NDArray[np.floating],
+    sampling_probability: Optional[npt.NDArray[np.floating]] = None,
     initial_projection: Type[FundusProjection] = AffineProjection,
     final_projection: Optional[Type[FundusProjection] | Dict[int, Type[FundusProjection]]] = None,
     *,
@@ -572,19 +589,19 @@ def ransac_fit_projection(
     early_stop_mean_error: float = 1,
     early_stop_min_inliers: int = 0.5,
     rng: np.random.Generator = None,
-) -> Tuple[FundusProjection, float, np.ndarray]:
+) -> Tuple[FundusProjection, float, npt.NDArray[np.integer]]:
     """
     Estimates a 2D transformation matrix that maps points from ``src`` to ``dst`` using the RANSAC algorithm.
 
     Parameters
     ----------
-        fix: np.ndarray
+        fix: npt.NDArray[np.floating]
             Coordinates of the fix points (N x 2) where N is the number of points.
 
-        moving: np.ndarray
+        moving: npt.NDArray[np.floating]
             Coordinates of the moving points (N x 2) where N is the number of points.
 
-        sampling_probability:
+        sampling_probability: Optional[npt.NDArray[np.floating]]
             Probability of sampling each point. If None, all points are sampled with the same probability.
 
         initial_projection: Type[FundusProjection], optional
@@ -628,7 +645,7 @@ def ransac_fit_projection(
         error: float
             Mean distance of the best transformation.
 
-        inliers: np.ndarray
+        inliers: npt.NDArray[np.integer]
             Indices of the points that are considered inliers.
 
     Raises
@@ -713,7 +730,7 @@ def ransac_fit_projection(
 
 
 ########################################################################################################################
-def fit_mse_affine_tranform(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
+def fit_mse_affine_tranform(src: npt.NDArray[np.floating], dst: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
     """
     Calculates the least-squares best-fit translation and rotation that maps corresponding points ``source`` to ``dest``.
 
@@ -721,15 +738,15 @@ def fit_mse_affine_tranform(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
 
     Parameters
     ----------
-    src : np.ndarray
+    src : npt.NDArray[np.floating]
         Source points (N x m) where N is the number of points and m is the number of dimensions.
 
-    dst : np.ndarray
+    dst : npt.NDArray[np.floating]
         Destination points (N x m).
 
     Returns
     -------
-    T : np.ndarray
+    T : npt.NDArray[np.floating]
         Homogeneous transformation matrix (m x m+1). E.g. for 2D points, the matrix is:
             [[cos(theta), -sin(theta), ty],
              [sin(theta),  cos(theta), tx]]
@@ -745,22 +762,22 @@ def fit_mse_affine_tranform(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
     return np.linalg.lstsq(src, dst, rcond=None)[0].T
 
 
-def apply_affine_transform(src: np.ndarray, T: np.ndarray) -> np.ndarray:
+def apply_affine_transform(src: npt.NDArray[np.floating], T: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
     """
     Applies a 2D affine transformation matrix to a set of points following the formula:
         ``dst.T = T @ [src, 1].T``.
 
     Parameters
     ----------
-    src : np.ndarray
+    src : npt.NDArray[np.floating]
         Source points (N x m) where N is the number of points and m is the number of dimensions.
 
-    T : np.ndarray
+    T : npt.NDArray[np.floating]
         Affine transformation matrix (m x m+1).
 
     Returns
     -------
-    dst : np.ndarray
+    dst : npt.NDArray[np.floating]
         Transformed points (N x m).
     """
     src = np.asarray(src)
@@ -771,21 +788,21 @@ def apply_affine_transform(src: np.ndarray, T: np.ndarray) -> np.ndarray:
     return dst.T
 
 
-def compose_affine_transforms(T1: np.ndarray, T2: np.ndarray) -> np.ndarray:
+def compose_affine_transforms(T1: npt.NDArray[np.floating], T2: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
     """
     Composes two 2D affine transformation matrices.
 
     Parameters
     ----------
-    T1 : np.ndarray
+    T1 : npt.NDArray[np.floating]
         First affine transformation matrix (m x m+1).
 
-    T2 : np.ndarray
+    T2 : npt.NDArray[np.floating]
         Second affine transformation matrix (m x m+1).
 
     Returns
     -------
-    T : np.ndarray
+    T : npt.NDArray[np.floating]
         Composed affine transformation matrix (m x m+1).
     """
     assert T1.ndim == T2.ndim == 2, "T1 and T2 must be 2D arrays"

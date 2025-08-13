@@ -8,7 +8,7 @@ from fundus_vessels_toolkit.vascular_data_objects.vgeometric_data import VGeomet
 
 from ..utils.bezier import BSpline
 from ..utils.math import quantified_roots
-from ..utils.numpy import Bool2DArrayLike
+from ..utils.typing import Bool2DArrayLike
 from ..vascular_data_objects import FundusData, VBranchGeoData, VGraph
 
 

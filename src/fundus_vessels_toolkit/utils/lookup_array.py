@@ -4,19 +4,23 @@ from typing import Dict, Mapping, Optional, Tuple, TypeVar
 import numpy as np
 import numpy.typing as npt
 
+from fundus_vessels_toolkit.utils.typing import Int1DArray
+
 from .binary_mask import index_to_mask
 
 T = TypeVar("T")
+DTYPE = TypeVar("DTYPE", bound=np.number)
 
 
-def add_empty_to_lookup(lookup: npt.NDArray[np.int_], increment_index=True) -> npt.NDArray[np.int_]:
+def add_empty_to_lookup(lookup: npt.NDArray[DTYPE], increment_index=True) -> npt.NDArray[DTYPE]:
     """
     Add an empty entry to a lookup table: insert a 0 at the beginning of the array and increment all other values by 1.
     """
+    dtype = lookup.dtype
     if increment_index:
-        return np.concatenate([[0], lookup + 1], dtype=lookup.dtype)
+        return np.concatenate([np.zeros(1, dtype=dtype), lookup + np.ones((), dtype=dtype)], dtype=dtype)
     else:
-        return np.concatenate([[-1], lookup], dtype=lookup.dtype)
+        return np.concatenate([-np.ones(1, dtype=dtype), lookup], dtype=dtype)
 
 
 def apply_lookup(
@@ -47,9 +51,30 @@ def apply_lookup(
         if len(lookup) < array.max() + 1:
             raise ValueError(
                 f"Lookup table is too short. The maximum value in the array is {array.max()}, "
-                f"but the lookup table has only {len(lookup)} elements instead of {array.max()+1}."
+                f"but the lookup table has only {len(lookup)} elements instead of {array.max() + 1}."
             ) from None
         raise e
+
+
+def lookup_from_mapping(
+    mapping: Mapping[int, int] | Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]], lookup_length: int
+) -> npt.NDArray[np.int_]:
+    """
+    Create a lookup table from a mapping.
+
+
+    """
+    if isinstance(mapping, tuple):
+        search, replace = mapping
+    elif isinstance(mapping, Mapping):
+        search = np.array(list(mapping.keys()), dtype=np.int_)
+        replace = np.array(list(mapping.values()), dtype=np.int_)
+    else:
+        raise TypeError(f"Unsupported mapping type: {type(mapping)}")
+
+    lookup = np.arange(lookup_length, dtype=np.int_)
+    lookup[search] = replace
+    return lookup
 
 
 def apply_lookup_on_dict(d: Mapping[int, T], lookup: npt.NDArray[np.int_] | Mapping[int, int]) -> Dict[int, T]:
@@ -106,7 +131,7 @@ def apply_lookup_on_coordinates(points_coord, lookup: np.ndarray | None, weight:
     return points_coord.T
 
 
-def complete_lookup(lookup: npt.NDArray[np.int_], max_index: int, assume_valid=False) -> npt.NDArray[np.int_]:
+def complete_lookup(lookup: Int1DArray, max_index: int, assume_valid=False) -> npt.NDArray[np.int_]:
     """
     Complete a lookup table to have a full range of indices from 0 to max_index.
     """
@@ -116,7 +141,9 @@ def complete_lookup(lookup: npt.NDArray[np.int_], max_index: int, assume_valid=F
         warnings.warn("The lookup table is empty.", stacklevel=2)
         return np.arange(max_index + 1)
 
-    assert len(lookup) <= max_index + 1, f"lookup must have less than {max_index+1} elements but has {lookup.shape[0]}."
+    assert len(lookup) <= max_index + 1, (
+        f"lookup must have less than {max_index + 1} elements but has {lookup.shape[0]}."
+    )
     if not assume_valid:
         lookup_sorted, lookup_counts = np.unique(lookup, return_counts=True)
         if lookup_sorted[0] < 0:

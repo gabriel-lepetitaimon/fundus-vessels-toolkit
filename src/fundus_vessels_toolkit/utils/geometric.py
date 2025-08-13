@@ -55,8 +55,8 @@ class Rect(NamedTuple):
         return Point(y=self.h, x=self.w)
 
     @property
-    def shape(self) -> Tuple[float, float]:
-        return self.h, self.w
+    def shape(self) -> Tuple[int, int]:
+        return int(math.ceil(self.h)), int(math.ceil(self.w))
 
     @property
     def area(self) -> float:

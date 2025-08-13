@@ -1,35 +1,11 @@
 from __future__ import annotations
 
-from typing import List, Tuple, TypeAlias
+from typing import Tuple
 
 import numpy as np
 import numpy.typing as npt
 
-RecursiveIntList: TypeAlias = List[int] | List["RecursiveIntList"]
-IntArrayLike: TypeAlias = npt.NDArray[np.int_] | int | RecursiveIntList
-Int1DArrayLike: TypeAlias = npt.NDArray[np.int_] | int | List[int]
-Int2DArrayLike: TypeAlias = npt.NDArray[np.int_] | List[int] | List[List[int]]
-Int3DArrayLike: TypeAlias = npt.NDArray[np.int_] | List[List[int]] | List[List[List[int]]]
-
-RecursiveBoolList: TypeAlias = List[bool] | List["RecursiveBoolList"]
-BoolArrayLike: TypeAlias = npt.NDArray[np.bool_] | bool | RecursiveBoolList
-Bool1DArrayLike: TypeAlias = npt.NDArray[np.bool_] | bool | List[bool]
-Bool2DArrayLike: TypeAlias = npt.NDArray[np.bool_] | List[bool] | List[List[bool]]
-
-RecursiveFloatList: TypeAlias = List[float] | List["RecursiveFloatList"]
-FloatArrayLike: TypeAlias = npt.NDArray[np.float64] | float | RecursiveFloatList
-Float1DArrayLike: TypeAlias = npt.NDArray[np.float64] | float | List[float]
-Float2DArrayLike: TypeAlias = npt.NDArray[np.float64] | List[float] | List[List[float]]
-Float3DArrayLike: TypeAlias = npt.NDArray[np.float64] | List[List[float]] | List[List[List[float]]]
-
-PointArrayLike: TypeAlias = npt.NDArray[np.int_] | List[int] | List[List[int]] | Tuple[int, int] | List[Tuple[int, int]]
-
-IntPairArrayLike: TypeAlias = (
-    npt.NDArray[np.int_] | List[int] | List[List[int]] | Tuple[int, int] | List[Tuple[int, int]]
-)
-BoolPairArrayLike: TypeAlias = (
-    npt.NDArray[np.bool_] | List[bool] | List[List[bool]] | Tuple[bool, bool] | List[Tuple[bool, bool]]
-)
+from ..utils.typing import IndicesLike
 
 
 def readonly(arr: npt.NDArray) -> npt.NDArray:
@@ -105,7 +81,7 @@ def np_find_sorted(keys: npt.NDArray, array: npt.NDArray, assume_keys_sorted=Fal
             return np.concatenate([(-1,) * k0, id, (-1,) * (len(keys) - k1)])
 
 
-def as_1d_array(data: npt.ArrayLike, *, dtype=None) -> Tuple[npt.NDArray, bool]:
+def as_1d_array(data: IndicesLike, *, dtype=None) -> Tuple[npt.NDArray, bool]:
     """Convert the data to a numpy array.
 
     Parameters

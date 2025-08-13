@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import functools
 import inspect
-from typing import TypeVar, Union, get_args, get_origin
+from typing import Callable, TypeVar, Union, get_args, get_origin
 
 import numpy as np
 import torch
@@ -89,7 +89,7 @@ def torch_apply(func, *args, device=None, **kwargs):
     return recursive_torch2numpy(r) if from_numpy else r
 
 
-def autocast_torch(f):
+def autocast_torch(f) -> Callable:
     def decorated_f(*args, **kwargs):
         return torch_apply(f, *args, **kwargs)
 
