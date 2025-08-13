@@ -181,6 +181,110 @@ class AVSegToTree(AVSegToTreeBase):
         return graph
 
 
+class GNNAVSegToTree(AVSegToTree):
+    def __init__(
+        self,
+        segToGraph: Optional[SegToGraph] = None,
+    ):
+        """
+
+        Parameters
+        ----------
+        segToGraph: SegToGraph
+            The SegToGraph instance to use for the segmentation to graph step.
+        """
+
+        super(AVSegToTree, self).__init__()
+        self.segToGraph = if_none(segToGraph, MINIMAL_FUNDUS_SEG_TO_GRAPH)
+        self.av_attr = "av"
+
+    def __call__(
+        self,
+        fundus: Optional[FundusData] = None,
+        /,
+        *,
+        av: Optional[npt.NDArray[np.int_] | torch.Tensor | str | Path] = None,
+        od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
+    ) -> Tuple[VTree, VTree]:
+        fundus = self.prepare_data(fundus, av=av, od=od)
+        if fundus.od_center is None:
+            raise NotImplementedError("Parsing tree of image without optic disc is not implemented.")
+        graph = self.to_vgraph(fundus, simplify=True)
+        lines_digraph_info = self.build_line_digraph(graph, fundus, inplace=True)
+        tree = self.resolve_digraph_to_vtree(*lines_digraph_info)
+        return self.split_av_tree(tree)
+
+    # --- Intermediate steps ---
+    def assign_av_labels(
+        self,
+        graph: VGraph,
+        av_map: npt.NDArray[np.int_],
+        *,
+        propagate_labels=True,
+        inplace: bool = False,
+    ) -> VGraph:
+        from ..segment_to_graph.av_tree_parsing import assign_av_label
+
+        return assign_av_label(
+            graph,
+            av_map=av_map,
+            split_av_branch=True,
+            av_attr=self.av_attr,
+            propagate_labels=propagate_labels,
+            inplace=inplace,
+        )
+
+    def simplify_av_graph(self, graph: VGraph, od_center: Optional[Point] = None, inplace: bool = False) -> VGraph:
+        from ..segment_to_graph.av_tree_parsing import simplify_av_graph
+
+        return simplify_av_graph(
+            graph,
+            av_attr=self.av_attr,
+            inplace=inplace,
+        )
+
+    def build_line_digraph(
+        self, graph: VGraph, fundus_data: FundusData, inplace: bool = False
+    ) -> Tuple[VGraph, npt.NDArray[np.int_], npt.NDArray[np.bool_], npt.NDArray[np.float64]]:
+        from ..segment_to_graph.av_tree_parsing import build_line_digraph
+
+        return build_line_digraph(graph, fundus_data, av_attr=self.av_attr, inplace=inplace)
+
+    def resolve_digraph_to_vtree(
+        self,
+        vgraph: VGraph,
+        line_list: npt.NDArray[np.int_],
+        line_tips: npt.NDArray[np.int_],
+        line_probability: npt.NDArray[np.float64],
+        line_through_node: npt.NDArray[np.int_],
+        branches_dir_p: npt.NDArray[np.float64],
+    ) -> VTree:
+        from ..segment_to_graph.av_tree_parsing import resolve_digraph_to_vtree
+
+        vtree = resolve_digraph_to_vtree(
+            vgraph, line_list, line_tips, line_probability, line_through_node, branches_dir_p
+        )
+        return vtree
+
+    def split_av_tree(self, tree: VTree) -> Tuple[VTree, VTree]:
+        from ..segment_to_graph.av_tree_parsing import split_av_graph_by_subtree
+
+        return split_av_graph_by_subtree(tree, av_attr=self.av_attr)
+
+    # --- Utility methods ---
+    def to_vgraph(self, fundus=None, /, *, av=None, od=None, label_av=True, simplify=True):
+        fundus = self.prepare_data(fundus, av=av, od=od)
+        mask = None if self.mask_optic_disc is None else ~fundus.od
+        skel = self.segToGraph.skeletonize(fundus.vessels, mask=mask)
+        vessels = fundus.vessels if self.mask_optic_disc is None else fundus.vessels * ~fundus.od
+        graph = self.segToGraph.from_skel(skel=skel, vessels=vessels, parse_geometry=True, simplify=False)
+        if label_av:
+            self.assign_av_labels(graph, fundus.av, inplace=True)
+            if simplify:
+                self.simplify_av_graph(graph, od_center=fundus.od_center, inplace=True)
+        return graph
+
+
 FUNDUS_SEG_TO_GRAPH = SegToGraph(
     skeletonize_method="lee",
     fix_hollow=True,

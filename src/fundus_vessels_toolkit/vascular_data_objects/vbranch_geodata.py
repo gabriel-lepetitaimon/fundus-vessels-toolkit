@@ -480,16 +480,21 @@ class VBranchBSpline(VBranchGeoDataBase):
 class VBranchGeoDescriptor(str, Generic[T_VBranchGeoData]):
     """``VBranchGeoDescriptor`` is a class that describes a branch geometrical attribute."""
 
-    def __new__(cls, name: str, geo_type: Optional[Type[T_VBranchGeoData]] = None) -> Self:
+    def __new__(cls, name: str, geo_type: Type[T_VBranchGeoData], empty: T_VBranchGeoData) -> Self:
         name = copy(name)
         return str.__new__(cls, name)
 
-    def __init__(self, name: str, geo_type: Optional[Type[T_VBranchGeoData]] = None) -> None:
+    def __init__(self, name: str, geo_type: Type[T_VBranchGeoData], empty: T_VBranchGeoData) -> None:
         self.geo_type = geo_type
+        self._empty = empty
 
     @property
     def name(self) -> str:
         return str(self)
+
+    @property
+    def empty(self) -> T_VBranchGeoData:
+        return self._empty
 
     def __hash__(self) -> int:
         return super().__hash__()
@@ -502,7 +507,9 @@ class VBranchGeoDescriptor(str, Generic[T_VBranchGeoData]):
         return False
 
     @staticmethod
-    def parse(key: VBranchGeoDataKey, geo_type: Optional[Type[VBranchGeoDataBase]] = None) -> VBranchGeoDescriptor:
+    def parse(
+        key: VBranchGeoDataKey, geo_type: Optional[Type[T_VBranchGeoData]] = None
+    ) -> VBranchGeoDescriptor[T_VBranchGeoData]:
         if isinstance(key, Type) and issubclass(key, VBranchGeoDataBase):
             key = VBranchGeoData.Fields.by_type(key)
         if isinstance(key, VBranchGeoDescriptor):
@@ -531,31 +538,37 @@ class VBranchGeoFields:
     """``VBranchGeoFields`` is an enumeration of the fields of a branch of a vascular graph."""
 
     #: The tangent of the branch at each skeleton point.
-    TANGENTS = VBranchGeoDescriptor("TANGENTS", VBranchTangents)
+    TANGENTS = VBranchGeoDescriptor("TANGENTS", VBranchTangents, VBranchTangents(np.empty((0, 2), dtype=np.float_)))
 
     #: The calibre of the branch at each skeleton point.
-    CALIBRES = VBranchGeoDescriptor("CALIBRES", VBranchCurveData)
+    CALIBRES = VBranchGeoDescriptor("CALIBRES", VBranchCurveData, VBranchCurveData(np.empty((0, 2), dtype=np.float_)))
 
     #: The position of the left and right boundaries of the branch.
-    BOUNDARIES = VBranchGeoDescriptor("BOUNDARIES", LeftRightCurveData)
+    BOUNDARIES = VBranchGeoDescriptor(
+        "BOUNDARIES", LeftRightCurveData, LeftRightCurveData(np.empty((0, 2, 2), dtype=np.int_))
+    )
 
     #: The curvature of the branch at each skeleton point.
-    CURVATURES = VBranchGeoDescriptor("CURVATURES", VBranchCurveData)
+    CURVATURES = VBranchGeoDescriptor("CURVATURES", VBranchCurveData, VBranchCurveData(np.empty((0,), dtype=np.float_)))
 
     #: The curvature roots of the branch.
-    CURVATURE_ROOTS = VBranchGeoDescriptor("CURVATURE_ROOTS", VBranchCurveIndex)
+    CURVATURE_ROOTS = VBranchGeoDescriptor(
+        "CURVATURE_ROOTS", VBranchCurveIndex, VBranchCurveIndex(np.empty((0,), dtype=np.int_))
+    )
 
     #: The B-spline representation of the branch.
-    BSPLINE = VBranchGeoDescriptor("BSPLINE", VBranchBSpline)
+    BSPLINE = VBranchGeoDescriptor("BSPLINE", VBranchBSpline, VBranchBSpline(BSpline([])))
 
     #: The tangents at the branches tips.
-    TIPS_TANGENT = VBranchGeoDescriptor("TIPS_TANGENT", VBranchTipsTangents)
+    TIPS_TANGENT = VBranchGeoDescriptor("TIPS_TANGENT", VBranchTipsTangents, VBranchTipsTangents.create_empty())
 
     #: The calibre at the branches tips.
-    TIPS_CALIBRE = VBranchGeoDescriptor("TIPS_CALIBRE", VBranchTipsScalarData)
+    TIPS_CALIBRE = VBranchGeoDescriptor("TIPS_CALIBRE", VBranchTipsScalarData, VBranchTipsScalarData.create_empty())
 
     #: The position of the left and right boundaries of the branches tips.
-    TIPS_BOUNDARIES = VBranchGeoDescriptor("TIPS_BOUNDARIES", VBranchTipsDoublePointsData)
+    TIPS_BOUNDARIES = VBranchGeoDescriptor(
+        "TIPS_BOUNDARIES", VBranchTipsDoublePointsData, VBranchTipsDoublePointsData.create_empty()
+    )
 
     @classmethod
     def by_type(cls, geo_type: type[T_VBranchGeoData]) -> VBranchGeoDescriptor[T_VBranchGeoData]:
