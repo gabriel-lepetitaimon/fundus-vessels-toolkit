@@ -821,9 +821,11 @@ class VGeometricData:
     @overload
     def branch_data(
         self, attr_name: VBranchGeoDescriptor[T_VBranchGeoData], branch_id: int, *, graph_index=True
-    ) -> T_VBranchGeoData: ...
+    ) -> T_VBranchGeoData | None: ...
     @overload
-    def branch_data(self, attr_name: VBranchGeoDataKey, branch_id: int, *, graph_index=True) -> VBranchGeoDataBase: ...
+    def branch_data(
+        self, attr_name: VBranchGeoDataKey, branch_id: int, *, graph_index=True
+    ) -> VBranchGeoDataBase | None: ...
     @overload
     def branch_data(
         self,
@@ -831,24 +833,30 @@ class VGeometricData:
         branch_id: Optional[Int1DArray] = None,
         *,
         graph_index=True,
-    ) -> List[T_VBranchGeoData]: ...
+    ) -> List[T_VBranchGeoData | None]: ...
     @overload
     def branch_data(
         self, attr_name: VBranchGeoDataKey, branch_id: Optional[Int1DArray] = None, *, graph_index=True
-    ) -> List[T_VBranchGeoData]: ...
+    ) -> List[T_VBranchGeoData | None]: ...
     @overload
-    def branch_data(self, *, branch_id: int, graph_index=True) -> Dict[str, VBranchGeoDataBase]: ...
+    def branch_data(self, *, branch_id: int, graph_index=True) -> Dict[str, T_VBranchGeoData | None]: ...
     @overload
     def branch_data(
         self, *, branch_id: Optional[Int1DArray] = None, graph_index=True
-    ) -> Dict[str, List[VBranchGeoDataBase]]: ...
+    ) -> Dict[str, List[T_VBranchGeoData | None]]: ...
     def branch_data(
         self,
         attr_name: Optional[VBranchGeoDataKey] = None,
         branch_id: Optional[int | Int1DArray] = None,
         *,
         graph_index=True,
-    ) -> VBranchGeoDataBase | List[T_VBranchGeoData] | Dict[str, T_VBranchGeoData] | Dict[str, List[T_VBranchGeoData]]:
+    ) -> (
+        VBranchGeoDataBase
+        | None
+        | List[T_VBranchGeoData | None]
+        | Dict[str, T_VBranchGeoData | None]
+        | Dict[str, List[T_VBranchGeoData | None]]
+    ):
         """Return the attribute of a branch.
 
         Parameters

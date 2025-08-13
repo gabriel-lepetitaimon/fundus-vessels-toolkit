@@ -47,7 +47,10 @@ def rasterize_tree_topology(
         branch_list=tree.branch_list,
         root_branches=tree.root_nodes_ids(),
         curves=geodata.branch_curve(),
-        boundaries=[_.data for _ in geodata.branch_data(boundaries_field)],
+        boundaries=[
+            _.data if _ is not None else np.empty((0, 2, 2), dtype=np.int_)
+            for _ in geodata.branch_data(boundaries_field)
+        ],
         shape=geodata.domain.shape,
         node_count=tree.node_count,
         bridge_gap_smaller_than=bridge_gap_smaller_than,
@@ -66,8 +69,7 @@ def rasterize_tree_topology(
 
 
 def fix_av_map(
-    av_map: npt.NDArray[np.uint8],
-    trees: Tuple[VTree, VTree],
+    av_map: npt.NDArray[np.uint8], trees: Tuple[VTree, VTree], expand_labels_by: int = 5
 ) -> npt.NDArray[np.uint8]:
     """
     Fix the AV classification to match the given trees. The vessel segmentation is not modified, only the AV classification.
@@ -92,7 +94,7 @@ def fix_av_map(
     a_map = rasterize_tree_topology(trees[0], **kwargs)[0] > 0
     v_map = rasterize_tree_topology(trees[1], **kwargs)[0] > 0
     tree_av_map = a_map.astype(np.uint8) + 2 * v_map.astype(np.uint8)
-    tree_av_map = expand_labels(tree_av_map, distance=5)
+    tree_av_map = expand_labels(tree_av_map, distance=expand_labels_by)
     tree_av_map[av_map == 0] = 0
     mask = tree_av_map == 0
     tree_av_map[mask] = av_map[mask]
