@@ -481,12 +481,14 @@ class VBranchGeoDescriptor(str, Generic[T_VBranchGeoData]):
     """``VBranchGeoDescriptor`` is a class that describes a branch geometrical attribute."""
 
     def __new__(cls, name: str, geo_type: Type[T_VBranchGeoData], empty: T_VBranchGeoData) -> Self:
-        name = copy(name)
         return str.__new__(cls, name)
 
     def __init__(self, name: str, geo_type: Type[T_VBranchGeoData], empty: T_VBranchGeoData) -> None:
         self.geo_type = geo_type
         self._empty = empty
+
+    def __copy__(self) -> Self:
+        return self.__class__(self, self.geo_type, self._empty)
 
     @property
     def name(self) -> str:
@@ -538,10 +540,10 @@ class VBranchGeoFields:
     """``VBranchGeoFields`` is an enumeration of the fields of a branch of a vascular graph."""
 
     #: The tangent of the branch at each skeleton point.
-    TANGENTS = VBranchGeoDescriptor("TANGENTS", VBranchTangents, VBranchTangents(np.empty((0, 2), dtype=np.float_)))
+    TANGENTS = VBranchGeoDescriptor("TANGENTS", VBranchTangents, VBranchTangents(np.empty((0, 2), dtype=np.float32)))
 
     #: The calibre of the branch at each skeleton point.
-    CALIBRES = VBranchGeoDescriptor("CALIBRES", VBranchCurveData, VBranchCurveData(np.empty((0, 2), dtype=np.float_)))
+    CALIBRES = VBranchGeoDescriptor("CALIBRES", VBranchCurveData, VBranchCurveData(np.empty((0, 2), dtype=np.float32)))
 
     #: The position of the left and right boundaries of the branch.
     BOUNDARIES = VBranchGeoDescriptor(
@@ -549,7 +551,9 @@ class VBranchGeoFields:
     )
 
     #: The curvature of the branch at each skeleton point.
-    CURVATURES = VBranchGeoDescriptor("CURVATURES", VBranchCurveData, VBranchCurveData(np.empty((0,), dtype=np.float_)))
+    CURVATURES = VBranchGeoDescriptor(
+        "CURVATURES", VBranchCurveData, VBranchCurveData(np.empty((0,), dtype=np.float32))
+    )
 
     #: The curvature roots of the branch.
     CURVATURE_ROOTS = VBranchGeoDescriptor(

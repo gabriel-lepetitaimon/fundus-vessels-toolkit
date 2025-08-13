@@ -45,8 +45,11 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& r
         bool reversed = branchDirs[branchID] == -1;
         int headNode = branchListAcc[branchID][reversed ? 0 : 1];
 
-        // Get the corresponding curve and boundaries
+        // Get the corresponding curve
         const auto& curve = curves[branchID].accessor<int, 2>();
+        if (curve.size(0) == 0) continue;  // If the curve is empty, skip this branch
+
+        // Get the corresponding boundaries
         const auto& boundary = boundaries[branchID].accessor<int, 3>();
         std::array<IntPoint, 2> headBounds;
         if (!reversed) {
@@ -74,6 +77,8 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& r
 
             if (fill_junctions) {
                 auto nextBoundariesAcc = boundaries[nextBranch.id].accessor<int, 3>();
+                if (nextBoundariesAcc.size(0) == 0) continue;  // If the boundaries are empty, skip this filling
+
                 std::array<IntPoint, 2> nextBounds;
                 if (!nextBranchReversed) {
                     nextBounds = {IntPoint(nextBoundariesAcc[0][0]), IntPoint(nextBoundariesAcc[0][1])};
