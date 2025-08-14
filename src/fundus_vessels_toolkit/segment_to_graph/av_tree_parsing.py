@@ -129,18 +129,24 @@ def assign_av_label(
             if branch.curve().shape[0] < 5:
                 geodata.clear_branch_gdata(branch.id)
             else:
-                # Separately parse the artery and veins branch
-                # print("Rasterize branch", branch.id, f" (length: {branch.curve().shape[0]})")
+                # Draw the adjacent branches mask
                 branch_mask, bbox = branch.rasterize(geodata=geodata, return_bbox=True, expand=2)
-                # print(" >> Found pixels:", branch_mask.sum(), bbox)
                 av_bbox = av_map[bbox.slice()]
-                a_mask = np.isin(av_bbox, (AVLabel.ART, AVLabel.BOTH, AVLabel.UNK)) & branch_mask
-                v_mask = np.isin(av_bbox, (AVLabel.VEI, AVLabel.BOTH, AVLabel.UNK)) & branch_mask
+                both_mask = np.isin(av_bbox, (AVLabel.BOTH, AVLabel.UNK))
+                a_mask = av_bbox == AVLabel.ART
+                v_mask = av_bbox == AVLabel.VEI
+                if (
+                    both_mask[branch_mask & (av_bbox != AVLabel.BKG)].mean() > 0.8
+                    or a_mask[branch_mask].mean() < 0.1
+                    or v_mask[branch_mask].mean() < 0.1
+                ):
+                    continue  # The AV map does not provide enough information to split the branch
 
-                branch_nodes = branch._node_ids
-                branch_nodes_yx = geodata.node_coord(branch_nodes)
+                # Isolate the artery mask and the vein mask
+                a_mask = (a_mask | both_mask) & branch_mask
+                v_mask = (v_mask | both_mask) & branch_mask
 
-                # Add the corresponding branches to the graph
+                # Parse both mask individually
                 def parse_graph(mask, branch):
                     # Parse topology
                     g = segToGraph(mask, simplify=False, parse_geometry=True)
@@ -158,15 +164,18 @@ def assign_av_label(
                         closest_points = np.argmin(D, axis=1)
                         b_t = b.geodata(VBranchGeoData.Fields.TANGENTS, g.geometric_data()).data
                         cos_sim = np.einsum("ij,ij->i", both_t[closest_points], b_t).mean()
-                        if cos_sim < 0.5 and cos_sim > -0.5:
+                        if -0.7 < cos_sim < 0.7:
                             invalid_branches.append(b.id)
                     g.delete_branch(invalid_branches, inplace=True)
                     return g
 
                 a_graph = parse_graph(a_mask, branch)
                 b_graph = parse_graph(v_mask, branch)
+
+                # If no branch were found leave the branch as both
                 if a_graph.is_empty() and b_graph.is_empty():
                     continue
+                # If a single artery or vein branch was found re-assign the branch label
                 elif a_graph.is_empty() and b_graph.branch_count == 1:
                     branch.attr[av_attr] = AVLabel.VEI
                     continue
@@ -174,7 +183,8 @@ def assign_av_label(
                     branch.attr[av_attr] = AVLabel.ART
                     continue
 
-                def add_branches(g, av_label):
+                # Otherwise incorporate the new branches in the graph
+                def add_branches(g, av_label, branch):
                     if g.branch_count == 0:
                         return False
 
@@ -186,12 +196,36 @@ def assign_av_label(
                     graph.branch_attr.loc[new_branches, av_attr] = av_label
 
                     # Merge the closest node with the previous branch start and end
+                    tip_nodes = branch._node_ids
+                    tip_yx = geodata.node_coord(tip_nodes)
                     nodes_yx = geodata.node_coord(new_nodes)
+                    D = np.linalg.norm(tip_yx[:, None, :] - nodes_yx[None, :, :], axis=2)
+                    closest = np.argmin(D[:, : g.node_count], axis=1)
+                    MAX_MERGE_DIST = 25
+                    if D[0, closest[0]] > MAX_MERGE_DIST:
+                        closest[0] = -1
+                    if D[1, closest[1]] > MAX_MERGE_DIST:
+                        closest[1] = -1
+                    if closest[0] == closest[1]:
+                        if D[0, closest[0]] < D[1, closest[1]]:
+                            closest[1] = -1
+                        else:
+                            closest[0] = -1
 
+                    nodes_weight = np.zeros(graph.node_count, dtype=float)
+                    nodes_weight[tip_nodes] = 1
+                    clusters = []
+                    if closest[0] >= 0:
+                        clusters += [[tip_nodes[0], new_nodes[closest[0]]]]
+                    if closest[1] >= 0:
+                        clusters += [[tip_nodes[1], new_nodes[closest[1]]]]
+                    if len(clusters) == 0:
+                        return False
+                    graph.merge_nodes(clusters, inplace=True, assume_reduced=True, nodes_weight=nodes_weight)
                     return True
 
-                add_branches(a_graph, AVLabel.ART)
-                add_branches(b_graph, AVLabel.VEI)
+                add_branches(a_graph, AVLabel.ART, branch)
+                add_branches(b_graph, AVLabel.VEI, branch)
 
                 branch_to_delete.append(branch.id)
 
@@ -541,10 +575,14 @@ def split_av_graph_by_subtree(
 
     # === Center junction nodes ===
     if center_junction_nodes:
-        from .geometry_parsing import center_junction_nodes
+        from .geometry_parsing import center_junction_nodes as center_junctions
+        from .geometry_parsing import snap_leaf_nodes_to_tips
 
-        center_junction_nodes(a_tree, inplace=True)
-        center_junction_nodes(v_tree, inplace=True)
+        center_junctions(a_tree, inplace=True)
+        center_junctions(v_tree, inplace=True)
+
+        snap_leaf_nodes_to_tips(a_tree, inplace=True)
+        snap_leaf_nodes_to_tips(v_tree, inplace=True)
 
     return a_tree, v_tree
 

@@ -225,7 +225,6 @@ class GNNAVSegToTree(AVSegToTree):
     ) -> VGraph:
         from ..segment_to_graph.av_tree_parsing import assign_av_label
 
-        print("Assign AV LABEL!")
         return assign_av_label(
             graph,
             av_map=av_map,

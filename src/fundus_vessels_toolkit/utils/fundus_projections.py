@@ -410,6 +410,10 @@ class Translation(FundusProjection):
         return dst - self.t
 
     @classmethod
+    def identity(cls) -> FundusProjection:
+        return cls(np.array([0.0, 0.0]))
+
+    @classmethod
     def fit(cls, src: npt.NDArray[np.floating], dst: npt.NDArray[np.floating]) -> Tuple[Self, float]:
         src, dst = np.asarray(src), np.asarray(dst)
         assert src.ndim == 2 and src.shape[1] == 2, "src must be a 2D array of 2D coordinates"

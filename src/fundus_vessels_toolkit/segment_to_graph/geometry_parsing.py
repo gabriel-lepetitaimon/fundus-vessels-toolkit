@@ -2,6 +2,8 @@ from typing import Literal, Optional
 
 import numpy as np
 
+from fundus_vessels_toolkit.vascular_data_objects.vtree import VTree
+
 from ..utils.geometric import Rect
 from ..utils.graph.measures import extract_branch_geometry
 from ..utils.math import intercept_segment
@@ -317,3 +319,49 @@ def center_junction_nodes(
                 gdata._nodes_coord[node_id] = intercepts.mean(axis=0)
 
     return graph
+
+
+def snap_leaf_nodes_to_tips(graph: VGraph, *, inplace: bool = False) -> VGraph:
+    """Snap the leaf nodes to the tips of the branches.
+
+    Parameters
+    ----------
+    graph : VGraph
+        The graph to snap the leaf nodes of.
+
+    inplace : bool, optional
+        If True, the graph is modified in place, by default False.
+
+    snap_distance : float, optional
+        The distance threshold to consider a node as a tip, by default 5.
+
+    snap_tangent : bool, optional
+        If True, the tangent of the leaf nodes is set to the tangent of the tips, by default True.
+
+    Returns
+    -------
+    VGraph
+        The graph with the leaf nodes snapped to the tips.
+    """
+    if not inplace:
+        graph = graph.copy()
+
+    if graph.node_count == 0:
+        return graph
+
+    leaf_nodes = graph.endpoint_nodes()
+    if isinstance(graph, VTree):
+        leaf_nodes = np.setdiff1d(leaf_nodes, graph.root_nodes_ids())
+
+    if len(leaf_nodes) == 0:
+        return graph
+
+    geodata = graph.geometric_data()
+    for node in graph.nodes(leaf_nodes):
+        # Get the branch of the node
+        curve = next(iter(node.adjacent_branches())).curve(geodata)
+        if curve is None or len(curve) == 0:
+            continue
+
+        new_coord = curve[0 if node.adjacent_branches_first_node[0] else -1]
+        geodata.set_node_coord(new_coord, node.id, graph_index=False)

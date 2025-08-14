@@ -320,6 +320,58 @@ class BezierCubic(NamedTuple):
         p0123 = p012 + (p123 - p012) * t
         return (BezierCubic(self.p0, p01, p012, p0123), BezierCubic(p0123, p123, p23, self.p1))
 
+    def rasterize(self, out: npt.NDArray | Tuple[int, int], width: float = 1.0, fill_value=1) -> npt.NDArray[np.int_]:
+        """Rasterize the Bezier curve into a binary mask.
+
+        Parameters
+        ----------
+        image_shape : Tuple[int, int]
+            The shape of the output binary mask (height, width).
+        width : float, optional
+            The width of the curve in pixels, by default 1.0.
+
+        Returns
+        -------
+        npt.NDArray[np.float32]
+            A binary mask of shape `image_shape` with the rasterized Bezier curve.
+        """
+        import cv2
+
+        # Sample points along the Bezier curve
+        n = int(self.arc_length(fast_approximation=True))
+        step = 1 / n
+        add = (width - 1) * 2 if width > 1.0 else 0
+        t_values = np.arange(-add * step, 1 + (add + 0.5) * step, step / 2)
+        bezier_points = np.round(self.evaluate(t_values)).astype(np.int32)
+        bezier_points = np.unique(bezier_points, axis=0)
+
+        # Drop out of bounds points
+        H, W = out if isinstance(out, tuple) else out.shape
+        max_shape = np.array([[H, W]])
+        bezier_points = bezier_points[np.all((bezier_points >= 0) & (bezier_points < max_shape), axis=1)]
+
+        out_array = np.zeros(out, dtype=np.int_) if isinstance(out, tuple) else out
+
+        # Apply Gaussian blur to simulate width
+        if width > 1.0:
+            k = int(width * 3)
+            half_k = k // 2
+            K = cv2.getGaussianKernel(k, width / 3)
+            K = K * K.T
+            K /= K[half_k, half_k]  # Normalize the kernel
+
+            mask_smooth = np.zeros((H, W), dtype=np.float32)
+            for y, x in bezier_points:
+                y0, x0 = max(0, y - half_k), max(0, x - half_k)
+                ky, kx = half_k - (y - y0), half_k - (x - x0)
+                h, w = min(k - ky, H - y0), min(k - kx, W - x0)
+                mask_smooth[y0 : y0 + h, x0 : x0 + w] += K[ky : ky + h, kx : kx + w]
+            mask = mask_smooth > 0.5
+            out_array[mask] = fill_value
+        else:
+            out_array[bezier_points[:, 0], bezier_points[:, 1]] = fill_value
+        return out_array
+
 
 class BSpline(tuple[BezierCubic]):
     def __new__(cls, iterable: Iterable[BezierCubic] = ()) -> BSpline:

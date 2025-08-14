@@ -41,7 +41,7 @@ def draw_tree(tree: VTree, view: View2D, artery: bool, name="tree", edge_labels=
     view[name] = layer
 
 
-def draw_trees(trees: Tuple[VTree, VTree], view: View2D) -> None:
+def draw_trees(trees: Tuple[VTree, VTree], view: View2D, edge_labels=False, node_labels=False) -> None:
     """
     Draw a vessel tree on a given view.
 
@@ -52,8 +52,8 @@ def draw_trees(trees: Tuple[VTree, VTree], view: View2D) -> None:
     view : View2D | Mosaic
         The view to draw the tree on.
     """
-    draw_tree(trees[0], view, artery=True, name="artery_tree")
-    draw_tree(trees[1], view, artery=False, name="vein_tree")
+    draw_tree(trees[0], view, artery=True, name="artery_tree", edge_labels=edge_labels, node_labels=node_labels)
+    draw_tree(trees[1], view, artery=False, name="vein_tree", edge_labels=edge_labels, node_labels=node_labels)
 
 
 def draw_graph(

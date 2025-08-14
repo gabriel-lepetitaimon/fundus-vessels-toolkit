@@ -6,6 +6,7 @@ import numpy.typing as npt
 from skimage.segmentation import expand_labels
 
 from fundus_vessels_toolkit.utils.lookup_array import invert_complete_lookup
+from fundus_vessels_toolkit.vascular_data_objects.vgraph import VGraph
 
 from ..utils.rasterization import rasterize_topology
 from ..vascular_data_objects.vbranch_geodata import VBranchGeoData
@@ -69,7 +70,10 @@ def rasterize_tree_topology(
 
 
 def fix_av_map(
-    av_map: npt.NDArray[np.uint8], trees: Tuple[VTree, VTree], expand_labels_by: int = 5
+    av_map: npt.NDArray[np.uint8],
+    trees: Tuple[VTree, VTree],
+    expand_labels_by: int = 1,
+    draw_reconnections: bool = True,
 ) -> npt.NDArray[np.uint8]:
     """
     Fix the AV classification to match the given trees. The vessel segmentation is not modified, only the AV classification.
@@ -93,12 +97,57 @@ def fix_av_map(
     kwargs: Dict[str, Any] = dict(bridge_gap_smaller_than=40, fill_junctions=True)
     a_map = rasterize_tree_topology(trees[0], **kwargs)[0] > 0
     v_map = rasterize_tree_topology(trees[1], **kwargs)[0] > 0
+
+    if expand_labels_by > 0:
+        from skimage.morphology import binary_dilation, disk
+
+        a_map = binary_dilation(a_map, disk(expand_labels_by))
+        v_map = binary_dilation(v_map, disk(expand_labels_by))
+
     tree_av_map = a_map.astype(np.uint8) + 2 * v_map.astype(np.uint8)
-    tree_av_map = expand_labels(tree_av_map, distance=expand_labels_by)
     tree_av_map[av_map == 0] = 0
     mask = tree_av_map == 0
     tree_av_map[mask] = av_map[mask]
+
+    if draw_reconnections:
+        draw_missing_connections(trees[0], tree_av_map, fill_value=1)
+        draw_missing_connections(trees[1], tree_av_map, fill_value=2)
+
     return tree_av_map
+
+
+def draw_missing_connections(graph: VGraph, out: npt.NDArray, fill_value: int = 1):
+    """
+    Draw missing connections in the graph by filling in the gaps in the out array.
+
+    Parameters
+    ----------
+    graph : VGraph
+        The vessel graph to draw missing connections for.
+    out : npt.NDArray
+        The output array to fill with missing connections.
+    fill_value :
+        The value to fill in the gaps. Default is 1.
+    """
+    for branch in graph.branches():
+        mean_calibre = None
+        n1, n2 = [node.coord() for node in branch.nodes()]
+        for bcurve in branch.bspline().filling_curves(n1, n2, smoothing=0.5):
+            mid_points = bcurve.evaluate(np.linspace(0, 1, min(10, int(bcurve.arc_length(fast_approximation=True)))))
+            mid_points = np.round(mid_points).astype(int)
+            if (
+                np.any(mid_points < 0)
+                or np.any(mid_points >= np.array(out.shape))
+                or np.all(out[mid_points[:, 0], mid_points[:, 1]] != 0)
+            ):
+                continue
+
+            if mean_calibre is None:
+                if (calibres := branch.geodata(VBranchGeoData.Fields.CALIBRES)) is None or len(calibres.data) == 0:
+                    mean_calibre = 2.0
+                else:
+                    mean_calibre = max(calibres.data.mean(), 2)
+            bcurve.rasterize(out, width=mean_calibre, fill_value=fill_value)
 
 
 class TopologicalLabel(np.uint64):

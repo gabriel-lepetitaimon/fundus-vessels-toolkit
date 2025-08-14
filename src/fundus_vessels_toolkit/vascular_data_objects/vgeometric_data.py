@@ -1490,7 +1490,7 @@ class VGeometricData:
 
         empty = BSpline()
         if is_single:
-            return empty if data is None else data.data
+            return empty if data[0] is None else data[0].data
         else:
             return [empty if d is None else d.data for d in data]
 
@@ -1909,9 +1909,9 @@ class VGeometricData:
             if not isinstance(projection, Translation):
                 cleaned_curve, new_id = remove_consecutive_duplicates(curve, return_index=True)
                 if new_id == np.arange(len(new_id)):
-                    cleaned_curve, new_id = None, None
+                    cleaned_curve, new_id = curve, None
             else:
-                cleaned_curve, new_id = None, None
+                cleaned_curve, new_id = curve, None
 
             ctx = self._geodata_edit_ctx(branch_id)
             for attr_name, attr in ctx.geodata_attrs.items():
@@ -1925,8 +1925,7 @@ class VGeometricData:
                     self._remove_branch_data(attr_name)
                     break
 
-            if cleaned_curve is not None:
-                self._branch_curve[branch_id] = readonly(cleaned_curve)
+            self._branch_curve[branch_id] = readonly(cleaned_curve)
 
         self._domain = projection.transform_domain(self._domain)
         return self
