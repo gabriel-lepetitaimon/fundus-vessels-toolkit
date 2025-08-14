@@ -7,7 +7,7 @@ from skimage.segmentation import expand_labels
 
 from fundus_vessels_toolkit.utils.lookup_array import invert_complete_lookup
 
-from ..utils.rasterize_topology import rasterize_topology
+from ..utils.rasterization import rasterize_topology
 from ..vascular_data_objects.vbranch_geodata import VBranchGeoData
 from ..vascular_data_objects.vtree import VTree, VTreeBranch
 

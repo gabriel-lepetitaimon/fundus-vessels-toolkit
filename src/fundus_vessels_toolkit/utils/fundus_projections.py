@@ -377,7 +377,7 @@ class IdentityProjection(FundusProjection):
         return "I"
 
     def invert(self) -> Self:
-        return IdentityProjection()
+        return type(self)()
 
     def compose(self, T1: Self) -> Self:
         return T1
@@ -387,6 +387,35 @@ class IdentityProjection(FundusProjection):
 
     def transform_inverse(self, dst: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         return dst
+
+
+class Translation(FundusProjection):
+    def __init__(self, t: npt.NDArray[np.floating]) -> None:
+        self.t = t
+        super().__init__()
+
+    def __repr__(self) -> str:
+        return f"Translation(t={self.t})"
+
+    def __str__(self) -> str:
+        return f"Trans(t={_np_short_str(self.t)})"
+
+    def invert(self) -> Self:
+        return self.__class__(-self.t)
+
+    def transform(self, src: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+        return src + self.t
+
+    def transform_inverse(self, dst: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+        return dst - self.t
+
+    @classmethod
+    def fit(cls, src: npt.NDArray[np.floating], dst: npt.NDArray[np.floating]) -> Tuple[Self, float]:
+        src, dst = np.asarray(src), np.asarray(dst)
+        assert src.ndim == 2 and src.shape[1] == 2, "src must be a 2D array of 2D coordinates"
+        assert src.shape == dst.shape, "src and dst must have the same shape"
+        t = np.mean(dst - src, axis=0)
+        return cls(t), np.mean(np.sum((dst - (src + t)) ** 2, axis=1))
 
 
 class AffineProjection(FundusProjection):

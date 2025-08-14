@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -82,12 +82,10 @@ def rasterize_topology(
 def rasterize_branch(
     curve: torch.Tensor,
     boundaries: torch.Tensor,
-    branchID: int,
-    branchRank: float,
-    branchLabelsMap: torch.Tensor,
-    topoMap: torch.Tensor,
-    bridge_gap_smaller_than_sqr: float = 2,
-) -> None:
+    out: torch.Tensor | Tuple[int, int],
+    fill_value: int = 1,
+    bridge_gap_smaller_than: float = 2,
+) -> torch.Tensor:
     """
     Rasterizes a branch given its curve and boundaries.
 
@@ -118,4 +116,11 @@ def rasterize_branch(
     Returns:
         None
     """
-    rasterize_branch_cpp(curve, boundaries, branchID, branchRank, branchLabelsMap, topoMap, bridge_gap_smaller_than_sqr)
+    if isinstance(out, torch.Tensor):
+        assert out.dtype == torch.int32, "The output tensor must be of type torch.int32."
+        assert out.dim() == 2, "The output tensor must be 2-dimensional."
+        outTensor = out
+    else:
+        outTensor = torch.from_numpy(np.zeros(out, dtype=np.int32)).int()
+
+    return rasterize_branch_cpp(curve, boundaries, outTensor, fill_value, bridge_gap_smaller_than)

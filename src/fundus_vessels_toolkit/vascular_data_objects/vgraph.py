@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import skimage
+
+from fundus_vessels_toolkit.vascular_data_objects.vbranch_geodata import T_VBranchGeoData, VBranchGeoDescriptor
+
 __all__ = ["VGraph"]
 
 import itertools
@@ -32,8 +36,8 @@ from ..utils.bezier import BSpline
 from ..utils.cluster import reduce_chains, reduce_clusters
 from ..utils.cpp_optimized import first_index_of, first_two_index_of
 from ..utils.data_io import NumpyDict, load_numpy_dict, pandas_to_numpy_dict, save_numpy_dict
-from ..utils.fundus_projections import FundusProjection
-from ..utils.geometric import Point
+from ..utils.fundus_projections import FundusProjection, Translation
+from ..utils.geometric import Point, Rect
 from ..utils.lookup_array import (
     add_empty_to_lookup,
     complete_lookup,
@@ -256,9 +260,9 @@ class VGraphBranch:
         return self.__graph
 
     @property
-    def node_ids(self) -> List[int]:
+    def node_ids(self) -> Tuple[int, int]:
         """The indices of the nodes connected by the branch as a tuple."""
-        return [int(_) for _ in self._node_ids]
+        return int(self._node_ids[0]), int(self._node_ids[1])
 
     def nodes(self) -> Tuple[VGraphNode, VGraphNode]:
         """The two nodes connected by this branch.  # noqa: E501
@@ -340,8 +344,8 @@ class VGraphBranch:
         return geodata.branch_bspline(self._id)
 
     def geodata(
-        self, attr_name: VBranchGeoDataKey, geodata: VGeometricData | int = 0
-    ) -> VBranchGeoData.Base | Dict[str, VBranchGeoData.Base]:
+        self, attr_name: VBranchGeoDescriptor[T_VBranchGeoData], geodata: VGeometricData | int = 0
+    ) -> T_VBranchGeoData | None:
         """Access the geometric data of the branch.
 
         This method is a shortcut to :meth:`VGeometricData.branch_data`.
@@ -364,13 +368,51 @@ class VGraphBranch:
 
     def node_to_node_length(self, geodata: VGeometricData | int = 0) -> float:
         assert self.is_valid(), "The branch has been removed from the graph."
-        if not isinstance(geodata, VGeometricData):
-            geodata = self.graph.geometric_data(geodata)
+        geodata = self.graph.geometric_data(geodata)
         yx1, yx2 = geodata.node_coord(self._node_ids)
         return float(np.linalg.norm(yx1 - yx2))
 
     def arc_length(self, geodata: VGeometricData | int = 0) -> float:
         return len(self.curve(geodata))
+
+    @overload
+    def rasterize(
+        self, *, geodata: VGeometricData | int = 0, return_bbox: Literal[False] = False, expand: int = 0
+    ) -> npt.NDArray[np.bool_]: ...
+    @overload
+    def rasterize(
+        self, *, geodata: VGeometricData | int = 0, return_bbox: Literal[True], expand: int = 0
+    ) -> Tuple[npt.NDArray[np.bool_], Rect]: ...
+    def rasterize(
+        self, *, geodata: VGeometricData | int = 0, return_bbox: bool = False, expand: int = 0
+    ) -> npt.NDArray[np.bool_] | Tuple[npt.NDArray[np.bool_], Rect]:
+        from ..utils.rasterization import rasterize_branch
+
+        assert self.is_valid(), "The branch has been removed from the graph."
+        geodata = self.graph.geometric_data(geodata)
+        curve = geodata.branch_curve(self._id)
+        if curve.size == 0:
+            return (
+                np.zeros(geodata.domain.shape, dtype=np.bool_)
+                if return_bbox is False
+                else (np.empty((0, 0), dtype=np.bool_), Rect.empty())
+            )
+        boundaries = geodata.branch_data(VBranchGeoData.Fields.BOUNDARIES, self._id).data
+        if return_bbox:
+            points = np.concatenate([boundaries.flatten().reshape((-1, 2)), curve])
+            bbox = Rect.from_points(tuple(points.min(axis=0)), tuple(points.max(axis=0) + 1))
+        else:
+            bbox = geodata.domain
+        curve = curve - bbox.top_left.numpy()[None, :]
+        boundaries = boundaries - bbox.top_left.numpy()[None, None, :]
+        out = rasterize_branch(curve, boundaries, out=bbox.shape).astype(bool)
+
+        if expand > 0:
+            from skimage.morphology import binary_dilation, disk
+
+            out = binary_dilation(out, disk(expand, dtype=bool))
+
+        return (out, bbox) if return_bbox else out
 
 
 BranchIndices: TypeAlias = Sequence[VGraphBranch] | Indices | pd.Series
@@ -490,8 +532,9 @@ class VGraph:
         """
         N, B = self.node_count, self.branch_count
 
-        assert N > 0, "The graph must contain at least one node."
-        assert B > 0, "The graph must contain at least one branch."
+        if N == 0 and B == 0:
+            # If both node and branch counts are zero, we can consider the graph empty
+            return
 
         # --- Check geometric data ---
         branches_idx = set()
@@ -733,6 +776,9 @@ class VGraph:
         5
         """
         return self._branch_list.shape[0]
+
+    def is_empty(self) -> bool:
+        return self._node_count == 0
 
     @property
     def branch_list(self) -> npt.NDArray[np.int_]:
@@ -1772,6 +1818,39 @@ class VGraph:
     ####################################################################################################################
     #  === GRAPH MANIPULATION ===
     ####################################################################################################################
+    def append_graph(self, other: Self, *, inplace=False) -> Self:
+        """Append another graph to this one.
+
+        Parameters
+        ----------
+        other : VGraph
+            The graph to append to this one.
+
+        inplace : bool, optional
+            If True, the graph is modified in place. Otherwise (by default), a modified copy of the graph is returned.
+
+        Returns
+        -------
+        VGraph
+            The modified graph.
+
+        """
+        if not inplace:
+            return self.copy().append_graph(other, inplace=True)
+
+        # Update branch list and node count
+        self._branch_list = np.vstack((self._branch_list, other._branch_list + self._node_count))
+        self._node_count += other._node_count
+
+        # Update attributes
+        self._branch_attr = pd.concat([self._branch_attr, other._branch_attr], ignore_index=True)
+        self._node_attr = pd.concat([self._node_attr, other._node_attr], ignore_index=True)
+
+        # Update geometric data
+        self.geometric_data()._append_nodes_and_branches(other.geometric_data())
+
+        return self
+
     def reindex_nodes(self, indices: Int1DArray | Mapping[int, int], *, inverse_lookup=False, inplace=False) -> Self:
         """Reindex the nodes of the graph.
 
@@ -2448,6 +2527,34 @@ class VGraph:
         return graph
 
     # --- Nodes edition ---
+    def add_nodes(self, coord: npt.NDArray[np.float32], inplace=False) -> npt.NDArray[np.int_]:
+        """Add a new node to the graph.
+
+        Parameters
+        ----------
+        coord : npt.NDArray[np.float32]
+            The coordinates of the new node as an array of shape (N, 2) where N is the number of new nodes to add.
+
+        inplace : bool, optional
+            If True, the graph is modified in place. Otherwise, a new graph is returned.
+
+        Returns
+        -------
+        npt.NDArray[np.int_]
+            The ID of the new node as a 1D array of shape (N,).
+        """
+        assert coord.ndim == 2 and coord.shape[1] == 2, "coord must be a 2D array of shape (N, 2)."
+        N = coord.shape[0]
+
+        graph = self.copy() if not inplace else self
+        new_nodes = np.arange(graph._node_count, graph._node_count + N)
+        graph._node_count += N
+
+        for gdata in graph._geometric_data:
+            gdata._append_nodes(coord)
+
+        return new_nodes
+
     def delete_node(self, node_id: NodeIndicesLike, *, inplace=False) -> Self:
         """Remove the nodes with the given indices from the graph as well as their incident branches.
 

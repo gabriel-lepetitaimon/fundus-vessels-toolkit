@@ -61,8 +61,8 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& r
         float headBoundsNorm = (headBounds[1] - headBounds[0]).norm();
 
         // Rasterize the branch
-        _rasterize_branch(curve, boundary, branchID + 1, rank, branchLabelsMapAcc, topoMapAcc, bridge_gap_smaller_than,
-                          reversed);
+        _rasterize_branch_topo(curve, boundary, branchID + 1, rank, branchLabelsMapAcc, topoMapAcc,
+                               bridge_gap_smaller_than, reversed);
 
         // Iterate over the neighbors of the current branch
         for (const auto& nextBranch : adjList[headNode]) {
@@ -105,8 +105,8 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& r
     }
 }
 
-void rasterize_branch(const torch::Tensor& curve, const torch::Tensor& boundaries, int branchID, float branchRank,
-                      torch::Tensor& branchLabelsMap, torch::Tensor& topoMap, float bridge_gap_smaller_than) {
+void rasterize_branch_topo(const torch::Tensor& curve, const torch::Tensor& boundaries, int branchID, float branchRank,
+                           torch::Tensor& branchLabelsMap, torch::Tensor& topoMap, float bridge_gap_smaller_than) {
     // Ensure the branchLabelsMap and topoMap are initialized correctly
     TORCH_CHECK(branchLabelsMap.dim() == 2 && topoMap.dim() == 2, "branchLabelsMap and topoMap must be 2D tensors.");
     TORCH_CHECK(branchLabelsMap.size(0) == topoMap.size(0) && branchLabelsMap.size(1) == topoMap.size(1),
@@ -121,14 +121,14 @@ void rasterize_branch(const torch::Tensor& curve, const torch::Tensor& boundarie
                 "curve must have shape [N, 2] and boundaries must have shape [N, 2, 2].");
     TORCH_CHECK(curve.size(0) == boundaries.size(0), "curve and boundaries must have the same first dimension size.");
 
-    return _rasterize_branch(curve.accessor<int, 2>(), boundaries.accessor<int, 3>(), branchID, branchRank,
-                             branchLabelsMap.accessor<int, 2>(), topoMap.accessor<float, 2>(),
-                             bridge_gap_smaller_than * bridge_gap_smaller_than);
+    return _rasterize_branch_topo(curve.accessor<int, 2>(), boundaries.accessor<int, 3>(), branchID, branchRank,
+                                  branchLabelsMap.accessor<int, 2>(), topoMap.accessor<float, 2>(),
+                                  bridge_gap_smaller_than * bridge_gap_smaller_than);
 }
 
-void _rasterize_branch(const Tensor2DAcc<int>& curve, const Tensor3DAcc<int>& boundaries, int branchID, float rank,
-                       Tensor2DAcc<int> branchLabelsMap, Tensor2DAcc<float> topoMap, float bridge_gap_smaller_than_sqr,
-                       bool reverse) {
+void _rasterize_branch_topo(const Tensor2DAcc<int>& curve, const Tensor3DAcc<int>& boundaries, int branchID, float rank,
+                            Tensor2DAcc<int> branchLabelsMap, Tensor2DAcc<float> topoMap,
+                            float bridge_gap_smaller_than_sqr, bool reverse) {
     const IntPoint maxShape = {(int)branchLabelsMap.size(0), (int)branchLabelsMap.size(1)};
     int N = (int)curve.size(0);
 
@@ -169,6 +169,55 @@ void _rasterize_branch(const Tensor2DAcc<int>& curve, const Tensor3DAcc<int>& bo
     }
 }
 
+torch::Tensor& rasterize_branch(const torch::Tensor& curveTensor, const torch::Tensor& boundariesTensor,
+                                torch::Tensor& outTensor, int fill_value, float bridge_gap_smaller_than) {
+    // Check input shapes
+    TORCH_CHECK(curveTensor.dim() == 2 && curveTensor.size(1) == 2, "curve must have shape [N, 2]");
+    TORCH_CHECK(boundariesTensor.dim() == 3 && boundariesTensor.size(1) == 2 && boundariesTensor.size(2) == 2,
+                "boundaries must have shape [N, 2, 2]");
+    TORCH_CHECK(curveTensor.size(0) == boundariesTensor.size(0),
+                "curve and boundaries must have the same first dimension size.");
+
+    // Check output tensor
+    TORCH_CHECK(outTensor.dim() == 2, "out must be a 2D tensor");
+    TORCH_CHECK(outTensor.dtype() == torch::kInt, "out must be an integer tensor");
+
+    // Prepare accessors and constants
+    auto curve = curveTensor.accessor<int, 2>();
+    auto boundaries = boundariesTensor.accessor<int, 3>();
+    auto out = outTensor.accessor<int, 2>();
+
+    const IntPoint maxShape = {(int)out.size(0), (int)out.size(1)};
+    float bridge_gap_smaller_than_sqr = bridge_gap_smaller_than * bridge_gap_smaller_than;
+    int N = (int)curve.size(0);
+
+    IntPoint p = curve[0], nextP;
+    IntPointPair b = {boundaries[0][0], boundaries[0][1]}, nextB;
+
+    for (int i = 0; i < N - 1; i++) {
+        IntPoint nextP = curve[i + 1];
+        IntPointPair nextB = {boundaries[i + 1][0], boundaries[i + 1][1]};
+
+        IntPoint diff = nextP - p;
+        if (diff.squaredNorm() <= bridge_gap_smaller_than_sqr) {
+            for (int lr = 0; lr < 2; ++lr) {
+                // Draw the center point
+                out[p.y][p.x] = fill_value;
+
+                // Iterate over left and right quads
+                QuadIterator it(p, b[lr], nextB[lr], nextP, maxShape);
+                while (it.iter()) out[it.point().y][it.point().x] = fill_value;
+            }
+        }
+
+        // Move to the next point
+        p = nextP;
+        b = nextB;
+    }
+
+    return outTensor;
+}
+
 /**********************************************************************************************************************
  *     === QUAD RASTERIZATION ===
  *********************************************************************************************************************/
@@ -180,15 +229,15 @@ bool isPointInQuad(const std::array<int, 4>& d) {
 IntPoint minBoundingPoint(const IntPoint& p1, const IntPoint& p2, const IntPoint& p3, const IntPoint& p4,
                           const IntPoint& maxPoint) {
     // Calculate the minimum bounding point of the quad defined by points p1, p2, p3, and p4
-    return IntPoint(std::max({std::min({p1.y, p2.y, p3.y, p4.y, maxPoint.y}), 0}),
-                    std::max({std::min({p1.x, p2.x, p3.x, p4.x, maxPoint.x}), 0}));
+    return IntPoint(std::max({std::min({p1.y, p2.y, p3.y, p4.y, maxPoint.y - 1}), 0}),
+                    std::max({std::min({p1.x, p2.x, p3.x, p4.x, maxPoint.x - 1}), 0}));
 }
 
 IntPoint maxBoundingPoint(const IntPoint& p1, const IntPoint& p2, const IntPoint& p3, const IntPoint& p4,
                           const IntPoint& maxPoint) {
     // Calculate the minimum bounding point of the quad defined by points p1, p2, p3, and p4
-    return IntPoint(std::min({std::max({p1.y, p2.y, p3.y, p4.y, 0}), maxPoint.y}),
-                    std::min({std::max({p1.x, p2.x, p3.x, p4.x, 0}), maxPoint.x}));
+    return IntPoint(std::min({std::max({p1.y, p2.y, p3.y, p4.y, 0}), maxPoint.y - 1}),
+                    std::min({std::max({p1.x, p2.x, p3.x, p4.x, 0}), maxPoint.x - 1}));
 }
 
 QuadIterator::QuadIterator(const IntPoint& p1, const IntPoint& p2, const IntPoint& p3, const IntPoint& p4,

@@ -225,21 +225,14 @@ class GNNAVSegToTree(AVSegToTree):
     ) -> VGraph:
         from ..segment_to_graph.av_tree_parsing import assign_av_label
 
+        print("Assign AV LABEL!")
         return assign_av_label(
             graph,
             av_map=av_map,
             split_av_branch=True,
             av_attr=self.av_attr,
             propagate_labels=propagate_labels,
-            inplace=inplace,
-        )
-
-    def simplify_av_graph(self, graph: VGraph, od_center: Optional[Point] = None, inplace: bool = False) -> VGraph:
-        from ..segment_to_graph.av_tree_parsing import simplify_av_graph
-
-        return simplify_av_graph(
-            graph,
-            av_attr=self.av_attr,
+            discard_joint_branch_geometry=False,
             inplace=inplace,
         )
 
@@ -270,19 +263,6 @@ class GNNAVSegToTree(AVSegToTree):
         from ..segment_to_graph.av_tree_parsing import split_av_graph_by_subtree
 
         return split_av_graph_by_subtree(tree, av_attr=self.av_attr)
-
-    # --- Utility methods ---
-    def to_vgraph(self, fundus=None, /, *, av=None, od=None, label_av=True, simplify=True):
-        fundus = self.prepare_data(fundus, av=av, od=od)
-        mask = None if self.mask_optic_disc is None else ~fundus.od
-        skel = self.segToGraph.skeletonize(fundus.vessels, mask=mask)
-        vessels = fundus.vessels if self.mask_optic_disc is None else fundus.vessels * ~fundus.od
-        graph = self.segToGraph.from_skel(skel=skel, vessels=vessels, parse_geometry=True, simplify=False)
-        if label_av:
-            self.assign_av_labels(graph, fundus.av, inplace=True)
-            if simplify:
-                self.simplify_av_graph(graph, od_center=fundus.od_center, inplace=True)
-        return graph
 
 
 FUNDUS_SEG_TO_GRAPH = SegToGraph(

@@ -2,7 +2,10 @@ import warnings
 from typing import List, Optional, Tuple
 
 import numpy as np
+import numpy.typing as npt
 import torch
+
+from fundus_vessels_toolkit.segment_to_graph import skeletonize
 
 from ..utils.cpp_extensions.fvt_cpp import detect_skeleton_nodes as detect_skeleton_nodes_cpp
 from ..utils.cpp_extensions.fvt_cpp import detect_skeleton_nodes_debug as detect_skeleton_nodes_debug_cpp
@@ -11,6 +14,59 @@ from ..utils.cpp_extensions.fvt_cpp import parse_skeleton_with_cleanup as parse_
 from ..utils.lookup_array import create_removal_lookup
 from ..utils.torch import autocast_torch
 from ..vascular_data_objects import FundusData, VBranchGeoData, VGeometricData, VGraph
+
+
+def segmentation_to_vgraph(
+    vessels: torch.Tensor | npt.NDArray[np.bool_],
+    fix_hollow=True,
+    clean_branches_tips=20,
+    clean_terminal_branches_tips=15,
+    min_terminal_branch_length=4,
+    min_terminal_branch_calibre_ratio=1,
+    max_spurs_length=30,
+) -> VGraph:
+    """
+    Parse a skeleton image into a graph of branches and nodes.
+
+    Parameters
+    ----------
+    segmentation_map : np.ndarray | torch.Tensor | FundusData
+        Segmentation map of the image. If provided, the function will remove small branches and clean the branches tips.
+
+    fix_hollow:
+        If True (by default), hollow cross pattern are filled and considered as a 4-branches junction.
+
+    clean_branches_tips:
+        If > 0, clean the skeleton extremities of each branches.
+        This step ensure that the branch skeleton actually starts where the branch emerge from the junction/bifurcation and not at the center of the junction/bifurcation. Skeleton inside the junction/bifurcation is often not relevant and may affect the accuracy of tangent and calibre estimation.
+
+        The value of ``clean_branches_tips`` is the maximum number of pixel that can be removed through this process.
+
+    min_terminal_branch_length :
+        If > 0, remove terminal branches that are shorter than this value in pixel.
+
+    min_terminal_branch_calibre_ratio :
+        If > 0, remove terminal branches that are shorter than this value times the calibre of its largest adjacent branch.
+
+    max_spurs_length :
+        If > 0, prevent the removal of a terminal branch longer than this value.
+
+    Returns
+    -------
+    A :class:`VGraph` object containing the graph of the skeleton.
+    """  # noqa: E501
+    vessels_np = vessels if isinstance(vessels, np.ndarray) else vessels.numpy(force=True)
+    skel = skeletonize(vessels_np > 0.5)
+    return skeleton_to_vgraph(
+        skel,
+        vessels=vessels_np,
+        fix_hollow=fix_hollow,
+        clean_branches_tips=clean_branches_tips,
+        clean_terminal_branches_tips=clean_terminal_branches_tips,
+        min_terminal_branch_length=min_terminal_branch_length,
+        min_terminal_branch_calibre_ratio=min_terminal_branch_calibre_ratio,
+        max_spurs_length=max_spurs_length,
+    )
 
 
 def skeleton_to_vgraph(
@@ -57,8 +113,9 @@ def skeleton_to_vgraph(
     A :class:`VGraph` object containing the graph of the skeleton.
     """  # noqa: E501
     if isinstance(skeleton_map, np.ndarray):
-        skeleton_map = torch.from_numpy(skeleton_map)
-    skeleton_map = skeleton_map.cpu()
+        skeleton = torch.from_numpy(skeleton_map)
+    else:
+        skeleton = skeleton_map.cpu()
 
     fundus_data = None
     if vessels is not None:
@@ -69,16 +126,16 @@ def skeleton_to_vgraph(
             vessels = torch.from_numpy(vessels)
         vessels = vessels.cpu().bool()
 
-    if skeleton_map.dtype == torch.bool:
+    if skeleton.dtype == torch.bool:
         remove_endpoint_branches = min_terminal_branch_length > 0 or min_terminal_branch_calibre_ratio > 0
-        skeleton_map = detect_skeleton_nodes(
-            skeleton_map, fix_hollow=fix_hollow, remove_endpoint_branches=remove_endpoint_branches
+        skeleton = detect_skeleton_nodes(
+            skeleton, fix_hollow=fix_hollow, remove_endpoint_branches=remove_endpoint_branches
         )
 
-    skeleton_map = skeleton_map.int()
+    skeleton = skeleton.int()
 
     outs = parse_skeleton(
-        skeleton_map,
+        skeleton,
         segmentation_map=vessels,
         clean_branches_tips=clean_branches_tips,
         clean_terminal_branches_tips=clean_terminal_branches_tips,

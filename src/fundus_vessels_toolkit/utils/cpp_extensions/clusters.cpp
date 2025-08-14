@@ -455,7 +455,7 @@ std::vector<torch::Tensor> remove_consecutive_duplicates(const torch::Tensor &te
     auto indexTensor = torch::empty({tensor.size(0)}, tensor.options().dtype(torch::kInt32));
     auto out = outTensor.accessor<int, 2>(), acc = tensor.accessor<int, 2>();
     auto id = indexTensor.accessor<int, 1>();
-
+    if (K > 0) id[0] = 0;
     for (std::size_t k = 0; k < K; k++) out[0][k] = acc[0][k];
     std::size_t j = 1;
     for (std::size_t i = 1; i < (std::size_t)tensor.size(0); i++) {

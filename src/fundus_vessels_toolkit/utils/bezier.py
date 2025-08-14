@@ -7,6 +7,7 @@ import numpy as np
 import numpy.typing as npt
 import torch
 
+from ..utils.fundus_projections import FundusProjection
 from .geometric import Point
 from .graph.measures import curve_tangent
 from .math import intercept_segment
@@ -34,9 +35,9 @@ class BezierCubic(NamedTuple):
             return ""
         oy, ox = offset if offset is not None else (0, 0)
         return (
-            f"M {self.p0.x-ox},{self.p0.y-oy} "
-            f"C {self.c0.x-ox},{self.c0.y-oy} {self.c1.x-ox},{self.c1.y-oy} "
-            f"{self.p1.x-ox},{self.p1.y-oy}"
+            f"M {self.p0.x - ox},{self.p0.y - oy} "
+            f"C {self.c0.x - ox},{self.c0.y - oy} {self.c1.x - ox},{self.c1.y - oy} "
+            f"{self.p1.x - ox},{self.p1.y - oy}"
         )
 
     def to_array(self) -> npt.NDArray[np.float64]:
@@ -368,6 +369,9 @@ class BSpline(tuple[BezierCubic]):
     def from_array(cls, curves: npt.NDArray) -> Self:
         return cls([curve if isinstance(curve, BezierCubic) else BezierCubic.from_array(curve) for curve in curves])
 
+    def to_array(self) -> npt.NDArray[np.float64]:
+        return np.stack([curve.to_array() for curve in self])
+
     @overload
     def intermediate_points(self, return_tangent: Literal[False] = False) -> npt.NDArray[np.float64]: ...
     @overload
@@ -481,6 +485,11 @@ class BSpline(tuple[BezierCubic]):
             else:
                 bezier_cubics.extend(bezier.split(0.5))
         return BSpline(bezier_cubics)
+
+    def transform(self, projection: FundusProjection) -> Self:
+        bspline_data = self.to_array().reshape(-1, 2)
+        bspline_data = projection.transform(bspline_data).reshape(-1, 4, 2)
+        return self.from_array(bspline_data)
 
     @overload
     def projection(

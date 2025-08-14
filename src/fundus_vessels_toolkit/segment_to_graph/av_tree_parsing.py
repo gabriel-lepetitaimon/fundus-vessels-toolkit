@@ -6,6 +6,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import numpy.typing as npt
 
+from fundus_vessels_toolkit.pipelines.seg_to_graph import SegToGraph
+from fundus_vessels_toolkit.segment_to_graph.geometry_parsing import derive_tips_geometry_from_curve_geometry
+
 from ..utils.cluster import cluster_by_distance, reduce_clusters
 from ..utils.geometric import Point
 from ..utils.lookup_array import create_removal_lookup
@@ -23,6 +26,7 @@ def assign_av_label(
     split_high_curvature=0,
     split_av_threshold=2 / 3,
     av_attr="av",
+    discard_joint_branch_geometry=True,
     propagate_labels=True,
     inplace=False,
 ):
@@ -37,10 +41,10 @@ def assign_av_label(
     elif isinstance(av_map, FundusData):
         av_map = av_map.av
 
-    gdata = graph.geometric_data()
+    geodata = graph.geometric_data()
     # === Split branches with high curvature ===
-    if split_high_curvature and gdata.has_branch_data(VBranchGeoData.Fields.CURVATURES):
-        curvatures = gdata.branch_data(VBranchGeoData.Fields.CURVATURES)
+    if split_high_curvature and geodata.has_branch_data(VBranchGeoData.Fields.CURVATURES):
+        curvatures = geodata.branch_data(VBranchGeoData.Fields.CURVATURES)
         splits = []
         for b in range(graph.branch_count):
             if curvatures[b] is None or len(curvatures[b].data) < 10:
@@ -63,8 +67,8 @@ def assign_av_label(
             continue
 
         # 0. Check the AV labels under each pixel of the skeleton and boundaries of the branch
-        bound = branch.geodata(VBranchGeoData.Fields.BOUNDARIES, gdata).data
-        valid_bound = gdata.domain.contains(bound).all(axis=1)
+        bound = branch.geodata(VBranchGeoData.Fields.BOUNDARIES, geodata).data
+        valid_bound = geodata.domain.contains(bound).all(axis=1)
         if not np.all(valid_bound):
             # warnings.warn(f"Branch {branch.id} has invalid boundary points. They will be ignored.", stacklevel=1)
             branch_curve = branch_curve[valid_bound]
@@ -107,12 +111,92 @@ def assign_av_label(
                     branches_av_attr[branch.id] = next(iter(av_splits.values()))
         else:
             _, n_art, n_vei, n_both, n_unk = np.bincount(branch_av, minlength=5)[:5]
-            branches_av_attr[branch.id] = [AVLabel.ART, AVLabel.VEI, AVLabel.BOTH][np.argmax([n_art, n_vei, n_both])]
+            main_av_label = [AVLabel.ART, AVLabel.VEI, AVLabel.BOTH][np.argmax([n_art, n_vei, n_both])]
+            branches_av_attr[branch.id] = main_av_label
 
     graph.branch_attr[av_attr] = branches_av_attr  # Why is this line necessary?
 
     # === Assign AV labels to nodes and propagate them through unknown passing nodes ===
     propagate_av_labels(graph=graph, av_attr=av_attr, only_label_nodes=not propagate_labels, inplace=True)
+
+    # === Remove or update geometry of branches with both type ===
+    if discard_joint_branch_geometry:
+        geodata.clear_branch_gdata(graph.as_branch_ids(graph.branch_attr[av_attr] == AVLabel.BOTH))
+    else:
+        segToGraph = SegToGraph(max_spurs_length=5, clean_branches_tips=5)
+        branch_to_delete = []
+        for branch in graph.branches(graph.branch_attr[av_attr] == AVLabel.BOTH):
+            if branch.curve().shape[0] < 5:
+                geodata.clear_branch_gdata(branch.id)
+            else:
+                # Separately parse the artery and veins branch
+                # print("Rasterize branch", branch.id, f" (length: {branch.curve().shape[0]})")
+                branch_mask, bbox = branch.rasterize(geodata=geodata, return_bbox=True, expand=2)
+                # print(" >> Found pixels:", branch_mask.sum(), bbox)
+                av_bbox = av_map[bbox.slice()]
+                a_mask = np.isin(av_bbox, (AVLabel.ART, AVLabel.BOTH, AVLabel.UNK)) & branch_mask
+                v_mask = np.isin(av_bbox, (AVLabel.VEI, AVLabel.BOTH, AVLabel.UNK)) & branch_mask
+
+                branch_nodes = branch._node_ids
+                branch_nodes_yx = geodata.node_coord(branch_nodes)
+
+                # Add the corresponding branches to the graph
+                def parse_graph(mask, branch):
+                    # Parse topology
+                    g = segToGraph(mask, simplify=False, parse_geometry=True)
+                    g.geometric_data()._domain = bbox + geodata.domain.top_left
+
+                    # Filter branch whose tangents are not aligned with the branch main directions
+                    both_curve = branch.curve()
+                    both_t = branch.geodata(VBranchGeoData.Fields.TANGENTS, geodata).data
+                    invalid_branches = []
+                    for b in g.branches():
+                        if (b_curve := b.curve()).shape[0] == 0:
+                            invalid_branches.append(b.id)
+                            continue
+                        D = np.linalg.norm(both_curve[None, :, :] - b_curve[:, None, :], axis=2)
+                        closest_points = np.argmin(D, axis=1)
+                        b_t = b.geodata(VBranchGeoData.Fields.TANGENTS, g.geometric_data()).data
+                        cos_sim = np.einsum("ij,ij->i", both_t[closest_points], b_t).mean()
+                        if cos_sim < 0.5 and cos_sim > -0.5:
+                            invalid_branches.append(b.id)
+                    g.delete_branch(invalid_branches, inplace=True)
+                    return g
+
+                a_graph = parse_graph(a_mask, branch)
+                b_graph = parse_graph(v_mask, branch)
+                if a_graph.is_empty() and b_graph.is_empty():
+                    continue
+                elif a_graph.is_empty() and b_graph.branch_count == 1:
+                    branch.attr[av_attr] = AVLabel.VEI
+                    continue
+                elif a_graph.branch_count == 1 and b_graph.is_empty():
+                    branch.attr[av_attr] = AVLabel.ART
+                    continue
+
+                def add_branches(g, av_label):
+                    if g.branch_count == 0:
+                        return False
+
+                    # Insert branches in the graph
+                    new_branches = np.arange(graph.branch_count, graph.branch_count + g.branch_count)
+                    new_nodes = np.arange(graph.node_count, graph.node_count + g.node_count)
+                    graph.append_graph(g, inplace=True)
+                    graph.node_attr.loc[new_nodes, av_attr] = av_label
+                    graph.branch_attr.loc[new_branches, av_attr] = av_label
+
+                    # Merge the closest node with the previous branch start and end
+                    nodes_yx = geodata.node_coord(new_nodes)
+
+                    return True
+
+                add_branches(a_graph, AVLabel.ART)
+                add_branches(b_graph, AVLabel.VEI)
+
+                branch_to_delete.append(branch.id)
+
+        if branch_to_delete:
+            graph.delete_branch(branch_to_delete, inplace=True)
 
     return graph
 
@@ -256,9 +340,6 @@ def simplify_av_graph(
     geodata = graph.geometric_data()
     nodes_av_attr = graph.node_attr[av_attr]
 
-    # === Remove geometry of branches with both type ===
-    geodata.clear_branch_gdata(graph.as_branch_ids(graph.branch_attr[av_attr] == AVLabel.BOTH))
-
     # === Merge nodes of the same type connected by a small branch ===
     nodes_clusters = []
     unknown_nodes_clusters = []
@@ -314,7 +395,7 @@ def simplify_av_graph(
         propagate_av_labels(graph, av_attr=av_attr, inplace=True)
 
     # === Remove geometry of branches with both type ===
-    geodata.clear_branch_gdata(graph.as_branch_ids(graph.branch_attr[av_attr] == AVLabel.BOTH))
+    # geodata.clear_branch_gdata(graph.as_branch_ids(graph.branch_attr[av_attr] == AVLabel.BOTH))
 
     return graph
 

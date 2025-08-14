@@ -1,11 +1,12 @@
-from typing import Tuple
+from typing import Optional, Tuple
 
 import pandas as pd
 from jppype import Mosaic, View2D, imshow, vscode_theme
 from jppype.layers import Layer, LayerImage, LayerQuiver
 
+
 from ..vascular_data_objects.fundus_data import AVLabel
-from ..vascular_data_objects.vtree import VTree
+from ..vascular_data_objects import VTree, VGraph
 
 vscode_theme()
 
@@ -53,3 +54,27 @@ def draw_trees(trees: Tuple[VTree, VTree], view: View2D) -> None:
     """
     draw_tree(trees[0], view, artery=True, name="artery_tree")
     draw_tree(trees[1], view, artery=False, name="vein_tree")
+
+
+def draw_graph(
+    graph: VGraph, view: View2D, av_attr: Optional[str] = None, edge_labels: bool = False, node_labels: bool = False
+) -> None:
+    """
+    Draw a vessel graph on a given view.
+
+    Parameters
+    ----------
+    graph : VGraph
+        The vessel graph to draw.
+    view : View2D | Mosaic
+        The view to draw the graph on.
+    av_attr : str | None
+        The attribute to use for coloring the vessels.
+    """
+    layer = graph.jppype_layer(edge_labels=edge_labels, node_labels=node_labels, bspline=True)
+    if av_attr:
+        if av_attr in graph.node_attr:
+            layer.nodes_cmap = graph.node_attr[av_attr].map(GRAPH_AV_COLORS).to_dict()
+        if av_attr in graph.branch_attr:
+            layer.edges_cmap = graph.branch_attr[av_attr].map(GRAPH_AV_COLORS).to_dict()
+    view["vessel_graph"] = layer

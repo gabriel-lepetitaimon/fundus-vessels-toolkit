@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from ast import Not
+from hmac import new
 import itertools
 import warnings
 from copy import copy
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Tuple, overload
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Self, Tuple, overload
 from weakref import ref
 
 import numpy as np
@@ -13,7 +15,7 @@ import numpy.typing as npt
 from ..utils.bezier import BSpline
 from ..utils.cluster import remove_consecutive_duplicates
 from ..utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
-from ..utils.fundus_projections import FundusProjection
+from ..utils.fundus_projections import FundusProjection, Translation
 from ..utils.geometric import Point, Rect
 from ..utils.lookup_array import invert_lookup, reorder_array
 from ..utils.numpy import as_1d_array, np_find_sorted, readonly
@@ -336,7 +338,7 @@ class VGeometricData:
             return index
 
     def node_coord(
-        self, ids: Optional[int | npt.NDArray[np.int32]] = None, *, graph_index=True, apply_domain=False
+        self, ids: Optional[int | npt.NDArray[np.int_]] = None, *, graph_index=True, apply_domain=False
     ) -> npt.NDArray[np.float32]:
         """Return the coordinates of the nodes in the graph."""
 
@@ -622,6 +624,7 @@ class VGeometricData:
             branch_id=internal_branch_id,
             curve=self._branch_curve[internal_branch_id],
             geodata_attrs=self.list_branch_data(internal_branch_id, graph_index=False),
+            info={},
         )
 
     ####################################################################################################################
@@ -1522,6 +1525,18 @@ class VGeometricData:
             self._nodes_id = reorder_array(self._nodes_id, new_node_index)
             self._sort_internal_node_ids()
 
+    def _append_nodes(self, node_coords: npt.NDArray[np.float32]):
+        """Append new nodes to the graph.
+
+        Parameters
+        ----------
+        node_coords : np.ndarray
+            The coordinates of the new nodes to append.
+        """
+        if self._nodes_id is not None:
+            raise NotImplementedError("Appending nodes is not supported for indexed graphs.")
+        self._nodes_coord = np.vstack([self._nodes_coord, node_coords])
+
     def _drop_nodes(self, node_ids: Iterable[int], *, graph_index=True):
         """Remove nodes from the graph.
 
@@ -1609,6 +1624,36 @@ class VGeometricData:
                 }
             self._sort_internal_branch_ids()
 
+    def _append_nodes_and_branches(self, other: VGeometricData, apply_domain: bool = True):
+        """Append nodes and branches from another graph to the current graph.
+
+        Parameters
+        ----------
+        other : VBranchGeoData
+            The other graph to append branches from.
+        branch_id : Optional[np.ndarray], optional
+            The ids of the branches to append, by default None (all branches are appended).
+        """
+
+        if apply_domain:
+            delta_yx = other.domain.top_left - self.domain.top_left
+            other = other.transform(Translation(delta_yx.numpy()))
+
+        # Append nodes
+        self._nodes_coord = np.concatenate([self._nodes_coord, other._nodes_coord])
+
+        # Append branches
+        if self._branches_id is not None:
+            raise NotImplementedError("Appending branches is not supported for indexed graphs.")
+
+        self._branch_curve += other._branch_curve
+        for attr_name, attr_data in self._branch_data_dict.items():
+            if attr_name in other._branch_data_dict:
+                attr_data += other._branch_data_dict[attr_name]
+            else:
+                # Ensure the attribute is registered
+                attr_data += [self._branches_attrs_descriptors[attr_name].empty] * len(self._branch_curve)
+
     def _append_empty_branches(self, n: int):
         """Append empty branches to the graph geometry data.
 
@@ -1626,6 +1671,8 @@ class VGeometricData:
                     attr += [attr_type.create_empty()] * n
                 else:
                     attr += [None] * n
+        else:
+            raise NotImplementedError("Appending branches is not supported for indexed graphs.")
 
     def _append_branch_duplicates(self, branches_id: npt.ArrayLike[int], new_branches_id: npt.ArrayLike[int]):
         """Append duplicates of the branches to the graph geometry data.
@@ -1855,24 +1902,31 @@ class VGeometricData:
             self = self.copy()
 
         self._nodes_coord = projection.transform(self._nodes_coord)
-        curves_reindex = {}
         for branch_id, curve in enumerate(self._branch_curve):
-            if curve is not None and len(curve):
-                curve = np.round(projection.transform(curve)).astype(np.int32)
-                cleaned_curve, id = remove_consecutive_duplicates(curve, return_index=True)
-                self._branch_curve[branch_id] = readonly(cleaned_curve)
-                curves_reindex[branch_id] = id
+            if curve is None or len(curve) == 0:
+                continue
+            curve = np.round(projection.transform(curve.astype(float))).astype(np.int32)
+            if not isinstance(projection, Translation):
+                cleaned_curve, new_id = remove_consecutive_duplicates(curve, return_index=True)
+                if new_id == np.arange(len(new_id)):
+                    cleaned_curve, new_id = None, None
+            else:
+                cleaned_curve, new_id = None, None
 
             ctx = self._geodata_edit_ctx(branch_id)
-            for attr_name, attr in list(ctx.geodata_attrs):
+            for attr_name, attr in ctx.geodata_attrs.items():
                 try:
-                    attr.transform(
-                        projection,
-                        ctx._replace(attr_name=attr_name, info={"curve_reindex": curves_reindex.get(branch_id, None)}),
-                    )
+                    ctx_attr = ctx._replace(attr_name=attr_name)
+                    attr = attr.transform(projection, ctx_attr)
+                    if new_id is not None:
+                        attr = attr.resample(new_id, ctx_attr)
+                    self._branch_data_dict[attr_name][branch_id] = attr
                 except NotImplementedError:
                     self._remove_branch_data(attr_name)
                     break
+
+            if cleaned_curve is not None:
+                self._branch_curve[branch_id] = readonly(cleaned_curve)
 
         self._domain = projection.transform_domain(self._domain)
         return self

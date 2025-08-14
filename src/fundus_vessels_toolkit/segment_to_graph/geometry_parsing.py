@@ -44,6 +44,9 @@ def populate_geometry(
     if not inplace:
         vgraph = vgraph.copy()
 
+    if vgraph.is_empty():
+        return vgraph
+
     geo_data = vgraph.geometric_data()
 
     if vessel_segmentation is None:

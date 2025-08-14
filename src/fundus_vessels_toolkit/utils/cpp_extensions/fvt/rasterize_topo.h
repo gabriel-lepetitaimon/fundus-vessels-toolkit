@@ -17,12 +17,15 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& r
                         int N_nodes, float bridge_gap_smaller_than, bool fill_junctions, torch::Tensor& branchLabelsMap,
                         torch::Tensor& topoMap);
 
-void rasterize_branch(const torch::Tensor& curve, const torch::Tensor& boundaries, int branchID, float branchRank,
-                      torch::Tensor& branchLabelsMap, torch::Tensor& topoMap, float bridge_gap_smaller_than = 2);
+torch::Tensor& rasterize_branch(const torch::Tensor& curveTensor, const torch::Tensor& boundariesTensor,
+                                torch::Tensor& outTensor, int fill_value = 1, float bridge_gap_smaller_than = 2);
 
-void _rasterize_branch(const Tensor2DAcc<int>& curve, const Tensor3DAcc<int>& boundaries, int branchID,
-                       float branchRank, Tensor2DAcc<int> branchLabelsMap, Tensor2DAcc<float> topoMap,
-                       float bridge_gap_smaller_than_sqr = 2, bool reverse = false);
+void rasterize_branch_topo(const torch::Tensor& curve, const torch::Tensor& boundaries, int branchID, float branchRank,
+                           torch::Tensor& branchLabelsMap, torch::Tensor& topoMap, float bridge_gap_smaller_than = 2);
+
+void _rasterize_branch_topo(const Tensor2DAcc<int>& curve, const Tensor3DAcc<int>& boundaries, int branchID,
+                            float branchRank, Tensor2DAcc<int> branchLabelsMap, Tensor2DAcc<float> topoMap,
+                            float bridge_gap_smaller_than_sqr = 2, bool reverse = false);
 
 torch::Tensor drawQuad(const IntPair& p1, const IntPair& p2, const IntPair& p3, const IntPair& p4,
                        const IntPair& maxShape);

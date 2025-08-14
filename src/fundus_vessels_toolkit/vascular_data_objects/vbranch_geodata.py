@@ -10,9 +10,11 @@ from typing import Any, Dict, Generic, List, NamedTuple, Optional, Self, Sequenc
 import numpy as np
 import numpy.typing as npt
 
+from fundus_vessels_toolkit.utils.lookup_array import invert_lookup
+
 from ..utils.bezier import BSpline
 from ..utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
-from ..utils.fundus_projections import FundusProjection
+from ..utils.fundus_projections import FundusProjection, Translation
 from ..utils.geometric import Point
 
 _registered_vbranch_geo_data_types: Dict[str, MetaVBranchGeoDataBase] = {}
@@ -149,6 +151,22 @@ class VBranchGeoDataBase(ABC, metaclass=MetaVBranchGeoDataBase):
         """
         ...
 
+    @abstractmethod
+    def resample(self, index: npt.NDArray[np.int32], ctx: BranchGeoDataEditContext) -> Self:
+        """Resample the parametric data at the given indices.
+
+        Parameters
+        ----------
+        index : npt.NDArray[np.int32]
+            The indices at which to resample the parametric data.
+
+        Returns
+        -------
+        Sequence[Self]
+            The resampled parametric data.
+        """
+        ...
+
     def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
         """Transform the parametric data using a projection.
 
@@ -202,6 +220,13 @@ class VBranchCurveData(VBranchGeoDataBase):
     def split(self, splits_point: Sequence[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:  # noqa: F821
         return [self.__class__(self.data[start:end]) for start, end in itertools.pairwise(splits_id)]
 
+    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+        return self
+
+    def resample(self, index: npt.NDArray[np.int32], ctx: BranchGeoDataEditContext) -> Self:
+        data = self.data[index]
+        return self.__class__(data)
+
 
 ####################################################################################################
 class LeftRightCurveData(VBranchCurveData):
@@ -218,6 +243,23 @@ class LeftRightCurveData(VBranchCurveData):
     def flip(self, ctx: BranchGeoDataEditContext) -> Self:
         data = np.flip(self.data, axis=(0, 1))
         return self.__class__(data)
+
+
+####################################################################################################
+class BoundariesData(LeftRightCurveData):
+    """``BoundariesData`` is a class that stores the parametric data of a vascular graph."""
+
+    def __init__(self, data: np.ndarray) -> None:
+        super().__init__(data)
+
+    def is_invalid(self, ctx: BranchGeoDataEditContext) -> str:
+        if self.data.ndim != 3 or self.data.shape[1:] != (2, 2):
+            return "BoundariesData must be a 3D array with shape (N, 2, 2)."
+        return super().is_invalid(ctx)
+
+    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+        data = projection.transform(self.data.reshape((-1, 2))).reshape(self.data.shape)
+        return self.__class__(data.astype(self.data.dtype))
 
 
 ####################################################################################################
@@ -275,6 +317,20 @@ class VBranchCurveIndex(VBranchGeoDataBase):
 
         return splitted_curveId
 
+    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+        return self
+
+    def resample(self, index: npt.NDArray[np.int32], ctx: BranchGeoDataEditContext) -> Self:
+        if self.is_empty():
+            return self
+        if (inverted := ctx.info.get("inverted_resample_index")) is None:
+            inverted = invert_lookup(index, max_index=ctx.curve.shape[0] - 1)
+            ctx.info["inverted_resample_index"] = inverted
+        data = inverted[self.data]
+        data = np.sort(data)
+        data = data[np.argmax(data > 0, axis=0) :]
+        return self.__class__(data)
+
 
 ####################################################################################################
 class VBranchTangents(VBranchGeoDataBase):
@@ -313,6 +369,17 @@ class VBranchTangents(VBranchGeoDataBase):
 
     def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
         return [self.__class__(self.data[start:end]) for start, end in itertools.pairwise(splits_id)]
+
+    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+        if self.is_empty() or isinstance(projection, Translation):
+            return self
+        p1 = (p0 := ctx.curve) + self.data
+        p0, p1 = projection.transform(p0), projection.transform(p1)
+        return self.__class__(p1 - p0)
+
+    def resample(self, index: npt.NDArray[np.int32], ctx: BranchGeoDataEditContext) -> Self:
+        data = self.data[index]
+        return self.__class__(data)
 
 
 ####################################################################################################
@@ -377,6 +444,9 @@ class VBranchTipsData(VBranchGeoDataBase):
             + [cls(np.array([nan, self.data[1]]))]
         )
 
+    def resample(self, index: npt.NDArray[np.int32], ctx: BranchGeoDataEditContext) -> Self:
+        return self
+
 
 ####################################################################################################
 class VBranchTipsScalarData(VBranchTipsData):
@@ -390,6 +460,9 @@ class VBranchTipsScalarData(VBranchTipsData):
     def empty_data(cls) -> np.ndarray:
         return np.array(float("nan"), dtype=float)
 
+    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+        return self
+
 
 ####################################################################################################
 class VBranchTipsDoublePointsData(VBranchTipsData):
@@ -398,6 +471,12 @@ class VBranchTipsDoublePointsData(VBranchTipsData):
     @classmethod
     def data_shape(cls) -> Tuple[int, ...]:
         return (2, 2)
+
+    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+        if self.is_empty():
+            return self
+        data = projection.transform(self.data.reshape(-1, 2)).reshape(self.data.shape)
+        return self.__class__(data.astype(self.data.dtype))
 
 
 ####################################################################################################
@@ -418,6 +497,14 @@ class VBranchTipsTangents(VBranchTipsData):
     def flip(self, ctx: BranchGeoDataEditContext) -> Self:
         data = np.flip(self.data, axis=0)  # No need to negate tangent tips are oriented in opposite direction
         return self.__class__(data)
+
+    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+        if self.is_empty() or isinstance(projection, Translation):
+            return self
+        p0 = np.stack(ctx.curve[0], ctx.curve[-1])
+        p1 = p0 + self.data
+        p0, p1 = projection.transform(p0), projection.transform(p1)
+        return self.__class__(p1 - p0)
 
 
 ####################################################################################################
@@ -472,8 +559,12 @@ class VBranchBSpline(VBranchGeoDataBase):
         return f"VBranchBSpline({self.data})"
 
     def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
-        bspline_data = np.stack([projection.transform(_.to_array()) for _ in self.data])
-        return self.__class__(BSpline.from_array(bspline_data))
+        if self.is_empty():
+            return self
+        return self.__class__(self.data.transform(projection))
+
+    def resample(self, index: npt.NDArray[np.int32], ctx: BranchGeoDataEditContext) -> Self:
+        return self
 
 
 ####################################################################################################
@@ -546,9 +637,7 @@ class VBranchGeoFields:
     CALIBRES = VBranchGeoDescriptor("CALIBRES", VBranchCurveData, VBranchCurveData(np.empty((0, 2), dtype=np.float32)))
 
     #: The position of the left and right boundaries of the branch.
-    BOUNDARIES = VBranchGeoDescriptor(
-        "BOUNDARIES", LeftRightCurveData, LeftRightCurveData(np.empty((0, 2, 2), dtype=np.int_))
-    )
+    BOUNDARIES = VBranchGeoDescriptor("BOUNDARIES", BoundariesData, BoundariesData(np.empty((0, 2, 2), dtype=np.int_)))
 
     #: The curvature of the branch at each skeleton point.
     CURVATURES = VBranchGeoDescriptor(
