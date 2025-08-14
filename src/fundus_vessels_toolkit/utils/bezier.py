@@ -340,8 +340,7 @@ class BezierCubic(NamedTuple):
         # Sample points along the Bezier curve
         n = int(self.arc_length(fast_approximation=True))
         step = 1 / n
-        add = (width - 1) * 2 if width > 1.0 else 0
-        t_values = np.arange(-add * step, 1 + (add + 0.5) * step, step / 2)
+        t_values = np.arange(0, 1 + 0.5 * step, step / 2)
         bezier_points = np.round(self.evaluate(t_values)).astype(np.int32)
         bezier_points = np.unique(bezier_points, axis=0)
 

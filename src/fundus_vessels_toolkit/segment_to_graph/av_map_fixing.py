@@ -5,7 +5,9 @@ import numpy as np
 import numpy.typing as npt
 from skimage.segmentation import expand_labels
 
+from fundus_vessels_toolkit.utils.cpp_optimized import first_index_of
 from fundus_vessels_toolkit.utils.lookup_array import invert_complete_lookup
+from fundus_vessels_toolkit.vascular_data_objects.fundus_data import AVLabel
 from fundus_vessels_toolkit.vascular_data_objects.vgraph import VGraph
 
 from ..utils.rasterization import rasterize_topology
@@ -110,8 +112,11 @@ def fix_av_map(
     tree_av_map[mask] = av_map[mask]
 
     if draw_reconnections:
-        draw_missing_connections(trees[0], tree_av_map, fill_value=1)
-        draw_missing_connections(trees[1], tree_av_map, fill_value=2)
+        a_map = np.isin(tree_av_map, (AVLabel.ART, AVLabel.BOTH))
+        v_map = np.isin(tree_av_map, (AVLabel.VEI, AVLabel.BOTH))
+        draw_missing_connections(trees[0], a_map, fill_value=True)
+        draw_missing_connections(trees[1], v_map, fill_value=True)
+        tree_av_map = a_map.astype(np.uint8) + 2 * v_map.astype(np.uint8)
 
     return tree_av_map
 
@@ -131,9 +136,14 @@ def draw_missing_connections(graph: VGraph, out: npt.NDArray, fill_value: int = 
     """
     for branch in graph.branches():
         mean_calibre = None
+        curve = branch.curve()
+        calibres = c.data if (c := branch.geodata(VBranchGeoData.Fields.CALIBRES)) is not None else None
         n1, n2 = [node.coord() for node in branch.nodes()]
-        for bcurve in branch.bspline().filling_curves(n1, n2, smoothing=0.5):
-            mid_points = bcurve.evaluate(np.linspace(0, 1, min(10, int(bcurve.arc_length(fast_approximation=True)))))
+        for bezier in branch.bspline().filling_curves(n1, n2, smoothing=0.5):
+            if bezier[0] == bezier[-1]:
+                continue
+
+            mid_points = bezier.evaluate(np.linspace(0, 1, min(10, int(bezier.arc_length(fast_approximation=True)))))
             mid_points = np.round(mid_points).astype(int)
             if (
                 np.any(mid_points < 0)
@@ -142,12 +152,19 @@ def draw_missing_connections(graph: VGraph, out: npt.NDArray, fill_value: int = 
             ):
                 continue
 
-            if mean_calibre is None:
-                if (calibres := branch.geodata(VBranchGeoData.Fields.CALIBRES)) is None or len(calibres.data) == 0:
-                    mean_calibre = 2.0
-                else:
-                    mean_calibre = max(calibres.data.mean(), 2)
-            bcurve.rasterize(out, width=mean_calibre, fill_value=fill_value)
+            mean_calibre = 2.0
+            if calibres is not None:
+                tip_calibres = []
+                if bezier[0] != n1:
+                    p0 = np.all(curve == bezier[0], axis=1)
+                    if p0.any():
+                        tip_calibres.append(calibres[np.argmax(p0)])
+                if bezier[-1] != n2:
+                    p1 = np.all(curve == bezier[-1], axis=1)
+                    if p1.any():
+                        tip_calibres.append(calibres[np.argmax(p1)])
+                mean_calibre = max(2.0, 0.75 * np.mean(tip_calibres)) if len(tip_calibres) > 0 else 2.0
+            bezier.rasterize(out, width=mean_calibre, fill_value=fill_value)
 
 
 class TopologicalLabel(np.uint64):
