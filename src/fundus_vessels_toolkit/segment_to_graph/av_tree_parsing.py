@@ -373,7 +373,6 @@ def simplify_av_graph(
     )
 
     geodata = graph.geometric_data()
-    nodes_av_attr = graph.node_attr[av_attr]
 
     # === Merge nodes of the same type connected by a small branch ===
     nodes_clusters = []
@@ -381,7 +380,7 @@ def simplify_av_graph(
     max_merge_distance = max(node_merge_distance, unknown_node_merge_distance)
     for branch in graph.branches(filter="non-endpoint"):
         if branch.node_to_node_length() < max_merge_distance:
-            n1, n2 = nodes_av_attr[list(branch.node_ids)]  # type: ignore
+            n1, n2 = graph.node_attr.loc[list(branch.node_ids), av_attr]  # type: ignore
             # For this step, we consider branches with both type as unknown
             n1 = AVLabel.UNK if n1 == AVLabel.BOTH else n1
             n2 = AVLabel.UNK if n2 == AVLabel.BOTH else n2
@@ -410,7 +409,7 @@ def simplify_av_graph(
             twin_branches.extend(twins[1:])
             # Label the first branch as unknown and clear its geometry data
             b0.attr[av_attr] = AVLabel.UNK
-            nodes_av_attr[b0.node_ids] = AVLabel.UNK
+            graph.node_attr.loc[list(b0.node_ids), av_attr] = AVLabel.UNK
             geodata.clear_branch_gdata([b0.id])
 
     graph.delete_branch(twin_branches, inplace=True)

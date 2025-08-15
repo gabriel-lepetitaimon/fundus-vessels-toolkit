@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, List, Mapping, Optional, Sequence, Tuple, TypeAlias, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TypeAlias, Union
 
+from coloraide import Color
 import numpy as np
 import numpy.typing as npt
 
@@ -174,3 +175,17 @@ def load_label_image(
         img = img[:, :, None]
     img = img.transpose(2, 0, 1)[None]  # HWC to BCHW
     return labels_mapping[np.linalg.norm(img - colors[:, :, None, None], axis=1).argmin(axis=0)]
+
+
+def save_label_image(label_img: npt.NDArray[np.uint8], path: str | Path, colors: Dict[int, ColorSpec]):
+    from .safe_import import import_cv2
+
+    cv2 = import_cv2()
+
+    img = np.zeros((*label_img.shape, 3), dtype=np.uint8)
+    for label, color in colors.items():
+        img[label_img == label] = parse_color(color)
+    img = img[:, :, ::-1]  # RGB to BGR
+
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(path), img)

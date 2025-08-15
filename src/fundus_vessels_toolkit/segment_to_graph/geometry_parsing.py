@@ -62,6 +62,9 @@ def populate_geometry(
     curves = geo_data.branch_curve()
     valid_curves_id = np.argwhere([c is not None and len(c) > 1 for c in curves]).flatten()
     valid_curves = [curves[int(i)] for i in valid_curves_id]
+    if not valid_curves:
+        return vgraph
+
     curves, curve_splits, tangents, calibres, boundaries, curvatures, curv_roots, bsplines = extract_branch_geometry(
         valid_curves,
         vessel_segmentation,
