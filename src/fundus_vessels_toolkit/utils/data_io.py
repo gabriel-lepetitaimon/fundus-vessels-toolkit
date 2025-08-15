@@ -86,7 +86,9 @@ def load_av(file, av_inverted=False, pad=None):
     return av
 
 
-def load_image(path: str | Path, binarize=False, resize=None, pad=None, cast_to_float=True) -> np.ndarray:
+def load_image(
+    path: str | Path, binarize=False, resize=None, pad=None, cast_to_float=True, keep_alpha=False
+) -> np.ndarray:
     from .image import resize as resize_image
     from .safe_import import import_cv2
 
@@ -98,8 +100,13 @@ def load_image(path: str | Path, binarize=False, resize=None, pad=None, cast_to_
 
     if img.ndim == 3:
         if img.shape[2] == 4:
-            img = img[:, :, :3]
-        img = img[:, :, ::-1]  # BGR to RGB
+            if keep_alpha:
+                img = img[:, :, [2, 1, 0, 3]]  # BGRA to RGBA
+            else:
+                img = img[:, :, :3]
+                img = img[:, :, ::-1]
+        else:
+            img = img[:, :, ::-1]  # BGR to RGB
 
     if img is None:
         raise ValueError(f"Could not load image from {path}")
