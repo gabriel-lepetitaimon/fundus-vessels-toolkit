@@ -267,7 +267,7 @@ std::tuple<torch::Tensor, double> fit_bspline(const torch::Tensor &curveYX_tenso
     if (tangents.size() != curve.size()) {
         // If tangents are not provided, compute them
         tangents.clear();
-        tangents.reserve(curve.size());
+        // tangents.reserve(curve.size());
         for (auto const &[start, end] : contiguousCurvesStartEnd) {
             const auto &t = fast_curve_tangent(curve, TANGENT_HALF_GAUSS, start, end);
             tangents.insert(tangents.end(), t.begin(), t.end());
@@ -291,7 +291,7 @@ std::tuple<torch::Tensor, double> fit_bspline(const torch::Tensor &curveYX_tenso
     // Candidates are either curvatures roots or small gap in the curve
     std::list<SizePair> curveSections;
     std::vector<std::size_t> nodeCandidates;
-    nodeCandidates.reserve(curvatureRoots.size() + contiguousCurvesStartEnd.size());
+    // nodeCandidates.reserve(curvatureRoots.size() + contiguousCurvesStartEnd.size());
     std::size_t prevStart = 0, prevEnd = 0;
     auto itRoots = curvatureRoots.cbegin();
 
