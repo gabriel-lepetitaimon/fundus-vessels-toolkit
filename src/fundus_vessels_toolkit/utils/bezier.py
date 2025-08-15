@@ -408,6 +408,9 @@ class BSpline(tuple[BezierCubic]):
 
         from .cpp_extensions.fvt_cpp import fit_bspline
 
+        if yx_points.shape[0] == 0:
+            return cls(), float("inf")
+
         curve = torch.from_numpy(yx_points.copy()).int()
         tangent_torch = (
             torch.from_numpy(tangents.copy()).float()
