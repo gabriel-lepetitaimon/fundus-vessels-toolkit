@@ -121,7 +121,8 @@ def assign_av_label(
 
     # === Remove or update geometry of branches with both type ===
     if discard_joint_branch_geometry:
-        geodata.clear_branch_gdata(graph.as_branch_ids(graph.branch_attr[av_attr] == AVLabel.BOTH))
+        # geodata.clear_branch_gdata(graph.as_branch_ids(graph.branch_attr[av_attr] == AVLabel.BOTH))
+        ...
     else:
         segToGraph = SegToGraph(max_spurs_length=5, clean_branches_tips=5)
         branch_to_delete = []

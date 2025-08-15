@@ -1822,6 +1822,7 @@ class VGeometricData:
 
         # === Split the branch geo data ===
         ctx = self._geodata_edit_ctx(internal_id)
+        ctx.info["new_curves"] = new_curves
         split_node_points: List[Point] = [Point.from_array(coord) for coord in explicit_split_coord]
         for attr_name, attr_data in self._branch_data_dict.items():
             attr = attr_data[internal_id]

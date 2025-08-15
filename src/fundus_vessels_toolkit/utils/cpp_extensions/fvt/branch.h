@@ -48,8 +48,12 @@ Point fast_curve_tangent(const CurveYX &curveYX, std::size_t i, const Scalars &G
                          const bool forward = true, const bool backward = true, const std::size_t curveStart = 0,
                          std::size_t curveEnd = 0);
 
-std::vector<Point> fast_curve_tangent(const CurveYX &curveYX, const Scalars &GaussKernel = TANGENT_HALF_GAUSS,
-                                      const std::vector<int> &evaluateAtID = {});
+std::vector<Point> fast_curve_tangent(const CurveYX &curveYX, const Scalars &GaussKernel,
+                                      const std::vector<int> &evaluateAtID);
+
+std::vector<Point> fast_curve_tangent(const CurveYX &curveYX,
+                                      const std::vector<float> &GaussKernel = TANGENT_HALF_GAUSS, std::size_t start = 0,
+                                      std::size_t end = 0);
 
 std::vector<std::size_t> curve_inflections_points(const Scalars &signedCurvature, const float K_threshold = 0.05,
                                                   int idOffset = 0);
@@ -181,20 +185,23 @@ std::tuple<std::vector<CurveYX>, std::vector<Sizes>, std::vector<CurveTangents>,
 extract_branches_geometry(std::vector<CurveYX> &branch_curves, const Tensor2DAcc<bool> &segmentation,
                           std::map<std::string, double> options = {}, bool assume_contiguous = false);
 
-BSpline bspline_regression(const CurveYX &curve, const CurveTangents &tangents, const Scalars &curvatures,
-                           double bspline_max_error, const float K_threshold = 0.15, std::size_t start = 0,
-                           std::size_t end = 0);
+std::tuple<BSpline, double> bspline_regression(const CurveYX &curve, const CurveTangents &tangents,
+                                               const Scalars &curvatures, double bspline_max_error,
+                                               const float K_threshold = 0.15, std::size_t start = 0,
+                                               std::size_t end = 0);
 
-BSpline bspline_regression(const CurveYX &curve, const CurveTangents &tangents, double bspline_max_error,
-                           const float K_threshold = 0.15, std::size_t start = 0, std::size_t end = 0);
+std::tuple<BSpline, double> bspline_regression(const CurveYX &curve, const CurveTangents &tangents,
+                                               double bspline_max_error, const float K_threshold = 0.15,
+                                               std::size_t start = 0, std::size_t end = 0);
 
-BSpline bspline_regression(const CurveYX &curve, const CurveTangents &tangents,
-                           const std::vector<std::size_t> &splitCandidate, double targetSqrError, std::size_t start = 0,
-                           std::size_t end = 0);
+std::tuple<BSpline, double> bspline_regression(const CurveYX &curve, const CurveTangents &tangents,
+                                               const std::vector<std::size_t> &splitCandidate, double targetSqrError,
+                                               std::size_t start = 0, std::size_t end = 0);
 
-BSpline iterative_fit_bspline(const CurveYX &d, const std::vector<Point> &tangents, const BezierCurve &bezier,
-                              const std::vector<double> &u, const std::vector<double> &bezierSqrErrors,
-                              const std::vector<std::size_t> &splitCandidates, double error, std::size_t first,
-                              std::size_t last);
+std::tuple<BSpline, double> iterative_fit_bspline(const CurveYX &d, const std::vector<Point> &tangents,
+                                                  const BezierCurve &bezier, const std::vector<double> &u,
+                                                  const std::vector<double> &bezierSqrErrors,
+                                                  const std::vector<std::size_t> &splitCandidates, double error,
+                                                  std::size_t first, std::size_t last);
 
 #endif  // BRANCH_TRACKING_H

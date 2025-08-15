@@ -169,10 +169,17 @@ class AVSegToTree(AVSegToTreeBase):
 
     # --- Utility methods ---
     def to_vgraph(self, fundus=None, /, *, av=None, od=None, label_av=True, simplify=True):
+        from skimage.morphology import binary_erosion, disk
+
         fundus = self.prepare_data(fundus, av=av, od=od)
-        mask = None if self.mask_optic_disc is None else ~fundus.od
+        if self.mask_optic_disc and fundus.od is not None:
+            mask = ~binary_erosion(fundus.od, disk(fundus.od_diameter * 0.2, dtype=np.bool_))
+        else:
+            mask = None
+
         skel = self.segToGraph.skeletonize(fundus.vessels, mask=mask)
-        vessels = fundus.vessels if self.mask_optic_disc is None else fundus.vessels * ~fundus.od
+        vessels = fundus.vessels if mask is None else fundus.vessels * mask
+
         graph = self.segToGraph.from_skel(skel=skel, vessels=vessels, parse_geometry=True, simplify=False)
         if label_av:
             self.assign_av_labels(graph, fundus.av, inplace=True)
@@ -231,7 +238,7 @@ class GNNAVSegToTree(AVSegToTree):
             split_av_branch=True,
             av_attr=self.av_attr,
             propagate_labels=propagate_labels,
-            discard_joint_branch_geometry=False,
+            discard_joint_branch_geometry=True,
             inplace=inplace,
         )
 

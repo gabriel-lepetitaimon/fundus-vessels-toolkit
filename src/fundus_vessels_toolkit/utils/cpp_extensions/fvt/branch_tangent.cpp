@@ -181,6 +181,31 @@ std::vector<Point> fast_curve_tangent(const CurveYX& curveYX, const std::vector<
 }
 
 /**
+ * @brief Evaluate the tangent of a curve.
+ *
+ * This method compute the tangent of a curve defined by a list of points.
+ * The tangent is computed by averaging the vectors between the current point
+ * and its neighbors weighted by a gaussian kernel.
+ *
+ * @param curveYX A list of points defining the curve.
+ * @param start The starting index for the evaluation.
+ * @param end The ending index for the evaluation.
+ * @param GaussKernel The gaussian kernel to use for smoothing.
+ */
+std::vector<Point> fast_curve_tangent(const CurveYX& curveYX, const std::vector<float>& GaussKernel, std::size_t start,
+                                      std::size_t end) {
+    if (end == 0) end = curveYX.size();
+
+    std::vector<Point> tangents(end - start, {0, 0});
+    // Compute the tangent at each point
+    for (std::size_t i = start; i < end; i++) {
+        tangents[i - start] = fast_curve_tangent(curveYX, i, GaussKernel, true, true, start, end);
+    }
+
+    return tangents;
+}
+
+/**
  * @brief Compute the inflection points of a curve.
  *
  * @param signedCurvature The signed curvature for each pixel of a curve.

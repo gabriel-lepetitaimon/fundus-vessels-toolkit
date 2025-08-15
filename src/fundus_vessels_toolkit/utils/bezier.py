@@ -396,7 +396,32 @@ class BSpline(tuple[BezierCubic]):
         return other + self
 
     @classmethod
-    def fit(cls, yx_points: npt.NDArray, max_error: float, split_on=None, tangent_std=2) -> Self:
+    def fit(
+        cls,
+        yx_points: npt.NDArray,
+        tangents: Optional[npt.NDArray[np.float32]] = None,
+        curvature_roots: Optional[npt.NDArray[np.int_]] = None,
+        *,
+        max_error: float = 3.0,
+    ) -> Tuple[Self, float]:
+        import torch
+
+        from .cpp_extensions.fvt_cpp import fit_bspline
+
+        curve = torch.from_numpy(yx_points)
+        tangent_torch = torch.from_numpy(tangents) if tangents is not None else torch.empty((0, 2), dtype=torch.float32)
+
+        curv_roots_torch = torch.tensor([-1], dtype=torch.int64)
+        if curvature_roots is not None:
+            curv_roots_torch = torch.from_numpy(curvature_roots)
+
+        opt = {"bspline_target_error": max_error, "ignore_gaps": 2.0, "curvature_roots_percentile_threshold": 0.1}
+
+        bsplines, max_error = fit_bspline(curve, tangent_torch, curv_roots_torch, opt)
+        return cls.from_array(bsplines.numpy()), max_error
+
+    @classmethod
+    def fit_legacy(cls, yx_points: npt.NDArray, max_error: float, split_on=None, tangent_std=2) -> Self:
         if len(yx_points) < 4:
             return cls([BezierCubic(*[Point(*yx_points[i]) for i in (0, -1, 0, -1)])])
 
@@ -752,14 +777,19 @@ class BSpline(tuple[BezierCubic]):
 
 @autocast_torch
 def fit_bezier_cubic(
-    curve: torch.Tensor, tangents: torch.Tensor, max_error: float, start: Optional[int] = 0, end: Optional[int] = 0
+    curve: torch.Tensor,
+    tangents: Optional[torch.Tensor] = None,
+    max_error: float = 2,
+    tangent_std: float = 2,
+    start: Optional[int] = 0,
+    end: Optional[int] = 0,
 ) -> Tuple[BezierCubic, float, torch.Tensor]:
-    from .cpp_extensions.fvt_cpp import fit_bezier as fit_bezier_cpp
+    from .cpp_extensions.fvt_cpp import fit_bezier_cubic as fit_bezier__cubic_cpp
 
     curve = curve.cpu().int()
-    tangents = tangents.cpu().float()
+    tangents = tangents.cpu().float() if tangents is not None else torch.empty((0, 2), dtype=torch.float32)
 
-    bezier, max_error, u = fit_bezier_cpp(curve, tangents, max_error, start, end)
+    bezier, max_error, u = fit_bezier__cubic_cpp(curve, tangents, max_error, tangent_std, start, end)
     return BezierCubic.from_array(bezier), max_error, u
 
 

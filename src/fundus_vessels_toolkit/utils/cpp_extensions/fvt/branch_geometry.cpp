@@ -6,7 +6,7 @@ extract_branches_geometry(std::vector<CurveYX>& branch_curves, const Tensor2DAcc
                           std::map<std::string, double> options, bool assume_contiguous) {
     // --- Parse Options ---
     bool adaptative_tangents = get_if_exists(options, "adaptative_tangents", 1.0) > 0;
-    float bspline_targetSqrError = pow(get_if_exists(options, "bspline_target_error", 0.0), 3);
+    float bspline_targetSqrError = pow(get_if_exists(options, "bspline_target_error", 3.0), 2);
     float curv_roots_percentileThreshold = get_if_exists(options, "curvature_roots_percentile_threshold", 0.1);
 
     bool return_calibre = get_if_exists(options, "return_calibre", 1.0) > 0;
@@ -188,8 +188,8 @@ extract_branches_geometry(std::vector<CurveYX>& branch_curves, const Tensor2DAcc
                 for (auto splitIt = curveSplits.begin(); splitIt != curveSplits.end(); splitIt++) {
                     auto end = *splitIt;
 
-                    auto const& bspline_curve = bspline_regression(finalCurve, finalTangents, nodeCandidates,
-                                                                   bspline_targetSqrError, start, end);
+                    auto const& [bspline_curve, error] = bspline_regression(finalCurve, finalTangents, nodeCandidates,
+                                                                            bspline_targetSqrError, start, end);
                     branchesBSpline[curveI].insert(branchesBSpline[curveI].end(), bspline_curve.begin(),
                                                    bspline_curve.end());
 
@@ -207,8 +207,9 @@ extract_branches_geometry(std::vector<CurveYX>& branch_curves, const Tensor2DAcc
                            branchesCurvature, branchesCurvatureRoots, branchesBSpline);
 }
 
-BSpline bspline_regression(const CurveYX& curve, const CurveTangents& tangents, double targetSqrError,
-                           const float KpercentileThreshold, std::size_t start, std::size_t end) {
+std::tuple<BSpline, double> bspline_regression(const CurveYX& curve, const CurveTangents& tangents,
+                                               double targetSqrError, const float KpercentileThreshold,
+                                               std::size_t start, std::size_t end) {
     if (curve.size() < 2) return {};
     if (end == 0) end = curve.size();
 
@@ -216,9 +217,9 @@ BSpline bspline_regression(const CurveYX& curve, const CurveTangents& tangents, 
     return bspline_regression(curve, tangents, curvatures, targetSqrError, KpercentileThreshold, start, end);
 }
 
-BSpline bspline_regression(const CurveYX& curve, const CurveTangents& tangents, const Scalars& curvatures,
-                           double targetSqrError, const float KpercentileThreshold, std::size_t start,
-                           std::size_t end) {
+std::tuple<BSpline, double> bspline_regression(const CurveYX& curve, const CurveTangents& tangents,
+                                               const Scalars& curvatures, double targetSqrError,
+                                               const float KpercentileThreshold, std::size_t start, std::size_t end) {
     if (curve.size() < 2) return {};
     if (end == 0) end = curve.size();
 
@@ -229,12 +230,12 @@ BSpline bspline_regression(const CurveYX& curve, const CurveTangents& tangents, 
         return iterative_fit_bspline(curve, tangents, bezier, u, sqrErrors, splitCandidate, targetSqrError, start,
                                      end - 1);
     } else
-        return {bezier};
+        return {BSpline({bezier}), maxError};
 }
 
-BSpline bspline_regression(const CurveYX& curve, const CurveTangents& tangents,
-                           const std::vector<std::size_t>& splitCandidate, double targetSqrError, std::size_t start,
-                           std::size_t end) {
+std::tuple<BSpline, double> bspline_regression(const CurveYX& curve, const CurveTangents& tangents,
+                                               const std::vector<std::size_t>& splitCandidate, double targetSqrError,
+                                               std::size_t start, std::size_t end) {
     if (curve.size() < 2) return {};
     if (end == 0) end = curve.size();
 
@@ -243,7 +244,7 @@ BSpline bspline_regression(const CurveYX& curve, const CurveTangents& tangents,
         return iterative_fit_bspline(curve, tangents, bezier, u, sqrErrors, splitCandidate, targetSqrError, start,
                                      end - 1);
     } else
-        return {bezier};
+        return {BSpline({bezier}), maxError};
 }
 
 /*
@@ -265,16 +266,17 @@ BSpline bspline_regression(const CurveYX& curve, const CurveTangents& tangents,
  * @return The Bezier-Spline which approximate the segment [first, last] of the curve d with a maximum error less
  * than the given error (provided that enough split candidates are available).
  */
-BSpline iterative_fit_bspline(const CurveYX& d, const std::vector<Point>& tangents, const BezierCurve& bezier,
-                              const std::vector<double>& u, const std::vector<double>& sqrErrors,
-                              const std::vector<std::size_t>& splitCandidates, double error, std::size_t first,
-                              std::size_t last) {
+std::tuple<BSpline, double> iterative_fit_bspline(const CurveYX& d, const std::vector<Point>& tangents,
+                                                  const BezierCurve& bezier, const std::vector<double>& u,
+                                                  const std::vector<double>& sqrErrors,
+                                                  const std::vector<std::size_t>& splitCandidates, double targetError,
+                                                  std::size_t first, std::size_t last) {
     std::vector<std::size_t> validSplits;
     validSplits.reserve(splitCandidates.size());
     for (auto const& split : splitCandidates) {
         if (split > first && split < last) validSplits.push_back(split);
     }
-    if (validSplits.size() == 0) return {bezier};
+    if (validSplits.size() == 0) return {BSpline({bezier}), 0.0};
     const std::size_t nSplit = validSplits.size();
     const std::size_t curveLength = last - first;
 
@@ -326,15 +328,19 @@ BSpline iterative_fit_bspline(const CurveYX& d, const std::vector<Point>& tangen
     }
 
     // Split the curve at the maximum error and recursively fit the two parts
+    double maxError = 0;
     BSpline bspline;
     for (auto const& [split_first, split_last] : std::array<SizePair, 2>{{{first, split}, {split, last}}}) {
-        auto const& [bezier, maxError, sqrErrors, u] = fit_bezier(d, tangents, error, split_first, split_last);
-        if (maxError > error) {
-            auto const& bspline1 = iterative_fit_bspline(d, tangents, bezier, u, sqrErrors, splitCandidates, error,
-                                                         split_first, split_last);
+        auto const& [bezier, fitMaxError, sqrErrors, u] = fit_bezier(d, tangents, targetError, split_first, split_last);
+        if (fitMaxError > targetError) {
+            auto const& [bspline1, iterFitMaxError] = iterative_fit_bspline(
+                d, tangents, bezier, u, sqrErrors, splitCandidates, targetError, split_first, split_last);
             bspline.insert(bspline.end(), bspline1.begin(), bspline1.end());
-        } else
+            if (maxError < iterFitMaxError) maxError = iterFitMaxError;
+        } else {
             bspline.push_back(bezier);
+            if (maxError < fitMaxError) maxError = fitMaxError;
+        }
     }
-    return bspline;
+    return {bspline, maxError};
 }

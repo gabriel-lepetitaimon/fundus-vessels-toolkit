@@ -242,15 +242,91 @@ torch::Tensor find_inflections_points(const torch::Tensor &curvatures, float K_t
     return vector_to_tensor(inflections);
 }
 
-std::tuple<torch::Tensor, double, torch::Tensor> fit_bezier_torch(const torch::Tensor &curveYX,
+std::tuple<torch::Tensor, double, torch::Tensor> fit_bezier_cubic(const torch::Tensor &curveYX,
                                                                   const torch::Tensor &tangents,
-                                                                  double bspline_max_error, std::size_t start,
-                                                                  std::size_t end) {
+                                                                  double bspline_max_error, float tangent_std = 2,
+                                                                  std::size_t start = 0, std::size_t end = 0) {
     const CurveYX &curve = tensor_to_curve(curveYX);
-    const PointList &tangents_vec = tensor_to_pointList(tangents);
+    PointList tangents_vec = tensor_to_pointList(tangents);
+    if (tangents_vec.empty()) tangents_vec = fast_curve_tangent(curve, gaussianHalfKernel1D(tangent_std));
     auto const &curvatures = tangents_to_curvature(tangents_vec, true, 5, start, end);
     auto const &[bezier, maxError, sqrError, u] = fit_bezier(curve, tangents_vec, bspline_max_error, start, end);
     return {bspline_to_tensor(bezier), maxError, vector_to_tensor(u)};
+}
+
+std::tuple<torch::Tensor, double> fit_bspline(const torch::Tensor &curveYX_tensor, const torch::Tensor &tangents_tensor,
+                                              const torch::Tensor &curvature_roots_tensor,
+                                              std::map<std::string, double> options) {
+    // === Parse input tensors ===
+    const CurveYX &curve = tensor_to_curve(curveYX_tensor);
+    auto const &contiguousCurvesStartEnd = split_contiguous_curves(curve);
+    float bspline_targetSqrError = pow(get_if_exists(options, "bspline_target_error", 3.0), 2);
+    float ignoreGapsSqr = pow(get_if_exists(options, "ignore_gaps", 2.0), 2);
+
+    PointList tangents = tensor_to_pointList(tangents_tensor);
+    if (tangents.size() != curve.size()) {
+        // If tangents are not provided, compute them
+        tangents.clear();
+        tangents.reserve(curve.size());
+        for (auto const &[start, end] : contiguousCurvesStartEnd) {
+            const auto &t = fast_curve_tangent(curve, TANGENT_HALF_GAUSS, start, end);
+            tangents.insert(tangents.end(), t.begin(), t.end());
+        }
+    }
+
+    std::vector<int> curvatureRoots = {-1};  // tensor_to_vector<int>(curvature_roots_tensor);
+    if (curvatureRoots.size() == 1 && curvatureRoots[0] == -1) {
+        // If curvature roots are not provided, compute them
+        curvatureRoots.clear();
+        float curv_roots_percentileThreshold = get_if_exists(options, "curvature_roots_percentile_threshold", 0.1);
+
+        for (auto const &[start, end] : contiguousCurvesStartEnd) {
+            auto const &curvature = tangents_to_curvature(tangents, true, 5, start, end);
+            auto const &curveInflections = curve_inflections_points(curvature, curv_roots_percentileThreshold, start);
+            curvatureRoots.insert(curvatureRoots.end(), curveInflections.begin(), curveInflections.end());
+        }
+    }
+
+    // === Compute bspline split candidates ===
+    // Candidates are either curvatures roots or small gap in the curve
+    std::list<SizePair> curveSections;
+    std::vector<std::size_t> nodeCandidates;
+    nodeCandidates.reserve(curvatureRoots.size() + contiguousCurvesStartEnd.size());
+    std::size_t prevStart = 0, prevEnd = 0;
+    auto itRoots = curvatureRoots.cbegin();
+
+    for (auto const &[start, end] : contiguousCurvesStartEnd) {
+        if (start != 0) {
+            if ((curve[start] - curve[prevEnd]).squaredNorm() > ignoreGapsSqr) {
+                // If the gap between two curves is larger than the ignoreGapsSqr, we create a new section
+                curveSections.push_back({prevStart, prevEnd});
+                prevStart = start;
+            } else {
+                // Otherwise extend the section and add the boundaries as a split candidates
+                nodeCandidates.push_back(prevEnd);
+                nodeCandidates.push_back(start);
+            }
+        }
+        prevEnd = end;
+
+        while (itRoots != curvatureRoots.cend() && static_cast<std::size_t>(*itRoots) < end) {
+            nodeCandidates.push_back(*itRoots);
+            itRoots++;
+        }
+    }
+    curveSections.push_back({prevStart, prevEnd});
+
+    // === Compute BSpline ===
+    double maxError = 0;
+    BSpline bspline;
+    for (auto const &[start, end] : curveSections) {
+        auto const &[bspline_curve, error] =
+            bspline_regression(curve, tangents, nodeCandidates, bspline_targetSqrError, start, end);
+        bspline.insert(bspline.end(), bspline_curve.begin(), bspline_curve.end());
+        if (maxError < error) maxError = error;
+    }
+
+    return {bspline_to_tensor(bspline), maxError};
 }
 
 torch::Tensor drawLine(std::array<int, 2> tip, std::array<float, 2> direction, int length) {
@@ -388,7 +464,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fast_branch_calibre", &fast_branch_calibre_torch, "Evaluate the width of a branch.");
     m.def("curve_curvature", &compute_curvature, "Evaluate the curvature of a curve.");
     m.def("find_inflections_points", &find_inflections_points, "Find the inflection points of a curve.");
-    m.def("fit_bezier", &fit_bezier_torch, "Fit a cubic bezier curve to a set of points.");
+    m.def("fit_bezier_cubic", &fit_bezier_cubic, "Fit a cubic bezier curve to a set of points.");
+    m.def("fit_bspline", &fit_bspline, "Fit a B-Spline curve to a set of points.");
     m.def("drawCone", &drawCone, "Draw a cone in a 2D image.");
     m.def("drawLine", &drawLine, "Draw a line in a 2D image.");
     m.def("drawTriangle", &drawTriangle, "Draw a triangle in a 2D image.");

@@ -553,7 +553,7 @@ class VBranchBSpline(VBranchGeoDataBase):
         return self.__class__(self.data.flip())
 
     def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
-        return [self.__class__(bspline) for bspline in self.data.split_into_multiple_bsplines(splits_point[1:-1])]
+        return [self.__class__(BSpline.fit(c)[0]) for c in ctx.info["new_curves"]]
 
     def __repr__(self) -> str:
         return f"VBranchBSpline({self.data})"
