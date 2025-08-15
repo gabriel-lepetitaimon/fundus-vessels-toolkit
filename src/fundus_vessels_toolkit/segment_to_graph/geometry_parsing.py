@@ -46,7 +46,7 @@ def populate_geometry(
     if not inplace:
         vgraph = vgraph.copy()
 
-    if vgraph.is_empty():
+    if vgraph.branch_count == 0:
         return vgraph
 
     geo_data = vgraph.geometric_data()
