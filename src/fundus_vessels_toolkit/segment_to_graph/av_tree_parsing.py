@@ -860,9 +860,9 @@ def build_line_digraph(
                 graph.split_branch(b, split_curve_id=0.5, inplace=True)
 
     # === Discover virtual branch to reconnect end nodes to adjacent branches or to other end nodes ===
-    virtual_endp_edges = find_facing_endpoints(graph, max_distance=100, max_angle=30)
+    virtual_endp_edges = find_facing_endpoints(graph, max_distance=50, max_angle=60)
     virtual_edges, new_nodes, new_nodes_yx = find_endpoints_branches_intercept(
-        graph, max_distance=100, intercept_snapping_distance=30, omit_endpoints_to_endpoints=True
+        graph, max_distance=100, intercept_snapping_distance=5, angle_tolerance=10, omit_endpoints_to_endpoints=True
     )
 
     # Insert any new nodes required by the virtual edges between end points and branches

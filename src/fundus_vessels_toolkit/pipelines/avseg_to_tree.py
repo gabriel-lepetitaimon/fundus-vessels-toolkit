@@ -133,9 +133,11 @@ class AVSegToTree(AVSegToTreeBase):
     def simplify_av_graph(self, graph: VGraph, od_center: Optional[Point] = None, inplace: bool = False) -> VGraph:
         from ..segment_to_graph.av_tree_parsing import simplify_av_graph
 
+        opts = {}
         return simplify_av_graph(
             graph,
             av_attr=self.av_attr,
+            orphan_branch_min_length=self.segToGraph.simplify_graph_arg.min_orphan_branches_length,
             inplace=inplace,
         )
 
@@ -238,7 +240,7 @@ class GNNAVSegToTree(AVSegToTree):
             split_av_branch=True,
             av_attr=self.av_attr,
             propagate_labels=propagate_labels,
-            discard_joint_branch_geometry=True,
+            discard_joint_branch_geometry=False,
             inplace=inplace,
         )
 

@@ -96,7 +96,7 @@ class SegToGraph:
         self.max_spurs_length = max_spurs_length
 
         self.simplify_graph = simplify_graph
-        self.simplify_graph_arg = simplify_graph_arg
+        self.simplify_graph_arg = if_none(simplify_graph_arg, GraphSimplifyArg())
 
         self.geometry_parsing_enabled = parse_geometry
         self.adaptative_tangents = adaptative_tangents
