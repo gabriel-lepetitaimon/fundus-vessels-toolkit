@@ -476,6 +476,7 @@ int Edge::other(int node) const { return (node == start) ? end : start; }
 bool Edge::operator==(const Edge& e) const { return (start == e.start && end == e.end && id == e.id); }
 bool Edge::operator!=(const Edge& e) const { return (start != e.start || end != e.end || id != e.id); }
 bool Edge::operator<(const Edge& e) const { return id < e.id; }
+bool Edge::is_first(int node) const { return start == node; }
 
 GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N, bool directed, bool keep_orientation) {
     if (N < 0) {

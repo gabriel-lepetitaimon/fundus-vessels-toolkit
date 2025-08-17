@@ -389,6 +389,7 @@ struct Edge {
     bool operator==(const Edge& e) const;
     bool operator!=(const Edge& e) const;
     bool operator<(const Edge& e) const;
+    bool is_first(int node) const;
 };
 
 using EdgeList = std::vector<Edge>;

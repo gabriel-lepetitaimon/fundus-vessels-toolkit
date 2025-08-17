@@ -332,12 +332,12 @@ std::tuple<torch::Tensor, double> fit_bspline(const torch::Tensor &curveYX_tenso
 torch::Tensor drawLine(std::array<int, 2> tip, std::array<float, 2> direction, int length) {
     auto scene = torch::zeros({512, 512}, torch::kInt);
     auto sceneAcc = scene.accessor<int, 2>();
-    auto iter = RayIterator(IntPoint(tip[0], tip[1]), Point(direction[0], direction[1]));
-    int i = 0;
-    while (++i < length) {
-        auto const &p = ++iter;
+    auto ray = RayIterator(IntPoint(tip[0], tip[1]), Point(direction[0], direction[1]));
+    while (ray.step() < length) {
+        auto const &p = *ray;
         if (!p.is_inside(512, 512)) break;
         sceneAcc[p.y][p.x] += 1;
+        ++ray;
     }
     return scene;
 }

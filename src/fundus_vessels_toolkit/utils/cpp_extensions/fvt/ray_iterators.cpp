@@ -5,87 +5,33 @@ std::array<IntPoint, 2> track_nearest_edges(const IntPoint& start, const Point& 
     if (direction.is_null()) return {{IntPoint::Invalid(), IntPoint::Invalid()}};
     const int H = segmentation.size(0), W = segmentation.size(1);
 
-    RayIterator dIter, rIter;  // Direct iterator, reverse iterator
-    bool dSafe = true, rSafe = true;
-    if (direction.x > 0) {
-        if (direction.y > 0) {                // Direct:  West
-            if (direction.x > direction.y) {  // SWW
-                float delta = direction.y / direction.x;
-                dIter = RayIterator(start, delta, Octant::SEE, &Incrementors::SEE);
-                rIter = RayIterator(start, delta, Octant::NWW, &Incrementors::NWW);
-            } else {  // SSW
-                float delta = direction.x / direction.y;
-                dIter = RayIterator(start, delta, Octant::SSE, &Incrementors::SSE);
-                rIter = RayIterator(start, delta, Octant::NNW, &Incrementors::NNW);
-            }
-            dSafe = start.y + max_iter < H && start.x + max_iter < W;
-            rSafe = start.y >= max_iter && start.x >= max_iter;
-        } else {                               // Direct:  East
-            if (direction.x > -direction.y) {  // SEE
-                float delta = -direction.y / direction.x;
-                dIter = RayIterator(start, delta, Octant::NEE, &Incrementors::NEE);
-                rIter = RayIterator(start, delta, Octant::SWW, &Incrementors::SWW);
-            } else {  // SSE
-                float delta = -direction.x / direction.y;
-                dIter = RayIterator(start, delta, Octant::NNE, &Incrementors::NNE);
-                rIter = RayIterator(start, delta, Octant::SSW, &Incrementors::SSW);
-            }
-            dSafe = start.y + max_iter < H && start.x >= max_iter;
-            rSafe = start.y >= max_iter && start.x + max_iter < W;
-        }
-    } else {                                   // Direct: North
-        if (direction.y > 0) {                 // Direct:  West
-            if (-direction.x > direction.y) {  // NWW
-                float delta = -direction.y / direction.x;
-                dIter = RayIterator(start, delta, Octant::SWW, &Incrementors::SWW);
-                rIter = RayIterator(start, delta, Octant::NEE, &Incrementors::NEE);
-            } else {  // NNW
-                float delta = -direction.x / direction.y;
-                dIter = RayIterator(start, delta, Octant::SSW, &Incrementors::SSW);
-                rIter = RayIterator(start, delta, Octant::NNE, &Incrementors::NNE);
-            }
-            dSafe = start.y >= max_iter && start.x + max_iter < W;
-            rSafe = start.y + max_iter < H && start.x >= max_iter;
-        } else {                              // Direct:  East
-            if (direction.x < direction.y) {  // NEE
-                float delta = direction.y / direction.x;
-                dIter = RayIterator(start, delta, Octant::NWW, &Incrementors::NWW);
-                rIter = RayIterator(start, delta, Octant::SEE, &Incrementors::SEE);
-            } else {  // NNE
-                float delta = direction.x / direction.y;
-                dIter = RayIterator(start, delta, Octant::NNW, &Incrementors::NNW);
-                rIter = RayIterator(start, delta, Octant::SSE, &Incrementors::SSE);
-            }
-            dSafe = start.y >= max_iter && start.x >= max_iter;
-            rSafe = start.y + max_iter < H && start.x + max_iter < W;
-        }
-    }
+    RayIterator dIter = RayIterator(start, direction),  // Direct iterator
+        rIter = dIter.oppositeRay();                    // reverse iterator
+    bool dSafe = dIter.extrapolate(max_iter).is_inside(H, W), rSafe = rIter.extrapolate(max_iter).is_inside(H, W);
 
     IntPoint dBound = IntPoint::Invalid(), rBound = IntPoint::Invalid();
 
-    int i = 0;
     IntPoint lastP = start;
-    do {
-        const IntPoint& p = ++dIter;
+    while ((++dIter).step() != max_iter) {
+        const IntPoint& p = dIter.point();
         if (!segmentation[p.y][p.x]) {
             dBound = lastP;
             break;
         } else if (!dSafe && !p.is_inside(H, W))
             break;
         lastP = p;
-    } while (++i != max_iter);
+    }
 
-    i = 0;
     lastP = start;
-    do {
-        const IntPoint& p = ++rIter;
+    while ((++rIter).step() != max_iter) {
+        const IntPoint& p = rIter.point();
         if (!segmentation[p.y][p.x]) {
             rBound = lastP;
             break;
         } else if (!rSafe && !p.is_inside(H, W))
             break;
         lastP = p;
-    } while (++i != max_iter);
+    }
 
     return {dBound, rBound};
 }
@@ -128,10 +74,7 @@ void draw_line(IntPoint start, IntPoint end, Tensor2DAcc<int>& tensor, int value
         return;
     }
     bool safe = start.is_inside(1, 1, H - 1, W - 1) && end.is_inside(1, 1, H - 1, W - 1);
-    RayIterator ray(start, end - start);
-    int i = ray.stepTo(end);
-    while (i-- > 0) {
-        const IntPoint& p = ++ray;
+    for (const auto& p : Line(start, end)) {
         if (safe || p.is_inside(H, W)) tensor[p.y][p.x] = value;
     }
 }
@@ -149,81 +92,71 @@ Incrementor Incrementors::SEE = {[](IntPoint& p, int primary, int secondary) {
                                      p.x += primary;
                                      p.y += secondary;
                                  },
-                                 [](IntPoint& p) { p.x++; }, [](IntPoint& p, int value) { p.y += value; }};
+                                 [](IntPoint& p) { p.x++; }, [](IntPoint& p, int value) { p.y += value; },
+                                 [](const IntPoint& start, const IntPoint& p) { return p.x - start.x; }};
 
 Incrementor Incrementors::SSE = {[](IntPoint& p, int primary, int secondary) {
                                      p.y += primary;
                                      p.x += secondary;
                                  },
-                                 [](IntPoint& p) { p.y++; }, [](IntPoint& p, int value) { p.x += value; }};
+                                 [](IntPoint& p) { p.y++; }, [](IntPoint& p, int value) { p.x += value; },
+                                 [](const IntPoint& start, const IntPoint& p) { return p.y - start.y; }};
 
 Incrementor Incrementors::SSW = {[](IntPoint& p, int primary, int secondary) {
                                      p.y += primary;
                                      p.x -= secondary;
                                  },
-                                 [](IntPoint& p) { p.y++; }, [](IntPoint& p, int value) { p.x -= value; }};
+                                 [](IntPoint& p) { p.y++; }, [](IntPoint& p, int value) { p.x -= value; },
+                                 [](const IntPoint& start, const IntPoint& p) { return p.y - start.y; }};
 
 Incrementor Incrementors::SWW = {[](IntPoint& p, int primary, int secondary) {
                                      p.x -= primary;
                                      p.y += secondary;
                                  },
-                                 [](IntPoint& p) { p.x--; }, [](IntPoint& p, int value) { p.y += value; }};
+                                 [](IntPoint& p) { p.x--; }, [](IntPoint& p, int value) { p.y += value; },
+                                 [](const IntPoint& start, const IntPoint& p) { return start.x - p.x; }};
 
 Incrementor Incrementors::NWW = {[](IntPoint& p, int primary, int secondary) {
                                      p.x -= primary;
                                      p.y -= secondary;
                                  },
-                                 [](IntPoint& p) { p.x--; }, [](IntPoint& p, int value) { p.y -= value; }};
+                                 [](IntPoint& p) { p.x--; }, [](IntPoint& p, int value) { p.y -= value; },
+                                 [](const IntPoint& start, const IntPoint& p) { return start.x - p.x; }};
 
 Incrementor Incrementors::NNW = {[](IntPoint& p, int primary, int secondary) {
                                      p.y -= primary;
                                      p.x -= secondary;
                                  },
-                                 [](IntPoint& p) { p.y--; }, [](IntPoint& p, int value) { p.x -= value; }};
+                                 [](IntPoint& p) { p.y--; }, [](IntPoint& p, int value) { p.x -= value; },
+                                 [](const IntPoint& start, const IntPoint& p) { return start.y - p.y; }};
 
 Incrementor Incrementors::NNE = {[](IntPoint& p, int primary, int secondary) {
                                      p.y -= primary;
                                      p.x += secondary;
                                  },
-                                 [](IntPoint& p) { p.y--; }, [](IntPoint& p, int value) { p.x += value; }};
+                                 [](IntPoint& p) { p.y--; }, [](IntPoint& p, int value) { p.x += value; },
+                                 [](const IntPoint& start, const IntPoint& p) { return start.y - p.y; }};
 
 Incrementor Incrementors::NEE = {[](IntPoint& p, int primary, int secondary) {
                                      p.x += primary;
                                      p.y -= secondary;
                                  },
-                                 [](IntPoint& p) { p.x++; }, [](IntPoint& p, int value) { p.y -= value; }};
+                                 [](IntPoint& p) { p.x++; }, [](IntPoint& p, int value) { p.y -= value; },
+                                 [](const IntPoint& start, const IntPoint& p) { return p.x - start.x; }};
 
 Incrementor* Incrementors::get(Octant octant) {
-    switch (octant) {
-        case Octant::SEE:
-            return &SEE;
-        case Octant::SSE:
-            return &SSE;
-        case Octant::SSW:
-            return &SSW;
-        case Octant::SWW:
-            return &SWW;
-        case Octant::NWW:
-            return &NWW;
-        case Octant::NNW:
-            return &NNW;
-        case Octant::NNE:
-            return &NNE;
-        case Octant::NEE:
-            return &NEE;
-        default:
-            throw std::invalid_argument("Invalid octant");
-    }
+    const std::array<Incrementor*, 8> incrementors = {&SEE, &SSE, &SSW, &SWW, &NWW, &NNW, &NNE, &NEE};
+    return incrementors[static_cast<int>(octant) % 8];
 }
 
-/******************************************************************************************************************
- *            === RAY ITERATORS ===
+/***********************************************************************************************************************
+ *            === RAY ITERATOR ===
  **********************************************************************************************************************/
-RayIterator::RayIterator() : point(IntPoint::Invalid()) {}
+RayIterator::RayIterator() : _start(IntPoint::Invalid()), _point(IntPoint::Invalid()) {}
 
-RayIterator::RayIterator(const IntPoint& start, Point direction) : point(start), _error(0) {
+RayIterator::RayIterator(const IntPoint& start, Point direction) : _start(start), _point(start), _error(0) {
     if (direction.is_null()) {
-        point = IntPoint::Invalid();
+        _point = IntPoint::Invalid();
         _delta = 0;
         _octant = Octant::SEE;
         _incrementor = &Incrementors::SEE;  // Default incrementor
@@ -282,117 +215,114 @@ RayIterator::RayIterator(const IntPoint& start, Point direction) : point(start),
 }
 
 RayIterator::RayIterator(const IntPoint& start, float delta, Octant octant)
-    : _delta(delta), _octant(octant), point(start), _error(0) {
+    : _start(start), _delta(delta), _octant(octant), _point(start), _error(0) {
     _incrementor = Incrementors::get(octant);
 }
 
 RayIterator::RayIterator(const IntPoint& start, float delta, Octant octant, Incrementor* incrementor)
-    : _delta(delta), _incrementor(incrementor), _octant(octant), point(start), _error(0) {}
+    : _start(start), _delta(delta), _incrementor(incrementor), _octant(octant), _point(start), _error(0) {}
 
-void RayIterator::reset(const IntPoint& start) {
-    point = start;
-    _error = 0;
-}
+RayIterator RayIterator::oppositeRay() const { return RayIterator(_point, _delta, oppositeOctant(_octant)); }
 
-void RayIterator::reset_error() { _error = 0; }
-
-const IntPoint& RayIterator::operator*() const { return point; }
-const int& RayIterator::y() const { return point.y; }
-const int& RayIterator::x() const { return point.x; }
-const float& RayIterator::delta() const { return _delta; }
-const Octant& RayIterator::octant() const { return _octant; }
-const float& RayIterator::error() const { return _error; }
-
-bool RayIterator::operator!=(const RayIterator& other) { return point != other.point; }
-
-const IntPoint& RayIterator::operator++() {
-    iter();
-    return point;
-}
-
-bool RayIterator::iter() {
-    _incrementor->stepMain(point);
+bool RayIterator::next() {
+    _incrementor->stepMain(_point);
     _error += _delta;
     float inc = round(_error);
     if (inc > 0) {
         _error -= inc;
-        _incrementor->incrSecondary(point, inc);
+        _incrementor->incrSecondary(_point, inc);
         return true;
     }
     return false;
 }
 
+RayIterator& RayIterator::operator++() {
+    next();
+    return *this;
+}
+RayIterator RayIterator::operator++(int) {
+    RayIterator temp = *this;
+    next();
+    return temp;
+}
+
+const IntPoint& RayIterator::operator*() const { return _point; }
+const IntPoint* RayIterator::operator->() const { return &_point; }
+bool RayIterator::operator==(const RayIterator& other) const {
+    return _point == other._point && _octant == other._octant && _delta == other._delta && _start == other._start;
+}
+bool RayIterator::operator!=(const RayIterator& other) const {
+    return _point != other._point || _octant != other._octant || _delta != other._delta || _start != other._start;
+}
+
+const IntPoint& RayIterator::point() const { return _point; }
+const int& RayIterator::y() const { return _point.y; }
+const int& RayIterator::x() const { return _point.x; }
+const float& RayIterator::delta() const { return _delta; }
+const Octant& RayIterator::octant() const { return _octant; }
+const float& RayIterator::error() const { return _error; }
+int RayIterator::step() const { return _incrementor->stepsBetween(_start, _point); }
+
+void RayIterator::reset() {
+    _point = _start;
+    _error = 0;
+}
+void RayIterator::reset(const IntPoint& start) {
+    _start = start;
+    _point = start;
+    _error = 0;
+}
+
+void RayIterator::reset_error() { _error = 0; }
 IntPoint RayIterator::previousHalfStep() const {
-    IntPoint p = point;
+    IntPoint p = _point;
     _incrementor->incrSecondary(p, -1);
     return p;
 }
 
 IntPoint RayIterator::extrapolate(int step) const {
-    if (step == 0) return point;
+    if (step == 0) return _point;
 
     int stepDelta = floor(step * _delta);
-    IntPoint p = point;
+    IntPoint p = _point;
     _incrementor->incr(p, step, stepDelta);
     return p;
 }
 
-int RayIterator::stepTo(const IntPoint& p) const {
+int RayIterator::stepsCountTo(const IntPoint& p) const {
     if (_delta == 0) return 0;
-    switch (_octant) {
-        case Octant::SEE:
-        case Octant::NEE:
-            return p.x - point.x;
-        case Octant::SSE:
-        case Octant::SSW:
-            return p.y - point.y;
-            return p.y - point.y;
-        case Octant::SWW:
-        case Octant::NWW:
-            return point.x - p.x;
-        case Octant::NNW:
-        case Octant::NNE:
-            return point.y - p.y;
-
-        default:
-            return 0;
-    }
+    return _incrementor->stepsBetween(_point, p);
 }
 
-void RayIterator::skip(int step) {
+RayIterator& RayIterator::skip(int step) {
     _error += step * _delta;
     int stepDelta = round(_error);
     _error -= stepDelta;
-    _incrementor->incr(point, step, stepDelta);
+    _incrementor->incr(_point, step, stepDelta);
+    return *this;
 }
 
-CountingRayIterator::CountingRayIterator() : RayIterator() {}
+/***********************************************************************************************************************
+ *            === LINE ===
+ **********************************************************************************************************************/
+Line::Line(const IntPoint& p0, const IntPoint& p1, bool last) : _p0(p0), _p1(p1), _direction((p1 - p0).normalize()) {
+    if (p0 == p1) {
+        _delta = 1;
+        _octant = Octant::SEE;  // Default octant
+        _length = 0;
+        return;
+    }
 
-CountingRayIterator::CountingRayIterator(const IntPoint& start, Point direction) : RayIterator(start, direction) {}
-
-bool CountingRayIterator::operator!=(const RayIterator& other) {
-    return RayIterator::operator!=(other) || _count != static_cast<const CountingRayIterator&>(other)._count;
-}
-const IntPoint& CountingRayIterator::operator++() {
-    _count++;
-    return RayIterator::operator++();
-}
-
-int CountingRayIterator::step() const { return _count; }
-
-bool CountingRayIterator::iter() {
-    _count++;
-    return RayIterator::iter();
-}
-void CountingRayIterator::skip(int step) {
-    _count += step;
-    RayIterator::skip(step);
+    _direction = (p1 - p0).normalize();
+    const auto& it = RayIterator(p0, _direction);
+    _delta = it.delta();
+    _octant = it.octant();
+    _length = it.stepsCountTo(p1);
+    if (!last) _length--;
 }
 
-void CountingRayIterator::reset(const IntPoint& start) {
-    RayIterator::reset(start);
-    _count = 0;
-}
+RayIterator Line::begin() const { return RayIterator(_p0, _delta, _octant); }
+RayIterator Line::end() const { return RayIterator(_p0, _delta, _octant).skip(_length); }
 
 /**********************************************************************************************************************
  *            === CONE ITERATOR ===
@@ -425,10 +355,10 @@ bool ConeIterator::iter() {
 
     if (interstice) {
         // Find the next gap to fill...
-        while (!transversalIter.iter());
+        while (!transversalIter.next());
     } else
         // Or walk along the transversal ray...
-        transversalIter.iter();
+        transversalIter.next();
 
     // ... and check that it is not beyond the right ray
     const auto& p = *transversalIter;
@@ -436,7 +366,7 @@ bool ConeIterator::iter() {
 
     // Otherwise, advance the left ray and check if we need to fill interstices
     if (!interstice) {
-        interstice = _leftRayIter.iter();
+        interstice = _leftRayIter.next();
         if (interstice) {
             // To fill interstice:
             // - Shift the current left ray pixel a half step to the right
@@ -459,7 +389,7 @@ bool ConeIterator::iter() {
             // gap to fill
             transversalIter.reset(shiftedP);
             while (!beyondRightRay(*transversalIter)) {
-                if (transversalIter.iter()) {
+                if (transversalIter.next()) {
                     if (beyondRightRay(*transversalIter)) break;
                     return false;
                 }
@@ -492,7 +422,7 @@ TriangleIterator::TriangleIterator(const IntPoint& v0, const IntPoint& v1, const
         return;
     } else if (v1 == v2 || v0 == v2) {
         _v2 = v1;  // If two vertices are equal, treat the triangle as a line
-        _edge01 = CountingRayIterator(v0, v1 - v0);
+        _edge01 = RayIterator(v0, v1 - v0);
         _edge02 = RayIterator(v0, v1 - v0);
         _traversalIncr = &Incrementors::SEE;
         e01width = e02width = width = (v1 - v0).abs().max();
@@ -533,7 +463,7 @@ TriangleIterator::TriangleIterator(const IntPoint& v0, const IntPoint& v1, const
         std::swap(e02, e12);
     }
 
-    _edge01 = CountingRayIterator(_v0, u01);
+    _edge01 = RayIterator(_v0, u01);
     _edge02 = RayIterator(_v0, u02);
 
     if (traverseVertically) {
@@ -567,7 +497,7 @@ bool TriangleIterator::iter() {
     // If we reached the height, move to a new line
     if (_traversalStep >= _traversalLength) {
         // - Advance along edge 01
-        _edge01.iter();
+        _edge01.next();
         if (finished()) {
             _point = e01width == width ? _v1 : _v2;
             return false;
@@ -584,11 +514,11 @@ bool TriangleIterator::iter() {
             int skipStep;
             if (traverseVertically) {
                 // Advance along edge 12 until we reached the same column as edge 01
-                while (_edge01.x() != _edge12.x()) _edge12.iter();
+                while (_edge01.x() != _edge12.x()) _edge12.next();
                 skipStep = abs(_edge01.y() - _edge12.y());
             } else {
                 // Advance along edge 12 until we reached the same row as edge 01
-                while (_edge01.y() != _edge12.y()) _edge12.iter();
+                while (_edge01.y() != _edge12.y()) _edge12.next();
                 skipStep = abs(_edge01.x() - _edge12.x());
             }
             _traversalStep = skipStep;
@@ -613,22 +543,22 @@ void TriangleIterator::updateTraversalLength() {
         IntPoint lastP = *_edge02;
         if (traverseVertically) {
             // Advance along edge 02 until we reached the same column as edge 01
-            while (_edge01.x() == (++_edge02).x) lastP = *_edge02;
+            while (_edge01.x() == (++_edge02).x()) lastP = *_edge02;
             _traversalLength = abs(_edge01.y() - lastP.y);
         } else {
             // Advance along edge 02 until we reached the same row as edge 01
-            while (_edge01.y() == (++_edge02).y) lastP = *_edge02;
+            while (_edge01.y() == (++_edge02).y()) lastP = *_edge02;
             _traversalLength = abs(_edge01.x() - lastP.x);
         }
     } else {
         // == Compute the traversal length from edge 01 to edge 21 ==
         if (traverseVertically) {
             // Advance along edge 21 until we reached the same column as edge 01
-            while (_edge01.x() != _edge12.x()) _edge12.iter();
+            while (_edge01.x() != _edge12.x()) _edge12.next();
             _traversalLength = abs(_edge01.y() - _edge12.y());
         } else {
             // Advance along edge 21 until we reached the same row as edge 01
-            while (_edge01.y() != _edge12.y()) _edge12.iter();
+            while (_edge01.y() != _edge12.y()) _edge12.next();
             _traversalLength = abs(_edge01.x() - _edge12.x());
         }
     }

@@ -343,3 +343,158 @@ torch::Tensor draw_branches_labels(const std::vector<torch::Tensor> &branchCurve
 
     return out;
 }
+
+/**
+ * @brief Find the intersection point of a curve within a cone defined by a point, a direction and a thecosine of the
+ * angle.
+ * @param curve The curve to intersect with. Warning: Assume the curve is non-empty!
+ * @param start The starting point of the line.
+ * @param dir The direction of the cone bisector.
+ * @param maxDistSqr The square of the maximum distance to consider.
+ * @param startMinCosSim The minimum cosine similarity at the start point.
+ * @param endMinCosSim The minimum cosine similarity at the end point.
+ * @param maxSnapDistSqr The square of the maximum distance under which the intersection snaps to the closest curve tip.
+ * @param maxSnapCosAngle The cosine of the maximum angle under which the intersection snaps.
+ * @return A tuple containing the index of the closest point on the curve, the squared distance to it, and the average
+ * square distance to every point on the curve.
+ */
+std::tuple<std::size_t, int, float> _intercept_curve(const CurveYX &curve, const IntPoint &start, const Point &dir,
+                                                     float maxDistSqr, float startMinCosSim, float endMinCosSim,
+                                                     float maxSnapDistSqr, float maxSnapCosAngle) {
+    std::size_t closestP = curve.size();
+    int closestDistSqr = maxDistSqr;
+    float avgSqrDist = 0.0f;
+
+    for (std::size_t i = 0; i < curve.size(); i++) {
+        const IntPoint p = curve[i] - start;
+
+        // Check if the point is closer than the previous closest point (or the initial maxDistance)
+        int distSqr = p.squaredNorm();
+        avgSqrDist += distSqr;
+        if (distSqr > closestDistSqr) continue;
+
+        // Check if the point is inside the cone
+        float dist = std::sqrt(distSqr), a = distSqr / maxDistSqr;
+        float cosSim = dir.dot(p) / dist;
+        float minCosSimAtDist = startMinCosSim * (1 - a) + endMinCosSim * a;
+        if (cosSim < minCosSimAtDist) continue;
+
+        // Record the closest point and distance
+        closestP = i;
+        closestDistSqr = distSqr;
+    }
+
+    avgSqrDist /= curve.size();
+
+    // If no point was found, return
+    if (closestP == curve.size()) return {closestP, -1, avgSqrDist};
+
+    // Try to snap to the nearest curve tip
+    if (maxSnapDistSqr > 0 && closestP != 0 && closestP != curve.size() - 1) {
+        bool lastTip = closestP > curve.size() - closestP;
+        const auto &tipP = lastTip ? curve.back() : curve.front();
+        const auto &p = curve[closestP];
+
+        // If the snapping tip is within the allowed distance and angle, snap to it
+        if ((p - tipP).squaredNorm() <= maxSnapDistSqr && (tipP - start).cosSim(p - start) >= maxSnapCosAngle)
+            closestP = lastTip ? curve.size() - 1 : 0;
+    }
+    return {closestP, closestDistSqr, avgSqrDist};
+}
+
+struct InterceptPoint {
+    std::size_t curveID;
+    std::size_t posInCurve;
+    int distSqr;
+    float avgDistSqr;
+};
+
+std::vector<std::list<InterceptPoint>> intercept_curves(const std::vector<CurveYX> &branchCurves,
+                                                        const std::vector<IntPair> &branchList,
+                                                        const GraphAdjList &graph, const std::vector<IntPoint> &nodesYX,
+                                                        const std::vector<IntPoint> &starts, const PointList &dirs,
+                                                        float maxDistSqr, float startMinCosSim, float endMinCosSim,
+                                                        float maxSnapDistSqr, float maxSnapCosAngle,
+                                                        bool interpolateCurves = true) {
+    // === INTERPOLATE CURVES ===
+    std::vector<CurveYX> curves;
+    if (interpolateCurves) {
+        for (std::size_t i = 0; i < branchCurves.size(); i++) {  // For each branch add missing points in its curve
+            const auto &curve = branchCurves[i];
+            const auto &nodes = branchList[i];
+
+            CurveYX interCurve;
+            // - Starting node -> First curve point
+            for (const auto &p : Line(nodesYX[nodes[0]], curve.front(), false)) interCurve.push_back(p);
+            // - Curve points: p1 -> p2 (filling gap)
+            for (std::size_t i = 0; i < curve.size() - 1; i++) {
+                const auto &p1 = curve[i], &p2 = curve[i + 1];
+                if (p1.is_adjacent(p2))
+                    interCurve.push_back(p1);
+                else
+                    for (const auto &p : Line(p1, p2, false)) interCurve.push_back(p);  // Fill the gap
+            }
+            // - Last curve point -> Ending node
+            auto it = Line(curve.back(), nodesYX[nodes[1]], true).begin();
+            while (*(++it) != nodesYX[nodes[1]]) interCurve.push_back(*it);  // the first pixel is skipped on purpose
+        }
+    } else {
+        curves = branchCurves;
+    }
+
+    // === SCAN FOR INTERCEPT POINTS ===
+    std::vector<std::list<InterceptPoint>> result(starts.size());
+
+#pragma omp parallel for
+    for (std::size_t startID = 0; startID < starts.size(); startID++) {
+        const auto &p = starts[startID];
+        const auto &dir = dirs[startID];
+
+        std::vector<InterceptPoint> intercepts;
+        intercepts.reserve(branchCurves.size());
+
+        // Find intercept points with each curve
+        for (std::size_t curveID = 0; curveID < branchCurves.size(); curveID++) {
+            auto [pointID, distSqr, avgDistSqr] = _intercept_curve(curves[curveID], p, dir, maxDistSqr, startMinCosSim,
+                                                                   endMinCosSim, maxSnapDistSqr, maxSnapCosAngle);
+            intercepts.emplace_back(InterceptPoint{curveID, pointID, distSqr, avgDistSqr});
+        }
+
+        // Deduplicates intercept points
+        std::size_t nodeID = 0;
+        for (const auto &adjacentBranches : graph) {
+            std::list<std::size_t> duplicates;
+            for (const auto &branch : adjacentBranches) {
+                if (intercepts[branch.id].posInCurve == (branch.is_first(nodeID) ? 0 : curves[branch.id].size() - 1))
+                    duplicates.push_back(branch.id);
+            }
+
+            if (duplicates.size() > 1) {
+                // Find the closest intercept point
+                std::size_t closest = duplicates.front();
+                for (const auto &id : duplicates) {
+                    int distDiff = intercepts[closest].distSqr - intercepts[id].distSqr;
+                    if (abs(distDiff) > maxSnapDistSqr) {
+                        if (distDiff > 0) closest = id;
+                    } else {
+                        if (intercepts[closest].avgDistSqr > intercepts[id].avgDistSqr) closest = id;
+                    }
+                }
+
+                // Mark the others as invalid
+                for (const auto &id : duplicates) {
+                    if (id != closest) intercepts[id].distSqr = -1;
+                }
+            }
+
+            nodeID++;
+        }
+
+        // Populate results
+        for (const auto &intercept : intercepts) {
+            if (intercept.distSqr > -1) result[startID].emplace_back(intercept);
+        }
+    }
+
+    return result;
+}

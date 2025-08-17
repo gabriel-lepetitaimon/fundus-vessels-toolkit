@@ -50,18 +50,20 @@ void draw_line(IntPoint start, IntPoint end, Tensor2DAcc<int>& tensor, int value
 void draw_line(IntPoint start, IntPoint end, Tensor2DAcc<int>& tensor, int value);
 
 /**********************************************************************************************************************
- *            === RAY ITERATORS ===
+ *            === RAY ITERATOR ===
  **********************************************************************************************************************/
 
 enum class Octant { SEE = 0, SSE = 1, SSW = 2, SWW = 3, NWW = 4, NNW = 5, NNE = 6, NEE = 7 };
 
 inline bool isPositiveVertically(Octant octant) { return octant >= Octant::NWW; }
 inline bool isPositiveHorizontally(Octant octant) { return octant <= Octant::SSE || octant >= Octant::NNE; }
+inline Octant oppositeOctant(Octant octant) { return static_cast<Octant>((static_cast<int>(octant) + 4) % 8); }
 
 struct Incrementor {
     void (*incr)(IntPoint& p, int primary, int secondary);
     void (*stepMain)(IntPoint& p);
     void (*incrSecondary)(IntPoint& p, int value);
+    int (*stepsBetween)(const IntPoint& start, const IntPoint& p);
 };
 
 class Incrementors {
@@ -72,55 +74,76 @@ class Incrementors {
 
 class RayIterator {
    public:
+    using iterator_category = std::forward_iterator_tag;
+    using value_type = const IntPoint;
+    using difference_type = std::ptrdiff_t;
+    using pointer = const IntPoint*;
+    using reference = const IntPoint&;
+
     RayIterator();
     RayIterator(const IntPoint& start, Point direction);
     RayIterator(const IntPoint& start, float delta, Octant octant = Octant::SEE);
     RayIterator(const IntPoint& start, float delta, Octant octant, Incrementor* incrementor);
-    void reset(const IntPoint& start);
-    void reset_error();
+    RayIterator oppositeRay() const;
 
-    const IntPoint& operator*() const;
+    bool next();
+    RayIterator& operator++();
+    RayIterator operator++(int);
+
+    reference operator*() const;
+    pointer operator->() const;
+    bool operator==(const RayIterator& other) const;
+    bool operator!=(const RayIterator& other) const;
+
+    const IntPoint& point() const;
     const int& y() const;
     const int& x() const;
     const float& delta() const;
     const Octant& octant() const;
     const float& error() const;
+    int step() const;
 
-    bool operator!=(const RayIterator& other);
-    const IntPoint& operator++();
-
-    bool iter();
     IntPoint previousHalfStep() const;
     IntPoint extrapolate(int step) const;
-    void skip(int step);
-    int stepTo(const IntPoint& p) const;
+    RayIterator& skip(int step);
+    int stepsCountTo(const IntPoint& p) const;
+    void reset();
+    void reset(const IntPoint& start);
+    void reset_error();
 
-   private:
+   protected:
+    IntPoint _start;
     float _delta;
     Incrementor* _incrementor;
     Octant _octant;
 
-    IntPoint point;
+    IntPoint _point;
     float _error;
 };
 
-class CountingRayIterator : public RayIterator {
+class Line {
    public:
-    CountingRayIterator();
-    CountingRayIterator(const IntPoint& start, Point direction);
+    Line(const IntPoint& p0, const IntPoint& p1, bool last = true);
 
-    bool operator!=(const RayIterator& other);
-    const IntPoint& operator++();
+    RayIterator begin() const;
+    RayIterator end() const;
 
-    bool iter();
-    void skip(int step);
-    void reset(const IntPoint& start);
-    int step() const;
+    const IntPoint& p0() const;
+    const IntPoint& p1() const;
+    const Point& dir() const;
 
-   private:
-    int _count = 0;
+   protected:
+    IntPoint _p0, _p1;
+    Point _direction;
+
+    float _delta;
+    Octant _octant;
+    int _length;
 };
 
+/**********************************************************************************************************************
+ *            === COMPOSITE ITERATORS ===
+ **********************************************************************************************************************/
 class ConeIterator {
    public:
     ConeIterator(const IntPoint& start, Point direction, float angle);
@@ -164,8 +187,7 @@ class TriangleIterator {
     IntPoint _v0, _v1, _v2, _point;
     bool traverseVertically;
 
-    CountingRayIterator _edge01;
-    RayIterator _edge02, _edge12;
+    RayIterator _edge01, _edge02, _edge12;
     Incrementor* _traversalIncr;
     int _traversalStep = 0, _traversalLength = 0;
 
