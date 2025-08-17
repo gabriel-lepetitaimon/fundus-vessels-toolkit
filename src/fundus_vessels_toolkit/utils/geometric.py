@@ -302,8 +302,9 @@ class Rect(NamedTuple):
         return self.left, self.top, self.right, self.bottom
 
     def slice(self) -> tuple[slice, slice]:
-        r = self.to_int()
-        return slice(r.y, r.y + r.h), slice(r.x, r.x + r.w)
+        y, x = math.floor(self.y), math.floor(self.x)
+        h, w = math.ceil(self.h), math.ceil(self.w)
+        return slice(y, y + h), slice(x, x + w)
 
     @overload
     def contains(self, other: Point | Rect) -> bool: ...
