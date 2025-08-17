@@ -311,7 +311,7 @@ class Rect(NamedTuple):
     def contains(self, other: npt.ArrayLike) -> npt.NDArray[np.bool_]: ...
     def contains(self, other: Point | Rect | npt.ArrayLike) -> bool | npt.NDArray[np.bool_]:
         if isinstance(other, Point):
-            return self.y <= other.y <= self.y + self.h and self.x <= other.x <= self.x + self.w
+            return self.y <= other.y < self.y + self.h and self.x <= other.x < self.x + self.w
         elif isinstance(other, Rect):
             return (
                 (self.y <= other.y)
@@ -325,10 +325,10 @@ class Rect(NamedTuple):
             if other.shape[-1] == 2:
                 return (
                     np.isfinite(other).all(axis=-1)
-                    & (self.y <= other[..., 0])
-                    & (self.x <= other[..., 1])
-                    & (self.y + self.h >= other[..., 0])
-                    & (self.x + self.w >= other[..., 1])
+                    & (other[..., 0] >= self.y)
+                    & (other[..., 1] >= self.x)
+                    & (other[..., 0] < self.y + self.h)
+                    & (other[..., 1] < self.x + self.w)
                 )
             return (
                 np.isfinite(other).all(axis=-1)
