@@ -1,13 +1,10 @@
-import math
 from typing import Any, Dict, List, Literal, Self, Sequence, Tuple, overload
 
 import numpy as np
 import numpy.typing as npt
 from skimage.segmentation import expand_labels
 
-from fundus_vessels_toolkit.utils.cpp_optimized import first_index_of
 from fundus_vessels_toolkit.utils.lookup_array import invert_complete_lookup
-from fundus_vessels_toolkit.vascular_data_objects.fundus_data import AVLabel
 from fundus_vessels_toolkit.vascular_data_objects.vgraph import VGraph
 
 from ..utils.rasterization import rasterize_topology
@@ -166,7 +163,7 @@ def draw_missing_connections(graph: VGraph, out: npt.NDArray, fill_value: int = 
                     p1 = np.all(curve == bezier[-1], axis=1)
                     if p1.any():
                         tip_calibres.append(calibres[np.argmax(p1)])
-                mean_calibre = max(2.0, 0.75 * np.mean(tip_calibres)) if len(tip_calibres) > 0 else 2.0
+                mean_calibre = max(2.0, float(0.75 * np.mean(tip_calibres))) if len(tip_calibres) > 0 else 2.0
             bezier.rasterize(out, width=mean_calibre, fill_value=fill_value)
 
 

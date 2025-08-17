@@ -7,11 +7,9 @@ import numpy as np
 import numpy.typing as npt
 
 from fundus_vessels_toolkit.pipelines.seg_to_graph import SegToGraph
-from fundus_vessels_toolkit.segment_to_graph.geometry_parsing import derive_tips_geometry_from_curve_geometry
 
 from ..utils.cluster import cluster_by_distance, reduce_clusters
 from ..utils.geometric import Point
-from ..utils.lookup_array import create_removal_lookup
 from ..utils.math import extract_splits, quantized_higher, sigmoid
 from ..vascular_data_objects import AVLabel, FundusData, VBranchGeoData, VGraph, VGraphNode, VTree
 from .graph_simplification import simplify_passing_nodes
@@ -768,7 +766,7 @@ def naive_vgraph_to_vtree(
 @dataclass
 class LineDigraphOpt:
     #: Weighting of the tips distance penalty in the probability of branch to branch connection
-    b2b_tips_dist_penalty_w: float = 1 / 80
+    b2b_tips_dist_penalty_w: float = 1 / 50
 
     #: Minimum tips distance under which no penalty is applied to the probability of branch to branch connection
     b2b_tips_dist_penalty_min: float = 5
