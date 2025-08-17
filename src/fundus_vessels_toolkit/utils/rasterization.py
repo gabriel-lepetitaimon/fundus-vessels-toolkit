@@ -121,6 +121,8 @@ def rasterize_branch(
         assert out.dim() == 2, "The output tensor must be 2-dimensional."
         outTensor = out
     else:
-        outTensor = torch.from_numpy(np.zeros(out, dtype=np.int32)).int()
+        outTensor = torch.from_numpy(np.zeros(out, dtype=np.int32))
+    curve = curve.cpu().int()
+    boundaries = boundaries.cpu().int()
 
     return rasterize_branch_cpp(curve, boundaries, outTensor, fill_value, bridge_gap_smaller_than)

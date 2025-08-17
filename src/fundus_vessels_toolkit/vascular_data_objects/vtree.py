@@ -574,7 +574,11 @@ class VTree(VGraph):
         dirs = self._branch_dir[branch_ids]
         return dirs[0] if single else dirs
 
-    def root_branches_ids(self) -> npt.NDArray[np.int_]:
+    @overload
+    def root_branch_ids(self, as_mask: Literal[True]) -> npt.NDArray[np.bool_]: ...
+    @overload
+    def root_branch_ids(self, as_mask: Literal[False] = False) -> npt.NDArray[np.int_]: ...
+    def root_branch_ids(self, as_mask: bool = False) -> npt.NDArray[np.int_] | npt.NDArray[np.bool_]:
         """Return the indices of the root branches.
 
         Returns
@@ -582,9 +586,15 @@ class VTree(VGraph):
         np.ndarray
             The indices of the root branches.
         """
+        if as_mask:
+            return self._branch_tree == -1
         return np.argwhere(self._branch_tree == -1).flatten()
 
-    def leaf_branches_ids(self) -> npt.NDArray[np.int_]:
+    @overload
+    def leaf_branch_ids(self, *, as_mask: Literal[True]) -> npt.NDArray[np.bool_]: ...
+    @overload
+    def leaf_branch_ids(self, *, as_mask: Literal[False] = False) -> npt.NDArray[np.int_]: ...
+    def leaf_branch_ids(self, *, as_mask: bool = False) -> npt.NDArray[np.int_] | npt.NDArray[np.bool_]:
         """Return the indices of the leaf branches.
 
         Returns
@@ -592,6 +602,8 @@ class VTree(VGraph):
         np.ndarray
             The indices of the leaf branches.
         """
+        if as_mask:
+            return np.isin(np.arange(self.branch_count), np.unique(self._branch_tree), assume_unique=True, invert=True)
         return np.setdiff1d(np.arange(self.branch_count), self._branch_tree)
 
     def tree_branch_list(self) -> npt.NDArray[np.int_]:
@@ -710,7 +722,7 @@ class VTree(VGraph):
         """
         if branch_id is None:
             dist = np.zeros(self.branch_count, dtype=int)
-            b = self.root_branches_ids()
+            b = self.root_branch_ids()
             i = 1
             while len(b := self.branch_successors(b, max_depth=1)) > 0:
                 dist[b] = i
@@ -737,7 +749,7 @@ class VTree(VGraph):
         """
         subtrees = []
         set_branches = np.zeros(self.branch_count, dtype=bool)
-        for branch_id in self.root_branches_ids():
+        for branch_id in self.root_branch_ids():
             subtree_branches = np.concatenate([[branch_id], self.branch_successors(branch_id, max_depth=None)])
             subtrees.append(subtree_branches)
 
@@ -860,7 +872,7 @@ class VTree(VGraph):
             A generator that yields the indices of the child branches.
         """
         if root_branch_id is None:
-            stack = self.root_branches_ids()
+            stack = self.root_branch_ids()
         else:
             stack = self.as_branch_ids(root_branch_id)
             if ignore_provided_id:
@@ -1140,7 +1152,7 @@ class VTree(VGraph):
         """
         if node_id is None:
             dist = np.zeros(self.node_count, dtype=int)
-            branch = self.root_branches_ids()
+            branch = self.root_branch_ids()
             i = 1
             while branch:
                 dist[self.branch_head(branch)] = i
@@ -1744,7 +1756,7 @@ class VTree(VGraph):
         Generator[VTreeBranch]
             A generator that yields the root branches.
         """
-        for b in self.root_branches_ids():
+        for b in self.root_branch_ids():
             yield VTreeBranch(self, b)
 
     def walk_branches(
@@ -1779,7 +1791,7 @@ class VTree(VGraph):
 
         depth_first = traversal == "dfs"
 
-        stack = list(self.root_branches_ids()) if root_branch_id is None else [root_branch_id]
+        stack = list(self.root_branch_ids()) if root_branch_id is None else [root_branch_id]
         while stack:
             branch_id = stack.pop() if depth_first else stack.pop(0)
             branch_children = self.branch_successors(branch_id)
@@ -1821,7 +1833,7 @@ class VTree(VGraph):
         branch_list = self.tree_branch_list()
 
         if node_id is None:
-            outgoing_branches = self.root_branches_ids()
+            outgoing_branches = self.root_branch_ids()
             if traversal == "dfs":
                 outgoing_branches = outgoing_branches[::-1]
         else:

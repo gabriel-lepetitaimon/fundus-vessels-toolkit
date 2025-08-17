@@ -42,6 +42,7 @@ Point IntPoint::normalize() const {
 }
 int IntPoint::cross(const IntPoint& p) const { return y * p.x - x * p.y; }
 int IntPoint::dot(const IntPoint& p) const { return y * p.y + x * p.x; }
+double IntPoint::cosSim(const IntPoint& p) const { return dot(p) / sqrt(squaredNorm() * p.squaredNorm()); }
 
 IntPoint IntPoint::clamp(IntPoint max) const { return IntPoint(std::clamp(y, 0, max.y), std::clamp(x, 0, max.x)); }
 IntPoint IntPoint::clamp(IntPoint min, IntPoint max) const {
@@ -101,7 +102,7 @@ Point Point::normalize() const {
 }
 
 double Point::dot(const Point& p) const { return y * p.y + x * p.x; }
-double Point::cosSim(const Point& p) const { return dot(p) / (norm() * p.norm()); }
+double Point::cosSim(const Point& p) const { return dot(p) / sqrt(squaredNorm() * p.squaredNorm()); }
 double Point::cross(const Point& p) const { return y * p.x - x * p.y; }
 double Point::squaredNorm() const { return y * y + x * x; }
 Point Point::positiveCoordinates() const { return Point(std::abs(y), std::abs(x)); }

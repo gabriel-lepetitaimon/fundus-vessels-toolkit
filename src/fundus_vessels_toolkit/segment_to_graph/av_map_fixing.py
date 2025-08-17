@@ -76,6 +76,7 @@ def fix_av_map(
     trees: Tuple[VTree, VTree],
     expand_labels_by: int = 1,
     draw_reconnections: bool = True,
+    discard_av: bool = False,
 ) -> npt.NDArray[np.uint8]:
     """
     Fix the AV classification to match the given trees. The vessel segmentation is not modified, only the AV classification.
@@ -96,7 +97,7 @@ def fix_av_map(
     npt.NDArray[np.float32]
         The fixed AV map.
     """  # noqa: E501
-    kwargs: Dict[str, Any] = dict(bridge_gap_smaller_than=40, fill_junctions=True)
+    kwargs: Dict[str, Any] = dict(bridge_gap_smaller_than=25, fill_junctions=True)
     a_map = rasterize_tree_topology(trees[0], **kwargs)[0] > 0
     v_map = rasterize_tree_topology(trees[1], **kwargs)[0] > 0
 
@@ -106,17 +107,19 @@ def fix_av_map(
         a_map = binary_dilation(a_map, disk(expand_labels_by))
         v_map = binary_dilation(v_map, disk(expand_labels_by))
 
-    tree_av_map = a_map.astype(np.uint8) + 2 * v_map.astype(np.uint8)
-    tree_av_map[av_map == 0] = 0
-    mask = tree_av_map == 0
-    tree_av_map[mask] = av_map[mask]
+    seg_mask = av_map == 0
+    a_map[seg_mask] = False
+    v_map[seg_mask] = False
 
     if draw_reconnections:
-        a_map = np.isin(tree_av_map, (AVLabel.ART, AVLabel.BOTH))
-        v_map = np.isin(tree_av_map, (AVLabel.VEI, AVLabel.BOTH))
-        draw_missing_connections(trees[0], a_map, fill_value=True)
-        draw_missing_connections(trees[1], v_map, fill_value=True)
-        tree_av_map = a_map.astype(np.uint8) + 2 * v_map.astype(np.uint8)
+        draw_missing_connections(trees[0], out=a_map, fill_value=True)
+        draw_missing_connections(trees[1], out=v_map, fill_value=True)
+
+    tree_av_map = a_map.astype(np.uint8) + 2 * v_map.astype(np.uint8)
+
+    if not discard_av:
+        mask = tree_av_map == 0
+        tree_av_map[mask] = av_map[mask]
 
     return tree_av_map
 

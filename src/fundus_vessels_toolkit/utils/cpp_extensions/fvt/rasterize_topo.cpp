@@ -39,15 +39,31 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& r
     }
 
     while (!q.empty()) {
+        // Read branch info
         int branchID = q.top();
         q.pop();
         int rank = branchRanks[branchID];
         bool reversed = branchDirs[branchID] == -1;
         int headNode = branchListAcc[branchID][reversed ? 0 : 1];
 
+        std::list<std::tuple<int, bool>> nextBranches;
+
+        // Iterate over the neighbors of the current branch
+        for (const auto& nextBranch : adjList[headNode]) {
+            // Skip the current branch or already visited branches
+            if (nextBranch.id == branchID || branchDirs[nextBranch.id] != 0) continue;
+
+            // Assign the neighbor branch rank and direction, and enqueue it
+            branchRanks[nextBranch.id] = rank + 1;
+            bool nextBranchReversed = nextBranch.start != headNode;
+            branchDirs[nextBranch.id] = nextBranchReversed ? -1 : 1;
+            q.push(nextBranch.id);
+            nextBranches.push_back({nextBranch.id, nextBranchReversed});
+        }
+
         // Get the corresponding curve
         const auto& curve = curves[branchID].accessor<int, 2>();
-        if (curve.size(0) == 0) continue;  // If the curve is empty, skip this branch
+        if (curve.size(0) == 0) continue;
 
         // Get the corresponding boundaries
         const auto& boundary = boundaries[branchID].accessor<int, 3>();
@@ -64,42 +80,35 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& r
         _rasterize_branch_topo(curve, boundary, branchID + 1, rank, branchLabelsMapAcc, topoMapAcc,
                                bridge_gap_smaller_than, reversed);
 
-        // Iterate over the neighbors of the current branch
-        for (const auto& nextBranch : adjList[headNode]) {
-            // Skip the current branch or already visited branches
-            if (nextBranch.id == branchID || branchDirs[nextBranch.id] != 0) continue;
+        // Fill junctions
+        if (!fill_junctions) continue;
+        for (const auto& [nextBranchID, nextBranchReversed] : nextBranches) {
+            auto nextBoundariesAcc = boundaries[nextBranchID].accessor<int, 3>();
+            if (nextBoundariesAcc.size(0) == 0) continue;  // If the boundaries are empty, skip this filling
 
-            // Assign the neighbor branch rank and direction, and enqueue it
-            branchRanks[nextBranch.id] = rank + 1;
-            bool nextBranchReversed = nextBranch.start != headNode;
-            branchDirs[nextBranch.id] = nextBranchReversed ? -1 : 1;
-            q.push(nextBranch.id);
+            std::array<IntPoint, 2> nextBounds;
+            if (!nextBranchReversed) {
+                nextBounds = {IntPoint(nextBoundariesAcc[0][0]), IntPoint(nextBoundariesAcc[0][1])};
+            } else {
+                const auto last = nextBoundariesAcc.size(0) - 1;
+                nextBounds = {IntPoint(nextBoundariesAcc[last][1]), IntPoint(nextBoundariesAcc[last][0])};
+            }
+            if (std::max(distanceSqr(headBounds[1], nextBounds[1]), distanceSqr(headBounds[0], nextBounds[0])) >
+                bridge_gap_smaller_than)
+                continue;
 
-            if (fill_junctions) {
-                auto nextBoundariesAcc = boundaries[nextBranch.id].accessor<int, 3>();
-                if (nextBoundariesAcc.size(0) == 0) continue;  // If the boundaries are empty, skip this filling
+            // Draw the quad for the junction
+            auto it = QuadIterator(headBounds[0], headBounds[1], nextBounds[1], nextBounds[0], maxShape);
 
-                std::array<IntPoint, 2> nextBounds;
-                if (!nextBranchReversed) {
-                    nextBounds = {IntPoint(nextBoundariesAcc[0][0]), IntPoint(nextBoundariesAcc[0][1])};
-                } else {
-                    const auto last = nextBoundariesAcc.size(0) - 1;
-                    nextBounds = {IntPoint(nextBoundariesAcc[last][1]), IntPoint(nextBoundariesAcc[last][0])};
-                }
-                float nextBoundsNorm = (nextBounds[1] - nextBounds[0]).norm();
-
-                // Draw the quad for the junction
-                auto it = QuadIterator(headBounds[0], headBounds[1], nextBounds[1], nextBounds[0], maxShape);
-
-                while (it.iter()) {
-                    IntPoint p = it.point();
-                    branchLabelsMapAcc[p.y][p.x] = branchID + 1;        // Use branchID + 1 to avoid zero
-                    float d = abs(it.crossProd()[0]) / headBoundsNorm;  // Normalize by the bounds norm
-                    float sumD = abs(it.crossProd()[2]) / nextBoundsNorm + d;
-                    d = sumD > 0 ? d / sumD : 0;  // Avoid division by zero
-                    float topoValue = rank + 0.9 + 0.1 * d;
-                    if (topoMapAcc[p.y][p.x] < topoValue) topoMapAcc[p.y][p.x] = topoValue;
-                }
+            float nextBoundsNorm = (nextBounds[1] - nextBounds[0]).norm();
+            while (it.iter()) {
+                IntPoint p = it.point();
+                branchLabelsMapAcc[p.y][p.x] = branchID + 1;        // Use branchID + 1 to avoid zero
+                float d = abs(it.crossProd()[0]) / headBoundsNorm;  // Normalize by the bounds norm
+                float sumD = abs(it.crossProd()[2]) / nextBoundsNorm + d;
+                d = sumD > 0 ? d / sumD : 0;  // Avoid division by zero
+                float topoValue = rank + 0.9 + 0.1 * d;
+                if (topoMapAcc[p.y][p.x] < topoValue) topoMapAcc[p.y][p.x] = topoValue;
             }
         }
     }

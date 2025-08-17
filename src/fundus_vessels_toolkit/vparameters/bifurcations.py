@@ -355,7 +355,7 @@ def reorder_branch_by_bifurcations(
         for succ_id in new_succ_ids[1:]:
             recursive_reorder_successors(succ_id, rank + 1)
 
-    for i in vtree.root_branches_ids():
+    for i in vtree.root_branch_ids():
         recursive_reorder_successors(i, 0)
 
     if apply_branch_reordering:

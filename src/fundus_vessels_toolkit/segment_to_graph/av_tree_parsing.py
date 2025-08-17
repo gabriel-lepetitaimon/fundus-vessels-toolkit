@@ -24,7 +24,7 @@ def assign_av_label(
     av_medfilt_size: int = 9,
     split_av_branch=True,
     split_high_curvature=0,
-    split_av_threshold=2 / 3,
+    split_av_threshold=4 / 5,
     av_attr="av",
     discard_joint_branch_geometry=True,
     propagate_labels=True,
@@ -434,32 +434,37 @@ def simplify_av_graph(
     return graph
 
 
+def remove_unknown_leaf_branches(tree: VTree, av_attr: str = "av", inplace: bool = False) -> VTree:
+    if not inplace:
+        tree = tree.copy()
+
+    while (unknown_leafs := ((tree.branch_attr[av_attr] == AVLabel.UNK) & tree.leaf_branch_ids(as_mask=True))).any():
+        tree.delete_branch(unknown_leafs, inplace=True)
+
+    return tree
+
+
 def split_av_graph(
-    graph: VGraph, *, av_attr: str = "av", simplify: bool = True, center_junction_nodes: bool = True
-) -> Tuple[VGraph, VGraph]:
-    b_attr = graph.branch_attr
-    a_graph = graph.delete_branch(b_attr[av_attr] == AVLabel.VEI, inplace=False)
-    v_graph = graph.delete_branch(b_attr[av_attr] == AVLabel.ART, inplace=False)
+    trees: VTree, *, av_attr: str = "av", simplify: bool = True, center_junction_nodes: bool = True
+) -> Tuple[VTree, VTree]:
+    b_attr = trees.branch_attr
+    a_graph = trees.delete_branch(b_attr[av_attr] == AVLabel.VEI, inplace=False)
+    v_graph = trees.delete_branch(b_attr[av_attr] == AVLabel.ART, inplace=False)
 
     if simplify:
         from .graph_simplification import simplify_passing_nodes
 
-        def remove_unknown_leaf_branches(graph):
-            unkown_branches = graph.as_branch_ids(graph.branch_attr[av_attr] == AVLabel.UNK)
-            while (unkown_terminal_branches := np.intersect1d(unkown_branches, graph.leaf_branches_ids())).size:
-                graph.delete_branch(unkown_terminal_branches, inplace=True)
-
-        remove_unknown_leaf_branches(a_graph)
-        remove_unknown_leaf_branches(v_graph)
+        remove_unknown_leaf_branches(a_graph, av_attr=av_attr, inplace=True)
+        remove_unknown_leaf_branches(v_graph, av_attr=av_attr, inplace=True)
 
         simplify_passing_nodes(a_graph, with_same_label=av_attr, inplace=True)
         simplify_passing_nodes(v_graph, with_same_label=av_attr, inplace=True)
 
     if center_junction_nodes:
-        from .geometry_parsing import center_junction_nodes
+        from .geometry_parsing import center_junction_nodes as center_junctions
 
-        center_junction_nodes(a_graph, inplace=True)
-        center_junction_nodes(v_graph, inplace=True)
+        center_junctions(a_graph, inplace=True)
+        center_junctions(v_graph, inplace=True)
 
     return a_graph, v_graph
 
@@ -557,15 +562,8 @@ def split_av_graph_by_subtree(
         from .graph_simplification import simplify_passing_nodes
         # from .tree_simplification import disconnect_crossing_nodes
 
-        def remove_unknown_leaf_branches(graph):
-            unkown_branches = graph.as_branch_ids(graph.branch_attr[av_attr] == AVLabel.UNK)
-            while (unkown_terminal_branches := np.intersect1d(unkown_branches, graph.leaf_branches_ids())).size:
-                del_lookup = create_removal_lookup(unkown_terminal_branches, length=graph.branch_count)
-                graph.delete_branch(unkown_terminal_branches, inplace=True)
-                unkown_branches = np.setdiff1d(del_lookup[unkown_branches], [-1])
-
-        remove_unknown_leaf_branches(a_tree)
-        remove_unknown_leaf_branches(v_tree)
+        remove_unknown_leaf_branches(a_tree, av_attr=av_attr, inplace=True)
+        remove_unknown_leaf_branches(v_tree, av_attr=av_attr, inplace=True)
 
         simplify_passing_nodes(a_tree, min_angle=110, inplace=True)
         simplify_passing_nodes(v_tree, min_angle=110, inplace=True)
@@ -614,7 +612,7 @@ def relabel_av_by_subtree(tree: VTree, *, av_attr: str = "av", inplace: bool = F
     vei_branches = tree.as_branch_ids(tree.branch_attr[av_attr] == AVLabel.VEI)
     geodata = tree.geometric_data()
 
-    for root in tree.root_branches_ids():
+    for root in tree.root_branch_ids():
         subtree = np.concatenate([[root], tree.branch_successors(root, max_depth=None)])
         subtree_a = np.intersect1d(subtree, art_branches)
         subtree_v = np.intersect1d(subtree, vei_branches)

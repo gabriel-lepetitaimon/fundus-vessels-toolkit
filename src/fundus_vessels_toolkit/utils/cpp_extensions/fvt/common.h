@@ -106,6 +106,7 @@ struct IntPoint {
     double norm() const;
     int cross(const IntPoint& p) const;
     int dot(const IntPoint& p) const;
+    double cosSim(const IntPoint& p) const;
 
     IntPoint clamp(IntPoint max) const;
     IntPoint clamp(IntPoint min, IntPoint max) const;
