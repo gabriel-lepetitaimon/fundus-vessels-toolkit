@@ -363,6 +363,7 @@ std::tuple<std::size_t, int, float> _intercept_curve(const CurveYX &curve, const
                                                      float maxSnapDistSqr, float maxSnapCosAngle) {
     std::size_t closestP = curve.size();
     int closestDistSqr = maxDistSqr;
+    float closestManhattanDist = std::numeric_limits<float>::max();
     float avgSqrDist = 0.0f;
 
     for (std::size_t i = 0; i < curve.size(); i++) {
@@ -371,17 +372,22 @@ std::tuple<std::size_t, int, float> _intercept_curve(const CurveYX &curve, const
         // Check if the point is closer than the previous closest point (or the initial maxDistance)
         int distSqr = p.squaredNorm();
         avgSqrDist += distSqr;
-        if (distSqr > closestDistSqr) continue;
 
         // Check if the point is inside the cone
-        float dist = std::sqrt(distSqr), a = distSqr / maxDistSqr;
-        float cosSim = dir.dot(p) / dist;
-        float minCosSimAtDist = startMinCosSim * (1 - a) + endMinCosSim * a;
+        const float dist = std::sqrt(distSqr), a = distSqr / maxDistSqr;
+        const float cosSim = dir.dot(p) / dist;
+        const float minCosSimAtDist = startMinCosSim * (1 - a) + endMinCosSim * a;
         if (cosSim < minCosSimAtDist) continue;
+
+        // Check if the point is closer regarding the manhattan Dist (to favor points aligned with the cone bisector)
+        // const float sin = sqrt(1 - cosSim * cosSim);
+        const float manhattanDist = (2 - cosSim * cosSim) * dist;
+        if (manhattanDist > closestManhattanDist) continue;
 
         // Record the closest point and distance
         closestP = i;
         closestDistSqr = distSqr;
+        closestManhattanDist = manhattanDist;
     }
 
     avgSqrDist /= curve.size();
@@ -402,45 +408,59 @@ std::tuple<std::size_t, int, float> _intercept_curve(const CurveYX &curve, const
     return {closestP, closestDistSqr, avgSqrDist};
 }
 
-struct InterceptPoint {
+struct InterceptIntermediateResults {
     std::size_t curveID;
     std::size_t posInCurve;
     int distSqr;
     float avgDistSqr;
 };
 
-std::vector<std::list<InterceptPoint>> intercept_curves(const std::vector<CurveYX> &branchCurves,
-                                                        const std::vector<IntPair> &branchList,
-                                                        const GraphAdjList &graph, const std::vector<IntPoint> &nodesYX,
-                                                        const std::vector<IntPoint> &starts, const PointList &dirs,
-                                                        float maxDistSqr, float startMinCosSim, float endMinCosSim,
-                                                        float maxSnapDistSqr, float maxSnapCosAngle,
-                                                        bool interpolateCurves = true) {
+std::vector<std::list<InterceptPoint>> intercept_curves(
+    const std::vector<CurveYX> &branchCurves, const std::vector<IntPair> &branchList, const GraphAdjList &graph,
+    const std::vector<IntPoint> &nodesYX, const std::vector<IntPoint> &starts, const PointList &dirs, float maxDistSqr,
+    float startMinCosSim, float endMinCosSim, float maxSnapDistSqr, float maxSnapCosAngle, bool interpolateCurves) {
     // === INTERPOLATE CURVES ===
     std::vector<CurveYX> curves;
+    std::vector<std::vector<int>> curvesIndices(branchCurves.size());
     if (interpolateCurves) {
+        curves.resize(branchCurves.size());
         for (std::size_t i = 0; i < branchCurves.size(); i++) {  // For each branch add missing points in its curve
             const auto &curve = branchCurves[i];
             const auto &nodes = branchList[i];
 
-            CurveYX interCurve;
-            // - Starting node -> First curve point
-            for (const auto &p : Line(nodesYX[nodes[0]], curve.front(), false)) interCurve.push_back(p);
-            // - Curve points: p1 -> p2 (filling gap)
-            for (std::size_t i = 0; i < curve.size() - 1; i++) {
-                const auto &p1 = curve[i], &p2 = curve[i + 1];
-                if (p1.is_adjacent(p2))
-                    interCurve.push_back(p1);
-                else
-                    for (const auto &p : Line(p1, p2, false)) interCurve.push_back(p);  // Fill the gap
+            CurveYX &interCurve = curves[i];
+            std::vector<int> &indices = curvesIndices[i];
+
+            if (curve.size() == 0) {
+                // IF CURVE IS EMPTY
+                // Starting node -> End node
+                for (const auto &p : Line(nodesYX[nodes[0]], nodesYX[nodes[1]], true)) interCurve.push_back(p);
+                indices.resize(interCurve.size(), 0);  // Pad with 0
+            } else {
+                // OTHERWISE
+                // - Starting node -> First curve point
+                for (const auto &p : Line(nodesYX[nodes[0]], curve.front(), true)) interCurve.push_back(p);
+                indices.resize(interCurve.size(), 0);  // Add 0 at the beginning of indices
+                for (std::size_t i = 0; i < curve.size() - 1; i++) {
+                    const auto &p1 = curve[i], &p2 = curve[i + 1];
+                    if (p1.is_adjacent(p2)) {
+                        interCurve.push_back(p1);
+                        indices.push_back(i);
+                    } else {
+                        for (const auto &p : Line(p1, p2, false)) interCurve.push_back(p);  // Fill the gap
+                        // Fill indices with...
+                        float delta = (interCurve.size() - indices.size()) / 2.0;
+                        indices.resize(indices.size() + ceil(delta), i);  // ... i for the first half
+                        indices.resize(interCurve.size(), i + 1);         // ... i+1 for the second half
+                    }
+                }
+                // - Last curve point -> Ending node (skipping the first pixel)
+                for (const auto &p : Line(curve.back(), nodesYX[nodes[1]], false, true)) interCurve.push_back(p);
+                indices.resize(interCurve.size(), curve.size() - 1);  // Pad indices with max_index
             }
-            // - Last curve point -> Ending node
-            auto it = Line(curve.back(), nodesYX[nodes[1]], true).begin();
-            while (*(++it) != nodesYX[nodes[1]]) interCurve.push_back(*it);  // the first pixel is skipped on purpose
         }
-    } else {
+    } else
         curves = branchCurves;
-    }
 
     // === SCAN FOR INTERCEPT POINTS ===
     std::vector<std::list<InterceptPoint>> result(starts.size());
@@ -450,14 +470,14 @@ std::vector<std::list<InterceptPoint>> intercept_curves(const std::vector<CurveY
         const auto &p = starts[startID];
         const auto &dir = dirs[startID];
 
-        std::vector<InterceptPoint> intercepts;
+        std::vector<InterceptIntermediateResults> intercepts;
         intercepts.reserve(branchCurves.size());
 
         // Find intercept points with each curve
         for (std::size_t curveID = 0; curveID < branchCurves.size(); curveID++) {
             auto [pointID, distSqr, avgDistSqr] = _intercept_curve(curves[curveID], p, dir, maxDistSqr, startMinCosSim,
                                                                    endMinCosSim, maxSnapDistSqr, maxSnapCosAngle);
-            intercepts.emplace_back(InterceptPoint{curveID, pointID, distSqr, avgDistSqr});
+            intercepts.emplace_back(InterceptIntermediateResults{curveID, pointID, distSqr, avgDistSqr});
         }
 
         // Deduplicates intercept points
@@ -492,7 +512,12 @@ std::vector<std::list<InterceptPoint>> intercept_curves(const std::vector<CurveY
 
         // Populate results
         for (const auto &intercept : intercepts) {
-            if (intercept.distSqr > -1) result[startID].emplace_back(intercept);
+            if (intercept.distSqr <= 0) continue;  // No intercept or duplicate
+            const auto &pos = curves[intercept.curveID][intercept.posInCurve];
+            if (pos == p) continue;  // Intercept is at the start point
+
+            result[startID].emplace_back(
+                InterceptPoint{intercept.curveID, curvesIndices[intercept.curveID][intercept.posInCurve], pos});
         }
     }
 

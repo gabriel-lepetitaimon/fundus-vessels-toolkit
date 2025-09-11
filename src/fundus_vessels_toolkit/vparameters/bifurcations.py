@@ -247,7 +247,7 @@ def parametrize_bifurcations(
             df.insert(4, "dist_macula", macula_center.distance(bifurcations_yx))
         if fundus_data.od_center is not None:
             df.insert(4, "dist_od", fundus_data.od_center.distance(bifurcations_yx))
-            if macula_center is not None and fundus_data.od_diameter is not None:
+            if macula_center is not None and fundus_data.has_od_diameter:
                 norm_coord, norm_dist_od = node_normalized_coordinates(
                     bifurcations_yx, fundus_data.od_center, fundus_data.od_diameter, macula_center
                 )

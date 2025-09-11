@@ -1,9 +1,10 @@
-from typing import Iterable, List, Tuple
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
 
+from ..cpp_extensions.fvt_cpp import compute_intercepts as compute_intercepts_cpp
 from ..cpp_extensions.fvt_cpp import extract_branches_geometry as extract_branches_geometry_cpp
 from ..cpp_extensions.fvt_cpp import (
     extract_branches_geometry_from_skeleton as extract_branches_geometry_from_skeleton_cpp,
@@ -329,6 +330,85 @@ def extract_bifurcations_parameters(branches_calibre, branches_tangent, branches
             )
 
     return pd.DataFrame(bifurcations).set_index("nodeID")
+
+
+@autocast_torch
+def intercept_cones_branches(
+    branch_curves: Sequence[torch.Tensor],
+    cone_tips_yx: torch.Tensor,
+    cone_dirs: torch.Tensor,
+    branch_list: Optional[torch.Tensor] = None,
+    node_yx: Optional[torch.Tensor] = None,
+    *,
+    maxDist: float = 200,
+    startMaxAngle: float = 50,
+    endMaxAngle: float = 0,
+    maxSnapDist: float = 15,
+    maxSnapAngle: float = 8,
+    interpolateCurves: bool = True,
+) -> List[torch.Tensor]:
+    """Compute the closest intercepts points between branch curves and a set of cones.
+
+    Parameters
+    ----------
+    branch_curves : Sequence[torch.Tensor]
+        The N branch curves to intercepts as a sequence of tensors of size (l, 2) (where l is the length of the curve).
+    cone_tips_yx : torch.Tensor
+        The tips or apexes of the M cones to consider for the intercepts as a tensor of size (M, 2).
+    cone_dirs : torch.Tensor
+        The directions of the M cones to consider for the intercepts as a tensor of size (M, 2).
+    branch_list : Optional[torch.Tensor]
+        An edge list representation of the graph connectivity. (Only necessary if ``interpolateCurves`` is True).
+    node_yx : Optional[torch.Tensor]
+        The coordinates of the graph nodes. (Only necessary if ``interpolateCurves`` is True).
+    maxDist : float, optional
+        The maximum distance for the intercepts, i.e. the length of the cones. By default: 100.
+    startMaxAngle : float, optional
+        The angle at the tip of the cones. By default: 100.
+    endMaxAngle : float, optional
+        The angle at the base of the cones. If ``startMaxAngle`` and ``endMaxAngle`` are different, the cones will be parabolic. By default: 30.
+    maxSnapDist : float, optional
+        The maximum distance for snapping the intercepts points to the nearest branch tip, by default 15.
+    maxSnapAngle : float, optional
+        The maximum angle for snapping the intercepts points to the nearest branch tip, by default 15.
+    interpolateCurves : bool, optional
+        Whether to interpolate the branch curves to fill gap between each branch nodes and its curve tips, and inside its curve. This requires the branch_list and node_yx parameters. By default: True.
+
+    Returns
+    -------
+    List[torch.Tensor]
+        A list of arrays containing, for each cone, the intercept points with the branch curves.
+        The list length is equal to the number of cones M.
+        The arrays shape is (I,4) where I is intercept points found for this cone. Each row corresponds to one intercept point and contains ``[branchID, posInCurve, y, x]`` where ``branchID`` is the index of the intercepted branch, ``posInCurve`` is the index of the nearest point on the curve, and ``y`` and ``x`` are the coordinates of the intercept point.
+    """  # noqa: E501
+    branch_curves = [_.cpu().int() for _ in branch_curves]
+    branch_list = branch_list.int() if branch_list is not None else torch.empty((0, 2), dtype=torch.int32)
+    node_yx = node_yx.int() if node_yx is not None else torch.empty((0, 2), dtype=torch.int32)
+
+    cone_tips_yx = cone_tips_yx.cpu().int()
+    cone_dirs = cone_dirs.cpu().float()
+    assert cone_tips_yx.dim() == 2 and cone_tips_yx.shape[1] == 2, "cone_tips_yx must be a (M, 2) tensor"
+    assert cone_dirs.dim() == 2 and cone_dirs.shape[1] == 2, "cone_dirs must be a (M, 2) tensor"
+    assert cone_tips_yx.shape[0] == cone_dirs.shape[0], "cone_tips_yx and cone_dirs must have the same length"
+
+    startMaxAngle = np.deg2rad(startMaxAngle)
+    endMaxAngle = np.deg2rad(endMaxAngle)
+    maxSnapAngle = np.deg2rad(maxSnapAngle)
+
+    intercepts = compute_intercepts_cpp(
+        branch_curves,
+        branch_list,
+        node_yx,
+        cone_tips_yx,
+        cone_dirs,
+        maxDist,
+        startMaxAngle,
+        endMaxAngle,
+        maxSnapDist,
+        maxSnapAngle,
+        interpolateCurves,
+    )
+    return intercepts
 
 
 ########################################################################################################################

@@ -123,7 +123,7 @@ class RayIterator {
 
 class Line {
    public:
-    Line(const IntPoint& p0, const IntPoint& p1, bool last = true);
+    Line(const IntPoint& p0, const IntPoint& p1, bool skipLast = false, bool skipFirst = false);
 
     RayIterator begin() const;
     RayIterator end() const;

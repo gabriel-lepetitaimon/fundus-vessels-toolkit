@@ -194,23 +194,25 @@ class SegToGraph:
     def populate_geometry(
         self, graph: VGraph, vessels_segmentation: npt.NDArray[np.bool_] | torch.Tensor, inplace=False
     ):
-        from ..segment_to_graph.geometry_parsing import populate_geometry
+        from ..segment_to_graph.geometry_parsing import populate_geometry, snap_leaf_nodes_to_tips
 
-        return populate_geometry(
+        graph = populate_geometry(
             graph,
             vessels_segmentation,
             adaptative_tangents=self.adaptative_tangents,
             bspline_target_error=self.bspline_target_error,
             inplace=inplace,
         )
+        snap_leaf_nodes_to_tips(graph, inplace=True)
+        return graph
 
     # --- Utility methods ---
     def from_skel(
         self,
         skel: npt.NDArray[np.bool_] | torch.Tensor,
         vessels: npt.NDArray[np.bool_] | torch.Tensor,
-        simplify: bool = None,
-        parse_geometry: bool = None,
+        simplify: Optional[bool] = None,
+        parse_geometry: Optional[bool] = None,
     ) -> VGraph:
         vgraph = self.skel_to_vgraph(skel, vessels)
         if if_none(simplify, self.simplify_graph):

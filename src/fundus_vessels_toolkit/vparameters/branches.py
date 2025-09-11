@@ -130,7 +130,7 @@ def parametrize_branches(vgraph: VGraph, fundus_data: Optional[FundusData] = Non
             from .bifurcations import node_normalized_coordinates
 
             df.insert(4, "dist_od", fundus_data.od_center.distance(mid_yx))
-            if macula_center is not None and fundus_data.od_diameter is not None:
+            if macula_center is not None and fundus_data.has_od_diameter:
                 norm_coord, norm_dist_od = node_normalized_coordinates(
                     mid_yx, fundus_data.od_center, fundus_data.od_diameter, macula_center
                 )

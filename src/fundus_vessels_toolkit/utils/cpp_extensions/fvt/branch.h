@@ -113,6 +113,20 @@ torch::Tensor draw_branches_labels(const std::vector<torch::Tensor> &branchCurve
                                    const torch::Tensor &branchList = torch::empty({0, 2}, torch::kInt),
                                    bool interpolate = false);
 
+struct InterceptPoint {
+    std::size_t curveID;
+    int posInCurve;
+    IntPoint point;
+};
+
+std::vector<std::list<InterceptPoint>> intercept_curves(const std::vector<CurveYX> &branchCurves,
+                                                        const std::vector<IntPair> &branchList,
+                                                        const GraphAdjList &graph, const std::vector<IntPoint> &nodesYX,
+                                                        const std::vector<IntPoint> &starts, const PointList &dirs,
+                                                        float maxDistSqr, float startMinCosSim, float endMinCosSim,
+                                                        float maxSnapDistSqr, float maxSnapCosAngle,
+                                                        bool interpolateCurves = true);
+
 /**************************************************************************************
  *              === BRANCH_FIXING.CPP ===
  **************************************************************************************/

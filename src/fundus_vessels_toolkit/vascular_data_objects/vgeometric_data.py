@@ -1005,29 +1005,30 @@ class VGeometricData:
             return {k: v[0] for k, v in out.items()} if is_single else {k: np.stack(v) for k, v in out.items()}
 
     @overload
-    def tip_data_around_node(self, attrs: VBranchGeoDataKey, node_id: int, *, graph_index: bool) -> np.ndarray: ...
+    def tip_data_around_node(self, attrs: VBranchGeoDataKey, node_id: int, *, graph_index: bool) -> npt.NDArray: ...
     @overload
     def tip_data_around_node(
-        self, attrs: VBranchGeoDataKey, node_id: Optional[npt.ArrayLike[int]], *, graph_index: bool
-    ) -> List[np.ndarray]: ...
-
+        self, attrs: VBranchGeoDataKey, node_id: Optional[Int1DArray], *, graph_index: bool
+    ) -> List[npt.NDArray]: ...
     @overload
     def tip_data_around_node(
-        self, attrs: Optional[List[VBranchGeoDataKey]], node_id: int, *, graph_index: bool
-    ) -> Dict[str, np.ndarray]: ...
-
+        self, attrs: List[VBranchGeoDataKey], node_id: int, *, graph_index: bool
+    ) -> Dict[str, npt.NDArray]: ...
     @overload
     def tip_data_around_node(
-        self, attrs: Optional[List[VBranchGeoDataKey]], node_id: Optional[npt.ArrayLike[int]], *, graph_index: bool
-    ) -> Dict[str, List[np.ndarray]]: ...
-
+        self,
+        attrs: Optional[List[VBranchGeoDataKey]] = None,
+        node_id: Optional[Int1DArray] = None,
+        *,
+        graph_index: bool,
+    ) -> Dict[str, List[npt.NDArray]]: ...
     def tip_data_around_node(
         self,
         attrs: Optional[VBranchGeoDataKey | List[VBranchGeoDataKey]] = None,
-        node_id: Optional[int | npt.ArrayLike[int]] = None,
+        node_id: Optional[int | Int1DArray] = None,
         *,
         graph_index=True,
-    ) -> np.ndarray | List[np.ndarray] | Dict[str, np.ndarray] | Dict[str, List[np.ndarray]]:
+    ) -> npt.NDArray | List[npt.NDArray] | Dict[str, npt.NDArray] | Dict[str, List[npt.NDArray]]:
         """Return the geometric data of the tips of the branches incident to a node.
 
         Parameters

@@ -487,7 +487,11 @@ class FundusData:
         return mask
 
     @property
-    def od_size(self) -> Optional[Point]:
+    def has_od_size(self) -> bool:
+        return self._od_size is not None and self._od_size is not ABSENT
+
+    @property
+    def od_size(self) -> Point:
         """The size (width, height) of the optic disc or None if the optic disc is not visible in this fundus.
 
         Raises
@@ -500,18 +504,24 @@ class FundusData:
                 raise AttributeError("The optic disc segmentation was not provided.")
             else:
                 _, self._od_center, self._od_size = self.load_od_macula(self._od, self.shape, fit_ellipse=True)
-        return None if self._od_size is ABSENT else self._od_size
+        if self._od_size is ABSENT:
+            raise AttributeError("The optic disc is not visible in this fundus.")
+        return self._od_size
 
     @property
-    def od_diameter(self) -> Optional[float]:
-        """The diameter of the optic disc or None if the optic disc is not visible in this fundus.
+    def has_od_diameter(self) -> bool:
+        return self.has_od_size
+
+    @property
+    def od_diameter(self) -> float:
+        """The diameter of the optic disc or -1 if the optic disc is not visible in this fundus.
 
         Raises
         ------
         AttributeError
             If the optic disc segmentation was not provided.
         """
-        return None if self._od_size is None else self._od_size.max
+        return -1 if self._od_size is None else self._od_size.max
 
     @property
     def has_macula(self) -> bool:

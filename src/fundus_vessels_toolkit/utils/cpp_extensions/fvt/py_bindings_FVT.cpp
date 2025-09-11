@@ -329,6 +329,43 @@ std::tuple<torch::Tensor, double> fit_bspline(const torch::Tensor &curveYX_tenso
     return {bspline_to_tensor(bspline), maxError};
 }
 
+std::vector<torch::Tensor> compute_intercepts(const std::vector<torch::Tensor> &branchCurvesTensor,
+                                              const torch::Tensor &branchListTensor, const torch::Tensor &nodesYXTensor,
+                                              const torch::Tensor &startsTensor, const torch::Tensor &dirsTensor,
+                                              float maxDist, float startMaxAngle, float endMaxAngle, float maxSnapDist,
+                                              float maxSnapAngle, bool interpolateCurves = true) {
+    const std::vector<CurveYX> &branchCurves = tensors_to_curves(branchCurvesTensor);
+    const std::vector<IntPair> &branchList = tensor_to_vectorIntPair(branchListTensor);
+    const GraphAdjList &graph = edge_list_to_adjlist(branchList);
+    const std::vector<IntPoint> &nodesYX = tensor_to_curve(nodesYXTensor);
+    const std::vector<IntPoint> &starts = tensor_to_curve(startsTensor);
+    const PointList &dirs = tensor_to_pointList(dirsTensor);
+
+    const auto &interceptPoints =
+        intercept_curves(branchCurves, branchList, graph, nodesYX, starts, dirs, maxDist * maxDist, cos(startMaxAngle),
+                         cos(endMaxAngle), maxSnapDist * maxSnapDist, cos(maxSnapAngle), interpolateCurves);
+
+    std::vector<torch::Tensor> interceptTensors;
+    interceptTensors.reserve(nodesYX.size());
+
+    for (const auto &points : interceptPoints) {
+        torch::Tensor interceptTensor = torch::empty({static_cast<int>(points.size()), 4}, torch::kInt);
+        auto acc = interceptTensor.accessor<int, 2>();
+
+        std::size_t i = 0;
+        for (const auto &p : points) {
+            acc[i][0] = p.curveID;
+            acc[i][1] = p.posInCurve;
+            acc[i][2] = p.point.y;
+            acc[i][3] = p.point.x;
+            i++;
+        }
+        interceptTensors.push_back(interceptTensor);
+    }
+
+    return interceptTensors;
+}
+
 torch::Tensor drawLine(std::array<int, 2> tip, std::array<float, 2> direction, int length) {
     auto scene = torch::zeros({512, 512}, torch::kInt);
     auto sceneAcc = scene.accessor<int, 2>();
@@ -466,6 +503,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("find_inflections_points", &find_inflections_points, "Find the inflection points of a curve.");
     m.def("fit_bezier_cubic", &fit_bezier_cubic, "Fit a cubic bezier curve to a set of points.");
     m.def("fit_bspline", &fit_bspline, "Fit a B-Spline curve to a set of points.");
+    m.def("compute_intercepts", &compute_intercepts, "Compute the intercepts of a set of curves.");
     m.def("drawCone", &drawCone, "Draw a cone in a 2D image.");
     m.def("drawLine", &drawLine, "Draw a line in a 2D image.");
     m.def("drawTriangle", &drawTriangle, "Draw a triangle in a 2D image.");

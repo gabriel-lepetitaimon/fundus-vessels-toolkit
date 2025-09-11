@@ -305,7 +305,8 @@ RayIterator& RayIterator::skip(int step) {
 /***********************************************************************************************************************
  *            === LINE ===
  **********************************************************************************************************************/
-Line::Line(const IntPoint& p0, const IntPoint& p1, bool last) : _p0(p0), _p1(p1), _direction((p1 - p0).normalize()) {
+Line::Line(const IntPoint& p0, const IntPoint& p1, bool skipLast, bool skipFirst)
+    : _p0(p0), _p1(p1), _direction((p1 - p0).normalize()) {
     if (p0 == p1) {
         _delta = 1;
         _octant = Octant::SEE;  // Default octant
@@ -318,11 +319,16 @@ Line::Line(const IntPoint& p0, const IntPoint& p1, bool last) : _p0(p0), _p1(p1)
     _delta = it.delta();
     _octant = it.octant();
     _length = it.stepsCountTo(p1);
-    if (!last) _length--;
+
+    if (skipFirst && _length > 0) {
+        _p0 = it.extrapolate(1);
+        _length--;
+    }
+    if (skipLast && _length > 0) _length--;
 }
 
 RayIterator Line::begin() const { return RayIterator(_p0, _delta, _octant); }
-RayIterator Line::end() const { return RayIterator(_p0, _delta, _octant).skip(_length); }
+RayIterator Line::end() const { return RayIterator(_p0, _delta, _octant).skip(_length + 1); }
 
 /**********************************************************************************************************************
  *            === CONE ITERATOR ===

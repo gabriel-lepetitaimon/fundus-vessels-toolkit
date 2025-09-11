@@ -27,7 +27,7 @@ class AVSegToTreeBase(metaclass=ABCMeta):
         fundus: Optional[FundusData] = None,
         /,
         *,
-        av: Optional[npt.NDArray[np.int_] | torch.Tensor | str | Path] = None,
+        av: Optional[npt.NDArray[np.uint8] | torch.Tensor | str | Path] = None,
         od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
     ) -> Tuple[VTree, VTree]:
         pass
@@ -35,7 +35,7 @@ class AVSegToTreeBase(metaclass=ABCMeta):
     def prepare_data(
         self,
         fundus: FundusData | None,
-        av: Optional[npt.NDArray[np.int_] | torch.Tensor | str | Path] = None,
+        av: Optional[npt.NDArray[np.uint8] | torch.Tensor | str | Path] = None,
         od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
     ) -> FundusData:
         if fundus is None:
@@ -52,9 +52,8 @@ class AVSegToTreeBase(metaclass=ABCMeta):
         fundus: Optional[FundusData] = None,
         /,
         *,
-        av: Optional[npt.NDArray[np.int_] | torch.Tensor | str | Path] = None,
+        av: Optional[npt.NDArray[np.uint8] | torch.Tensor | str | Path] = None,
         od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
-        populate_geometry: Optional[bool] = None,
     ) -> VGraph: ...
 
 
@@ -99,7 +98,7 @@ class AVSegToTree(AVSegToTreeBase):
         fundus: Optional[FundusData] = None,
         /,
         *,
-        av: Optional[npt.NDArray[np.int_] | torch.Tensor | str | Path] = None,
+        av: Optional[npt.NDArray[np.uint8] | torch.Tensor | str | Path] = None,
         od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
     ) -> Tuple[VTree, VTree]:
         fundus = self.prepare_data(fundus, av=av, od=od)
@@ -114,7 +113,7 @@ class AVSegToTree(AVSegToTreeBase):
     def assign_av_labels(
         self,
         graph: VGraph,
-        av_map: npt.NDArray[np.int_],
+        av_map: npt.NDArray[np.uint8],
         *,
         propagate_labels=True,
         inplace: bool = False,
@@ -143,8 +142,15 @@ class AVSegToTree(AVSegToTreeBase):
 
     def build_line_digraph(
         self, graph: VGraph, fundus_data: FundusData, inplace: bool = False
-    ) -> Tuple[VGraph, npt.NDArray[np.int_], npt.NDArray[np.bool_], npt.NDArray[np.float64]]:
-        from ..segment_to_graph.av_tree_parsing import build_line_digraph
+    ) -> Tuple[
+        VGraph,
+        npt.NDArray[np.int_],
+        npt.NDArray[np.int_],
+        npt.NDArray[np.float64],
+        npt.NDArray[np.int_],
+        npt.NDArray[np.float64],
+    ]:
+        from ..segment_to_graph.line_digraph_solving import build_line_digraph
 
         return build_line_digraph(graph, fundus_data, av_attr=self.av_attr, inplace=inplace)
 
@@ -157,7 +163,7 @@ class AVSegToTree(AVSegToTreeBase):
         line_through_node: npt.NDArray[np.int_],
         branches_dir_p: npt.NDArray[np.float64],
     ) -> VTree:
-        from ..segment_to_graph.av_tree_parsing import resolve_digraph_to_vtree
+        from ..segment_to_graph.line_digraph_solving import resolve_digraph_to_vtree
 
         vtree = resolve_digraph_to_vtree(
             vgraph, line_list, line_tips, line_probability, line_through_node, branches_dir_p
@@ -170,12 +176,21 @@ class AVSegToTree(AVSegToTreeBase):
         return split_av_graph_by_subtree(tree, av_attr=self.av_attr)
 
     # --- Utility methods ---
-    def to_vgraph(self, fundus=None, /, *, av=None, od=None, label_av=True, simplify=True):
+    def to_vgraph(
+        self,
+        fundus=None,
+        /,
+        *,
+        av=None,
+        od=None,
+        label_av=True,
+        simplify=True,
+    ):
         from skimage.morphology import binary_erosion, disk
 
         fundus = self.prepare_data(fundus, av=av, od=od)
         if self.mask_optic_disc and fundus.od is not None:
-            mask = ~binary_erosion(fundus.od, disk(fundus.od_diameter * 0.2, dtype=np.bool_))
+            mask = ~binary_erosion(fundus.od, disk(fundus.od_diameter * 0.2, dtype=np.bool_))  # type: ignore
         else:
             mask = None
 
@@ -212,7 +227,7 @@ class GNNAVSegToTree(AVSegToTree):
         fundus: Optional[FundusData] = None,
         /,
         *,
-        av: Optional[npt.NDArray[np.int_] | torch.Tensor | str | Path] = None,
+        av: Optional[npt.NDArray[np.uint8] | torch.Tensor | str | Path] = None,
         od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
     ) -> Tuple[VTree, VTree]:
         fundus = self.prepare_data(fundus, av=av, od=od)
@@ -227,7 +242,7 @@ class GNNAVSegToTree(AVSegToTree):
     def assign_av_labels(
         self,
         graph: VGraph,
-        av_map: npt.NDArray[np.int_],
+        av_map: npt.NDArray[np.uint8],
         *,
         propagate_labels=True,
         inplace: bool = False,
@@ -246,8 +261,15 @@ class GNNAVSegToTree(AVSegToTree):
 
     def build_line_digraph(
         self, graph: VGraph, fundus_data: FundusData, inplace: bool = False
-    ) -> Tuple[VGraph, npt.NDArray[np.int_], npt.NDArray[np.bool_], npt.NDArray[np.float64]]:
-        from ..segment_to_graph.av_tree_parsing import build_line_digraph
+    ) -> Tuple[
+        VGraph,
+        npt.NDArray[np.int_],
+        npt.NDArray[np.int_],
+        npt.NDArray[np.float64],
+        npt.NDArray[np.int_],
+        npt.NDArray[np.float64],
+    ]:
+        from ..segment_to_graph.line_digraph_solving import build_line_digraph
 
         return build_line_digraph(graph, fundus_data, av_attr=self.av_attr, inplace=inplace)
 
@@ -260,7 +282,7 @@ class GNNAVSegToTree(AVSegToTree):
         line_through_node: npt.NDArray[np.int_],
         branches_dir_p: npt.NDArray[np.float64],
     ) -> VTree:
-        from ..segment_to_graph.av_tree_parsing import resolve_digraph_to_vtree
+        from ..segment_to_graph.line_digraph_solving import resolve_digraph_to_vtree
 
         vtree = resolve_digraph_to_vtree(
             vgraph, line_list, line_tips, line_probability, line_through_node, branches_dir_p
@@ -311,7 +333,7 @@ class NaiveAVSegToTree(AVSegToTreeBase):
         fundus: Optional[FundusData] = None,
         /,
         *,
-        av: Optional[npt.NDArray[np.int_] | torch.Tensor | str | Path] = None,
+        av: Optional[npt.NDArray[np.uint8] | torch.Tensor | str | Path] = None,
         od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
     ) -> Tuple[VTree, VTree]:
         fundus = self.prepare_data(fundus, av=av, od=od)
@@ -381,10 +403,9 @@ class NaiveAVSegToTree(AVSegToTreeBase):
         fundus: Optional[FundusData] = None,
         /,
         *,
-        av: Optional[npt.NDArray[np.int_] | torch.Tensor | str | Path] = None,
+        av: Optional[npt.NDArray[np.uint8] | torch.Tensor | str | Path] = None,
         od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
         simplify: Optional[bool] = None,
-        populate_geometry: Optional[bool] = None,
     ) -> Tuple[VGraph, VGraph]:
         fundus = self.prepare_data(fundus, av=av, od=od)
         av = fundus.av.copy()
@@ -393,11 +414,7 @@ class NaiveAVSegToTree(AVSegToTreeBase):
 
         av_skeleton = self.av_skeletonize(av)
 
-        a_graph = self.skel_to_vgraph(
-            av_skeleton, av, artery=True, simplify=simplify, populate_geometry=populate_geometry
-        )
-        v_graph = self.skel_to_vgraph(
-            av_skeleton, av, vein=True, simplify=simplify, populate_geometry=populate_geometry
-        )
+        a_graph = self.skel_to_vgraph(av_skeleton, av, artery=True, simplify=simplify, populate_geometry=True)
+        v_graph = self.skel_to_vgraph(av_skeleton, av, vein=True, simplify=simplify, populate_geometry=True)
 
         return a_graph, v_graph
