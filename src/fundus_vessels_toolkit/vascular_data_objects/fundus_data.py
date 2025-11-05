@@ -6,8 +6,9 @@ from typing import Literal, Optional, Self, Tuple, overload
 import numpy as np
 import numpy.typing as npt
 
+from fundus_toolkits.utils.geometric import Point
+
 from ..utils.data_io import load_image
-from ..utils.geometric import Point
 from ..utils.image import crop_pad_center
 from ..utils.safe_import import is_torch_tensor
 

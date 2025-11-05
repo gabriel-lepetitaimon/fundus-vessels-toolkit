@@ -7,8 +7,9 @@ import numpy as np
 import numpy.typing as npt
 import torch
 
+from fundus_toolkits.utils.geometric import Point
+
 from ..utils.fundus_projections import FundusProjection
-from .geometric import Point
 from .graph.measures import curve_tangent
 from .math import intercept_segment
 from .torch import autocast_torch

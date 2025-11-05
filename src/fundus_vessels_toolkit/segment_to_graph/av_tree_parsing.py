@@ -4,12 +4,13 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import numpy.typing as npt
 
-from fundus_vessels_toolkit.pipelines.seg_to_graph import SegToGraph
+from fundus_toolkits import AVLabel, FundusData
+from fundus_toolkits.utils.geometric import Point
 
+from ..pipelines.seg_to_graph import SegToGraph
 from ..utils.cluster import cluster_by_distance, reduce_clusters
-from ..utils.geometric import Point
 from ..utils.math import extract_splits, quantized_higher
-from ..vascular_data_objects import AVLabel, FundusData, VBranchGeoData, VGraph, VTree
+from ..vascular_data_objects import VBranchGeoData, VGraph, VTree
 from .graph_simplification import simplify_passing_nodes
 
 

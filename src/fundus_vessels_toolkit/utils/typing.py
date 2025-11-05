@@ -5,11 +5,11 @@ import numpy.typing as npt
 import pandas as pd
 
 RecursiveIntList: TypeAlias = List[int] | List["RecursiveIntList"]
-IntArrayLike: TypeAlias = npt.NDArray[np.int_] | int | RecursiveIntList
-Int1DArrayLike: TypeAlias = npt.NDArray[np.int_] | int | List[int]
-Int2DArrayLike: TypeAlias = npt.NDArray[np.int_] | List[int] | List[List[int]]
-Int3DArrayLike: TypeAlias = npt.NDArray[np.int_] | List[List[int]] | List[List[List[int]]]
-Int1DArray: TypeAlias = npt.NDArray[np.int_] | List[int]
+IntArrayLike: TypeAlias = npt.NDArray[np.int32] | int | RecursiveIntList
+Int1DArrayLike: TypeAlias = npt.NDArray[np.int32] | int | List[int]
+Int2DArrayLike: TypeAlias = npt.NDArray[np.int32] | List[int] | List[List[int]]
+Int3DArrayLike: TypeAlias = npt.NDArray[np.int32] | List[List[int]] | List[List[List[int]]]
+Int1DArray: TypeAlias = npt.NDArray[np.int32] | List[int]
 
 
 RecursiveBoolList: TypeAlias = List[bool] | List["RecursiveBoolList"]
@@ -25,15 +25,17 @@ Float2DArrayLike: TypeAlias = npt.NDArray[np.float64] | List[float] | List[List[
 Float3DArrayLike: TypeAlias = npt.NDArray[np.float64] | List[List[float]] | List[List[List[float]]]
 Float1DArray: TypeAlias = npt.NDArray[np.float64] | List[float]
 
-PointArrayLike: TypeAlias = npt.NDArray[np.int_] | List[int] | List[List[int]] | Tuple[int, int] | List[Tuple[int, int]]
+PointArrayLike: TypeAlias = (
+    npt.NDArray[np.int32] | List[int] | List[List[int]] | Tuple[int, int] | List[Tuple[int, int]]
+)
 
 IntPairArrayLike: TypeAlias = (
-    npt.NDArray[np.int_] | List[int] | List[List[int]] | Tuple[int, int] | List[Tuple[int, int]]
+    npt.NDArray[np.int32] | List[int] | List[List[int]] | Tuple[int, int] | List[Tuple[int, int]]
 )
 BoolPairArrayLike: TypeAlias = (
     npt.NDArray[np.bool_] | List[bool] | List[List[bool]] | Tuple[bool, bool] | List[Tuple[bool, bool]]
 )
 
 Index: TypeAlias = int
-Indices: TypeAlias = npt.NDArray[np.int_] | List[int] | pd.Series
+Indices: TypeAlias = npt.NDArray[np.int32] | List[int] | pd.Series
 IndicesLike: TypeAlias = Index | Int1DArrayLike

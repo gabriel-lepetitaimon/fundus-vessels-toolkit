@@ -412,11 +412,11 @@ class Point(NamedTuple):
 
     @classmethod
     def from_tuple(cls, point: float | int | Tuple[float | int] | Tuple[float | int, float | int]):
-        if np.isscalar(point):
-            return cls(point, point)
-        if len(point) == 1:
+        if isinstance(point, (float, int)) or np.isscalar(point):
+            return cls(point, point)  # type: ignore
+        elif len(point) == 1:
             if np.isscalar(point[0]):
-                return cls(point[0], point[0])
+                return cls(point[0], point[0])  # type: ignore
             if isinstance(point[0], tuple):
                 return cls(*point[0])
         if len(point) == 2:
@@ -424,7 +424,7 @@ class Point(NamedTuple):
         raise TypeError("Point can only be created from a float or a tuple of 2 floats")
 
     @classmethod
-    def from_array(cls, point: npt.NDArray[np.float]) -> Point:
+    def from_array(cls, point: npt.NDArray[np.float32]) -> Point:
         return cls(float(point[0]), float(point[1]))
 
     def numpy(self) -> np.ndarray:
@@ -432,14 +432,11 @@ class Point(NamedTuple):
 
     @overload
     def distance(self, other: Point) -> float: ...
-
     @overload
     def distance(self, other: List[Point]) -> List[float]: ...
-
     @overload
-    def distance(self, other: npt.NDArray[np.float]) -> npt.NDArray[np.float]: ...
-
-    def distance(self, other: Point | Iterable[Point]) -> float | Iterable[float] | npt.NDArray[np.float]:
+    def distance(self, other: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]: ...
+    def distance(self, other: Point | Iterable[Point]) -> float | Iterable[float] | npt.NDArray[np.float32]:
         import numpy as np
 
         if isinstance(other, np.ndarray):

@@ -3,33 +3,33 @@
 name = "fundus-vessels-toolkit"
 version = '0.0.5'
 authors = [
-    {name= 'Gabriel Lepetit-Aimon', email= 'gabriel.lepetit-aimon@polymtl.ca'},
+    { name = 'Gabriel Lepetit-Aimon', email = 'gabriel.lepetit-aimon@polymtl.ca' },
 ]
 description = """A bundle of tools to segment, classify, skeletonize fundus vascular tree."""
 readme = 'README.md'
 
-requires-python = '>=3.10'
+requires-python = '>=3.12'
 dependencies = [
     'numpy',
     'scikit-image',
     'scipy',
     'pandas',
     'coloraide',
-    
+
     'pygmtools',
     'networkx>=3.1',
-    
+
     'torch>=2.0.0',
     'segmentation-models-pytorch',
-    'ninja'
+    'ninja',
 ]
 
 [project.optional-dependencies]
 dev = [
-    'sphinx',           
+    'sphinx',
     'sphinx-rtd-theme', # Read the docs theme
     'nbsphinx',         # To include notebook in doc
-	'ipython'           # (also required to parse notebook)
+    'ipython',          # (also required to parse notebook)
 ]
 examples = ['jppype>=0.2.0a6']
 
@@ -43,7 +43,7 @@ requires = ["setuptools >= 77.0.3", "numpy", "torch", "ninja"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = { "" = "src" }
 
 [tool.ruff]
 # Enable flake8-bugbear (`B`) rules.
@@ -52,7 +52,7 @@ line-length = 120
 
 # Avoid trying to fix flake8-bugbear (`B`) violations.
 unfixable = ["B"]
-target-version = "py310"
+target-version = "py312"
 
 [tool.ruff.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
@@ -62,13 +62,25 @@ target-version = "py310"
 line-length = 120
 
 [tool.ruff.isort]
-known-first-party = ["fundus_vessels_toolkit", "fundus_toolkits"]
-section-order = ["future", "standard-library", "third-party", "steered_cnn", "first-party", "local-folder"]
+known-first-party = [
+    "fundus_vessels_toolkit",
+    "fundus_toolkits",
+    "fundus_odmac_toolkit",
+    "fundus_lesions_toolkit",
+]
+section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "steered_cnn",
+    "first-party",
+    "local-folder",
+]
 
 [tool.ruff.isort.sections]
 "steered_cnn" = ["steered_cnn"]
 
 [tool.pytest.ini_options]
-addopts          = "--doctest-modules src/fundus_vessels_toolkit --doctest-ignore-import-errors --doctest-report ndiff"
-testpaths        = ["tests"]
+addopts = "--doctest-modules src/fundus_vessels_toolkit --doctest-ignore-import-errors --doctest-report ndiff"
+testpaths = ["tests"]
 doctest_optionflags = ["NORMALIZE_WHITESPACE", "ELLIPSIS"]

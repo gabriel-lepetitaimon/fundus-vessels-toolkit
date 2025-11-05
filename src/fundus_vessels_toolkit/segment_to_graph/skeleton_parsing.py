@@ -5,15 +5,16 @@ import numpy as np
 import numpy.typing as npt
 import torch
 
-from fundus_vessels_toolkit.segment_to_graph import skeletonize
+from fundus_toolkits import FundusData
 
+from ..segment_to_graph import skeletonize
 from ..utils.cpp_extensions.fvt_cpp import detect_skeleton_nodes as detect_skeleton_nodes_cpp
 from ..utils.cpp_extensions.fvt_cpp import detect_skeleton_nodes_debug as detect_skeleton_nodes_debug_cpp
 from ..utils.cpp_extensions.fvt_cpp import parse_skeleton as parse_skeleton_cpp
 from ..utils.cpp_extensions.fvt_cpp import parse_skeleton_with_cleanup as parse_skeleton_with_cleanup_cpp
 from ..utils.lookup_array import create_removal_lookup
 from ..utils.torch import autocast_torch
-from ..vascular_data_objects import FundusData, VBranchGeoData, VGeometricData, VGraph
+from ..vascular_data_objects import VBranchGeoData, VGeometricData, VGraph
 
 
 def segmentation_to_vgraph(

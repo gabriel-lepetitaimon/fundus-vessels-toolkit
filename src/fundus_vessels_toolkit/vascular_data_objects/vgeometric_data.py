@@ -1,26 +1,25 @@
 from __future__ import annotations
 
-from ast import Not
-from hmac import new
 import itertools
 import warnings
 from copy import copy
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Self, Tuple, overload
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Tuple, overload
 from weakref import ref
 
 import numpy as np
 import numpy.typing as npt
 
+from fundus_toolkits import FundusData
+from fundus_toolkits.utils.geometric import Point, Rect
+
 from ..utils.bezier import BSpline
 from ..utils.cluster import remove_consecutive_duplicates
 from ..utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
 from ..utils.fundus_projections import FundusProjection, Translation
-from ..utils.geometric import Point, Rect
 from ..utils.lookup_array import invert_lookup, reorder_array
 from ..utils.numpy import as_1d_array, np_find_sorted, readonly
 from ..utils.typing import Bool1DArrayLike, IndicesLike, Int1DArray
-from .fundus_data import FundusData
 from .vbranch_geodata import (
     BranchGeoDataEditContext,
     T_VBranchGeoData,
@@ -84,7 +83,7 @@ class VGeometricData:
         """  # noqa: E501
         # Define domain
         self.parent_graph = parent_graph
-        self.fundus_data = fundus_data
+        self.fundus_data = fundus_data.to_immutable() if fundus_data is not None else None
         self._domain: Rect = Rect.from_tuple(domain)
 
         # Check and define nodes coordinates and index

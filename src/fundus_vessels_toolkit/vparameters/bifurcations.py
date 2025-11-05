@@ -5,11 +5,12 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+from fundus_toolkits import FundusData
 from fundus_vessels_toolkit.utils.geometric import Point
 
 from ..utils.graph.measures import extract_bifurcations_parameters as extract_bifurcations_parameters
 from ..utils.math import modulo_pi
-from ..vascular_data_objects import FundusData, VBranchGeoData, VGeometricData, VTree
+from ..vascular_data_objects import VBranchGeoData, VGeometricData, VTree
 
 
 def bifurcations_biomarkers(d0, d1, d2, θ1, θ2, *, as_dict=True) -> Dict[str, float] | List[float]:

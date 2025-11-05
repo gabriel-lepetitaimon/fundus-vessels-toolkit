@@ -6,9 +6,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import numpy.typing as npt
 
-from ..utils.geometric import Point
+from fundus_toolkits import AVLabel, FundusData
+from fundus_toolkits.utils.geometric import Point
+
 from ..utils.math import sigmoid
-from ..vascular_data_objects import AVLabel, FundusData, VBranchGeoData, VGraph, VGraphNode, VTree
+from ..vascular_data_objects import VBranchGeoData, VGraph, VGraphNode, VTree
 
 
 @dataclass

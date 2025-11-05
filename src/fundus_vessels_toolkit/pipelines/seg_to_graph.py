@@ -11,7 +11,6 @@ from fundus_vessels_toolkit.utils import if_none
 
 from ..segment_to_graph import (
     GraphSimplifyArg,
-    ReconnectEndpointsArg,
     SkeletonizeMethod,
 )
 from ..vascular_data_objects import VGraph
@@ -144,7 +143,7 @@ class SegToGraph:
                 img = img.sum(axis=2) > 0.5
             else:
                 # Red channel is not binary: the image is a fundus image
-                from ..segment import segment_vessels
+                from ..models import segment_vessels
 
                 img = segment_vessels(img)
         return img

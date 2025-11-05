@@ -1,17 +1,18 @@
-from typing import Optional, Tuple
+from typing import Dict, Literal, Optional, Tuple
 
 import pandas as pd
-from jppype import Mosaic, View2D, imshow, vscode_theme
-from jppype.layers import Layer, LayerImage, LayerQuiver
+from coloraide import Color
+from jppype import Mosaic, View2D, View2dGroup, imshow, vscode_theme
+from jppype.layers import Layer, LayerGraph, LayerImage, LayerQuiver
 
+from fundus_toolkits import AVLabel
 
-from ..vascular_data_objects.fundus_data import AVLabel
-from ..vascular_data_objects import VTree, VGraph
+from ..vascular_data_objects import VGraph, VTree
 
 vscode_theme()
 
 
-GRAPH_AV_COLORS = {
+AV_COLORS: Dict[AVLabel, str] = {
     AVLabel.BKG: "grey",
     AVLabel.ART: "red",
     AVLabel.VEI: "blue",
@@ -20,7 +21,15 @@ GRAPH_AV_COLORS = {
 }
 
 
-def draw_tree(tree: VTree, view: View2D, artery: bool, name="tree", edge_labels=False, node_labels=False) -> None:
+def draw_tree(
+    tree: VTree,
+    view: View2D | View2dGroup,
+    artery: bool,
+    name="tree",
+    edge_labels=False,
+    node_labels=False,
+    branch_color: Literal["av", "rank", "subtree"] = "rank",
+) -> LayerGraph:
     layer = tree.jppype_layer(bspline=True, edge_labels=edge_labels, node_labels=node_labels)
 
     if artery:
@@ -31,17 +40,45 @@ def draw_tree(tree: VTree, view: View2D, artery: bool, name="tree", edge_labels=
         root_color = "#1a1a7a"
         leaf_color = "#7676da"
         label = AVLabel.VEI
-    main_color = GRAPH_AV_COLORS[label]
+    main_color = AV_COLORS[label]
     nodes_color = pd.Series(main_color, index=tree.node_attr.index)
     nodes_color[tree.root_nodes_ids()] = root_color
     nodes_color[tree.leaf_nodes_ids()] = leaf_color
     layer.nodes_cmap = nodes_color.to_dict()
-    layer.edges_cmap = main_color
+
+    if branch_color == "rank" and "rank" in tree.node_attr:
+        MAX_RANK = 4
+        if artery:
+            gradient = Color.interpolate(["#ff0000", "#ff7a7a"], space="lab")
+        else:
+            gradient = Color.interpolate(["#0000ff", "#7a7aff"], space="lab")
+        edge_gradient = gradient.steps(MAX_RANK)
+        edge_gradient = [edge_gradient[x].convert("srgb").to_string(hex=True) for x in range(MAX_RANK)]
+        edges_rank = tree.node_attr["rank"][tree.branch_head()].clip(1, MAX_RANK) - 1
+        layer.edges_cmap = [edge_gradient[x] for x in edges_rank]
+
+    elif branch_color == "subtree":
+
+        def colormap(x):
+            cmap = ["red", "blue", "purple", "green", "orange", "cyan", "pink", "yellow", "teal", "lime"]
+            return cmap[x % len(cmap)]
+
+        layer.edges_cmap = pd.Series(tree.subtrees_branch_labels()).map(colormap).to_dict()
+
+    else:
+        layer.edges_cmap = main_color
 
     view[name] = layer
+    return layer
 
 
-def draw_trees(trees: Tuple[VTree, VTree], view: View2D, edge_labels=False, node_labels=False) -> None:
+def draw_trees(
+    trees: Tuple[VTree, VTree],
+    view: View2D | View2dGroup,
+    edge_labels=False,
+    node_labels=False,
+    branch_color: Literal["av", "rank", "subtree"] = "rank",
+) -> None:
     """
     Draw a vessel tree on a given view.
 
@@ -52,8 +89,24 @@ def draw_trees(trees: Tuple[VTree, VTree], view: View2D, edge_labels=False, node
     view : View2D | Mosaic
         The view to draw the tree on.
     """
-    draw_tree(trees[0], view, artery=True, name="artery_tree", edge_labels=edge_labels, node_labels=node_labels)
-    draw_tree(trees[1], view, artery=False, name="vein_tree", edge_labels=edge_labels, node_labels=node_labels)
+    draw_tree(
+        trees[0],
+        view,
+        artery=True,
+        name="artery_tree",
+        edge_labels=edge_labels,
+        node_labels=node_labels,
+        branch_color=branch_color,
+    )
+    draw_tree(
+        trees[1],
+        view,
+        artery=False,
+        name="vein_tree",
+        edge_labels=edge_labels,
+        node_labels=node_labels,
+        branch_color=branch_color,
+    )
 
 
 def draw_graph(
@@ -74,7 +127,7 @@ def draw_graph(
     layer = graph.jppype_layer(edge_labels=edge_labels, node_labels=node_labels, bspline=True)
     if av_attr:
         if av_attr in graph.node_attr:
-            layer.nodes_cmap = graph.node_attr[av_attr].map(GRAPH_AV_COLORS).to_dict()
+            layer.nodes_cmap = graph.node_attr[av_attr].map(AV_COLORS).to_dict()
         if av_attr in graph.branch_attr:
-            layer.edges_cmap = graph.branch_attr[av_attr].map(GRAPH_AV_COLORS).to_dict()
+            layer.edges_cmap = graph.branch_attr[av_attr].map(AV_COLORS).to_dict()
     view["vessel_graph"] = layer

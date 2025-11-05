@@ -4,12 +4,12 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from fundus_vessels_toolkit.vascular_data_objects.vgeometric_data import VGeometricData
+from fundus_toolkits import FundusData
 
 from ..utils.bezier import BSpline
 from ..utils.math import quantified_roots
 from ..utils.typing import Bool2DArrayLike
-from ..vascular_data_objects import FundusData, VBranchGeoData, VGraph
+from ..vascular_data_objects import VBranchGeoData, VGeometricData, VGraph
 
 
 def parametrize_branches(vgraph: VGraph, fundus_data: Optional[FundusData] = None) -> pd.DataFrame:

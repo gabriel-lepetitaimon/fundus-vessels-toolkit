@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 import torch
 
+from fundus_toolkits.utils.geometric import Point, Rect
+
 from ..cpp_extensions.fvt_cpp import compute_intercepts as compute_intercepts_cpp
 from ..cpp_extensions.fvt_cpp import extract_branches_geometry as extract_branches_geometry_cpp
 from ..cpp_extensions.fvt_cpp import (
@@ -12,7 +14,6 @@ from ..cpp_extensions.fvt_cpp import (
 from ..cpp_extensions.fvt_cpp import fast_branch_boundaries as fast_branch_boundaries_cpp
 from ..cpp_extensions.fvt_cpp import fast_curve_tangent as fast_curve_tangent_cpp
 from ..cpp_extensions.fvt_cpp import track_branches as track_branches_cpp
-from ..geometric import Point, Rect
 from ..torch import autocast_torch
 
 

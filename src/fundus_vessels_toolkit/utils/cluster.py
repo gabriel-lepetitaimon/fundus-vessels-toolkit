@@ -1,14 +1,14 @@
 from typing import Iterable, List, Literal, Optional, Tuple, overload
 
-import numpy as np
 import torch  # Required for cpp extension loading
+
+from fundus_toolkits.utils.geometric import Point
 
 from .cpp_extensions.clusters_cpp import iterative_cluster_by_distance as iterative_cluster_by_distance_cpp
 from .cpp_extensions.clusters_cpp import iterative_reduce_clusters as iterative_reduce_clusters_cpp
 from .cpp_extensions.clusters_cpp import remove_consecutive_duplicates as remove_consecutive_duplicates_cpp
 from .cpp_extensions.clusters_cpp import solve_1d_chains as solve_1d_chains_cpp
 from .cpp_extensions.clusters_cpp import solve_clusters as solve_clusters_cpp
-from .geometric import Point
 from .torch import TensorArray, to_torch
 
 
@@ -148,9 +148,9 @@ def cluster_by_distance(
             edge_list_tensor = torch.tensor(edge_list, dtype=torch.int32)
         else:
             edge_list_tensor = to_torch(edge_list, dtype=torch.int32)
-        assert (
-            edge_list_tensor.ndim == 2 and edge_list_tensor.shape[1] == 2
-        ), "Edge list must be a 2D tensor of shape (n, 2)"
+        assert edge_list_tensor.ndim == 2 and edge_list_tensor.shape[1] == 2, (
+            "Edge list must be a 2D tensor of shape (n, 2)"
+        )
 
     if iterative:
         if edge_list_tensor is None:

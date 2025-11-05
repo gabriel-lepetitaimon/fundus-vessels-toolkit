@@ -2,12 +2,13 @@ from typing import Literal, Optional
 
 import numpy as np
 
-from fundus_vessels_toolkit.vascular_data_objects.vtree import VTree
+from fundus_toolkits import FundusData
+from fundus_toolkits.utils.geometric import Rect
 
-from ..utils.geometric import Rect
 from ..utils.graph.measures import extract_branch_geometry
 from ..utils.math import intercept_segment
-from ..vascular_data_objects import FundusData, VBranchGeoData, VGraph
+from ..vascular_data_objects import VBranchGeoData, VGraph
+from ..vascular_data_objects.vtree import VTree
 
 
 def populate_geometry(

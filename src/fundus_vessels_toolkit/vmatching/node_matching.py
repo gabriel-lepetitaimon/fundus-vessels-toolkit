@@ -1,6 +1,6 @@
 import functools
 from abc import ABC, abstractmethod
-from typing import Iterable, List, Mapping, Optional, Tuple, Type, TypeAlias
+from typing import Iterable, List, Literal, Mapping, Optional, Tuple, Type, TypeAlias, overload
 
 import numpy as np
 import pandas as pd
@@ -74,6 +74,28 @@ def match_nodes_by_distance(
     return matched_nodes
 
 
+@overload
+def ransac_refine_node_matching(
+    fix_graph: VGraph,
+    moving_graph: VGraph,
+    matched_nodes: Iterable[Iterable[int]] | np.ndarray,
+    matches_probability: Optional[np.ndarray] = None,
+    *,
+    reindex_graphs=False,
+    return_mean_error: Literal[False] = False,
+    final_projection: Optional[Type[FundusProjection] | Mapping[int, Type[FundusProjection]]] = None,
+) -> Tuple[FundusProjection, np.ndarray]: ...
+@overload
+def ransac_refine_node_matching(
+    fix_graph: VGraph,
+    moving_graph: VGraph,
+    matched_nodes: Iterable[Iterable[int]] | np.ndarray,
+    matches_probability: Optional[np.ndarray] = None,
+    *,
+    reindex_graphs=False,
+    return_mean_error: Literal[True],
+    final_projection: Optional[Type[FundusProjection] | Mapping[int, Type[FundusProjection]]] = None,
+) -> Tuple[FundusProjection, np.ndarray, float]: ...
 def ransac_refine_node_matching(
     fix_graph: VGraph,
     moving_graph: VGraph,
@@ -222,9 +244,9 @@ class NodeSimilarityEstimator(ABC):
         elif isinstance(matchable, tuple):
             if len(matchable) == 2:
                 n1, n2 = matchable
-                assert all(
-                    isinstance(_, np.ndarray) for _ in matchable
-                ), "matchable must be a tuple of two or three arrays"
+                assert all(isinstance(_, np.ndarray) for _ in matchable), (
+                    "matchable must be a tuple of two or three arrays"
+                )
                 m = None
             elif len(matchable) == 3:
                 m, n1, n2 = matchable
@@ -468,17 +490,17 @@ class JunctionSimilarity(NodeSimilarityEstimator):
             node_features = features[n_id] = {}
             for b, (b_ang_f, b_scal_f) in enumerate(zip(ang_f[n], scal_f[n], strict=True)):
                 if len(branch[n]) <= b:
-                    node_features[f"B{b+1}"] = ""
+                    node_features[f"B{b + 1}"] = ""
                     for i, _ in enumerate(b_ang_f):
-                        node_features[f"B{b+1} cos-{i}"] = ""
+                        node_features[f"B{b + 1} cos-{i}"] = ""
                     for i, _ in enumerate(b_scal_f):
-                        node_features[f"B{b+1} l2-{i}"] = ""
+                        node_features[f"B{b + 1} l2-{i}"] = ""
                 else:
-                    node_features[f"B{b+1}"] = branch[n][b]
+                    node_features[f"B{b + 1}"] = branch[n][b]
                     for i, f in enumerate(b_ang_f):
-                        node_features[f"B{b+1} cos-{i}"] = f"{np.arctan2(*f)*180/np.pi:.0f}°"
+                        node_features[f"B{b + 1} cos-{i}"] = f"{np.arctan2(*f) * 180 / np.pi:.0f}°"
                     for i, f in enumerate(b_scal_f):
-                        node_features[f"B{b+1} l2-{i}"] = f"{f:.2f}"
+                        node_features[f"B{b + 1} l2-{i}"] = f"{f:.2f}"
         return pd.DataFrame(features).T
 
     def branch_matching_available(self) -> bool:
@@ -567,6 +589,27 @@ def match_junctions(
         return matched_nodes, ctx["branches_match"]
     else:
         return matched_nodes
+
+
+def match_branches_endpoints(g1: VGraph, g2: VGraph, n_junction_match: int, n_branch_match: int, reindex: bool = False):
+    branch = g1.endpoint_branches(as_mask=True)[:n_branch_match] & g2.endpoint_branches(as_mask=True)[:n_branch_match]
+
+    matched_nodes = (list(np.arange(n_junction_match)), list(np.arange(n_junction_match)))
+    for nodes1, nodes2 in zip(
+        g1.branch_list[:n_branch_match][branch], g2.branch_list[:n_branch_match][branch], strict=True
+    ):
+        if (nodes1 >= n_junction_match).sum() != 1 or (nodes2 >= n_junction_match).sum() != 1:
+            continue
+        matched_nodes[0].append(nodes1[nodes1 >= n_junction_match][0])
+        matched_nodes[1].append(nodes2[nodes2 >= n_junction_match][0])
+    matched_nodes = np.array(matched_nodes)
+
+    if reindex:
+        g1.reindex_nodes(matched_nodes[0], inverse_lookup=True, inplace=True)
+        g2.reindex_nodes(matched_nodes[1], inverse_lookup=True, inplace=True)
+        matched_nodes = np.array((np.arange(len(matched_nodes[0])),) * 2)
+
+    return matched_nodes
 
 
 def match_junctions_simple(

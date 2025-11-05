@@ -427,6 +427,8 @@ class VTree(VGraph):
             If the tree is not a tree (i.e. contains cycles).
         """
         B = self.branch_count
+        if B == 0:
+            return
         assert self.branch_tree.min() >= -1, "Invalid tree: the provided branch parents contains invalid indices."
         assert self.branch_tree.max() < B, "Invalid tree: the provided branch parents contains invalid indices."
         assert np.all(self.branch_tree != np.arange(B)), "Invalid tree: some branches are their own parent."

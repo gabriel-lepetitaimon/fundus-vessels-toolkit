@@ -3,9 +3,9 @@ from typing import Iterable, Optional, Tuple
 import numpy as np
 import numpy.typing as npt
 
-from fundus_vessels_toolkit.utils.fundus_projections import FundusProjection
+from fundus_toolkits.utils.geometric import Rect
 
-from .geometric import Rect
+from ..utils.fundus_projections import FundusProjection
 
 
 def stitch_images(

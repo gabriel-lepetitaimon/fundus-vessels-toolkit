@@ -32,12 +32,13 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+from fundus_toolkits.utils.geometric import Point, Rect
+
 from ..utils.bezier import BSpline
 from ..utils.cluster import reduce_chains, reduce_clusters
 from ..utils.cpp_optimized import first_index_of, first_two_index_of
 from ..utils.data_io import NumpyDict, load_numpy_dict, pandas_to_numpy_dict, save_numpy_dict
-from ..utils.fundus_projections import FundusProjection, Translation
-from ..utils.geometric import Point, Rect
+from ..utils.fundus_projections import FundusProjection
 from ..utils.lookup_array import (
     add_empty_to_lookup,
     complete_lookup,
@@ -49,10 +50,8 @@ from ..utils.pandas import DFSetterAccessor
 from ..utils.typing import (
     Float1DArrayLike,
     Indices,
-    IndicesLike,
     Int1DArray,
     Int1DArrayLike,
-    IntArrayLike,
     IntPairArrayLike,
     PointArrayLike,
 )
@@ -117,7 +116,7 @@ class VGraphNode:
         return Point(*geodata.node_coord(self._id))
 
     #  __ INCIDENT BRANCHES __
-    def _update_adjacent_branch_cache(self) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.bool_]]:
+    def _update_adjacent_branch_cache(self) -> Tuple[npt.NDArray[np.int32], npt.NDArray[np.bool_]]:
         self._ibranch_ids, self._ibranch_dirs = self.graph.adjacent_branches(self._id, return_branch_direction=True)
         return self._ibranch_ids, self._ibranch_dirs
 
@@ -222,7 +221,7 @@ class VGraphBranch:
     All their method and properties makes calls to :class:`VGraph` methods to generate their results.
     """
 
-    def __init__(self, graph: VGraph, id: int, nodes_id: Optional[npt.NDArray[np.int_]] = None):
+    def __init__(self, graph: VGraph, id: int, nodes_id: Optional[npt.NDArray[np.int32]] = None):
         self.__graph = graph
         self._id = id
         graph._branch_refs.add(self)
@@ -297,7 +296,7 @@ class VGraphBranch:
         assert self.is_valid(), "The branch has been removed from the graph."
         return DFSetterAccessor(self.__graph._branch_attr, self._id)
 
-    def curve(self, geodata: VGeometricData | int = 0) -> npt.NDArray[np.int_]:
+    def curve(self, geodata: VGeometricData | int = 0) -> npt.NDArray[np.int32]:
         """Return the indices of the pixels forming the curve of the branch as a 2D array of shape (n, 2).
 
         This method is a shortcut to :meth:`VGeometricData.branch_curve`.
@@ -781,7 +780,7 @@ class VGraph:
         return self._node_count == 0
 
     @property
-    def branch_list(self) -> npt.NDArray[np.int_]:
+    def branch_list(self) -> npt.NDArray[np.int32]:
         """The list of branches in the graph as a 2D array of shape (B, 2) where B is the number of branches. Each row contains the indices of the nodes connected by each branch.
 
         Examples
@@ -828,7 +827,7 @@ class VGraph:
         """The attributes of the branches in the graph as a pandas.DataFrame."""
         return self._branch_attr
 
-    def as_node_ids(self, ids: NodeIndicesLike | None, /, *, check=True) -> npt.NDArray[np.int_]:
+    def as_node_ids(self, ids: NodeIndicesLike | None, /, *, check=True) -> npt.NDArray[np.int32]:
         """Parse objects assimilable to indices into valid node indices.
 
         Parameters
@@ -909,7 +908,7 @@ class VGraph:
         check=True,
         return_is_single: Literal[False] = False,
         filter: Literal["orphan", "endpoint", "non-endpoint"] | None = None,
-    ) -> npt.NDArray[np.int_]: ...
+    ) -> npt.NDArray[np.int32]: ...
     @overload
     def as_branch_ids(
         self,
@@ -919,7 +918,7 @@ class VGraph:
         check=True,
         return_is_single: Literal[True],
         filter: Literal["orphan", "endpoint", "non-endpoint"] | None = None,
-    ) -> Tuple[npt.NDArray[np.int_], bool]: ...
+    ) -> Tuple[npt.NDArray[np.int32], bool]: ...
     def as_branch_ids(
         self,
         ids: BranchIndicesLike | None,
@@ -928,7 +927,7 @@ class VGraph:
         check=True,
         return_is_single: bool = False,
         filter: Literal["orphan", "endpoint", "non-endpoint"] | None = None,
-    ) -> npt.NDArray[np.int_] | Tuple[npt.NDArray[np.int_], bool]:
+    ) -> npt.NDArray[np.int32] | Tuple[npt.NDArray[np.int32], bool]:
         """Parse objects assimilable to indices into valid branch indices.
 
         Parameters
@@ -1106,16 +1105,16 @@ class VGraph:
     @overload
     def adjacent_branches(
         self, node_id: NodeIndicesLike, return_branch_direction: Literal[False] = False
-    ) -> npt.NDArray[np.int_]: ...
+    ) -> npt.NDArray[np.int32]: ...
     @overload
     def adjacent_branches(
         self, node_id: NodeIndicesLike, return_branch_direction: Literal[True]
-    ) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.bool_]]: ...
+    ) -> Tuple[npt.NDArray[np.int32], npt.NDArray[np.bool_]]: ...
     def adjacent_branches(
         self,
         node_id: NodeIndicesLike,
         return_branch_direction: bool = False,
-    ) -> npt.NDArray[np.int_] | Tuple[npt.NDArray[np.int_], npt.NDArray[np.bool_]]:
+    ) -> npt.NDArray[np.int32] | Tuple[npt.NDArray[np.int32], npt.NDArray[np.bool_]]:
         """Return the indices of the branches adjacent to the given node(s).
 
         Parameters
@@ -1164,7 +1163,7 @@ class VGraph:
             node_ids=node_id, return_branch_direction=return_branch_direction, individual_nodes=False
         )
 
-    def adjacent_nodes(self, node_id: NodeIndicesLike) -> npt.NDArray[np.int_]:
+    def adjacent_nodes(self, node_id: NodeIndicesLike) -> npt.NDArray[np.int32]:
         """Compute the indices of the nodes adjacent to the given node.
 
         Parameters
@@ -1175,7 +1174,7 @@ class VGraph:
 
         Returns
         -------
-        npt.NDArray[np.int_]
+        npt.NDArray[np.int32]
             The indices of the nodes adjacent to the given nodes.
 
         See Also
@@ -1198,16 +1197,16 @@ class VGraph:
     @overload
     def adjacent_branches_per_node(
         self, node_id: NodeIndicesLike, return_branch_direction: Literal[False] = False
-    ) -> List[npt.NDArray[np.int_]]: ...
+    ) -> List[npt.NDArray[np.int32]]: ...
     @overload
     def adjacent_branches_per_node(
         self, node_id: NodeIndicesLike, return_branch_direction: Literal[True]
-    ) -> Tuple[List[npt.NDArray[np.int_]], List[npt.NDArray[np.bool_]]]: ...
+    ) -> Tuple[List[npt.NDArray[np.int32]], List[npt.NDArray[np.bool_]]]: ...
     def adjacent_branches_per_node(
         self,
         node_id: NodeIndicesLike,
         return_branch_direction: bool = False,
-    ) -> List[npt.NDArray[np.int_]] | Tuple[List[npt.NDArray[np.int_]], List[npt.NDArray[np.bool_]]]:
+    ) -> List[npt.NDArray[np.int32]] | Tuple[List[npt.NDArray[np.int32]], List[npt.NDArray[np.bool_]]]:
         """Compute the indices of the branches incident to multiple nodes.
         In contrast to :meth:`VGraph.incident_branches`, this method returns the incident branches for each node separately.
 
@@ -1251,18 +1250,18 @@ class VGraph:
     @overload
     def _adjacent_branches(
         self, node_ids: NodeIndicesLike, return_branch_direction: bool, individual_nodes: Literal[True]
-    ) -> List[npt.NDArray[np.int_]] | Tuple[List[npt.NDArray[np.int_]], List[npt.NDArray[np.bool_]]]: ...
+    ) -> List[npt.NDArray[np.int32]] | Tuple[List[npt.NDArray[np.int32]], List[npt.NDArray[np.bool_]]]: ...
     @overload
     def _adjacent_branches(
         self, node_ids: NodeIndicesLike, return_branch_direction: bool, individual_nodes: Literal[False]
-    ) -> npt.NDArray[np.int_] | Tuple[npt.NDArray[np.int_], npt.NDArray[np.bool_]]: ...
+    ) -> npt.NDArray[np.int32] | Tuple[npt.NDArray[np.int32], npt.NDArray[np.bool_]]: ...
     def _adjacent_branches(
         self, node_ids: NodeIndicesLike, return_branch_direction: bool, individual_nodes: bool
     ) -> (
-        List[npt.NDArray[np.int_]]
-        | Tuple[List[npt.NDArray[np.int_]], List[npt.NDArray[np.bool_]]]
-        | npt.NDArray[np.int_]
-        | Tuple[npt.NDArray[np.int_], npt.NDArray[np.bool_]]
+        List[npt.NDArray[np.int32]]
+        | Tuple[List[npt.NDArray[np.int32]], List[npt.NDArray[np.bool_]]]
+        | npt.NDArray[np.int32]
+        | Tuple[npt.NDArray[np.int32], npt.NDArray[np.bool_]]
     ):
         node_ids = self.as_node_ids(node_ids)
         if len(node_ids) == 0:
@@ -1298,7 +1297,7 @@ class VGraph:
 
     def node_degree(
         self, node_id: Optional[NodeIndicesLike] = None, /, *, count_loop_branches_once: bool = False
-    ) -> npt.NDArray[np.int_]:
+    ) -> npt.NDArray[np.int32]:
         """Compute the degree of each node in the graph.
 
         The degree of a node is its number of adjacent (or incident) branches.
@@ -1352,10 +1351,10 @@ class VGraph:
             return node_count
 
     @overload
-    def endpoint_nodes(self, as_mask: Literal[False] = False) -> npt.NDArray[np.int_]: ...
+    def endpoint_nodes(self, as_mask: Literal[False] = False) -> npt.NDArray[np.int32]: ...
     @overload
     def endpoint_nodes(self, as_mask: Literal[True]) -> npt.NDArray[np.bool_]: ...
-    def endpoint_nodes(self, as_mask=False) -> npt.NDArray[np.int_ | np.bool_]:
+    def endpoint_nodes(self, as_mask=False) -> npt.NDArray[np.int32 | np.bool_]:
         """Return the indices of the endpoint nodes in the graph.
 
         The endpoint nodes are the nodes connected to exactly one branch (i.e. of degree 1).
@@ -1395,16 +1394,16 @@ class VGraph:
     @overload
     def endpoint_nodes_with_branch_id(
         self, *, return_branch_direction: Literal[False] = False
-    ) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]: ...
+    ) -> Tuple[npt.NDArray[np.int32], npt.NDArray[np.int32]]: ...
     @overload
     def endpoint_nodes_with_branch_id(
         self, *, return_branch_direction: Literal[True]
-    ) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_], npt.NDArray[np.bool_]]: ...
+    ) -> Tuple[npt.NDArray[np.int32], npt.NDArray[np.int32], npt.NDArray[np.bool_]]: ...
     def endpoint_nodes_with_branch_id(
         self, *, return_branch_direction: bool = False
     ) -> (
-        Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]
-        | Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_], npt.NDArray[np.bool_]]
+        Tuple[npt.NDArray[np.int32], npt.NDArray[np.int32]]
+        | Tuple[npt.NDArray[np.int32], npt.NDArray[np.int32], npt.NDArray[np.bool_]]
     ):
         """Return the indices of the nodes that are connected to exactly one branch along with the indices of their incident branches.
 
@@ -1415,10 +1414,10 @@ class VGraph:
 
         Returns
         -------
-        nodes_index: npt.NDArray[np.int_]
+        nodes_index: npt.NDArray[np.int32]
             The indices of the endpoints nodes.
 
-        incident_branch_index: npt.NDArray[np.int_]
+        incident_branch_index: npt.NDArray[np.int32]
             The indices of the branches connected to the passing nodes.
 
         branch_direction: npt.NDArray[np.bool_] (optional)
@@ -1449,10 +1448,10 @@ class VGraph:
             return endpoint_nodes, branch_index
 
     @overload
-    def junction_nodes(self, as_mask: Literal[False] = False) -> npt.NDArray[np.int_]: ...
+    def junction_nodes(self, as_mask: Literal[False] = False) -> npt.NDArray[np.int32]: ...
     @overload
     def junction_nodes(self, as_mask: Literal[True]) -> npt.NDArray[np.bool_]: ...
-    def junction_nodes(self, as_mask=False) -> npt.NDArray[np.int_ | np.bool_]:
+    def junction_nodes(self, as_mask=False) -> npt.NDArray[np.int32 | np.bool_]:
         """Return the indices of the junctions (non-endpoints) nodes in the graph.
 
         The junction nodes are the nodes connected to at least two branches.
@@ -1487,12 +1486,12 @@ class VGraph:
         return mask if as_mask else np.argwhere(mask).flatten()
 
     @overload
-    def passing_nodes(self, *, as_mask: Literal[False] = False, exclude_loop: bool = True) -> npt.NDArray[np.int_]: ...
+    def passing_nodes(self, *, as_mask: Literal[False] = False, exclude_loop: bool = True) -> npt.NDArray[np.int32]: ...
     @overload
     def passing_nodes(self, *, as_mask: Literal[True], exclude_loop: bool = True) -> npt.NDArray[np.bool_]: ...
     def passing_nodes(
         self, *, as_mask=False, exclude_loop: bool = True
-    ) -> npt.NDArray[np.int_ | np.bool_] | Tuple[npt.NDArray[np.int_ | np.bool_], List[npt.NDArray[np.int_]]]:
+    ) -> npt.NDArray[np.int32 | np.bool_] | Tuple[npt.NDArray[np.int32 | np.bool_], List[npt.NDArray[np.int32]]]:
         """Return the indices of the nodes that are connected to exactly two branches.
 
         Parameters
@@ -1539,16 +1538,16 @@ class VGraph:
     @overload
     def passing_nodes_with_branch_index(
         self, *, return_branch_direction: Literal[False] = False, exclude_loop: bool = True
-    ) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]: ...
+    ) -> Tuple[npt.NDArray[np.int32], npt.NDArray[np.int32]]: ...
     @overload
     def passing_nodes_with_branch_index(
         self, *, return_branch_direction: Literal[True], exclude_loop: bool = True
-    ) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_], npt.NDArray[np.bool_]]: ...
+    ) -> Tuple[npt.NDArray[np.int32], npt.NDArray[np.int32], npt.NDArray[np.bool_]]: ...
     def passing_nodes_with_branch_index(
         self, *, return_branch_direction: bool = False, exclude_loop: bool = True
     ) -> (
-        Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]
-        | Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_], npt.NDArray[np.bool_]]
+        Tuple[npt.NDArray[np.int32], npt.NDArray[np.int32]]
+        | Tuple[npt.NDArray[np.int32], npt.NDArray[np.int32], npt.NDArray[np.bool_]]
     ):
         """Return the indices of the nodes that are connected to exactly two branches along with the indices of these branches.
 
@@ -1562,10 +1561,10 @@ class VGraph:
 
         Returns
         -------
-        passing_nodes_index: npt.NDArray[np.int_]
+        passing_nodes_index: npt.NDArray[np.int32]
             The indices of the passing nodes as a array of shape (N,) where N is the number of passing nodes.
 
-        incident_branch_index: npt.NDArray[np.int_]
+        incident_branch_index: npt.NDArray[np.int32]
             The indices of the branches connected to the passing nodes as an array of shape (N, 2)
 
         branch_direction: npt.NDArray[np.bool_] (optional)
@@ -1601,15 +1600,23 @@ class VGraph:
 
     @overload
     def endpoint_branches(
-        self, *, as_mask=False, return_node_mask: Literal[False] = False
-    ) -> npt.NDArray[np.int_ | np.bool_]: ...
+        self, *, as_mask: Literal[False] = False, return_node_mask: Literal[False] = False
+    ) -> npt.NDArray[np.int32]: ...
     @overload
     def endpoint_branches(
-        self, *, as_mask=False, return_node_mask: Literal[True]
-    ) -> Tuple[npt.NDArray[np.int_ | np.bool_], npt.NDArray[np.bool_]]: ...
+        self, *, as_mask: Literal[True], return_node_mask: Literal[False] = False
+    ) -> npt.NDArray[np.bool_]: ...
+    @overload
+    def endpoint_branches(
+        self, *, as_mask: Literal[False] = False, return_node_mask: Literal[True]
+    ) -> Tuple[npt.NDArray[np.int32], npt.NDArray[np.bool_]]: ...
+    @overload
+    def endpoint_branches(
+        self, *, as_mask: Literal[True], return_node_mask: Literal[True]
+    ) -> Tuple[npt.NDArray[np.bool_], npt.NDArray[np.bool_]]: ...
     def endpoint_branches(
         self, *, as_mask=False, return_node_mask=False
-    ) -> npt.NDArray[np.int_ | np.bool_] | Tuple[npt.NDArray[np.int_ | np.bool_], npt.NDArray[np.bool_]]:
+    ) -> npt.NDArray[np.int32 | np.bool_] | Tuple[npt.NDArray[np.int32 | np.bool_], npt.NDArray[np.bool_]]:
         """Return the indices of the terminal branches in the graph.
 
         The terminal branches are the branches connected to endpoint nodes.
@@ -1625,7 +1632,7 @@ class VGraph:
 
         Returns
         -------
-        endpoints_branches : npt.NDArray[np.int_ | np.bool_]
+        endpoints_branches : npt.NDArray[np.int32 | np.bool_]
             An array of length (B,) containing the indices of the terminal branches (or a mask of the terminal branches if ``as_mask`` is True).
 
         node_mask : npt.NDArray[np.bool_]
@@ -1662,7 +1669,7 @@ class VGraph:
         # _, branch_index, node_count = np.unique(self._branch_list, return_counts=True, return_index=True)
         # return np.unique(branch_index[node_count == 1] // 2)
 
-    def orphan_branches(self, as_mask=False) -> npt.NDArray[np.int_]:
+    def orphan_branches(self, as_mask=False) -> npt.NDArray[np.int32]:
         """Return the indices of the branches connected to no other branch in the graph.
 
         Parameters
@@ -1693,7 +1700,7 @@ class VGraph:
         )
         return orphan_branches_mask if as_mask else np.argwhere(orphan_branches_mask).flatten()
 
-    def self_loop_branches(self, as_mask=False) -> npt.NDArray[np.int_]:
+    def self_loop_branches(self, as_mask=False) -> npt.NDArray[np.int32]:
         """Compute the indices of the branches connecting a node to itself in the graph.
 
         Parameters
@@ -1715,7 +1722,7 @@ class VGraph:
         self_loop_mask = self._branch_list[:, 0] == self._branch_list[:, 1]
         return self_loop_mask if as_mask else np.argwhere(self_loop_mask).flatten()
 
-    def twin_branches(self) -> List[npt.NDArray[np.int_]]:
+    def twin_branches(self) -> List[npt.NDArray[np.int32]]:
         """Compute the indices of the branches that are twins in the graph.
 
         Returns
@@ -1736,12 +1743,12 @@ class VGraph:
         _, inv, counts = np.unique(branch_list, return_inverse=True, return_counts=True, axis=0)
         return [np.argwhere(inv == twin_id).flatten() for twin_id in np.argwhere(counts > 1).flatten()]
 
-    def node_connected_components(self) -> List[npt.NDArray[np.int_]]:
+    def node_connected_components(self) -> List[npt.NDArray[np.int32]]:
         """Compute the connected components of the graph and return, for each of them, its nodes indices.
 
         Returns
         -------
-        List[npt.NDArray[np.int_]]
+        List[npt.NDArray[np.int32]]
             A tuple of arrays containing the indices of the nodes included in each connected component.
 
         Examples
@@ -1751,6 +1758,8 @@ class VGraph:
         >>> graph.node_connected_components()
         [array([0, 1, 2, 3]), array([4]), array([5, 6])]
         """
+        if self.node_count == 0:
+            return []
         return [np.asarray(cc, dtype=int) for cc in reduce_clusters(self._branch_list, drop_singleton=False)]
 
     ####################################################################################################################
@@ -1780,11 +1789,11 @@ class VGraph:
 
     def _geometrical_data_priority(
         self, geometrical_data_priority: Optional[int | Iterable[int]] = None
-    ) -> npt.NDArray[np.int_] | range:
+    ) -> npt.NDArray[np.int32] | range:
         if np.isscalar(geometrical_data_priority) and np.issubdtype(type(geometrical_data_priority), np.integer):
-            geometrical_data_priority = np.array([geometrical_data_priority], dtype=np.int_)
+            geometrical_data_priority = np.array([geometrical_data_priority], dtype=np.int32)
         elif not isinstance(geometrical_data_priority, np.ndarray):
-            geometrical_data_priority = np.asarray(geometrical_data_priority, dtype=np.int_)
+            geometrical_data_priority = np.asarray(geometrical_data_priority, dtype=np.int32)
         if isinstance(geometrical_data_priority, Iterable):
             geometrical_data_priority = complete_lookup(
                 geometrical_data_priority, max_index=len(self._geometric_data) - 1
@@ -2056,7 +2065,7 @@ class VGraph:
         return self.reindex_branches(new_order)
 
     # --- Private base edition ---
-    def _delete_branch(self, branch_id: npt.NDArray[np.int_], update_refs: bool = True) -> npt.NDArray[np.int_]:
+    def _delete_branch(self, branch_id: npt.NDArray[np.int32], update_refs: bool = True) -> npt.NDArray[np.int32]:
         if len(branch_id) == 0:
             return np.arange(self.branch_count)
 
@@ -2074,7 +2083,7 @@ class VGraph:
 
         return branches_reindex
 
-    def _delete_node(self, node_id: npt.NDArray[np.int_], update_refs: bool = True) -> npt.NDArray[np.int_]:
+    def _delete_node(self, node_id: npt.NDArray[np.int32], update_refs: bool = True) -> npt.NDArray[np.int32]:
         if len(node_id) == 0:
             return np.arange(self.node_count)
         self._node_attr = self._node_attr.drop(node_id).reset_index(drop=True)  # type: ignore
@@ -2160,7 +2169,7 @@ class VGraph:
 
     def add_branch(
         self, branch_nodes: IntPairArrayLike, *, return_branch_id=False, inplace=True
-    ) -> Self | Tuple[VGraph, npt.NDArray[np.int_]]:
+    ) -> Self | Tuple[VGraph, npt.NDArray[np.int32]]:
         """Add branch(es) to the graph.
 
         Parameters
@@ -2227,10 +2236,10 @@ class VGraph:
     @overload
     def duplicate_branch(
         self, branch_id: BranchIndicesLike, *, return_branch_id: Literal[True], inplace=False
-    ) -> Tuple[VGraph, npt.NDArray[np.int_]]: ...
+    ) -> Tuple[VGraph, npt.NDArray[np.int32]]: ...
     def duplicate_branch(
         self, branch_id: BranchIndicesLike, *, return_branch_id=False, inplace=False
-    ) -> Self | Tuple[VGraph, npt.NDArray[np.int_]]:
+    ) -> Self | Tuple[VGraph, npt.NDArray[np.int32]]:
         """Duplicate branches in the graph.
 
         Parameters
@@ -2315,7 +2324,7 @@ class VGraph:
         return_branch_ids: Literal[True],
         return_node_ids: Literal[False] = False,
         inplace=False,
-    ) -> Tuple[Self, npt.NDArray[np.int_]]: ...
+    ) -> Tuple[Self, npt.NDArray[np.int32]]: ...
     @overload
     def split_branch(
         self,
@@ -2326,7 +2335,7 @@ class VGraph:
         return_branch_ids: Literal[False] = False,
         return_node_ids: Literal[True],
         inplace=False,
-    ) -> Tuple[Self, npt.NDArray[np.int_]]: ...
+    ) -> Tuple[Self, npt.NDArray[np.int32]]: ...
     @overload
     def split_branch(
         self,
@@ -2337,7 +2346,7 @@ class VGraph:
         return_branch_ids: Literal[True],
         return_node_ids: Literal[True],
         inplace=False,
-    ) -> Tuple[Self, npt.NDArray[np.int_], npt.NDArray[np.int_]]: ...
+    ) -> Tuple[Self, npt.NDArray[np.int32], npt.NDArray[np.int32]]: ...
     def split_branch(
         self,
         branch_id: int,
@@ -2347,7 +2356,7 @@ class VGraph:
         return_branch_ids=False,
         return_node_ids=False,
         inplace=False,
-    ) -> Self | Tuple[Self, npt.NDArray[np.int_]] | Tuple[Self, npt.NDArray[np.int_], npt.NDArray[np.int_]]:
+    ) -> Self | Tuple[Self, npt.NDArray[np.int32]] | Tuple[Self, npt.NDArray[np.int32], npt.NDArray[np.int32]]:
         """Split a branch into two branches by adding a new node near the given coordinates.
 
         The new node is added to the nodes coordinates and the two new branches are added to the branch list.
@@ -2527,7 +2536,7 @@ class VGraph:
         return graph
 
     # --- Nodes edition ---
-    def add_nodes(self, coord: npt.NDArray[np.float32], inplace=False) -> npt.NDArray[np.int_]:
+    def add_nodes(self, coord: npt.NDArray[np.float32], inplace=False) -> npt.NDArray[np.int32]:
         """Add a new node to the graph.
 
         Parameters
@@ -2540,7 +2549,7 @@ class VGraph:
 
         Returns
         -------
-        npt.NDArray[np.int_]
+        npt.NDArray[np.int32]
             The ID of the new node as a 1D array of shape (N,).
         """
         assert coord.ndim == 2 and coord.shape[1] == 2, "coord must be a 2D array of shape (N, 2)."
@@ -2703,7 +2712,7 @@ class VGraph:
         *,
         quietly_ignore_invalid_nodes: Optional[bool] = False,
         incident_branches: Optional[IntPairArrayLike] = None,
-    ) -> Tuple[List[npt.NDArray[np.int_]], npt.NDArray[np.bool_], npt.NDArray[np.int_], npt.NDArray[np.int_]]:
+    ) -> Tuple[List[npt.NDArray[np.int32]], npt.NDArray[np.bool_], npt.NDArray[np.int32], npt.NDArray[np.int32]]:
         """Fuse nodes connected to exactly two branches. (See :meth:`fuse_nodes` for the public method)
 
         Parameters
@@ -2889,7 +2898,7 @@ class VGraph:
 
     def _merge_consecutive_branches(
         self, branch_pairs: IntPairArrayLike, junction_nodes: Int1DArrayLike, remove_orphan_nodes: bool = True
-    ) -> Tuple[List[npt.NDArray[np.int_]], npt.NDArray[np.bool_], npt.NDArray[np.int_], npt.NDArray[np.int_]]:
+    ) -> Tuple[List[npt.NDArray[np.int32]], npt.NDArray[np.bool_], npt.NDArray[np.int32], npt.NDArray[np.int32]]:
         """Merge consecutive branches in the graph. (See :meth:`merge_consecutive_branches` for the public method)
 
         .. warning::
@@ -2927,8 +2936,8 @@ class VGraph:
         branch_pairs = np.asarray(branch_pairs, dtype=int).reshape(-1, 2)
 
         chains = reduce_chains(branch_pairs.tolist(), return_index=True)
-        consecutive_branches = [np.array(c, dtype=np.int_) for c in chains[0]]
-        consecutive_pair_ids = [np.array(c, dtype=np.int_) for c in chains[1]]
+        consecutive_branches = [np.array(c, dtype=np.int32) for c in chains[0]]
+        consecutive_pair_ids = [np.array(c, dtype=np.int32) for c in chains[1]]
 
         # 2. For each group of consecutive branches flip them if needed and merge them
         branches_to_delete = []

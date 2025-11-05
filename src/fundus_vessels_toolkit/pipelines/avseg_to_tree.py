@@ -4,16 +4,20 @@ from abc import ABCMeta, abstractmethod
 from functools import reduce
 from operator import ior
 from pathlib import Path
+from types import EllipsisType
 from typing import Optional, Tuple
 
 import numpy as np
 import numpy.typing as npt
 import torch
+from skimage.morphology import binary_erosion, disk
+
+from fundus_toolkits import AVLabel, FundusData
+from fundus_toolkits.utils.geometric import Point
 
 from ..segment_to_graph.graph_simplification import GraphSimplifyArg
 from ..utils import if_none
-from ..utils.geometric import Point
-from ..vascular_data_objects import AVLabel, FundusData, VGraph, VTree
+from ..vascular_data_objects import VGraph, VTree
 from .seg_to_graph import SegToGraph
 
 
@@ -27,23 +31,23 @@ class AVSegToTreeBase(metaclass=ABCMeta):
         fundus: Optional[FundusData] = None,
         /,
         *,
-        av: Optional[npt.NDArray[np.uint8] | torch.Tensor | str | Path] = None,
-        od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
+        av: npt.NDArray[np.uint8] | torch.Tensor | str | Path | EllipsisType = ...,
+        od: npt.NDArray[np.bool_] | torch.Tensor | str | Path | EllipsisType = ...,
     ) -> Tuple[VTree, VTree]:
         pass
 
     def prepare_data(
         self,
         fundus: FundusData | None,
-        av: Optional[npt.NDArray[np.uint8] | torch.Tensor | str | Path] = None,
-        od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
+        av: npt.NDArray[np.uint8] | torch.Tensor | str | Path | EllipsisType = ...,
+        od: npt.NDArray[np.bool_] | torch.Tensor | str | Path | EllipsisType = ...,
     ) -> FundusData:
         if fundus is None:
-            if av is None or od is None:
+            if av is ... or od is ...:
                 raise ValueError("Either `fundus` or `av` and `od` must be provided.")
-            fundus = FundusData(vessels=av, od=od)
+            fundus = FundusData(av=av, od=od)
         else:
-            fundus = fundus.update(vessels=av, od=od)
+            fundus = fundus.update(av=av, od=od)
         return fundus
 
     @abstractmethod
@@ -52,8 +56,8 @@ class AVSegToTreeBase(metaclass=ABCMeta):
         fundus: Optional[FundusData] = None,
         /,
         *,
-        av: Optional[npt.NDArray[np.uint8] | torch.Tensor | str | Path] = None,
-        od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
+        av: npt.NDArray[np.uint8] | torch.Tensor | str | Path | EllipsisType = ...,
+        od: npt.NDArray[np.bool_] | torch.Tensor | str | Path | EllipsisType = ...,
     ) -> VGraph: ...
 
 
@@ -98,8 +102,8 @@ class AVSegToTree(AVSegToTreeBase):
         fundus: Optional[FundusData] = None,
         /,
         *,
-        av: Optional[npt.NDArray[np.uint8] | torch.Tensor | str | Path] = None,
-        od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
+        av: npt.NDArray[np.uint8] | torch.Tensor | str | Path | EllipsisType = ...,
+        od: npt.NDArray[np.bool_] | torch.Tensor | str | Path | EllipsisType = ...,
     ) -> Tuple[VTree, VTree]:
         fundus = self.prepare_data(fundus, av=av, od=od)
         if fundus.od_center is None:
@@ -181,13 +185,11 @@ class AVSegToTree(AVSegToTreeBase):
         fundus=None,
         /,
         *,
-        av=None,
-        od=None,
+        av: npt.NDArray[np.uint8] | torch.Tensor | str | Path | EllipsisType = ...,
+        od: npt.NDArray[np.bool_] | torch.Tensor | str | Path | EllipsisType = ...,
         label_av=True,
         simplify=True,
     ):
-        from skimage.morphology import binary_erosion, disk
-
         fundus = self.prepare_data(fundus, av=av, od=od)
         if self.mask_optic_disc and fundus.od is not None:
             mask = ~binary_erosion(fundus.od, disk(fundus.od_diameter * 0.2, dtype=np.bool_))  # type: ignore
@@ -227,8 +229,8 @@ class GNNAVSegToTree(AVSegToTree):
         fundus: Optional[FundusData] = None,
         /,
         *,
-        av: Optional[npt.NDArray[np.uint8] | torch.Tensor | str | Path] = None,
-        od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
+        av: npt.NDArray[np.uint8] | torch.Tensor | str | Path | EllipsisType = ...,
+        od: npt.NDArray[np.bool_] | torch.Tensor | str | Path | EllipsisType = ...,
     ) -> Tuple[VTree, VTree]:
         fundus = self.prepare_data(fundus, av=av, od=od)
         if fundus.od_center is None:
@@ -333,15 +335,16 @@ class NaiveAVSegToTree(AVSegToTreeBase):
         fundus: Optional[FundusData] = None,
         /,
         *,
-        av: Optional[npt.NDArray[np.uint8] | torch.Tensor | str | Path] = None,
-        od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
+        av: npt.NDArray[np.uint8] | torch.Tensor | str | Path | EllipsisType = ...,
+        od: npt.NDArray[np.bool_] | torch.Tensor | str | Path | EllipsisType = ...,
     ) -> Tuple[VTree, VTree]:
         fundus = self.prepare_data(fundus, av=av, od=od)
         if fundus.od_center is None:
             raise NotImplementedError("Parsing tree of image without optic disc is not implemented.")
         av = fundus.av.copy()
-        if self.mask_optic_disc:
-            av[fundus.od] = 0
+        if self.mask_optic_disc and fundus.od is not None:
+            mask = binary_erosion(fundus.od, disk(fundus.od_diameter * 0.2, dtype=np.bool_))  # type: ignore
+            av[mask] = 0
         av_skeleton = self.av_skeletonize(av)
 
         graphs = [
@@ -403,14 +406,15 @@ class NaiveAVSegToTree(AVSegToTreeBase):
         fundus: Optional[FundusData] = None,
         /,
         *,
-        av: Optional[npt.NDArray[np.uint8] | torch.Tensor | str | Path] = None,
-        od: Optional[npt.NDArray[np.bool_] | torch.Tensor | str | Path] = None,
+        av: npt.NDArray[np.uint8] | torch.Tensor | str | Path | EllipsisType = ...,
+        od: npt.NDArray[np.bool_] | torch.Tensor | str | Path | EllipsisType = ...,
         simplify: Optional[bool] = None,
     ) -> Tuple[VGraph, VGraph]:
         fundus = self.prepare_data(fundus, av=av, od=od)
         av = fundus.av.copy()
-        if self.mask_optic_disc:
-            av[fundus.od] = 0
+        if self.mask_optic_disc and fundus.od is not None:
+            mask = binary_erosion(fundus.od, disk(fundus.od_diameter * 0.2, dtype=np.bool_))  # type: ignore
+            av[mask] = 0
 
         av_skeleton = self.av_skeletonize(av)
 

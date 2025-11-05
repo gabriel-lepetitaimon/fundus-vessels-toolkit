@@ -6,7 +6,7 @@ from typing import Dict, List, Mapping, Optional, Self, Tuple, Type
 import numpy as np
 import numpy.typing as npt
 
-from .geometric import Rect
+from fundus_toolkits.utils.geometric import Rect
 
 
 def _np_short_str(arr: npt.NDArray[np.floating]) -> str:

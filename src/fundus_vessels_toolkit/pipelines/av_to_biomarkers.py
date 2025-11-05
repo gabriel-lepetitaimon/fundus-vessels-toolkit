@@ -8,7 +8,9 @@ import numpy.typing as npt
 import pandas as pd
 import torch
 
-from ..vascular_data_objects import FundusData, VTree
+from fundus_toolkits import FundusData
+
+from ..vascular_data_objects import VTree
 from .avseg_to_tree import AVSegToTreeBase
 
 

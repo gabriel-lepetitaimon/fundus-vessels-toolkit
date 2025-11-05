@@ -5,66 +5,65 @@
 ########################################################################################################################
 from __future__ import annotations
 
-__all__ = ["classification_model", "classify_AV", "ClassifyModel"]
+__all__ = ["classify_av_model", "classify_av", "ClassifyAVModel"]
 
 import typing
 import warnings
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Sequence, Tuple, overload
+from typing import Any, Dict, Literal, Optional, Sequence, Tuple, overload
 
 import numpy as np
 import numpy.typing as npt
 import torch
-from fundus_toolkits.utils.fundus import fundus_ROI, gaussian_preprocess_torch
-from fundus_toolkits.utils.image import PathLikeType, crop_pad, read_image
-from fundus_toolkits.utils.models import ModelCache, PrePostProcessing, TensorSpec, download_state_dict
 
 from steered_cnn.models.steered import SteeredHemelingNet
-from steered_cnn.utils.torch import crop_pad
 
-from ..utils.torch import TensorArray, img_to_torch
+from fundus_toolkits.models import basic_fundus_pre_postprocessing, cache_model, download_state_dict
+from fundus_toolkits.models.generic_inference import fundus_inference
+from fundus_toolkits.models.pre_postprocessing import PrePostProcessing, TensorSpec
+from fundus_toolkits.utils.fundus import fundus_ROI, gaussian_preprocess_torch
+from fundus_toolkits.utils.image import crop_pad, read_image
+from fundus_toolkits.utils.torch import DeviceLikeType, TensorArray, img_to_torch
+from fundus_toolkits.utils.typing import PathLike
 
-if TYPE_CHECKING:
-    from torch._prims_common import DeviceLikeType
 
-
-class ClassifyModel(str, Enum):
+class ClassifyAVModel(str, Enum):
     """
     The available pretrained models for vessel segmentation.
     """
 
-    HEMELING = "HEMELING"
-    HEMELING_STEERED = "HEMELING_STEERED"
+    HEMELING = "hemeling"
+    HEMELING_STEERED = "hemeling_steered"
 
 
-_last_model: ModelCache[ClassifyModel] = ModelCache()
+ClassifyAVModels: typing.TypeAlias = Literal["hemeling", "hemeling_steered"] | ClassifyAVModel
 
 
 @overload
-def classify_AV(
-    fundus_image: npt.NDArray | PathLikeType | Sequence[PathLikeType],
+def classify_av(
+    fundus_image: npt.NDArray | PathLike | Sequence[PathLike],
     vessels_mask: Optional[torch.Tensor | npt.NDArray[np.bool_]] = None,
-    roi_mask: Literal["auto"] | npt.NDArray | torch.Tensor | str | Sequence[str] = "auto",
     *,
-    model_name: ClassifyModel = ClassifyModel.HEMELING_STEERED,
+    roi_mask: Literal["auto"] | npt.NDArray | torch.Tensor | str | Sequence[str] = "auto",
+    model_name: ClassifyAVModel = ClassifyAVModel.HEMELING_STEERED,
     device: DeviceLikeType | Literal["auto"] = "auto",
 ) -> npt.NDArray[np.uint8]: ...
 @overload
-def classify_AV(
+def classify_av(
     fundus_image: torch.Tensor,
     vessels_mask: Optional[torch.Tensor | npt.NDArray[np.bool_]] = None,
-    roi_mask: Literal["auto"] | npt.NDArray | torch.Tensor | str | Sequence[str] = "auto",
     *,
-    model_name: ClassifyModel = ClassifyModel.HEMELING_STEERED,
+    roi_mask: Literal["auto"] | npt.NDArray | torch.Tensor | str | Sequence[str] = "auto",
+    model_name: ClassifyAVModel = ClassifyAVModel.HEMELING_STEERED,
     device: DeviceLikeType | Literal["auto"] = "auto",
 ) -> torch.Tensor: ...
-def classify_AV(
-    fundus_image: torch.Tensor | npt.NDArray | PathLikeType | Sequence[PathLikeType],
+def classify_av(
+    fundus_image: torch.Tensor | npt.NDArray | PathLike | Sequence[PathLike],
     vessels_mask: Optional[torch.Tensor | npt.NDArray[np.bool_]] = None,
-    roi_mask: Literal["auto"] | npt.NDArray | torch.Tensor | str | Sequence[str] = "auto",
     *,
-    model_name: ClassifyModel = ClassifyModel.HEMELING_STEERED,
+    roi_mask: Literal["auto"] | npt.NDArray | torch.Tensor | str | Sequence[str] = "auto",
+    model_name: ClassifyAVModel = ClassifyAVModel.HEMELING_STEERED,
     device: DeviceLikeType | Literal["auto"] = "auto",
 ) -> torch.Tensor | npt.NDArray[np.uint8]:
     """
@@ -88,25 +87,14 @@ def classify_AV(
     -------
     torch.Tensor
         The classification results.
-    """
+    """  # noqa: E501
 
     if device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # --- Fetch model by name ---
-    global _last_model
-    # pre_post_process = basic_fundus_pre_postprocessing(model_name, None)
-    if _last_model.is_cached():
-        # Attempt to load the model from cache
-        model = _last_model.model_to(device=device)
-        if _last_model.has_pre_post_processing():
-            pre_post_process = _last_model.pre_post_processing
-        else:
-            raise NotImplementedError
-    else:
-        model = classification_model(model_name).to(device=device)
-        pre_post_process = classification_pre_post_processing(model_name)
-        _last_model.set_model(model_name, model, pre_post_process)
+    model = classify_av_model(model_name).to(device=device)
+    pre_post_process = classification_pre_post_processing(model_name)
 
     # --- Read images if provided as path ---
     result_to_numpy = not isinstance(fundus_image, torch.Tensor)
@@ -174,7 +162,8 @@ def classify_AV(
     return av_pred
 
 
-def classification_model(model_name: ClassifyModel = ClassifyModel.HEMELING_STEERED) -> torch.nn.Module:
+@cache_model()
+def classify_av_model(model_name: ClassifyAVModels = ClassifyAVModel.HEMELING_STEERED) -> torch.nn.Module:
     """
     Loads a pretrained model for vessel segmentation.
 
@@ -191,8 +180,8 @@ def classification_model(model_name: ClassifyModel = ClassifyModel.HEMELING_STEE
     torch.nn.Module
         The segmentation model.
     """
-    match model_name:
-        case ClassifyModel.HEMELING_STEERED:
+    match ClassifyAVModel(model_name):
+        case ClassifyAVModel.HEMELING_STEERED:
             opts = dict(n_in=6, n_out=1, nfeatures=11, nscale=5, depth=2)
             opts |= dict(batchnorm=True, padding="auto", upsampling="bilinear", downsampling="conv")
             opts |= dict(rho_nonlinearity="normalize", attention_mode=False, attention_base=False)
@@ -204,13 +193,15 @@ def classification_model(model_name: ClassifyModel = ClassifyModel.HEMELING_STEE
             model.load_state_dict(state_dict)
         case _:
             raise ValueError(
-                f"Unknown model: {model_name}.\nAvailable models are: {', '.join(_.value for _ in ClassifyModel)}."
+                f"Unknown model: {model_name}.\nAvailable models are: {', '.join(_.value for _ in ClassifyAVModel)}."
             )
 
     return model.eval()
 
 
-def classification_pre_post_processing(model_name: ClassifyModel = ClassifyModel.HEMELING_STEERED) -> PrePostProcessing:
+def classification_pre_post_processing(
+    model_name: ClassifyAVModels = ClassifyAVModel.HEMELING_STEERED,
+) -> PrePostProcessing:
     """
     Preprocesses the fundus images for classification.
 
@@ -227,16 +218,14 @@ def classification_pre_post_processing(model_name: ClassifyModel = ClassifyModel
     torch.Tensor
         The preprocessed fundus images.
     """
-    from .vessels_segmentation import basic_fundus_pre_postprocessing
-
-    match model_name:
-        case ClassifyModel.HEMELING_STEERED:
-            return steering_pre_post_processing("hemeling_steered", 565, auto_resize=True)
-        case ClassifyModel.HEMELING:
-            return basic_fundus_pre_postprocessing("hemeling", 565, auto_resize=True)
+    match ClassifyAVModel(model_name):
+        case ClassifyAVModel.HEMELING_STEERED:
+            return steering_pre_post_processing(565, model_name="hemeling_steered", auto_resize=True)
+        case ClassifyAVModel.HEMELING:
+            return basic_fundus_pre_postprocessing(565, model_name="hemeling", auto_resize=True)
         case _:
             raise ValueError(
-                f"Unknown model: {model_name}.\nAvailable models are: {', '.join(_.value for _ in ClassifyModel)}."
+                f"Unknown model: {model_name}.\nAvailable models are: {', '.join(_.value for _ in ClassifyAVModel)}."
             )
 
 
@@ -247,7 +236,7 @@ def classification_pre_post_processing(model_name: ClassifyModel = ClassifyModel
 #
 ########################################################################################################################
 def steering_pre_post_processing(
-    model_name: str, standard_resolution: Optional[int] = 512, auto_resize=True
+    standard_resolution: Optional[int] = 512, model_name: str = "this steered model", auto_resize=True
 ) -> PrePostProcessing:
     """
     Returns the pre and post processing for the classification model.
@@ -261,7 +250,7 @@ def steering_pre_post_processing(
     def preprocess(
         fundus: TensorArray,
         vessels: torch.Tensor | npt.NDArray[np.bool_],
-        alpha: Optional[torch.Tensor | npt.NDArray[np.float_]] = None,
+        alpha: Optional[torch.Tensor | npt.NDArray[np.float32]] = None,
         device: DeviceLikeType | Literal["auto"] = "auto",
     ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], Dict[str, Any]]:
         if device == "auto":

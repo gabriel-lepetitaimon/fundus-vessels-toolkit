@@ -10,12 +10,12 @@ from typing import Any, Dict, Generic, List, NamedTuple, Optional, Self, Sequenc
 import numpy as np
 import numpy.typing as npt
 
-from fundus_vessels_toolkit.utils.lookup_array import invert_lookup
+from fundus_toolkits.utils.geometric import Point
 
 from ..utils.bezier import BSpline
 from ..utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
 from ..utils.fundus_projections import FundusProjection, Translation
-from ..utils.geometric import Point
+from ..utils.lookup_array import invert_lookup
 
 _registered_vbranch_geo_data_types: Dict[str, MetaVBranchGeoDataBase] = {}
 

@@ -1,9 +1,11 @@
 from typing import Callable, List, Optional, Tuple
 
 import numpy as np
+import numpy.typing as npt
+
+from fundus_toolkits.utils.geometric import Point
 
 from ..utils.bezier import BezierCubic, BSpline
-from ..utils.geometric import Point
 from ..vascular_data_objects import VBranchGeoData, VGraph
 
 
@@ -17,14 +19,14 @@ def junction_incident_branches_descriptor(
     geometric_data_id: int = 0,
     junctions_id: Optional[np.ndarray] = None,  # noqa: F821
     *,
-    bspline_name: str = VBranchGeoData.Fields.BSPLINE,
-    calibre_name: str = VBranchGeoData.Fields.CALIBRES,
+    bspline_name=VBranchGeoData.Fields.BSPLINE,
+    calibre_name=VBranchGeoData.Fields.CALIBRES,
     return_junctions_id: bool = False,
     return_incident_branches_id: bool = False,
     return_incident_branches_u: bool = False,
     return_scalar_features_std: bool = False,
     N_max_branches: int = 4,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[npt.NDArray, ...]:
     """
     Computes the descriptor of all junctions in a graph.
 
@@ -81,20 +83,20 @@ def junction_incident_branches_descriptor(
 
     for junction_i, node_id in enumerate(junctions_id):
         nodes_id[junction_i] = node_id
-        p = geo_datanode_coord(node_id)
+        p = geo_data.node_coord(node_id)
 
-        branches, are_outgoing = vgraph.incident_branches(node_id, return_branch_direction=True)
+        branches, are_outgoing = vgraph.adjacent_branches(node_id, return_branch_direction=True)
         incident_beziers: List[BezierCubic] = []
         incident_calibre: List[np.ndarray] = []
 
         # Read the bezier cubic curve and calibres of incident branches to the junction
-        bsplines: List[BSpline] = geo_data.branch_bspline(branches, name=bspline_name)
+        bsplines: List[BSpline] = geo_data.branch_bspline(branches, attr=bspline_name)
         for branch_id, is_outgoing, bspline in zip(branches, are_outgoing, bsplines, strict=True):
             if len(bspline) == 0 or (len(bspline) == 1 and bspline[0].chord_length() < 20):
                 p0_id, p1_id = vgraph.branch_list[branch_id]
                 if not is_outgoing:
                     p0_id, p1_id = p1_id, p0_id
-                p0, p1 = Point(*geo_datanode_coord(p0_id)), Point(*geo_datanode_coord(p1_id))
+                p0, p1 = Point(*geo_data.node_coord(p0_id)), Point(*geo_data.node_coord(p1_id))
                 incident_beziers.append(BezierCubic(p0, p1, p0, p1))
                 incident_calibre.append(0)
             else:
@@ -135,7 +137,7 @@ def junction_incident_branches_descriptor(
             L2_features[junction_i, i, 0] = incident_calibre[branch_i]
             # L2_features[junction_i, i, 1] = bezier.chord_length()  # Chord length
 
-    outs = [cos_features, L2_features]
+    outs: List[npt.NDArray] = [cos_features, L2_features]
     if return_junctions_id:
         outs.append(nodes_id)
     if return_incident_branches_id:
@@ -144,4 +146,4 @@ def junction_incident_branches_descriptor(
         outs.append(u_vectors)
     if return_scalar_features_std:
         outs.append(np.array([2]))
-    return outs
+    return tuple(outs)

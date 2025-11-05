@@ -1,6 +1,8 @@
 import warnings
 
-from ..vascular_data_objects import AVLabel, VTree
+from fundus_toolkits import AVLabel
+
+from ..vascular_data_objects import VTree
 from .graph_simplification import simplify_passing_nodes
 
 
