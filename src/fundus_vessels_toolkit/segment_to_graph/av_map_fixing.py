@@ -167,6 +167,92 @@ def draw_missing_connections(graph: VGraph, out: npt.NDArray, fill_value: int = 
             bezier.rasterize(out, width=mean_calibre, fill_value=fill_value)
 
 
+def evaluate_topology(
+    tree: VTree, topo_labels: npt.NDArray[np.uint64], topo_map: npt.NDArray[np.float32], *, epsilon=1e-5
+) -> dict[str, npt.NDArray]:
+    """
+    Evaluate the topology of the vessel tree against the topological labels.
+
+    Parameters
+    ----------
+    tree : VTree
+        The vessel tree to evaluate.
+    topo_labels : npt.NDArray[np.uint64]
+        The topological labels of the branches.
+    topo_map : npt.NDArray[np.float32]
+        The topological map of the vessel tree.
+
+    Returns
+    -------
+    Dict[str, Any]
+        A dictionary containing the evaluation metrics.
+    """
+    tree = tree.flip_branch_to_tree_dir()
+    branches = np.arange(tree.branch_count)
+
+    nodes_yx = tree.geometric_data().node_coord()
+    B = tree.branch_count
+
+    # === UNKNOWN BRANCHES AND BRANCH DIRECTIONS ===
+    unknown_branches = np.zeros_like(branches, dtype=np.bool_)
+    branches_dir = np.zeros_like(branches, dtype=np.float32)
+    for b in tree.branches():
+        if (curve := b.curve()) is None:
+            t1, t2 = [topo_map[*_.coord().int_tuple()] for _ in b.nodes()]
+            if t1 == 0 and t2 == 0:
+                unknown_branches[b.id] = True
+            elif t2 - t1 > epsilon:
+                branches_dir[b.id] = 1
+            elif t1 - t2 > epsilon:
+                branches_dir[b.id] = -1
+            continue
+
+        topo_values = topo_map[*curve.T]
+        null_topo = topo_values == 0
+        topo_values = topo_values[~null_topo]
+        if np.mean(null_topo) > 2 / 3 or len(topo_values) < 2:
+            unknown_branches[b.id] = True
+            continue
+
+        diff = np.diff(topo_values)
+        forward_diff = diff > epsilon
+        backward_diff = diff < -epsilon
+        branches_dir[b.id] = np.mean(1 * forward_diff - 1 * backward_diff)
+
+    # === BRANCH BEST PARENT ===
+    head_nodes = tree.branch_list[np.arange(B), (branches_dir >= 0).astype(np.int32)]
+    heads_yx = nodes_yx[head_nodes].astype(np.int32)
+    heads_label, heads_rank = topo_labels[*heads_yx.T], topo_map[*heads_yx.T]
+
+    tail_nodes = tree.branch_list[np.arange(B), (branches_dir < 0).astype(np.int32)]
+    tails_yx = nodes_yx[tail_nodes].astype(np.int32)
+    tails_label, tails_rank = topo_labels[*tails_yx.T], topo_map[*tails_yx.T]
+
+    best_parent = np.full(tree.branch_count, -1, dtype=np.int32)
+    for b_id in branches[~unknown_branches]:
+        b = tree.branch(b_id)
+        tail_label = TopologicalLabel(tails_label[b_id])
+        tail_rank = tails_rank[b_id]
+
+        ancestors = (tail_label == heads_label) | tail_label.is_child_of(heads_label)
+        ancestors[b_id] = False  # A branch cannot be its own parent
+        ancestors[heads_rank > tail_rank] = False  # Parent must have a lower rank
+        ancestors = np.where(ancestors)[0]
+
+        if len(ancestors) == 0:
+            continue
+
+        best_ancestors = ancestors[np.argsort(heads_rank[ancestors])[::-1]]  # Prefer the highest rank
+        best_parent[b_id] = best_ancestors[0]
+
+    return dict(
+        missing=np.array(unknown_branches, dtype=np.int32),
+        gt_dir=branches_dir,
+        gt_parent=best_parent,
+        parent=tree.branch_tree,
+    )
+
+
 def count_disconnection(graph, topological_labels: npt.NDArray[np.uint64]) -> int:
     """
     Count the number of disconnected branches in the graph based on the topological map.
@@ -331,16 +417,51 @@ class TopologicalLabel(np.uint64):
         o = TopologicalLabel(other)
         return self.subtree == o.subtree
 
-    def is_parent_of(self, other: Self | np.int32) -> bool:
+    @overload
+    def is_parent_of(self, other: Self | np.uint64) -> bool: ...
+    @overload
+    def is_parent_of(self, other: npt.NDArray[np.uint64]) -> npt.NDArray[np.bool_]: ...
+    def is_parent_of(self, other: Self | np.uint64 | npt.NDArray[np.uint64]) -> bool | npt.NDArray[np.bool_]:
         """
         Check if this label is a parent of another label.
         """
-        o = TopologicalLabel(other)
-        return (
-            self.subtree == o.subtree
-            and self.rank < o.rank
-            and bool(np.all(self.branching_pattern == o.branching_pattern[: self.rank]))
-        )
+        if not isinstance(other, np.ndarray):
+            o = TopologicalLabel(other)
+            return (
+                self.subtree == o.subtree
+                and self.rank < o.rank
+                and bool(np.all(self.branching_pattern == o.branching_pattern[: self.rank]))
+            )
+        else:
+            o_subtrees = (other & self.SUBTREE_MASK >> np.int32(52)) - np.int32(1)
+            o_ranks = (other & self.RANK_MASK) >> np.int32(44)
+            pattern_mask = np.uint64(2**self.rank) - np.uint64(1)
+            o_patterns = other & pattern_mask
+            self_pattern = self & pattern_mask
+            return (self.subtree == o_subtrees) & (self.rank < o_ranks) & (self_pattern == o_patterns)
+
+    @overload
+    def is_child_of(self, other: Self | np.uint64) -> bool: ...
+    @overload
+    def is_child_of(self, other: npt.NDArray[np.uint64]) -> npt.NDArray[np.bool_]: ...
+    def is_child_of(self, other: Self | np.uint64 | npt.NDArray[np.uint64]) -> bool | npt.NDArray[np.bool_]:
+        """
+        Check if this label is a child of another label.
+        """
+        if not isinstance(other, np.ndarray):
+            o = TopologicalLabel(other)
+            return (
+                self.subtree == o.subtree
+                and self.rank > o.rank
+                and bool(np.all(o.branching_pattern == self.branching_pattern[: o.rank]))
+            )
+        else:
+            o_subtrees = (other & self.SUBTREE_MASK).astype(np.int32) >> np.int32(52) - np.int32(1)
+            o_ranks = (other & self.RANK_MASK).astype(np.int32) >> np.int32(44)
+            pattern_mask = np.uint64(2**o_ranks) - np.uint64(1)
+            o_patterns = other & pattern_mask
+            self_pattern = self & pattern_mask
+            return (self.subtree == o_subtrees) & (self.rank > o_ranks) & (self_pattern == o_patterns)
 
     def common_ancestor(self, other: Self | np.int32) -> Self | None:
         """
