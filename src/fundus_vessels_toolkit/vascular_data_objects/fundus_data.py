@@ -355,7 +355,7 @@ class FundusData:
         return self._fundus
 
     @property
-    def has_fundus_mask(self) -> bool:
+    def has_roi_mask(self) -> bool:
         return self._fundus_mask is not None
 
     @property
@@ -459,7 +459,7 @@ class FundusData:
             _description_
         """
         if apply_mask is None:
-            apply_mask = self.has_fundus_mask
+            apply_mask = self.has_roi_mask
         mask = np.ones(self.shape, bool) if not apply_mask else self.fundus_mask
         if exclude_od:
             mask &= ~self.od

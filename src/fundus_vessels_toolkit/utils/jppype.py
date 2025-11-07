@@ -28,9 +28,12 @@ def draw_tree(
     name="tree",
     edge_labels=False,
     node_labels=False,
+    edge: Literal["bspline", "line", "skeleton"] = "bspline",
     branch_color: Literal["av", "rank", "subtree"] = "rank",
 ) -> LayerGraph:
-    layer = tree.jppype_layer(bspline=True, edge_labels=edge_labels, node_labels=node_labels)
+    layer = tree.jppype_layer(
+        edge_map=edge == "skeleton", bspline=edge == "bspline", edge_labels=edge_labels, node_labels=node_labels
+    )
 
     if artery:
         root_color = "#7a1a1a"
@@ -77,6 +80,7 @@ def draw_trees(
     view: View2D | View2dGroup,
     edge_labels=False,
     node_labels=False,
+    edge: Literal["bspline", "line", "skeleton"] = "bspline",
     branch_color: Literal["av", "rank", "subtree"] = "rank",
 ) -> None:
     """
@@ -96,6 +100,7 @@ def draw_trees(
         name="artery_tree",
         edge_labels=edge_labels,
         node_labels=node_labels,
+        edge=edge,
         branch_color=branch_color,
     )
     draw_tree(
@@ -105,6 +110,7 @@ def draw_trees(
         name="vein_tree",
         edge_labels=edge_labels,
         node_labels=node_labels,
+        edge=edge,
         branch_color=branch_color,
     )
 

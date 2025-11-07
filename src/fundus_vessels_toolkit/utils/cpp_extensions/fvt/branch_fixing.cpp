@@ -25,8 +25,8 @@
  * the calibre of the branches tips.
  */
 std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_branches_skeleton(
-    std::vector<CurveYX> &branchCurves, Tensor2DAcc<int> &branchesLabelMap, const Tensor2DAcc<bool> &segmentation,
-    const GraphAdjList &adjacency, int maxRemovedLength, int maxRemovedLengthEnd, bool adaptativeTangent) {
+    std::vector<CurveYX>& branchCurves, Tensor2DAcc<int>& branchesLabelMap, const Tensor2DAcc<bool>& segmentation,
+    const GraphAdjList& adjacency, int maxRemovedLength, int maxRemovedLengthEnd, bool adaptativeTangent) {
     std::vector<IntPair> branches_tips(branchCurves.size(), {0, 0});
     std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> out(branchCurves.size());
 
@@ -35,13 +35,13 @@ std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_
 #pragma omp parallel for
     for (int nodeID = 0; nodeID < (int)adjacency.size(); nodeID++) {
         // For each node, find the first valid skeleton pixel of...
-        auto const &node_adjacency = adjacency[nodeID];
+        auto const& node_adjacency = adjacency[nodeID];
 
         if (node_adjacency.size() == 1) {
             // ... its **single** branch ...
-            const auto &edge = *node_adjacency.begin();
+            const auto& edge = *node_adjacency.begin();
             const bool startSide = nodeID == edge.start;
-            auto const &[tipIdx, tangent, calibre, boundL, boundR] = clean_branch_skeleton_tip(
+            auto const& [tipIdx, tangent, calibre, boundL, boundR] = clean_branch_skeleton_tip(
                 branchCurves, edge.id, startSide, segmentation, maxRemovedLengthEnd, adaptativeTangent);
 
             // ... and store the tip indices, in order to clean them later.
@@ -49,13 +49,13 @@ std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_
             out[edge.id][startSide ? 0 : 1] = {startSide ? tangent : -tangent, calibre, boundL, boundR};
         } else {
             //  ... **all** its incident branches...
-            auto const &tips_around_node = clean_branch_skeleton_around_node(
+            auto const& tips_around_node = clean_branch_skeleton_around_node(
                 branchCurves, nodeID, node_adjacency, segmentation, maxRemovedLength, adaptativeTangent);
 
             // ... and store the tips indices, in order to clean them later.
             int i = 0;
-            for (auto const &edge : node_adjacency) {
-                auto const &[tipIdx, tangent, calibre, boundL, boundR] = tips_around_node[i];
+            for (auto const& edge : node_adjacency) {
+                auto const& [tipIdx, tangent, calibre, boundL, boundR] = tips_around_node[i];
                 if (nodeID == edge.start) {
                     branches_tips[edge.id][0] = tipIdx;
                     out[edge.id][0] = {tangent, calibre, boundL, boundR};
@@ -72,7 +72,7 @@ std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_
 #pragma omp parallel for
     for (std::size_t i = 0; i < branchCurves.size(); i++) {
         // For each branch, remove the invalid pixels
-        auto &branchYX = branchCurves[i];
+        auto& branchYX = branchCurves[i];
         auto [firstI, lastI] = branches_tips[i];
 
         if (firstI <= lastI - 1) {
@@ -93,7 +93,7 @@ std::vector<std::array<std::tuple<Vector, float, IntPoint, IntPoint>, 2>> clean_
     return out;
 }
 
-bool is_valid_boundaries(const IntPoint &p, const std::array<IntPoint, 2> &boundaries) {
+bool is_valid_boundaries(const IntPoint& p, const std::array<IntPoint, 2>& boundaries) {
     // 1. Check if the boundaries are valid
     auto const &boundL = boundaries[0], boundR = boundaries[1];
     if (!boundL.is_valid() || !boundR.is_valid()) return false;
@@ -137,13 +137,13 @@ bool is_valid_boundaries(const IntPoint &p, const std::array<IntPoint, 2> &bound
  *
  */
 std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_skeleton_around_node(
-    const std::vector<CurveYX> &branchCurves, int nodeID, const std::set<Edge> &node_adjacency,
-    const Tensor2DAcc<bool> &segmentation, int maxRemovedLength, bool adaptativeTangent = false) {
+    const std::vector<CurveYX>& branchCurves, int nodeID, const std::set<Edge>& node_adjacency,
+    const Tensor2DAcc<bool>& segmentation, int maxRemovedLength, bool adaptativeTangent = false) {
     // === Preparation ==
     // Read branches id and side
     std::vector<std::tuple<int, bool>> branchesInfos;
     branchesInfos.reserve(node_adjacency.size());
-    for (const auto &edge : node_adjacency) {
+    for (const auto& edge : node_adjacency) {
         if (edge.start == nodeID) branchesInfos.push_back({edge.id, true});
         if (edge.end == nodeID) branchesInfos.push_back({edge.id, false});
     }
@@ -151,7 +151,7 @@ std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_ske
     // Prepare a lambda function to get the start and end (if the maximum length
     // was to be removed) of a branch
     auto get_branch_start_end = [&](int branchID, bool forward) {
-        const CurveYX &curveYX = branchCurves[branchID];
+        const CurveYX& curveYX = branchCurves[branchID];
         const int curveEnd = (int)curveYX.size() - 1;  // Last valid index of the curve
         // If the node is a junction, it should be removed from the branch skeleton
         const int c0 = node_adjacency.size() > 1 ? 1 : 0;
@@ -166,7 +166,7 @@ std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_ske
     // === For each branch: search first valid pixel (Lambda Function) ===
     auto find_first_valid_branch_pixel = [&](int branchI) {
         auto [branchID, forward] = branchesInfos[branchI];
-        const CurveYX &curveYX = branchCurves[branchID];
+        const CurveYX& curveYX = branchCurves[branchID];
 
         auto const [start, end] = get_branch_start_end(branchID, forward);
         const int curveSize = curveYX.size();
@@ -176,9 +176,9 @@ std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_ske
             return std::make_tuple(end, Point(0, 0), INVALID_CALIBRE, IntPoint::Invalid(), IntPoint::Invalid());
 
         // === Check if pixel is valid (Lambda Function) ===
-        auto is_branch_pixel_valid = [&](const IntPoint &p, const std::array<IntPoint, 2> &boundaries,
-                                         const std::array<IntPoint, 2> &nextBoundaries, const Point &tangent,
-                                         const Point &nextTangent, float calibre, float nextCalibre) {
+        auto is_branch_pixel_valid = [&](const IntPoint& p, const std::array<IntPoint, 2>& boundaries,
+                                         const std::array<IntPoint, 2>& nextBoundaries, const Point& tangent,
+                                         const Point& nextTangent, float calibre, float nextCalibre) {
             // 1. Check if the boundaries are valid
             auto const &boundL = boundaries[0], boundR = boundaries[1];
             if (!boundL.is_valid() || !boundR.is_valid()) return false;
@@ -197,11 +197,11 @@ std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_ske
 
             // 4. Check if the skeleton closest to the boundaries belong to the
             // current branch
-            auto isClosestToCurrentBranch = [&](const IntPoint &bound) {
+            auto isClosestToCurrentBranch = [&](const IntPoint& bound) {
                 float distToCurrentBranch = distance(p, bound);
                 for (auto [id, forward] : branchesInfos) {
                     if (id == branchID) continue;
-                    const CurveYX &otherCurve = branchCurves[id];
+                    const CurveYX& otherCurve = branchCurves[id];
                     auto [otherStart, otherEnd] = get_branch_start_end(id, forward);
                     auto const [closest_p, dist] = find_closest_pixel(otherCurve, bound, otherStart, otherEnd, true);
                     if (dist < distToCurrentBranch) return false;
@@ -303,12 +303,12 @@ std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_ske
  * - The right boundary of the branch at this pixel.
  *
  */
-std::tuple<int, Vector, float, IntPoint, IntPoint> clean_branch_skeleton_tip(const std::vector<CurveYX> &branchCurves,
+std::tuple<int, Vector, float, IntPoint, IntPoint> clean_branch_skeleton_tip(const std::vector<CurveYX>& branchCurves,
                                                                              int branchID, bool startTip,
-                                                                             const Tensor2DAcc<bool> &segmentation,
+                                                                             const Tensor2DAcc<bool>& segmentation,
                                                                              int maxRemovedLength,
                                                                              bool adaptativeTangent = false) {
-    const CurveYX &curveYX = branchCurves[branchID];
+    const CurveYX& curveYX = branchCurves[branchID];
     int start = startTip ? 0 : curveYX.size() - 1;
     const int end = startTip ? std::min(maxRemovedLength, (int)curveYX.size() - 2)
                              : std::max((int)curveYX.size() - 1 - maxRemovedLength, 1);
@@ -329,9 +329,9 @@ std::tuple<int, Vector, float, IntPoint, IntPoint> clean_branch_skeleton_tip(con
     const int curveEnd = startTip ? end : start;
 
     // === Check if pixel is valid (Lambda Function) ===
-    auto is_branch_pixel_valid = [&](const IntPoint &p, const std::array<IntPoint, 2> &boundaries,
-                                     const std::array<IntPoint, 2> &nextBoundaries, const Point &tangent,
-                                     const Point &nextTangent, float calibre, float nextCalibre) {
+    auto is_branch_pixel_valid = [&](const IntPoint& p, const std::array<IntPoint, 2>& boundaries,
+                                     const std::array<IntPoint, 2>& nextBoundaries, const Point& tangent,
+                                     const Point& nextTangent, float calibre, float nextCalibre) {
         // 1. Check if the boundaries are valid
         auto const &boundL = boundaries[0], boundR = boundaries[1];
         if (!boundL.is_valid() || !boundR.is_valid()) return false;
@@ -385,14 +385,14 @@ std::tuple<int, Vector, float, IntPoint, IntPoint> clean_branch_skeleton_tip(con
     return std::make_tuple(end, tangent, calibre, boundaries[0], boundaries[1]);
 }
 
-void remove_small_spurs(float min_length, EdgeList &edgeList, std::vector<CurveYX> &branchCurves,
-                        std::vector<IntPoint> &nodeCoords, Tensor2DAcc<int> &labelMap) {
+void remove_small_spurs(float min_length, EdgeList& edgeList, std::vector<CurveYX>& branchCurves,
+                        std::vector<IntPoint>& nodeCoords, Tensor2DAcc<int>& labelMap) {
     // Search for the terminal edges
     std::vector<std::pair<Edge, int>> terminalEdges;
     terminalEdges.reserve(edgeList.size());
 
-    auto const &nodesRank = nodes_rank(edgeList);
-    for (const auto &edge : edgeList) {
+    auto const& nodesRank = nodes_rank(edgeList);
+    for (const auto& edge : edgeList) {
         if (edge.start >= 0 && nodesRank[edge.start] == 1)
             terminalEdges.push_back({edge, edge.start});
         else if (edge.end >= 0 && nodesRank[edge.end] == 1)
@@ -405,7 +405,7 @@ void remove_small_spurs(float min_length, EdgeList &edgeList, std::vector<CurveY
     std::vector<std::size_t> nodeToRemove;
     nodeToRemove.reserve(terminalEdges.size());
 
-    for (auto const &[edge, nodeId] : terminalEdges) {
+    for (auto const& [edge, nodeId] : terminalEdges) {
         // Filter the terminal edges: only select the small spurs for removal
         if (branchCurves[edge.id].size() <= min_length) {
             branchToRemove.push_back(edge);
@@ -435,8 +435,8 @@ void remove_small_spurs(float min_length, EdgeList &edgeList, std::vector<CurveY
  *
  * @return A list of edges representing the terminal edges of the graph.
  */
-std::vector<Edge> find_spurs(const std::vector<CurveYX> &branchCurves, const EdgeList &edgeList,
-                             const Tensor2DAcc<bool> &segmentation, float min_length, const float calibre_factor,
+std::vector<Edge> find_spurs(const std::vector<CurveYX>& branchCurves, const EdgeList& edgeList,
+                             const Tensor2DAcc<bool>& segmentation, float min_length, const float calibre_factor,
                              const float max_length) {
     min_length = std::max(min_length, 1.0f);
 
@@ -451,7 +451,7 @@ std::vector<Edge> find_spurs(const std::vector<CurveYX> &branchCurves, const Edg
     if (calibre_factor > 0) adjacency = edge_list_to_adjlist(edgeList);
 
 #pragma omp parallel for reduction(merge : branchToRemove)
-    for (auto const &edge : terminal_edge) {
+    for (auto const& edge : terminal_edge) {
         auto const curveSize = branchCurves[edge.id].size();
         // Filter the terminal edges: only select the small spurs for removal
         if (curveSize <= min_length) {
@@ -469,15 +469,15 @@ std::vector<Edge> find_spurs(const std::vector<CurveYX> &branchCurves, const Edg
     return branchToRemove;
 }
 
-float largest_node_calibre(const int nodeId, const GraphAdjList &adjacency, const std::vector<CurveYX> &branchesCurves,
-                           const Tensor2DAcc<bool> &segmentation) {
+float largest_node_calibre(const int nodeId, const GraphAdjList& adjacency, const std::vector<CurveYX>& branchesCurves,
+                           const Tensor2DAcc<bool>& segmentation) {
     float maxCalibre = -1;
-    for (auto const &nearEdge : adjacency[nodeId]) {
-        auto const &curve = branchesCurves[nearEdge.id];
+    for (auto const& nearEdge : adjacency[nodeId]) {
+        auto const& curve = branchesCurves[nearEdge.id];
         if (curve.empty()) continue;
 
         int evaluateAtI = nodeId == nearEdge.start ? 0 : (int)curve.size() - 1;
-        auto const &tangent = fast_curve_tangent(curve, evaluateAtI);
+        auto const& tangent = fast_curve_tangent(curve, evaluateAtI);
         const float calibre = fast_branch_calibre(curve, evaluateAtI, segmentation, tangent);
         if (is_valid_calibre(calibre)) maxCalibre = std::max(maxCalibre, calibre);
     }

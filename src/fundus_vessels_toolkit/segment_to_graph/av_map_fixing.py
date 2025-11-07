@@ -167,6 +167,76 @@ def draw_missing_connections(graph: VGraph, out: npt.NDArray, fill_value: int = 
             bezier.rasterize(out, width=mean_calibre, fill_value=fill_value)
 
 
+def count_disconnection(graph, topological_labels: npt.NDArray[np.uint64]) -> int:
+    """
+    Count the number of disconnected branches in the graph based on the topological map.
+
+    Parameters
+    ----------
+    graph : VGraph
+        The vessel graph to analyze.
+    topological_map : npt.NDArray[np.uint64]
+        The topological map of the vessel tree.
+
+    Returns
+    -------
+    int
+        The number of disconnected branches.
+    """
+    disconnected_count = 0
+    for branch in graph.branches():
+        branch_label = TopologicalLabel.encode(
+            subtree=branch.subtree_index(),
+            branching_pattern=branch.branching_pattern(),
+        )
+        curve = branch.curve()
+        rasterized_labels = topological_labels[
+            np.clip(curve[:, 0], 0, topological_labels.shape[0] - 1),
+            np.clip(curve[:, 1], 0, topological_labels.shape[1] - 1),
+        ]
+        if not np.any(rasterized_labels == branch_label):
+            disconnected_count += 1
+    return disconnected_count
+
+
+def evaluate_branch_direction(tree: VTree, topological_map: npt.NDArray[np.float32], epsilon=1e-5) -> npt.NDArray:
+    """
+
+    Parameters
+    ----------
+    tree : _type_
+        _description_
+    topological_map : npt.NDArray[np.uint64]
+        _description_
+
+    Returns
+    -------
+    npt.NDArray
+        _description_
+    """
+    direction = np.zeros((tree.branch_count,), dtype=np.float32)
+
+    for b in tree.flip_branch_to_tree_dir().branches():
+        curve = b.curve()
+        if curve.shape[0] < 2:
+            continue
+        topo_values = topological_map[curve[:, 0], curve[:, 1]]
+
+        # Discard zero values
+        topo_values = topo_values[topo_values != 0]
+
+        if len(topo_values) < 2:
+            continue
+
+        # Compute the direction as the mean of the topological values
+        diff = np.diff(topo_values)
+        forward_diff = diff > epsilon
+        backward_diff = diff < -epsilon
+        direction[b.id] = np.mean(1 * forward_diff - 1 * backward_diff)
+
+    return direction
+
+
 class TopologicalLabel(np.uint64):
     """
     A class representing a topological label for a branch in the vessel tree, coded on a 64-bit integer.

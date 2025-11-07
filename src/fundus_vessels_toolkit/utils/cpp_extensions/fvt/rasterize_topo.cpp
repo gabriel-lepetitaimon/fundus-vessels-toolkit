@@ -93,9 +93,9 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& r
                 const auto last = nextBoundariesAcc.size(0) - 1;
                 nextBounds = {IntPoint(nextBoundariesAcc[last][1]), IntPoint(nextBoundariesAcc[last][0])};
             }
-            if (std::max(distanceSqr(headBounds[1], nextBounds[1]), distanceSqr(headBounds[0], nextBounds[0])) >
-                bridge_gap_smaller_than)
-                continue;
+            // if (std::max(distanceSqr(headBounds[1], nextBounds[1]), distanceSqr(headBounds[0], nextBounds[0])) >
+            //    bridge_gap_smaller_than)
+            //    continue;
 
             // Draw the quad for the junction
             auto it = QuadIterator(headBounds[0], headBounds[1], nextBounds[1], nextBounds[0], maxShape);

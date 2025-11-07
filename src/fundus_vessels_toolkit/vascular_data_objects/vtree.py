@@ -1647,6 +1647,50 @@ class VTree(VGraph):
         """  # noqa: E501
         raise NotImplementedError("The merge_nodes method is not implemented yet.")
 
+    @overload
+    def split_branch(
+        self,
+        branch_id: int,
+        split_curve_id: Int1DArrayLike | Float1DArrayLike,
+        split_coord: Optional[PointArrayLike] = None,
+        *,
+        return_branch_ids: Literal[False] = False,
+        return_node_ids: Literal[False] = False,
+        inplace=False,
+    ) -> Self: ...
+    @overload
+    def split_branch(
+        self,
+        branch_id: int,
+        split_curve_id: Int1DArrayLike | Float1DArrayLike,
+        split_coord: Optional[PointArrayLike] = None,
+        *,
+        return_branch_ids: Literal[True],
+        return_node_ids: Literal[False] = False,
+        inplace=False,
+    ) -> Tuple[Self, npt.NDArray[np.int32]]: ...
+    @overload
+    def split_branch(
+        self,
+        branch_id: int,
+        split_curve_id: Int1DArrayLike | Float1DArrayLike,
+        split_coord: Optional[PointArrayLike] = None,
+        *,
+        return_branch_ids: Literal[False] = False,
+        return_node_ids: Literal[True],
+        inplace=False,
+    ) -> Tuple[Self, npt.NDArray[np.int32]]: ...
+    @overload
+    def split_branch(
+        self,
+        branch_id: int,
+        split_curve_id: Int1DArrayLike | Float1DArrayLike,
+        split_coord: Optional[PointArrayLike] = None,
+        *,
+        return_branch_ids: Literal[True],
+        return_node_ids: Literal[True],
+        inplace=False,
+    ) -> Tuple[Self, npt.NDArray[np.int32], npt.NDArray[np.int32]]: ...
     def split_branch(
         self,
         branch_id: int,
@@ -1677,7 +1721,23 @@ class VTree(VGraph):
         VTree
             The modified tree.
         """
-        raise NotImplementedError("The split_branch method is not implemented yet.")
+        tree = self if inplace else self.copy()
+        tree.flip_branch_to_tree_dir(inplace=True)
+
+        _, new_branch_ids, new_nodes_ids = super(VTree, tree).split_branch(
+            branch_id, split_curve_id, split_coord, return_branch_ids=True, return_node_ids=True, inplace=True
+        )
+
+        # === Update branch tree ===
+        new_branch_ids = new_branch_ids[1:]
+        branch_tree = np.concatenate([tree._branch_tree, [branch_id], new_branch_ids[:-1]])
+        branch_tree[branch_tree == branch_id] = new_branch_ids[-1]
+        tree._branch_tree = branch_tree
+
+        if return_branch_ids:
+            return (tree, new_branch_ids, new_nodes_ids) if return_node_ids else (tree, new_branch_ids)
+        else:
+            return (tree, new_nodes_ids) if return_node_ids else tree
 
     def bridge_nodes(self, node_pairs: IntPairArrayLike, *, fuse_nodes=False, check=True, inplace=False) -> Self:
         """Bridge the two given nodes with a new branch.

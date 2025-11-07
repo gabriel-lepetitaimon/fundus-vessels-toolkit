@@ -233,7 +233,7 @@ class GNNAVSegToTree(AVSegToTree):
         od: npt.NDArray[np.bool_] | torch.Tensor | str | Path | EllipsisType = ...,
     ) -> Tuple[VTree, VTree]:
         fundus = self.prepare_data(fundus, av=av, od=od)
-        if fundus.od_center is None:
+        if fundus.od_center is None or fundus.od_center.is_nan():
             raise NotImplementedError("Parsing tree of image without optic disc is not implemented.")
         graph = self.to_vgraph(fundus, simplify=True)
         lines_digraph_info = self.build_line_digraph(graph, fundus, inplace=True)
