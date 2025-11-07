@@ -1386,7 +1386,7 @@ class VTree(VGraph):
 
         delete_successors : bool, optional
             If True, the successors of the deleted branches are also removed. By default: False.
-            Otherwise if a branch has successors, an error is raised.
+            Otherwise if a branch has successors, they become root branches.
 
             By default: False.
 
@@ -1403,10 +1403,6 @@ class VTree(VGraph):
         branch_id = tree.as_branch_ids(branch_id)
         if delete_successors:
             branch_id = np.unique(np.concatenate([branch_id, tree.branch_successors(branch_id)]))
-        else:
-            assert (
-                invalid := np.setdiff1d(branch_id[np.where(tree.branch_has_successors(branch_id))[0]], branch_id)
-            ).size == 0, f"The branches {branch_id[invalid]} can't be deleted: they still have successors."
         super(tree.__class__, tree).delete_branch(branch_id, delete_orphan_nodes=delete_orphan_nodes, inplace=True)  # type: ignore
         return tree
 
@@ -1729,9 +1725,10 @@ class VTree(VGraph):
         )
 
         # === Update branch tree ===
-        new_branch_ids = new_branch_ids[1:]
-        branch_tree = np.concatenate([tree._branch_tree, [branch_id], new_branch_ids[:-1]])
+        branch_tree = tree.branch_tree.copy()
         branch_tree[branch_tree == branch_id] = new_branch_ids[-1]
+        branch_tree = np.concatenate([branch_tree, new_branch_ids[:-1]])
+        assert np.all(branch_tree != np.arange(branch_tree.size)), "Branch tree is corrupted after split_branch."
         tree._branch_tree = branch_tree
 
         if return_branch_ids:
