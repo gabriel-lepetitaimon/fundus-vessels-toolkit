@@ -580,7 +580,7 @@ class VGraph:
 
     def copy(self) -> Self:
         """Create a copy of the current Graph object."""
-        return VGraph(
+        return type(self)(
             self._branch_list.copy(),
             [gdata.copy(None) for gdata in self._geometric_data],
             self._node_attr.copy() if self._node_attr is not None else None,
@@ -714,7 +714,41 @@ class VGraph:
                     ) from None
         return cls(branches)
 
-    def subgraph(self, nodes: NodeIndicesLike) -> Self:
+    @overload
+    def subgraph(
+        self,
+        nodes: NodeIndicesLike,
+        *,
+        return_node_lookup: Literal[False] = False,
+        return_branch_lookup: Literal[False] = False,
+    ) -> VGraph: ...
+    @overload
+    def subgraph(
+        self,
+        nodes: NodeIndicesLike,
+        *,
+        return_node_lookup: Literal[True],
+        return_branch_lookup: Literal[False] = False,
+    ) -> tuple[VGraph, npt.NDArray[np.int_]]: ...
+    @overload
+    def subgraph(
+        self,
+        nodes: NodeIndicesLike,
+        *,
+        return_node_lookup: Literal[False] = False,
+        return_branch_lookup: Literal[True],
+    ) -> tuple[VGraph, npt.NDArray[np.int_]]: ...
+    @overload
+    def subgraph(
+        self,
+        nodes: NodeIndicesLike,
+        *,
+        return_node_lookup: Literal[True],
+        return_branch_lookup: Literal[True],
+    ) -> tuple[VGraph, npt.NDArray[np.int_], npt.NDArray[np.int_]]: ...
+    def subgraph(
+        self, nodes: NodeIndicesLike, *, return_node_lookup: bool = False, return_branch_lookup: bool = False
+    ) -> VGraph | tuple[Self, npt.NDArray[np.int_]] | tuple[Self, npt.NDArray[np.int_], npt.NDArray[np.int_]]:
         """Create a subgraph from the current graph.
 
         Parameters
@@ -727,7 +761,7 @@ class VGraph:
         VGraph
             The subgraph created from the current graph.
         """
-        nodes = np.sort(self.as_node_ids(nodes))
+        nodes = np.unique(self.as_node_ids(nodes))
         if len(nodes) == 0:
             return type(self).empty_like(self)
 
@@ -742,7 +776,7 @@ class VGraph:
             gdata._reindex_nodes(nodes_lookup)
             gdata._reindex_branches(branch_lookup)
 
-        return VGraph(
+        graph = VGraph(
             branch_list,
             geodata,
             self._node_attr.loc[nodes].reset_index(drop=True),
@@ -750,6 +784,9 @@ class VGraph:
             len(nodes),
             check_integrity=False,
         )
+        if return_node_lookup:
+            return (graph, nodes_lookup) if not return_branch_lookup else (graph, nodes_lookup, branch_lookup)
+        return graph if not return_branch_lookup else (graph, branch_lookup)
 
     ####################################################################################################################
     #  === PROPERTIES ===

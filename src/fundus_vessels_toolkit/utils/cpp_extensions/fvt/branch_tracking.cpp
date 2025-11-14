@@ -23,9 +23,9 @@
  * @return A list of pairs of points representing the first and last pixels of
  * the branches.
  */
-std::vector<std::array<IntPoint, 2>> find_branch_endpoints(const torch::Tensor &branch_labels,
-                                                           const torch::Tensor &node_yx,
-                                                           const torch::Tensor &branch_list) {
+std::vector<std::array<IntPoint, 2>> find_branch_endpoints(const torch::Tensor& branch_labels,
+                                                           const torch::Tensor& node_yx,
+                                                           const torch::Tensor& branch_list) {
     const int B = branch_list.size(0);
     const int H = branch_labels.size(0), W = branch_labels.size(1);
     auto bLabels_acc = branch_labels.accessor<int, 2>();
@@ -47,7 +47,7 @@ std::vector<std::array<IntPoint, 2>> find_branch_endpoints(const torch::Tensor &
 
             // ... check if it's an endpoint.
             bool is_endpoint = false;
-            for (const PointWithID &n : NEIGHBORHOOD) {
+            for (const PointWithID& n : NEIGHBORHOOD) {
                 if (bLabels_acc[y + n.y][x + n.x] == b) {
                     if (!is_endpoint)
                         is_endpoint = true;  // First neighbor found
@@ -107,14 +107,14 @@ std::vector<std::array<IntPoint, 2>> find_branch_endpoints(const torch::Tensor &
  *
  * @return A list of the yx coordinates of the branches pixels.
  */
-std::vector<CurveYX> track_branches(const torch::Tensor &branch_labels, const torch::Tensor &node_yx,
-                                    const torch::Tensor &branch_list) {
+std::vector<CurveYX> track_branches(const torch::Tensor& branch_labels, const torch::Tensor& node_yx,
+                                    const torch::Tensor& branch_list) {
     const int B = branch_list.size(0);
     const int H = branch_labels.size(0), W = branch_labels.size(1);
     auto bLabels_acc = branch_labels.accessor<int, 2>();
 
     // Find the branch start and endpoints
-    auto const &branch_endpoints = find_branch_endpoints(branch_labels, node_yx, branch_list);
+    auto const& branch_endpoints = find_branch_endpoints(branch_labels, node_yx, branch_list);
     std::vector<CurveYX> branches_pixels(B);
 
 // Track the branches
@@ -125,12 +125,12 @@ std::vector<CurveYX> track_branches(const torch::Tensor &branch_labels, const to
         const int bLabel = b + 1;
 
         // Initialize the branch pixels list with the start pixel
-        CurveYX *branch_pixels = &branches_pixels[b];
+        CurveYX* branch_pixels = &branches_pixels[b];
         branch_pixels->reserve(16);
         branch_pixels->push_back(start_p);
 
         PointWithID current_p = start_p;
-        for (const PointWithID &n : NEIGHBORHOOD) {
+        for (const PointWithID& n : NEIGHBORHOOD) {
             const IntPoint neighbor = start_p + n;
             if (!neighbor.is_inside(H, W)) continue;
             if (bLabels_acc[neighbor.y][neighbor.x] == bLabel) {
@@ -145,7 +145,7 @@ std::vector<CurveYX> track_branches(const torch::Tensor &branch_labels, const to
             // Track the next pixel of the branch...
             //  (TRACK_NEXT_NEIGHBORS is used to avoid tracking back and to favor the
             //  pixels diametrically opposed to the previous one.)
-            for (const int &n_id : TRACK_NEXT_NEIGHBORS[current_p.id]) {
+            for (const int& n_id : TRACK_NEXT_NEIGHBORS[current_p.id]) {
                 const IntPoint neighbor = NEIGHBORHOOD[n_id] + current_p;
                 if (!neighbor.is_inside(H, W)) continue;
                 if (bLabels_acc[neighbor.y][neighbor.x] == bLabel) {
@@ -176,7 +176,7 @@ std::vector<CurveYX> track_branches(const torch::Tensor &branch_labels, const to
  * @return The first point of the line for which the segmentation is false. If
  * no such point is found, return IntPoint::Invalid().
  */
-IntPoint track_nearest_edge(const IntPoint &start, const Point &direction, const Tensor2DAcc<bool> &segmentation,
+IntPoint track_nearest_edge(const IntPoint& start, const Point& direction, const Tensor2DAcc<bool>& segmentation,
                             int max_distance) {
     if (direction.is_null()) return IntPoint::Invalid();
     const int H = segmentation.size(0), W = segmentation.size(1);
@@ -211,7 +211,7 @@ IntPoint track_nearest_edge(const IntPoint &start, const Point &direction, const
  * @return A tuple containing the index of the closest pixel and the distance to
  * the point.
  */
-std::tuple<int, float> find_closest_pixel(const CurveYX &curve, const Point &p, int start, int end,
+std::tuple<int, float> find_closest_pixel(const CurveYX& curve, const Point& p, int start, int end,
                                           bool findFirstLocalMinimum) {
     if (start == end) return {start, distance(curve[start], p)};
 
@@ -228,9 +228,9 @@ std::tuple<int, float> find_closest_pixel(const CurveYX &curve, const Point &p, 
     return min_point;
 }
 
-std::pair<torch::Tensor, torch::Tensor> find_closest_branches(const torch::Tensor &branch_labels,
-                                                              const torch::Tensor &points,
-                                                              const torch::Tensor &direction, float max_dist,
+std::pair<torch::Tensor, torch::Tensor> find_closest_branches(const torch::Tensor& branch_labels,
+                                                              const torch::Tensor& points,
+                                                              const torch::Tensor& direction, float max_dist,
                                                               float angle) {
     TORCH_CHECK(points.ndimension() == 2 && points.size(1) == 2,
                 "Invalid argument points: should have a shape of (N, 2) instead of", points.sizes());
@@ -252,7 +252,7 @@ std::pair<torch::Tensor, torch::Tensor> find_closest_branches(const torch::Tenso
     for (std::size_t i = 0; i < N; i++) {
         auto start = IntPoint(points_acc[i][0], points_acc[i][1]);
         auto dir = Point(direction_acc[i][0], direction_acc[i][1]);
-        const auto &[b, p] = track_nearest_branch(start, dir, angle, max_dist, branch_labels_acc);
+        const auto& [b, p] = track_nearest_branch(start, dir, angle, max_dist, branch_labels_acc);
         branch_acc[i] = b - 1;
         intercept_acc[i][0] = p.y;
         intercept_acc[i][1] = p.x;
@@ -272,13 +272,13 @@ std::pair<torch::Tensor, torch::Tensor> find_closest_branches(const torch::Tenso
  * @return A list of contiguous curves.
  *
  */
-std::list<SizePair> split_contiguous_curves(const CurveYX &curve) {
+std::list<SizePair> split_contiguous_curves(const CurveYX& curve) {
     if (curve.size() < 2) return {{0, curve.size()}};
 
     std::list<SizePair> curvesBoundaries;
     std::size_t start = 0;
     for (auto it = curve.begin() + 1; it != curve.end(); it++) {
-        auto const &&diff = *it - *(it - 1);
+        auto const&& diff = *it - *(it - 1);
         if (abs(diff.x) > 1 || abs(diff.y) > 1) {
             curvesBoundaries.push_back(SizePair{start, (std::size_t)(it - curve.begin())});
             start = it - curve.begin();
@@ -289,19 +289,19 @@ std::list<SizePair> split_contiguous_curves(const CurveYX &curve) {
     return curvesBoundaries;
 }
 
-torch::Tensor draw_branches_labels(const std::vector<torch::Tensor> &branchCurves, const torch::Tensor &out,
-                                   const torch::Tensor &nodeCoords, const torch::Tensor &branchList, bool interpolate) {
+torch::Tensor draw_branches_labels(const std::vector<torch::Tensor>& branchCurves, const torch::Tensor& out,
+                                   const torch::Tensor& nodeCoords, const torch::Tensor& branchList, bool interpolate) {
     const std::size_t B = branchCurves.size();
     auto branchesLabels = out.accessor<int, 2>();
 
-    const auto &size = branchesLabels.sizes();
+    const auto& size = branchesLabels.sizes();
     int H = size[0], W = size[1];
 
     for (std::size_t b = 0; b < B; b++) {
-        const auto &curveT = branchCurves[b];
+        const auto& curveT = branchCurves[b];
         TORCH_CHECK(curveT.ndimension() == 2 && curveT.size(1) == 2, "Invalid argument branchCurves: branch ", b,
                     " should have a shape of (N, 2) instead of ", curveT.sizes());
-        const auto &curve = curveT.accessor<int, 2>();
+        const auto& curve = curveT.accessor<int, 2>();
         const std::size_t N = curve.size(0);
         if (N == 0) continue;
 
@@ -330,7 +330,7 @@ torch::Tensor draw_branches_labels(const std::vector<torch::Tensor> &branchCurve
     for (std::size_t b = 0; b < B; b++) {
         const IntPoint start = {nodeCoords_acc[branchList_acc[b][0]][0], nodeCoords_acc[branchList_acc[b][0]][1]};
         const IntPoint end = {nodeCoords_acc[branchList_acc[b][1]][0], nodeCoords_acc[branchList_acc[b][1]][1]};
-        const auto &curve = branchCurves[b].accessor<int, 2>();
+        const auto& curve = branchCurves[b].accessor<int, 2>();
         if (curve.size(0) == 0) {
             draw_line(start, end, branchesLabels, b + 1);
         } else {
@@ -358,7 +358,7 @@ torch::Tensor draw_branches_labels(const std::vector<torch::Tensor> &branchCurve
  * @return A tuple containing the index of the closest point on the curve, the squared distance to it, and the average
  * square distance to every point on the curve.
  */
-std::tuple<std::size_t, int, float> _intercept_curve(const CurveYX &curve, const IntPoint &start, const Point &dir,
+std::tuple<std::size_t, int, float> _intercept_curve(const CurveYX& curve, const IntPoint& start, const Point& dir,
                                                      float maxDistSqr, float startMinCosSim, float endMinCosSim,
                                                      float maxSnapDistSqr, float maxSnapCosAngle) {
     std::size_t closestP = curve.size();
@@ -371,6 +371,7 @@ std::tuple<std::size_t, int, float> _intercept_curve(const CurveYX &curve, const
 
         // Check if the point is closer than the previous closest point (or the initial maxDistance)
         int distSqr = p.squaredNorm();
+        if (distSqr > maxDistSqr) continue;
         avgSqrDist += distSqr;
 
         // Check if the point is inside the cone
@@ -381,7 +382,7 @@ std::tuple<std::size_t, int, float> _intercept_curve(const CurveYX &curve, const
 
         // Check if the point is closer regarding the manhattan Dist (to favor points aligned with the cone bisector)
         // const float sin = sqrt(1 - cosSim * cosSim);
-        const float manhattanDist = (2 - cosSim * cosSim) * dist;
+        const float manhattanDist = (2 - cosSim * cosSim) * dist;  // Equivalent to dist * (|sin| + |cos|)
         if (manhattanDist > closestManhattanDist) continue;
 
         // Record the closest point and distance
@@ -398,8 +399,8 @@ std::tuple<std::size_t, int, float> _intercept_curve(const CurveYX &curve, const
     // Try to snap to the nearest curve tip
     if (maxSnapDistSqr > 0 && closestP != 0 && closestP != curve.size() - 1) {
         bool lastTip = closestP > curve.size() - closestP;
-        const auto &tipP = lastTip ? curve.back() : curve.front();
-        const auto &p = curve[closestP];
+        const auto& tipP = lastTip ? curve.back() : curve.front();
+        const auto& p = curve[closestP];
 
         // If the snapping tip is within the allowed distance and angle, snap to it
         if ((p - tipP).squaredNorm() <= maxSnapDistSqr && (tipP - start).cosSim(p - start) >= maxSnapCosAngle)
@@ -416,8 +417,8 @@ struct InterceptIntermediateResults {
 };
 
 std::vector<std::list<InterceptPoint>> intercept_curves(
-    const std::vector<CurveYX> &branchCurves, const std::vector<IntPair> &branchList, const GraphAdjList &graph,
-    const std::vector<IntPoint> &nodesYX, const std::vector<IntPoint> &starts, const PointList &dirs, float maxDistSqr,
+    const std::vector<CurveYX>& branchCurves, const std::vector<IntPair>& branchList, const GraphAdjList& graph,
+    const std::vector<IntPoint>& nodesYX, const std::vector<IntPoint>& starts, const PointList& dirs, float maxDistSqr,
     float startMinCosSim, float endMinCosSim, float maxSnapDistSqr, float maxSnapCosAngle, bool interpolateCurves) {
     // === INTERPOLATE CURVES ===
     std::vector<CurveYX> curves;
@@ -425,21 +426,21 @@ std::vector<std::list<InterceptPoint>> intercept_curves(
     if (interpolateCurves) {
         curves.resize(branchCurves.size());
         for (std::size_t i = 0; i < branchCurves.size(); i++) {  // For each branch add missing points in its curve
-            const auto &curve = branchCurves[i];
-            const auto &nodes = branchList[i];
+            const auto& curve = branchCurves[i];
+            const auto& nodes = branchList[i];
 
-            CurveYX &interCurve = curves[i];
-            std::vector<int> &indices = curvesIndices[i];
+            CurveYX& interCurve = curves[i];
+            std::vector<int>& indices = curvesIndices[i];
 
             if (curve.size() == 0) {
                 // IF CURVE IS EMPTY
                 // Starting node -> End node
-                for (const auto &p : Line(nodesYX[nodes[0]], nodesYX[nodes[1]], true)) interCurve.push_back(p);
+                for (const auto& p : Line(nodesYX[nodes[0]], nodesYX[nodes[1]], true)) interCurve.push_back(p);
                 indices.resize(interCurve.size(), 0);  // Pad with 0
             } else {
                 // OTHERWISE
                 // - Starting node -> First curve point
-                for (const auto &p : Line(nodesYX[nodes[0]], curve.front(), true)) interCurve.push_back(p);
+                for (const auto& p : Line(nodesYX[nodes[0]], curve.front(), true)) interCurve.push_back(p);
                 indices.resize(interCurve.size(), 0);  // Add 0 at the beginning of indices
                 for (std::size_t i = 0; i < curve.size() - 1; i++) {
                     const auto &p1 = curve[i], &p2 = curve[i + 1];
@@ -447,7 +448,7 @@ std::vector<std::list<InterceptPoint>> intercept_curves(
                         interCurve.push_back(p1);
                         indices.push_back(i);
                     } else {
-                        for (const auto &p : Line(p1, p2, false)) interCurve.push_back(p);  // Fill the gap
+                        for (const auto& p : Line(p1, p2, false)) interCurve.push_back(p);  // Fill the gap
                         // Fill indices with...
                         float delta = (interCurve.size() - indices.size()) / 2.0;
                         indices.resize(indices.size() + ceil(delta), i);  // ... i for the first half
@@ -455,7 +456,7 @@ std::vector<std::list<InterceptPoint>> intercept_curves(
                     }
                 }
                 // - Last curve point -> Ending node (skipping the first pixel)
-                for (const auto &p : Line(curve.back(), nodesYX[nodes[1]], false, true)) interCurve.push_back(p);
+                for (const auto& p : Line(curve.back(), nodesYX[nodes[1]], false, true)) interCurve.push_back(p);
                 indices.resize(interCurve.size(), curve.size() - 1);  // Pad indices with max_index
             }
         }
@@ -467,8 +468,8 @@ std::vector<std::list<InterceptPoint>> intercept_curves(
 
 #pragma omp parallel for
     for (std::size_t startID = 0; startID < starts.size(); startID++) {
-        const auto &p = starts[startID];
-        const auto &dir = dirs[startID];
+        const auto& p = starts[startID];
+        const auto& dir = dirs[startID];
 
         std::vector<InterceptIntermediateResults> intercepts;
         intercepts.reserve(branchCurves.size());
@@ -482,9 +483,9 @@ std::vector<std::list<InterceptPoint>> intercept_curves(
 
         // Deduplicates intercept points
         std::size_t nodeID = 0;
-        for (const auto &adjacentBranches : graph) {
+        for (const auto& adjacentBranches : graph) {
             std::list<std::size_t> duplicates;
-            for (const auto &branch : adjacentBranches) {
+            for (const auto& branch : adjacentBranches) {
                 if (intercepts[branch.id].posInCurve == (branch.is_first(nodeID) ? 0 : curves[branch.id].size() - 1))
                     duplicates.push_back(branch.id);
             }
@@ -492,7 +493,7 @@ std::vector<std::list<InterceptPoint>> intercept_curves(
             if (duplicates.size() > 1) {
                 // Find the closest intercept point
                 std::size_t closest = duplicates.front();
-                for (const auto &id : duplicates) {
+                for (const auto& id : duplicates) {
                     int distDiff = intercepts[closest].distSqr - intercepts[id].distSqr;
                     if (abs(distDiff) > maxSnapDistSqr) {
                         if (distDiff > 0) closest = id;
@@ -502,7 +503,7 @@ std::vector<std::list<InterceptPoint>> intercept_curves(
                 }
 
                 // Mark the others as invalid
-                for (const auto &id : duplicates) {
+                for (const auto& id : duplicates) {
                     if (id != closest) intercepts[id].distSqr = -1;
                 }
             }
@@ -511,9 +512,9 @@ std::vector<std::list<InterceptPoint>> intercept_curves(
         }
 
         // Populate results
-        for (const auto &intercept : intercepts) {
+        for (const auto& intercept : intercepts) {
             if (intercept.distSqr <= 0) continue;  // No intercept or duplicate
-            const auto &pos = curves[intercept.curveID][intercept.posInCurve];
+            const auto& pos = curves[intercept.curveID][intercept.posInCurve];
             if (pos == p) continue;  // Intercept is at the start point
 
             result[startID].emplace_back(

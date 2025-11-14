@@ -11,6 +11,7 @@ __all__ = [
     "SimplifyTopology",
 ]
 
+from tracemalloc import start
 import warnings
 from dataclasses import dataclass
 from typing import List, Literal, Optional, Tuple, TypeAlias
@@ -20,6 +21,8 @@ import numpy as np
 import numpy.typing as npt
 
 from fundus_toolkits.utils.geometric import distance_matrix
+
+from fundus_vessels_toolkit.vascular_data_objects.vgraph import BranchIndicesLike, NodeIndicesLike
 
 from ..utils import if_none
 from ..utils.cluster import cluster_by_distance, iterative_reduce_clusters, reduce_clusters
@@ -617,7 +620,208 @@ def find_facing_endpoints(
     return endp[endpoint_pairs]
 
 
-def find_endpoints_branches_intercept(
+def find_reconnection_candidates(
+    graph: VGraph,
+    *,
+    max_distance: float = 100,
+    max_angle: float = 30,
+    end_max_angle: Optional[float] = None,
+    snap_max_distance: float = 30,
+    snap_max_angle: float = 30,
+    interpolate_curve: bool = True,
+    ignore_endpoints: Optional[NodeIndicesLike] = None,
+    endpoint_ids: Optional[NodeIndicesLike] = None,
+    branch_ids: Optional[BranchIndicesLike] = None,
+    tangent_key: VBranchGeoData.Key = VBranchGeoData.Fields.TIPS_TANGENT,
+) -> npt.NDArray[np.int_]:
+    """
+    Find potential reconnection candidates by intercepting the branches curve with ray emitted from end-points.
+
+    A tolerance on the angle between the ray and the branch tangent can also be specified. In that case the ray take the form of a cone. This method will only return one intercepts per ray and per branch: the point of the branch curve inside the cone which is the closest to the ray source according to the manhattan distance (the sum of the distances along the ray and perpendicular to it).
+
+    To prevent adding nodes very close to the branch tips, an intercept point closer than ``snap_max_distance`` to a branch tip and whose angle with the branch tangent at this tip is lower than ``snap_max_angle`` snaps to this tip.
+
+    Parameters
+    ----------
+    graph: VGraph
+        The vasculature graph.
+
+    max_distance: float
+        The maximum distance between the ray source and the point of intercept on a branch.
+
+    max_angle: float
+        The maximum angle between the ray direction and the branch tangent at the point of intercept.
+
+    end_max_angle: Optional[float]
+        If not None, define the angle at the end of the cone, giving the cone a parabolic shape.
+
+    snap_max_distance: float
+        The maximum distance between a point of intercept and a branch tip to consider snapping the intercept to this tip.
+
+    snap_max_angle: float
+        The maximum angle between the ray direction and the branch tangent at a branch tip to consider snapping the intercept to this tip.
+
+    interpolate_curve: bool
+        If True, the branch curves are interpolated according to the graph topology to fill gaps in the skeleton map.
+
+    Returns
+    -------
+    intercept_branches: List[npt.NDArray[np.int_]]
+        A list of length N (number of rays). Each element is an (M, 6) array where each row contains:
+        - the index of the node where the ray originates,
+        - the index of an existing node close to the intercept (or -1 if no node is close),
+        - the index of the branch where the intercept occurs,
+        - the index of the closest point on the branch curve,
+        - the y coordinate of the intercept point,
+        - the x coordinate of the intercept point.
+    """  # noqa: E501
+    endpoints, endpoints_branches, idirs = graph.endpoint_nodes_with_branch_id(return_branch_direction=True)
+    if ignore_endpoints is not None or endpoint_ids is not None:
+        if endpoint_ids is not None:
+            endpoints_mask = np.isin(endpoints, graph.as_node_ids(endpoint_ids))
+        else:
+            endpoints_mask = np.ones(len(endpoints), dtype=bool)
+        if ignore_endpoints is not None:
+            ignore_mask = np.isin(endpoints, graph.as_node_ids(ignore_endpoints), invert=True)
+            endpoints_mask &= ignore_mask
+        if np.any(~endpoints_mask):
+            endpoints = endpoints[endpoints_mask]
+            endpoints_branches = endpoints_branches[endpoints_mask]
+            idirs = idirs[endpoints_mask]
+    if len(endpoints) == 0:
+        return np.empty((0, 6), dtype=np.int_)
+
+    gdata = graph.geometric_data()
+    endpoints_yx = gdata.node_coord()[endpoints]
+    endpoints_t = -np.stack(
+        [gdata.tip_tangent(b, d, attr=tangent_key) for b, d in zip(endpoints_branches, idirs, strict=True)]
+    )
+
+    intercepts = find_branch_intercepts(
+        graph,
+        endpoints_yx,
+        endpoints_t,
+        max_distance=max_distance,
+        max_angle=max_angle,
+        end_max_angle=end_max_angle,
+        snap_max_distance=snap_max_distance,
+        snap_max_angle=snap_max_angle,
+        interpolate_curve=interpolate_curve,
+        branch_ids=branch_ids,
+    )
+
+    branches_length = gdata.branch_arc_length()
+
+    intercepts_with_nodes = []
+    for node_id, intercepts_data in zip(endpoints, intercepts, strict=True):
+        intercept_is_tail = intercepts_data[:, 1] == 0
+        intercept_is_head = intercepts_data[:, 1] == branches_length[intercepts_data[:, 0]] - 1
+        intercepts_existing_node = -np.ones(len(intercepts_data), dtype=np.int_)
+        intercepts_existing_node[intercept_is_tail] = graph.branch_list[intercepts_data[intercept_is_tail, 0], 0]
+        intercepts_existing_node[intercept_is_head] = graph.branch_list[intercepts_data[intercept_is_head, 0], 1]
+        data = (
+            np.full(len(intercepts_data), node_id, dtype=np.int_),
+            intercepts_existing_node,
+            intercepts_data,
+        )
+        intercepts_with_nodes.append(np.column_stack(data))
+
+    return np.concatenate(intercepts_with_nodes, axis=0)
+
+
+def find_branch_intercepts(
+    graph: VGraph,
+    yx: npt.NDArray[np.float32],
+    vu: npt.NDArray[np.float32],
+    *,
+    branch_ids: Optional[BranchIndicesLike] = None,
+    max_distance: float = 100,
+    max_angle: float = 30,
+    end_max_angle: Optional[float] = None,
+    snap_max_distance: float = 30,
+    snap_max_angle: float = 30,
+    interpolate_curve: bool = True,
+) -> List[npt.NDArray[np.int_]]:
+    """
+    Find the intercepts of rays with the branches of the graph. Rays are defined by a point, a direction and a maximum distance. The branch curves are defined by their skeleton but may be interpolated according to the graph topology to fill gaps in the skeleton map.
+
+    A tolerance on the angle between the ray and the branch tangent can also be specified. In that case the ray take the form of a cone. This method will only return one intercepts per ray and per branch: the point of the branch curve inside the cone which is the closest to the ray source according to the manhattan distance (the sum of the distances along the ray and perpendicular to it).
+
+    To prevent adding nodes very close to the branch tips, an intercept point closer than ``snap_max_distance`` to a branch tip and whose angle with the branch tangent at this tip is lower than ``snap_max_angle`` snaps to this tip.
+
+    Parameters
+    ----------
+    graph: VGraph
+        The vasculature graph.
+
+    yx: npt.NDArray[np.float64]
+        An (N, 2) array containing the coordinates of the ray sources.
+
+    vu: npt.NDArray[np.float64]
+        An (N, 2) array containing the direction vectors of the rays.
+
+    branch_ids: Optional[BranchIndicesLike]
+        If not None, only consider the branches with these indices for the intercepts.
+
+    max_distance: float
+        The maximum distance between the ray source and the point of intercept on a branch.
+
+    max_angle: float
+        The maximum angle between the ray direction and the branch tangent at the point of intercept.
+
+    end_max_angle: Optional[float]
+        If not None, define the angle at the end of the cone, giving the cone a parabolic shape.
+
+    snap_max_distance: float
+        The maximum distance between a point of intercept and a branch tip to consider snapping the intercept to this tip.
+
+    snap_max_angle: float
+        The maximum angle between the ray direction and the branch tangent at a branch tip to consider snapping the intercept to this tip.
+
+    interpolate_curve: bool
+        If True, the branch curves are interpolated according to the graph topology to fill gaps in the skeleton map.
+
+    Returns
+    -------
+    intercept_branches: List[npt.NDArray[np.int_]]
+        A list of length N (number of rays). Each element is an (M, 4) array where each row contains:
+        - the index of the branch where the intercept occurs,
+        - the index of the closest point on the branch curve,
+        - the y coordinate of the intercept point,
+        - the x coordinate of the intercept point.
+    """  # noqa: E501
+    from ..utils.graph.measures import intercept_cones_branches
+
+    if end_max_angle is None:
+        end_max_angle = max_angle
+
+    # Curve data
+    if branch_ids is None:
+        branch_ids_ = np.arange(len(graph.branch_list), dtype=np.int32)
+    else:
+        branch_ids_ = graph.as_branch_ids(branch_ids)
+        graph = graph.subgraph(graph.branch_list[branch_ids_])
+    gdata = graph.geometric_data()
+
+    intercepts_per_ray = intercept_cones_branches(
+        gdata.branch_curve(),
+        yx,
+        vu,
+        graph.branch_list,
+        gdata.node_coord(),
+        maxDist=max_distance,
+        startMaxAngle=max_angle,
+        endMaxAngle=end_max_angle,
+        maxSnapDist=snap_max_distance,
+        maxSnapAngle=snap_max_angle,
+        interpolateCurves=interpolate_curve,
+    )
+    for intercepts in intercepts_per_ray:
+        intercepts[:, 0] = branch_ids_[intercepts[:, 0]]
+    return intercepts_per_ray
+
+
+def find_endpoints_branches_intercept_legacy(
     graph: VGraph,
     max_distance: float = 100,
     angle_tolerance: float = 10,
@@ -839,7 +1043,7 @@ def reconnect_endpoints(
         tangent=arg.tangent,
     )
 
-    new_edges, new_nodes, new_nodes_yx = find_endpoints_branches_intercept(
+    new_edges, new_nodes, new_nodes_yx = find_endpoints_branches_intercept_legacy(
         graph,
         max_distance=arg.max_distance,
         angle_tolerance=arg.max_angle,

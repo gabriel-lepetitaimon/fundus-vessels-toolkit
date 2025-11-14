@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Literal, Self, Sequence, Tuple, overload
+from typing import Any, Dict, List, Literal, Optional, Self, Sequence, Tuple, overload
 
 import numpy as np
 import numpy.typing as npt
@@ -369,6 +369,53 @@ class TopologicalLabel(np.uint64):
         return labels_map.astype(np.uint32), [cls(label) for label in labels]
 
     @classmethod
+    @overload
+    def decode_subtree(cls, label: Self | np.uint64) -> np.uint64: ...
+    @classmethod
+    @overload
+    def decode_subtree(cls, label: npt.NDArray[np.uint64]) -> npt.NDArray[np.uint64]: ...
+    @classmethod
+    def decode_subtree(cls, label: Self | np.uint64 | npt.NDArray[np.uint64]) -> np.uint64 | npt.NDArray[np.uint64]:
+        """
+        Decode the subtree indices from a topological label map.
+        """
+        return ((label >> np.uint64(52)) & np.uint64(0xFFF)) - np.uint64(1)
+
+    @classmethod
+    @overload
+    def decode_rank(cls, label: Self | np.uint64) -> np.uint8: ...
+    @classmethod
+    @overload
+    def decode_rank(cls, label: npt.NDArray[np.uint64]) -> npt.NDArray[np.uint8]: ...
+    @classmethod
+    def decode_rank(cls, label: Self | np.uint64 | npt.NDArray[np.uint64]) -> np.uint8 | npt.NDArray[np.uint8]:
+        """
+        Decode the branching ranks from a topological label map.
+        """
+        return ((label & cls.RANK_MASK) >> np.uint64(44)).astype(np.uint8)
+
+    @classmethod
+    @overload
+    def decode_branching_pattern(cls, label: Self | np.uint64, *, max_rank: Optional[int] = None) -> np.uint64: ...
+    @classmethod
+    @overload
+    def decode_branching_pattern(
+        cls, label: npt.NDArray[np.uint64], *, max_rank: Optional[int] = None
+    ) -> npt.NDArray[np.uint64]: ...
+    @classmethod
+    def decode_branching_pattern(
+        cls, label: Self | np.uint64 | npt.NDArray[np.uint64], *, max_rank: Optional[int] = None
+    ) -> np.uint64 | npt.NDArray[np.uint64]:
+        """
+        Decode the branching patterns from a topological label map.
+        """
+        if max_rank is None:
+            max_rank = int(np.max(cls.decode_rank(label)))
+        assert max_rank <= 44, "Max rank must be less than or equal to 44."
+        pattern_mask = np.uint64(2**max_rank) - np.uint64(1)
+        return (label & pattern_mask).astype(np.uint64)
+
+    @classmethod
     def map_to_rgb(cls, map: npt.NDArray[np.uint64]) -> npt.NDArray[np.uint8]:
         """Convert a topological label map to an RGB color map for visualisation purposes.
 
@@ -386,13 +433,6 @@ class TopologicalLabel(np.uint64):
         labels_map, labels = cls.decode(map)
         colors = np.stack([label.color(format="rgb") for label in labels])
         return colors[labels_map.flatten()].reshape(map.shape + (3,))
-
-    @classmethod
-    def to_subtree(cls, label: Self | np.uint64 | npt.NDArray[np.uint64]) -> np.uint64 | npt.NDArray[np.uint64]:
-        """
-        Get the subtree index from a topological label.
-        """
-        return ((label >> np.uint64(52)) & np.uint64(0xFFF)) - np.uint64(1)
 
     @property
     def is_background(self) -> bool:
@@ -456,8 +496,8 @@ class TopologicalLabel(np.uint64):
                 and bool(np.all(o.branching_pattern == self.branching_pattern[: o.rank]))
             )
         else:
-            o_subtrees = (other & self.SUBTREE_MASK).astype(np.int32) >> np.int32(52) - np.int32(1)
-            o_ranks = (other & self.RANK_MASK).astype(np.int32) >> np.int32(44)
+            o_subtrees = self.decode_subtree(other)
+            o_ranks = self.decode_rank(other)
             pattern_mask = np.uint64(2**o_ranks) - np.uint64(1)
             o_patterns = other & pattern_mask
             self_pattern = self & pattern_mask

@@ -701,6 +701,12 @@ class VGeometricData:
 
         return branch_label_map
 
+    @overload
+    def branch_arc_length(self, graph_ids: int, fast_approximation=True) -> float: ...
+    @overload
+    def branch_arc_length(
+        self, graph_ids: Optional[Iterable[int]] = None, fast_approximation=True
+    ) -> npt.NDArray[np.float32]: ...
     def branch_arc_length(
         self, graph_ids: Optional[int | Iterable[int]] = None, fast_approximation=True
     ) -> float | npt.NDArray[np.float32]:
@@ -1173,7 +1179,7 @@ class VGeometricData:
         infer_from_nodes_if_missing: bool = True,
         attr: VBranchGeoDataKey = VBranchGeoData.Fields.TIPS_TANGENT,
         graph_index=True,
-    ) -> np.ndarray:
+    ) -> npt.NDArray[np.float32]:
         """Return the tangent of the tips of the branches.
 
         Parameters

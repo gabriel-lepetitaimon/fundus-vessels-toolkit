@@ -81,6 +81,27 @@ def np_find_sorted(keys: npt.NDArray, array: npt.NDArray, assume_keys_sorted=Fal
             return np.concatenate([(-1,) * k0, id, (-1,) * (len(keys) - k1)])
 
 
+def np_group_by(array: npt.NDArray, keys: npt.NDArray) -> list[tuple[npt.NDArray, npt.NDArray]]:
+    """
+    Group the elements of an array by keys.
+
+    Parameters
+    ----------
+    array : np.ndarray
+        The array to group.
+    keys : np.ndarray
+        The keys to group by. Must be the same length as array.
+
+    Returns
+    -------
+    List[np.ndarray]
+        A list of arrays, each containing the elements of array corresponding to a unique key.
+    """
+    assert array.shape[0] == keys.shape[0], "array and keys must have the same length."
+    unique_keys, inverse_indices = np.unique(keys, return_inverse=True)
+    return [(unique_keys[i], array[inverse_indices == i]) for i in range(len(unique_keys))]
+
+
 def as_1d_array(data: IndicesLike, *, dtype=None) -> Tuple[npt.NDArray, bool]:
     """Convert the data to a numpy array.
 

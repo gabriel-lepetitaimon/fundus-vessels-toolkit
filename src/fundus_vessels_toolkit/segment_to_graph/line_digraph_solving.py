@@ -8,9 +8,107 @@ import numpy.typing as npt
 
 from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.geometric import Point
+from fundus_vessels_toolkit.utils.cluster import cluster_by_distance
+from fundus_vessels_toolkit.utils.numpy import np_group_by
+from fundus_vessels_toolkit.vascular_data_objects.vgraph import BranchIndicesLike, NodeIndicesLike
 
 from ..utils.math import sigmoid
 from ..vascular_data_objects import VBranchGeoData, VGraph, VGraphNode, VTree
+
+
+def prepare_graph_for_reconnections(
+    graph: VGraph,
+    *,
+    max_distance: float = 100,
+    max_angle: float = 30,
+    end_max_angle: Optional[float] = 20,
+    snap_tip_max_distance: float = 30,
+    snap_tip_max_angle: float = 30,
+    snap_new_node_max_distance: float = 25,
+    endpoint_ids: Optional[NodeIndicesLike] = None,
+    branch_ids: Optional[BranchIndicesLike] = None,
+    inplace: bool = False,
+) -> tuple[VGraph, npt.NDArray[np.int_]]:
+    """Find reconnection candidates in the graph using a directed line graph approach.
+
+    Parameters
+    ----------
+    graph : VGraph
+        The input vascular graph.
+
+    Returns
+    -------
+    VTree
+        A tree storing the best reconnection candidates.
+    """
+    from .graph_simplification import find_reconnection_candidates
+
+    if not inplace:
+        graph = graph.copy()
+
+    candidates = find_reconnection_candidates(
+        graph,
+        max_distance=max_distance,
+        max_angle=max_angle,
+        end_max_angle=end_max_angle,
+        snap_max_distance=snap_tip_max_distance,
+        snap_max_angle=snap_tip_max_angle,
+        endpoint_ids=endpoint_ids,
+        branch_ids=branch_ids,
+    )
+    # Candidates format:    0     1        2         3      4  5
+    #                   (node1, node2, branch_id, curve_id, y, x)
+    new_node_mask = candidates[:, 1] == -1  # Node2 is a new node
+    reconnections = [candidates[~new_node_mask][:, :2]]
+    new_nodes = candidates[new_node_mask]
+
+    if not len(new_nodes):
+        return graph, reconnections[0]
+
+    # Deduplicate new nodes
+    new_nodes_specs, new_nodes_lookup = np.unique(new_nodes[:, 2:], axis=0, return_inverse=True)
+    new_nodes_specs = np.hstack([np.arange(len(new_nodes_specs))[:, None], new_nodes_specs])
+    NEW_NODE_ID, NEW_NODE_BRANCH, NEW_NODE_CURVE_ID, NEW_NODE_YX = 0, 1, 2, slice(3, 5)
+
+    if snap_new_node_max_distance > 0:
+        # Snap new nodes of the same branch if they are close enough
+        merged_nodes_specs = []
+        for b_id, nodes in np_group_by(new_nodes_specs, keys=new_nodes_specs[:, NEW_NODE_BRANCH]):
+            if len(nodes) <= 1:
+                merged_nodes_specs.append(nodes[0])
+                continue
+
+            clusters = cluster_by_distance(nodes[:, NEW_NODE_YX], snap_new_node_max_distance)
+            for c in clusters:
+                if len(c) == 1:
+                    merged_nodes_specs.append(nodes[c[0]])
+                else:
+                    merged_node_id = np.min(nodes[c, NEW_NODE_ID])
+                    centroid_yx = nodes[c, NEW_NODE_YX].mean(axis=0)
+                    centroid_i = np.round(nodes[c, NEW_NODE_CURVE_ID].mean()).astype(np.int_)
+                    merged_nodes_specs += [(merged_node_id, b_id, centroid_i, *centroid_yx)]
+
+                    new_nodes_lookup[np.isin(new_nodes_lookup, nodes[c, NEW_NODE_ID])] = merged_node_id
+        new_nodes_specs = np.array(merged_nodes_specs)
+
+    # Split the branches at the new nodes
+    branch_ids, node_specs = zip(*np_group_by(new_nodes_specs, new_nodes_specs[:, NEW_NODE_BRANCH]), strict=True)
+    for b, nodes in zip(graph.branches(branch_ids, dynamic_iterator=True), node_specs, strict=True):
+        if len(nodes) == 0:
+            continue
+        nodes = nodes[np.argsort(nodes[:, NEW_NODE_CURVE_ID])]  # Sort by curve index
+        _, new_nodes_id = graph.split_branch(
+            branch_id=b.id,
+            split_curve_id=nodes[:, NEW_NODE_CURVE_ID],
+            split_coord=nodes[:, NEW_NODE_YX],
+            return_node_ids=True,
+            inplace=True,
+        )
+        for node1_id, new_node_id in zip(nodes[:, NEW_NODE_ID], new_nodes_id, strict=True):
+            node1_ids = new_nodes[new_nodes_lookup == node1_id][:, 0]
+            reconnections += [np.hstack([node1_ids[:, None], np.full((len(node1_ids), 1), new_node_id)])]
+
+    return graph, np.vstack(reconnections)
 
 
 @dataclass
@@ -80,7 +178,7 @@ def build_line_digraph(
         The third array of shape (n_edges,) stores, for each directed edge, the probabilities of the parent branch being the parent of the child branch.
     """  # noqa: E501
     from .geometry_parsing import derive_tips_geometry_from_curve_geometry
-    from .graph_simplification import find_endpoints_branches_intercept, find_facing_endpoints
+    from .graph_simplification import find_endpoints_branches_intercept_legacy, find_facing_endpoints
 
     if not inplace:
         graph = graph.copy()
@@ -113,7 +211,7 @@ def build_line_digraph(
 
     # === Discover virtual branch to reconnect end nodes to adjacent branches or to other end nodes ===
     virtual_endp_edges = find_facing_endpoints(graph, max_distance=50, max_angle=60)
-    virtual_edges, new_nodes, new_nodes_yx = find_endpoints_branches_intercept(
+    virtual_edges, new_nodes, new_nodes_yx = find_endpoints_branches_intercept_legacy(
         graph, max_distance=100, intercept_snapping_distance=5, angle_tolerance=10, omit_endpoints_to_endpoints=True
     )
 

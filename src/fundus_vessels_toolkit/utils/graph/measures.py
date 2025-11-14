@@ -337,7 +337,7 @@ def extract_bifurcations_parameters(branches_calibre, branches_tangent, branches
 def intercept_cones_branches(
     branch_curves: Sequence[torch.Tensor],
     cone_tips_yx: torch.Tensor,
-    cone_dirs: torch.Tensor,
+    cone_dirs_vu: torch.Tensor,
     branch_list: Optional[torch.Tensor] = None,
     node_yx: Optional[torch.Tensor] = None,
     *,
@@ -348,49 +348,57 @@ def intercept_cones_branches(
     maxSnapAngle: float = 8,
     interpolateCurves: bool = True,
 ) -> List[torch.Tensor]:
-    """Compute the closest intercepts points between branch curves and a set of cones.
+    """
+    Find the intercepts of rays with the branches of the graph. Rays are defined by a point, a direction and a maximum distance. The branch curves are defined by their skeleton but may be interpolated according to the graph topology to fill gaps in the skeleton map.
+
+    A tolerance on the angle between the ray and the branch tangent can also be specified. In that case the ray take the form of a cone. This method will only return one intercepts per ray and per branch: the point of the branch curve inside the cone which is the closest to the ray source according to the manhattan distance (the sum of the distances along the ray and perpendicular to it).
+
+    To prevent adding nodes very close to the branch tips, an intercept point closer than ``snap_max_distance`` to a branch tip and whose angle with the branch tangent at this tip is lower than ``snap_max_angle`` snaps to this tip.
 
     Parameters
     ----------
     branch_curves : Sequence[torch.Tensor]
-        The N branch curves to intercepts as a sequence of tensors of size (l, 2) (where l is the length of the curve).
-    cone_tips_yx : torch.Tensor
-        The tips or apexes of the M cones to consider for the intercepts as a tensor of size (M, 2).
-    cone_dirs : torch.Tensor
-        The directions of the M cones to consider for the intercepts as a tensor of size (M, 2).
+        The branch curves to intercepts as a sequence of tensors of size (l, 2) (where l is the length of the curve).
+
+    cone_tips_yx: torch.Tensor
+        An (N, 2) array containing the coordinates of the ray sources.
+
+    cone_dirs_vu: torch.Tensor
+        An (N, 2) array containing the direction vectors of the rays.
+
     branch_list : Optional[torch.Tensor]
         An edge list representation of the graph connectivity. (Only necessary if ``interpolateCurves`` is True).
+
     node_yx : Optional[torch.Tensor]
         The coordinates of the graph nodes. (Only necessary if ``interpolateCurves`` is True).
-    maxDist : float, optional
-        The maximum distance for the intercepts, i.e. the length of the cones. By default: 100.
-    startMaxAngle : float, optional
-        The angle at the tip of the cones. By default: 100.
-    endMaxAngle : float, optional
-        The angle at the base of the cones. If ``startMaxAngle`` and ``endMaxAngle`` are different, the cones will be parabolic. By default: 30.
-    maxSnapDist : float, optional
-        The maximum distance for snapping the intercepts points to the nearest branch tip, by default 15.
-    maxSnapAngle : float, optional
-        The maximum angle for snapping the intercepts points to the nearest branch tip, by default 15.
+
+    maxDist: float
+        The maximum distance between the ray source and the point of intercept on a branch.
+
+    startMaxAngle: float
+        The maximum angle between the ray direction and the branch tangent at the point of intercept.
+
+    endMaxAngle: Optional[float]
+        If not None, define the angle at the end of the cone, giving the cone a parabolic shape.
+
+    maxSnapDist: float
+        The maximum distance between a point of intercept and a branch tip to consider snapping the intercept to this tip.
+
+    maxSnapAngle: float
+        The maximum angle between the ray direction and the branch tangent at a branch tip to consider snapping the intercept to this tip.
+
     interpolateCurves : bool, optional
         Whether to interpolate the branch curves to fill gap between each branch nodes and its curve tips, and inside its curve. This requires the branch_list and node_yx parameters. By default: True.
-
-    Returns
-    -------
-    List[torch.Tensor]
-        A list of arrays containing, for each cone, the intercept points with the branch curves.
-        The list length is equal to the number of cones M.
-        The arrays shape is (I,4) where I is intercept points found for this cone. Each row corresponds to one intercept point and contains ``[branchID, posInCurve, y, x]`` where ``branchID`` is the index of the intercepted branch, ``posInCurve`` is the index of the nearest point on the curve, and ``y`` and ``x`` are the coordinates of the intercept point.
     """  # noqa: E501
     branch_curves = [_.cpu().int() for _ in branch_curves]
     branch_list = branch_list.int() if branch_list is not None else torch.empty((0, 2), dtype=torch.int32)
     node_yx = node_yx.int() if node_yx is not None else torch.empty((0, 2), dtype=torch.int32)
 
     cone_tips_yx = cone_tips_yx.cpu().int()
-    cone_dirs = cone_dirs.cpu().float()
+    cone_dirs_vu = cone_dirs_vu.cpu().float()
     assert cone_tips_yx.dim() == 2 and cone_tips_yx.shape[1] == 2, "cone_tips_yx must be a (M, 2) tensor"
-    assert cone_dirs.dim() == 2 and cone_dirs.shape[1] == 2, "cone_dirs must be a (M, 2) tensor"
-    assert cone_tips_yx.shape[0] == cone_dirs.shape[0], "cone_tips_yx and cone_dirs must have the same length"
+    assert cone_dirs_vu.dim() == 2 and cone_dirs_vu.shape[1] == 2, "cone_dirs must be a (M, 2) tensor"
+    assert cone_tips_yx.shape[0] == cone_dirs_vu.shape[0], "cone_tips_yx and cone_dirs must have the same length"
 
     startMaxAngle = np.deg2rad(startMaxAngle)
     endMaxAngle = np.deg2rad(endMaxAngle)
@@ -401,7 +409,7 @@ def intercept_cones_branches(
         branch_list,
         node_yx,
         cone_tips_yx,
-        cone_dirs,
+        cone_dirs_vu,
         maxDist,
         startMaxAngle,
         endMaxAngle,

@@ -27,6 +27,7 @@ from ..utils.lookup_array import (
     complete_lookup,
     create_removal_lookup,
     invert_complete_lookup,
+    invert_lookup,
     lookup_from_mapping,
 )
 from ..utils.tree import find_cycles, has_cycle
@@ -442,7 +443,7 @@ class VTree(VGraph):
 
     def copy(self) -> Self:
         """Return a copy of the tree."""
-        return VTree(
+        return type(self)(
             self._branch_list.copy(),
             self._branch_tree.copy(),
             self._branch_dir.copy() if self._branch_dir is not None else None,
@@ -461,7 +462,7 @@ class VTree(VGraph):
         branch_dirs: npt.NDArray[np.bool_] | None,
         copy=True,
         check=True,
-    ) -> VTree:
+    ) -> Self:
         """Create a tree from a graph.
 
         Parameters
@@ -513,7 +514,7 @@ class VTree(VGraph):
     def _empty_like_kwargs(cls, other: VTree) -> Dict[str, Any]:
         return super()._empty_like_kwargs(other) | {"branch_tree": np.empty(0, dtype=int), "branch_dirs": None}
 
-    def subtree(self, branch_ids: BranchIndicesLike, check=True) -> VTree:
+    def subtree(self, branch_ids: BranchIndicesLike, check: bool = True) -> VTree:
         """Return the subtree of the given branch(es).
 
         Parameters
@@ -523,17 +524,16 @@ class VTree(VGraph):
 
         Returns
         -------
-        VTree
+        Self
             The subtree.
         """
-        branch_ids = np.sort(self.as_branch_ids(branch_ids))
-        branch_lookup = create_removal_lookup(
-            branch_ids, length=self.branch_count, invert=True, add_empty=True, replace_value=0
-        )
-        branch_tree = branch_lookup[self.branch_tree[branch_ids] + 1] - 1
-        subgraph = self.subgraph(np.unique(self._branch_list[branch_ids]))
+        nodes = np.unique(self.branch_list[self.as_branch_ids(branch_ids)].flatten())
+        subgraph, b_lookup = super().subgraph(nodes, return_branch_lookup=True)
 
-        return VTree.from_graph(subgraph, branch_tree, self.branch_dirs(branch_ids), copy=False, check=check)
+        branch_tree = b_lookup[self._branch_tree + 1] - 1
+        branch_dirs = None if self._branch_dir is None else self._branch_dir[invert_lookup(b_lookup)]
+
+        return VTree.from_graph(subgraph, branch_tree, branch_dirs, copy=False, check=check)
 
     ####################################################################################################################
     #  === TREE BRANCHES PROPERTIES ===
@@ -1718,17 +1718,26 @@ class VTree(VGraph):
             The modified tree.
         """
         tree = self if inplace else self.copy()
-        tree.flip_branch_to_tree_dir(inplace=True)
+
+        branch_flipped = False if tree._branch_dir is None else not tree._branch_dir[branch_id]
 
         _, new_branch_ids, new_nodes_ids = super(VTree, tree).split_branch(
             branch_id, split_curve_id, split_coord, return_branch_ids=True, return_node_ids=True, inplace=True
         )
 
         # === Update branch tree ===
+        if tree._branch_dir is not None:
+            tree._branch_dir = np.append(tree._branch_dir, np.full(len(new_branch_ids) - 1, branch_flipped))
         branch_tree = tree.branch_tree.copy()
-        branch_tree[branch_tree == branch_id] = new_branch_ids[-1]
-        branch_tree = np.concatenate([branch_tree, new_branch_ids[:-1]])
-        assert np.all(branch_tree != np.arange(branch_tree.size)), "Branch tree is corrupted after split_branch."
+
+        if not branch_flipped:
+            branch_tree[branch_tree == branch_id] = new_branch_ids[-1]  # Redirect child to the last segment
+            branch_tree = np.concatenate([branch_tree, new_branch_ids[:-1]])  # Add parent of the new segments
+            assert np.all(branch_tree != np.arange(branch_tree.size)), "Branch tree is corrupted after split_branch."
+        else:
+            parent = branch_tree[branch_id]
+            branch_tree[branch_id] = new_branch_ids[1]  # Redirect branch parent to the second segment
+            branch_tree = np.concatenate([branch_tree, new_branch_ids[2:], [parent]])  # Add parent of the new segments
         tree._branch_tree = branch_tree
 
         if return_branch_ids:
