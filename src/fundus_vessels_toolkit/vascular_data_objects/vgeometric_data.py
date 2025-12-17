@@ -14,7 +14,6 @@ from traitlets import Int
 
 from fundus_toolkits import FundusData
 from fundus_toolkits.utils.geometric import Point, Rect
-
 from fundus_vessels_toolkit.utils.cpp_optimized import discontiguous_index
 from fundus_vessels_toolkit.utils.math import nearest_point_on_segment
 

@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TypeAlias, Union
 
-from coloraide import Color
 import numpy as np
 import numpy.typing as npt
+from coloraide import Color
 
 NumpyDict: TypeAlias = Mapping[str, Union[npt.NDArray[Any], "NumpyDict"]] | List[npt.NDArray[Any]] | List["NumpyDict"]
 

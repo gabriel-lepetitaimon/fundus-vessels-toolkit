@@ -617,6 +617,8 @@ class VGraph:
         )
 
         if filename is not None:
+            filename = Path(filename)
+            filename.parent.mkdir(parents=True, exist_ok=True)
             save_numpy_dict(data, filename)
         return data
 

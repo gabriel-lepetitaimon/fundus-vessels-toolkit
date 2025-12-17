@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from fundus_vessels_toolkit.utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
+
 __all__ = ["VTree"]
 
+from pathlib import Path
 from typing import (
     Any,
     Dict,
@@ -498,6 +501,65 @@ class VTree(VGraph):
         if check:
             tree.check_tree_integrity()
         return tree
+
+    def save(self, filename: Optional[str | Path] = None) -> NumpyDict:
+        """Save the tree data to a file.
+
+        The tree is saved as a dictionary with the following keys:
+            - ``branch_list``: The list of branches in the graph as a 2D array of shape (B, 2) where B is the number of branches. Each row contains the indices of the nodes connected by each branch.
+            - ``geometric_data``: The geometric data associated with the graph as a list of dictionaries.
+            - ``nodes_attr``: The attributes of the nodes in the graph as a dictionary.
+            - ``branches_attr``: The attributes of the branches in the graph as a dictionary.
+            - ``branch_tree``: The tree structure of the branches as a 1D array.
+            - ``branch_dirs``: The direction of the branches as a 1D array.
+
+        Parameters
+        ----------
+        filename : str or Path, optional
+            The name of the file to save the data to. If None, the data is not saved to a file.
+
+        Returns
+        -------
+        NUMPY_DICT
+            The graph as a dictionary of numpy arrays.
+        """  # noqa: E501
+
+        data = super().save()
+        data["branch_tree"] = self._branch_tree  # type: ignore
+        data["branch_dirs"] = self.branch_dirs()  # type: ignore
+
+        if filename is not None:
+            filename = Path(filename)
+            filename.parent.mkdir(parents=True, exist_ok=True)
+            save_numpy_dict(data, filename)
+        return data
+
+    @classmethod
+    def load(cls, filename: str | Path | NumpyDict) -> Self:
+        """Load a Graph object from a file.
+
+        Parameters
+        ----------
+        filename : str or Path
+            The name of the file to load the data from.
+
+        Returns
+        -------
+        VGraph
+            The Graph object loaded from the file.
+        """
+        if isinstance(filename, (str, Path)):
+            data = load_numpy_dict(filename)
+        else:
+            data = filename
+
+        return cls.from_graph(
+            VGraph.load(data),  # type: ignore
+            data["branch_tree"],  # type: ignore
+            data["branch_dirs"] if not np.all(data["branch_dirs"]) else None,  # type: ignore
+            copy=False,
+            check=True,
+        )
 
     @classmethod
     def empty(cls) -> VTree:

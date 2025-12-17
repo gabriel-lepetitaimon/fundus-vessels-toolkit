@@ -9,10 +9,9 @@ from fundus_data_toolkit.functional import open_image
 from ipywidgets import Button, GridBox, HBox, Label, Layout
 from jppype import Mosaic, vscode_theme
 
-from fundus_odmac_toolkit import segment_od_mac
+from fundus_odmac_toolkit.models.segmentation import segment
 from fundus_toolkits import FundusData
-from fundus_vessels_toolkit.models import segment_av
-from fundus_vessels_toolkit.pipelines.avseg_to_tree import GNNAVSegToTree, NaiveAVSegToTree
+from fundus_vessels_toolkit.pipelines.avseg_to_tree import NaiveAVSegToTree
 from fundus_vessels_toolkit.segment_to_graph.av_map_fixing import TopologicalLabel, rasterize_tree_topology
 from fundus_vessels_toolkit.segment_to_graph.av_tree_parsing import naive_infer_roots
 from fundus_vessels_toolkit.segment_to_graph.graph_simplification import simplify_passing_nodes
@@ -38,30 +37,38 @@ class BranchSelection:
         self.tip = tip
 
     def is_second_selection(self, artery: bool) -> bool:
-        return self.artery is not None and self.artery != artery
+        return self.artery is not None and self.artery == artery
 
 
 @dataclass
 class AnnotationContext:
     force_roots: set[VTreeNode] = set()
 
+    def clear(self):
+        self.force_roots.clear()
+
 
 class ReviewTool:
-    def __init__(self, raw_path: Path, av_path: Path, save_path: Path, raw_ext="png", av_ext="png", av2tree=None):
-        self.raw_path = raw_path
-        self.av_path = av_path
-        self.save_path = save_path
+    def __init__(
+        self, raw_path: Path, av_path: Path, save_path: Path, *, raw_ext="png", av_ext="png", height=800, av2tree=None
+    ):
+        self.raw_path = Path(raw_path)
+        self.av_path = Path(av_path)
+        self.save_path = Path(save_path)
         self.raw_ext = raw_ext
         self.av_ext = av_ext
 
-        img_names = set(raw_path.glob(f"*.{raw_ext}")) & set(av_path.glob(f"*.{av_ext}"))
-        self.img_names = sorted([p.stem for p in img_names])
+        img_names = {_.stem for _ in self.raw_path.glob(f"*.{raw_ext}")} & {
+            _.stem for _ in self.av_path.glob(f"*.{av_ext}")
+        }
+        assert len(img_names) > 0, "No images found in the specified directories."
+        self.img_names = sorted(list(img_names))
         self.current_index = 0
 
         self.av2tree = av2tree or NaiveAVSegToTree()
 
         self.mosaic = Mosaic(
-            (2, 3), cols_titles=["Image", "Graph", "Topo"], rows_titles=["Art", "Vei"], cell_height=500
+            (2, 3), cols_titles=["Image", "Graph", "Topo"], rows_titles=["Art", "Vei"], cell_height=height // 2
         )
         self.mosaic[0, 1].on_click(partial(self.handle_click, artery=True))
         self.mosaic[1, 1].on_click(partial(self.handle_click, artery=False))
@@ -76,24 +83,43 @@ class ReviewTool:
         self.annotation_ctx: tuple[AnnotationContext, AnnotationContext] = (AnnotationContext(), AnnotationContext())
         self.prev_selected_branch: BranchSelection = BranchSelection()
 
+        # Load first image
+        self.load(0)
+
     def widget(self) -> GridBox:
         btn_layout = Layout(width="80px")
         bPrev = Button(description="Previous", layout=btn_layout)
+        bPrev.on_click(lambda btn: self.previous_image())
         bNext = Button(description="Next", layout=btn_layout)
+        bNext.on_click(lambda btn: self.next_image())
         bSave = Button(description="Save", layout=btn_layout)
+        bSave.on_click(lambda btn: self.save_trees())
         bReset = Button(description="Reset", layout=btn_layout)
+        bReset.on_click(lambda btn: self.reset_annotations())
         bCompleteReset = Button(description="Complete Reset", layout=btn_layout)
+        bCompleteReset.on_click(lambda btn: self.complete_reset())
 
-        box = GridBox(
+        buttons = GridBox(
             children=[bPrev, bNext, bSave, bReset, bCompleteReset, self.label],
             layout=Layout(
                 width="100%",
-                grid_template_columns="repeat(5, 100px)",
+                grid_template_columns="repeat(5, 150px) auto",
                 grid_template_rows="auto",
                 justify_content="space-around",
             ),
         )
-        return box
+
+        view = GridBox(
+            children=[buttons, self.mosaic.draw_mosaic()],
+            layout=Layout(
+                width="100%",
+                grid_template_columns="100%",
+                grid_template_rows="auto auto",
+                row_gap="10px",
+            ),
+        )
+
+        return view
 
     @property
     def trees(self) -> tuple[VTree, VTree]:
@@ -114,10 +140,12 @@ class ReviewTool:
         self.label.value = f"{img_name} ({index + 1}/{len(self.img_names)})"
 
         fundus = FundusData(
-            image=self.raw_path / img_name,
-            av=self.av_path / img_name,
+            image=self.raw_path / (img_name + "." + self.raw_ext),
+            av=self.av_path / (img_name + "." + self.av_ext),
         )
-        segment_od_mac(fundus)
+        # segment_od_mac(fundus)
+        od_mac = segment(open_image(self.raw_path / (img_name + "." + self.raw_ext))).numpy(force=True).argmax(axis=0)
+        fundus = fundus.update(od=od_mac == 1, macula=od_mac == 2)
         self._fundus = fundus
 
         # Draw fundus
@@ -131,8 +159,8 @@ class ReviewTool:
         self.draw_trees()
 
     def load_saved_trees(self, draw=True) -> tuple[VTree, VTree]:
-        art_file = self.save_path / f"{self.img_name}_art.vtree"
-        vei_file = self.save_path / f"{self.img_name}_vei.vtree"
+        art_file = self.save_path / f"{self.img_name}_art.npz"
+        vei_file = self.save_path / f"{self.img_name}_vei.npz"
         if art_file.exists() and vei_file.exists():
             self._trees = VTree.load(art_file), VTree.load(vei_file)
         else:
@@ -148,8 +176,8 @@ class ReviewTool:
         return self.trees
 
     def save_trees(self):
-        art_file = self.save_path / f"{self.img_name}_art.vtree"
-        vei_file = self.save_path / f"{self.img_name}_vei.vtree"
+        art_file = self.save_path / f"{self.img_name}_art"
+        vei_file = self.save_path / f"{self.img_name}_vei"
         self.trees[0].save(art_file)
         self.trees[1].save(vei_file)
 
@@ -165,7 +193,7 @@ class ReviewTool:
 
             label_map, topo_map = rasterize_tree_topology(tree, bridge_gap_smaller_than=50)
             subtree_map = TopologicalLabel.decode_subtree(label_map)
-            N_subtree = subtree_map.max() + 1
+            N_subtree = int(subtree_map.max()) + 1
             color_map = np.zeros(self.fundus.shape + (3,), dtype=np.float32)
             alpha = np.zeros_like(topo_map)
 
@@ -181,6 +209,9 @@ class ReviewTool:
             img = (1 - alpha) * img + alpha * color_map
             self.mosaic[i, 2].add_image(img, name="topo_map")
 
+    ##########################################################################
+    # === CLICK HANDLERS ===
+    ##########################################################################
     def handle_click(self, event, artery: bool):
         modified_tree: Literal["artery", "vein", "both"] = "artery" if artery else "vein"
 
@@ -219,7 +250,8 @@ class ReviewTool:
                     tree.branch_list[self.prev_selected_branch.id][self.prev_selected_branch.tip],
                     tree.branch_list[branch_id][tip],
                 ]
-                tree = self.infer_roots(tree.add_branch(nodes), ctx)
+                tree.add_branch(nodes, inplace=True)
+                tree = self.infer_roots(tree, ctx, inplace=True)
                 simplify_passing_nodes(tree, only_fusable=nodes, inplace=True)
                 self.prev_selected_branch.reset()
             else:
@@ -290,6 +322,34 @@ class ReviewTool:
         self.draw_trees(which=modified_tree)
 
     def infer_roots(self, tree: VTree, ctx: AnnotationContext, *, inplace=False) -> VTree:
+        ctx.force_roots.difference_update({n for n in ctx.force_roots if not n.is_valid()})
         return naive_infer_roots(
-            tree, root_pos=self.fundus.od_center, force_roots=[n.id for n in ctx.force_roots], inplace=inplace
+            tree,
+            root_pos=self.fundus.od_center,
+            force_roots=[n.id for n in ctx.force_roots if n.is_valid()],
+            inplace=inplace,
         )
+
+    ##########################################################################
+    # === BUTTON INTERACTIONS ===
+    ##########################################################################
+    def next_image(self):
+        if self.current_index + 1 < len(self.img_names):
+            self.load(self.current_index + 1)
+
+    def previous_image(self):
+        if self.current_index - 1 >= 0:
+            self.load(self.current_index - 1)
+
+    def reset_annotations(self):
+        self.load_trees_from_av(draw=True)
+        self.reset_annotation_ctx()
+
+    def complete_reset(self):
+        self.load_trees_from_av(draw=True)
+        self.reset_annotation_ctx()
+
+    def reset_annotation_ctx(self):
+        for ctx in self.annotation_ctx:
+            ctx.clear()
+        self.prev_selected_branch.reset()

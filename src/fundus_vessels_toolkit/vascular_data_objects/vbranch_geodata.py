@@ -614,16 +614,15 @@ class VBranchGeoDescriptor(str, Generic[T_VBranchGeoData]):
                 )
             return key
         elif isinstance(key, str):
-            if geo_type is not None and VBranchGeoData.Fields.has_name(key):
-                desc = VBranchGeoData.Fields.by_name(key)
-                if desc.geo_type is None or not issubclass(desc.geo_type, geo_type):
-                    raise ValueError(
-                        "Invalid branch geometrical attribute type: "
-                        f"{None if desc.geo_type is None else desc.geo_type.__name__} "
-                        f"(for attribute: {key}). Expected type is: {geo_type.__name__}."
-                    )
-                return desc
-            return VBranchGeoDescriptor(key, geo_type)
+            assert VBranchGeoData.Fields.has_name(key), f"Unknown VBranchGeoField name: {key}"
+            desc = VBranchGeoData.Fields.by_name(key)
+            if geo_type is not None and (desc.geo_type is None or not issubclass(desc.geo_type, geo_type)):
+                raise ValueError(
+                    "Invalid branch geometrical attribute type: "
+                    f"{None if desc.geo_type is None else desc.geo_type.__name__} "
+                    f"(for attribute: {key}). Expected type is: {geo_type.__name__}."
+                )
+            return desc
         raise ValueError(f"Invalid type for geo descriptor: {type(key)}")
 
 
@@ -828,7 +827,7 @@ class VBranchGeoData:
                 if geo_type is None:
                     geo_type = type(attr_data)
 
-                is_invalid = attr_data.is_invalid(vgeo_data_object._branch_ctx(branch_id))
+                is_invalid = attr_data.is_invalid(vgeo_data_object._geodata_edit_ctx(branch_id))
                 if is_invalid:
                     raise ValueError(f"Invalid attribute {geo_desc} of branch {branch_id}.\n{is_invalid}")
             if geo_desc.geo_type is None:
