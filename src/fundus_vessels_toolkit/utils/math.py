@@ -1,5 +1,5 @@
 import itertools
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Literal, Tuple, overload
 
 import numpy as np
 import numpy.typing as npt
@@ -260,6 +260,56 @@ def intercept_segment(
         if b1_bound:
             out[u > 1] = np.nan
     return out
+
+
+@overload
+def nearest_point_on_segment(
+    p: npt.ArrayLike, a: npt.ArrayLike, b: npt.ArrayLike, *, return_distance: Literal[False] = False
+) -> npt.NDArray[np.float64]: ...
+@overload
+def nearest_point_on_segment(
+    p: npt.ArrayLike, a: npt.ArrayLike, b: npt.ArrayLike, *, return_distance: Literal[True]
+) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]: ...
+def nearest_point_on_segment(
+    p: npt.ArrayLike, a: npt.ArrayLike, b: npt.ArrayLike, *, return_distance: bool = False
+) -> npt.NDArray[np.float64] | Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """
+    Return the nearest point on segment a-b to point p.
+
+    Parameters
+    ----------
+    p : npt.ArrayLike
+        The points as an array of shape (P, 2).
+
+    a : npt.ArrayLike
+        The first point of the segments as an array of shape (S, 2).
+
+    b : npt.ArrayLike
+        The second point of the segments as an array of shape (S, 2).
+
+    Returns
+    -------
+    npt.NDArray[np.float64]
+        The nearest points on each segment as an array of shape (P, S, 2).
+
+    npt.NDArray[np.float64]
+        The distances to the nearest points as an array of shape (P, S).
+    """
+    p = np.atleast_2d(p).astype(float)
+    a = np.atleast_2d(a).astype(float)
+    b = np.atleast_2d(b).astype(float)
+
+    ap = p[:, None, :] - a[None, :, :]
+    ab = b[None, :, :] - a[None, :, :]
+    ab_squared = np.sum(ab**2, axis=-1) + 1e-10  # Prevent division by zero
+    t = np.clip(np.sum(ap * ab, axis=-1) / ab_squared, 0, 1)
+    nearest = a[None, :, :] + t[:, :, None] * ab
+
+    if not return_distance:
+        return nearest
+
+    distance = np.linalg.norm(nearest - p[:, None, :], axis=-1)
+    return nearest, distance
 
 
 def sigmoid(x, antisymmetric=False):

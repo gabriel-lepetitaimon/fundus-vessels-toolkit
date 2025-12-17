@@ -379,7 +379,7 @@ class TopologicalLabel(np.uint64):
         """
         Decode the subtree indices from a topological label map.
         """
-        return ((label >> np.uint64(52)) & np.uint64(0xFFF)) - np.uint64(1)
+        return (label & cls.SUBTREE_MASK) >> np.uint64(52)
 
     @classmethod
     @overload
@@ -416,13 +416,16 @@ class TopologicalLabel(np.uint64):
         return (label & pattern_mask).astype(np.uint64)
 
     @classmethod
-    def map_to_rgb(cls, map: npt.NDArray[np.uint64]) -> npt.NDArray[np.uint8]:
+    def map_to_rgb(cls, map: npt.NDArray[np.uint64], *, encode_pattern: bool = True) -> npt.NDArray[np.uint8]:
         """Convert a topological label map to an RGB color map for visualisation purposes.
 
         Parameters
         ----------
         map : npt.NDArray[np.uint64]
             The input topological label map.
+
+        encode_pattern : bool, optional
+            Whether to encode the branching pattern in the color. Default is True.
 
         Returns
         -------
@@ -431,8 +434,8 @@ class TopologicalLabel(np.uint64):
         """
         # Decode labels map
         labels_map, labels = cls.decode(map)
-        colors = np.stack([label.color(format="rgb") for label in labels])
-        return colors[labels_map.flatten()].reshape(map.shape + (3,))
+        colors = np.stack([label.color(format="rgb", encode_pattern=encode_pattern) for label in labels])
+        return colors[labels_map.flatten()].reshape(map.shape + (3,)).transpose(2, 0, 1)
 
     @property
     def is_background(self) -> bool:
@@ -518,10 +521,17 @@ class TopologicalLabel(np.uint64):
 
         return TopologicalLabel.encode(self.subtree, common_rank, common_branching_pattern)  # type: ignore[arg-type]
 
-    def subtree_color(self) -> str:
+    @classmethod
+    @overload
+    def subtree_color(cls, subtree: int, format: Literal["hex"] = "hex") -> str: ...
+    @classmethod
+    @overload
+    def subtree_color(cls, subtree: int, format: Literal["rgb"]) -> npt.NDArray[np.uint8]: ...
+    @classmethod
+    def subtree_color(cls, subtree: int, format: Literal["hex", "rgb"] = "hex") -> str | npt.NDArray[np.uint8]:
         """Assign a base color to each subtree."""
-        if self.is_background:
-            return "#000000"
+        if subtree == 0:
+            return "#000000" if format == "hex" else np.zeros(3, dtype=np.uint8)
 
         catppuccin_latte = [
             "#1e66f5",  # Blue
@@ -539,25 +549,44 @@ class TopologicalLabel(np.uint64):
             "#8839ef",  # Mauve
             "#dd7878",  # Flamingo
         ]
-        return catppuccin_latte[self.subtree % len(catppuccin_latte)]  # Cycle through the colors
+        color = catppuccin_latte[subtree % len(catppuccin_latte)]  # Cycle through the colors
+
+        if format == "hex":
+            return color
+
+        from coloraide import Color
+
+        return (np.array(Color(color).convert("srgb").coords()) * 255).astype(np.uint8)
 
     @overload
-    def color(self, format: Literal["hex"] = "hex") -> str: ...
+    def color(self, format: Literal["hex"] = "hex", *, encode_pattern: bool = True) -> str: ...
     @overload
-    def color(self, format: Literal["rgb"]) -> npt.NDArray[np.uint8]: ...
-    def color(self, format: Literal["hex", "rgb"] = "hex") -> str | npt.NDArray[np.uint8]:
+    def color(self, format: Literal["rgb"], *, encode_pattern: bool = True) -> npt.NDArray[np.uint8]: ...
+    def color(
+        self, format: Literal["hex", "rgb"] = "hex", *, encode_pattern: bool = True
+    ) -> str | npt.NDArray[np.uint8]:
         """Assign a color to this label base on its subtree and its branching pattern.
         Starting from the subtree color, the saturation increase for each primary branching and decrease for each secondary branching. The lightness increase at each level of the tree.
+
+        Parameters
+        ----------
+        format : Literal["hex", "rgb"], optional
+            The format of the output color. Can be "hex" or "rgb". Default is "hex".
+        encode_pattern : bool, optional
+            Whether to encode the branching pattern in the color. Default is True.
         """  # noqa: E501
         from coloraide import Color
 
         if self.is_background:
             return "#000000" if format == "hex" else np.zeros(3, dtype=np.uint8)
 
-        hsv_color = Color(self.subtree_color()).convert("hsv")
-        hsv_color[1] = 0.95**self.rank
-        hsv_color[2] = sum([0.5] + [0.5 ** (i + 2) * (1 if b else -1) for i, b in enumerate(self.branching_pattern)])
-        hsv_color[2] = hsv_color[2] * 0.9 + 0.1
+        hsv_color = Color(self.subtree_color(self.subtree, format="hex")).convert("hsv")
+        if encode_pattern:
+            hsv_color[1] = 0.95**self.rank
+            hsv_color[2] = sum(
+                [0.5] + [0.5 ** (i + 2) * (1 if b else -1) for i, b in enumerate(self.branching_pattern)]
+            )
+            hsv_color[2] = hsv_color[2] * 0.9 + 0.1
 
         color = hsv_color.convert("srgb")
         if format == "hex":

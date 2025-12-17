@@ -393,10 +393,10 @@ class NaiveAVSegToTree(AVSegToTreeBase):
         return vgraph
 
     def vgraph_to_vtree(self, graph: VGraph, od_pos: Point) -> VTree:
-        from ..segment_to_graph.av_tree_parsing import naive_vgraph_to_vtree
+        from ..segment_to_graph.av_tree_parsing import naive_infer_roots
         from ..segment_to_graph.tree_simplification import clean_vtree
 
-        tree = naive_vgraph_to_vtree(graph, od_pos)
+        tree = naive_infer_roots(graph, od_pos)
         tree = clean_vtree(tree, passing_node_min_angle=self.segToGraph.simplify_graph_arg.passing_node_min_angle)
         return tree
 

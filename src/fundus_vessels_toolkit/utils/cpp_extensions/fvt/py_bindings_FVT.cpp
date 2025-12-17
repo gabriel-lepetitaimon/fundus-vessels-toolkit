@@ -34,7 +34,7 @@ std::tuple<torch::Tensor, torch::Tensor, std::vector<torch::Tensor>, torch::Tens
     bool adaptativeTangent = get_if_exists(options, "adaptative_tangents", 1.) > 0;
     auto tangents_calibres_tensor = torch::empty({0}, torch::kFloat);
     if (clean_branches_tips > 0) {
-        auto const &adj_list = edge_list_to_adjlist(edge_list, node_yx.size());
+        auto const& adj_list = edge_list_to_adjlist(edge_list, node_yx.size());
         auto const tangents_calibres =
             clean_branches_skeleton(branches_curves, labels_acc, seg_acc, adj_list, clean_branches_tips,
                                     clean_terminal_branches_tips, adaptativeTangent);
@@ -43,7 +43,7 @@ std::tuple<torch::Tensor, torch::Tensor, std::vector<torch::Tensor>, torch::Tens
         tangents_calibres_tensor = torch::empty({n_branches, 2, 7}, torch::kFloat);
         auto accessor = tangents_calibres_tensor.accessor<float, 3>();
         for (int i = 0; i < n_branches; i++) {
-            auto const &tc = tangents_calibres[i];
+            auto const& tc = tangents_calibres[i];
             for (int j = 0; j < 2; j++) {
                 accessor[i][j][0] = std::get<0>(tc[j]).y;  // tangent.y
                 accessor[i][j][1] = std::get<0>(tc[j]).x;  // tangent.x
@@ -60,14 +60,14 @@ std::tuple<torch::Tensor, torch::Tensor, std::vector<torch::Tensor>, torch::Tens
     double spurs_calibre_factor = get_if_exists(options, "spurs_calibre_factor", 0.);
     if (min_spurs_length > 0 || spurs_calibre_factor > 0) {
         double max_spurs_length = get_if_exists(options, "max_spurs_length", std::numeric_limits<double>::max());
-        auto const &spurs =
+        auto const& spurs =
             find_spurs(branches_curves, edge_list, seg_acc, min_spurs_length, spurs_calibre_factor, max_spurs_length);
         if (spurs.size() > 0) {
             remove_branches(spurs, branches_curves, labels_acc, edge_list);
             if (tangents_calibres_tensor.size(0) > 0) {
                 std::vector<int> spurs_ids;
                 spurs_ids.reserve(spurs.size());
-                for (auto const &spur : spurs) spurs_ids.push_back(spur.id);
+                for (auto const& spur : spurs) spurs_ids.push_back(spur.id);
                 tangents_calibres_tensor = remove_rows(tangents_calibres_tensor, spurs_ids);
             }
             // !! The adj_list is not updated, but it is not used anymore !!
@@ -98,11 +98,11 @@ std::tuple<torch::Tensor, torch::Tensor, std::vector<torch::Tensor>, torch::Tens
  *  - the width of the branches
  */
 std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_curves(
-    std::vector<torch::Tensor> branch_curves, const torch::Tensor &segmentation,
+    std::vector<torch::Tensor> branch_curves, const torch::Tensor& segmentation,
     std::map<std::string, double> options = {}) {
-    auto const &seg_acc = segmentation.accessor<bool, 2>();
+    auto const& seg_acc = segmentation.accessor<bool, 2>();
     auto curves = tensors_to_curves(branch_curves);
-    auto const &[cleanedCurves, curveSplits, tangents, calibres, boundaries, curvatures, curv_roots, bsplines] =
+    auto const& [cleanedCurves, curveSplits, tangents, calibres, boundaries, curvatures, curv_roots, bsplines] =
         extract_branches_geometry(curves, seg_acc, options);
 
     // --- Convert to tensor ---
@@ -133,9 +133,9 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_curves(
  *  - the width of the branches
  */
 std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_skeleton(
-    torch::Tensor branch_labels, const torch::Tensor &node_yx, const torch::Tensor &branch_list,
-    const torch::Tensor &segmentation, std::map<std::string, double> options = {}) {
-    auto const &seg_acc = segmentation.accessor<bool, 2>();
+    torch::Tensor branch_labels, const torch::Tensor& node_yx, const torch::Tensor& branch_list,
+    const torch::Tensor& segmentation, std::map<std::string, double> options = {}) {
+    auto const& seg_acc = segmentation.accessor<bool, 2>();
     auto labels_acc = branch_labels.accessor<int, 2>();
 
     // --- Track branches ---
@@ -145,12 +145,12 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_skeleton(
     int clean_branches_tips = get_if_exists(options, "clean_branches_tips", 0.);
     bool adaptativeTangent = get_if_exists(options, "adaptative_tangents", 1.) > 0;
     if (clean_branches_tips > 0) {
-        auto const &adj_list = edge_list_to_adjlist(tensor_to_vectorIntPair(branch_list), node_yx.size(0));
+        auto const& adj_list = edge_list_to_adjlist(tensor_to_vectorIntPair(branch_list), node_yx.size(0));
         clean_branches_skeleton(curves, labels_acc, seg_acc, adj_list, clean_branches_tips, adaptativeTangent);
     }
 
     // --- Extract branches geometry ---
-    auto const &[cleanedCurves, curveSplits, tangents, calibres, boundaries, curvatures, curv_roots, bsplines] =
+    auto const& [cleanedCurves, curveSplits, tangents, calibres, boundaries, curvatures, curv_roots, bsplines] =
         extract_branches_geometry(curves, seg_acc, options, true);
 
     // --- Convert to tensor ---
@@ -167,15 +167,15 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_skeleton(
     return out;
 }
 
-std::vector<torch::Tensor> track_branches_to_torch(const torch::Tensor &branch_labels, const torch::Tensor &node_yx,
-                                                   const torch::Tensor &branch_list) {
-    auto const &branches_pixels = track_branches(branch_labels, node_yx, branch_list);
+std::vector<torch::Tensor> track_branches_to_torch(const torch::Tensor& branch_labels, const torch::Tensor& node_yx,
+                                                   const torch::Tensor& branch_list) {
+    auto const& branches_pixels = track_branches(branch_labels, node_yx, branch_list);
     return vectors_to_tensors(branches_pixels);
 }
 
-torch::Tensor fast_curve_tangent_torch(const torch::Tensor &curveYX, float gaussianStd = 2,
-                                       const torch::Tensor &evaluateAtID = {}) {
-    const CurveYX &curveYX_vec = tensor_to_curve(curveYX);
+torch::Tensor fast_curve_tangent_torch(const torch::Tensor& curveYX, float gaussianStd = 2,
+                                       const torch::Tensor& evaluateAtID = {}) {
+    const CurveYX& curveYX_vec = tensor_to_curve(curveYX);
     std::vector<float> gaussKernel = gaussianHalfKernel1D(gaussianStd);
 
     std::vector<int> evaluateAtID_vec;
@@ -183,52 +183,52 @@ torch::Tensor fast_curve_tangent_torch(const torch::Tensor &curveYX, float gauss
     auto evaluateAtID_acc = evaluateAtID.accessor<int, 1>();
     for (int i = 0; i < (int)evaluateAtID.size(0); i++) evaluateAtID_vec.push_back(evaluateAtID_acc[i]);
 
-    auto const &tangents = fast_curve_tangent(curveYX_vec, gaussKernel, evaluateAtID_vec);
+    auto const& tangents = fast_curve_tangent(curveYX_vec, gaussKernel, evaluateAtID_vec);
     return vector_to_tensor(tangents);
 }
 
-torch::Tensor fast_branch_boundaries_torch(const torch::Tensor &curveYX, const torch::Tensor &segmentation,
-                                           const torch::Tensor &evaluateAtID = {}) {
-    const CurveYX &curveYX_vec = tensor_to_curve(curveYX);
-    auto const &seg_acc = segmentation.accessor<bool, 2>();
+torch::Tensor fast_branch_boundaries_torch(const torch::Tensor& curveYX, const torch::Tensor& segmentation,
+                                           const torch::Tensor& evaluateAtID = {}) {
+    const CurveYX& curveYX_vec = tensor_to_curve(curveYX);
+    auto const& seg_acc = segmentation.accessor<bool, 2>();
 
     std::vector<int> evaluateAtID_vec;
     evaluateAtID_vec.reserve(evaluateAtID.size(0));
     auto evaluateAtID_acc = evaluateAtID.accessor<int, 1>();
     for (int i = 0; i < (int)evaluateAtID.size(0); i++) evaluateAtID_vec.push_back(evaluateAtID_acc[i]);
 
-    auto const &tangents = fast_curve_tangent(curveYX_vec, TANGENT_HALF_GAUSS, evaluateAtID_vec);
+    auto const& tangents = fast_curve_tangent(curveYX_vec, TANGENT_HALF_GAUSS, evaluateAtID_vec);
 
-    auto const &boundaries = fast_branch_boundaries(curveYX_vec, seg_acc, tangents, evaluateAtID_vec);
+    auto const& boundaries = fast_branch_boundaries(curveYX_vec, seg_acc, tangents, evaluateAtID_vec);
     return vector_to_tensor(boundaries);
 }
 
-torch::Tensor fast_branch_calibre_torch(const torch::Tensor &curveYX, const torch::Tensor &segmentation,
-                                        const torch::Tensor &evaluateAtID = {}) {
-    const CurveYX &curveYX_vec = tensor_to_curve(curveYX);
-    auto const &seg_acc = segmentation.accessor<bool, 2>();
+torch::Tensor fast_branch_calibre_torch(const torch::Tensor& curveYX, const torch::Tensor& segmentation,
+                                        const torch::Tensor& evaluateAtID = {}) {
+    const CurveYX& curveYX_vec = tensor_to_curve(curveYX);
+    auto const& seg_acc = segmentation.accessor<bool, 2>();
 
     std::vector<int> evaluateAtID_vec;
     evaluateAtID_vec.reserve(evaluateAtID.size(0));
     auto evaluateAtID_acc = evaluateAtID.accessor<int, 1>();
     for (int i = 0; i < (int)evaluateAtID.size(0); i++) evaluateAtID_vec.push_back(evaluateAtID_acc[i]);
 
-    auto const &tangents = fast_curve_tangent(curveYX_vec, TANGENT_HALF_GAUSS, evaluateAtID_vec);
+    auto const& tangents = fast_curve_tangent(curveYX_vec, TANGENT_HALF_GAUSS, evaluateAtID_vec);
 
-    auto &&boundaries = fast_branch_calibre(curveYX_vec, seg_acc, tangents, evaluateAtID_vec);
+    auto&& boundaries = fast_branch_calibre(curveYX_vec, seg_acc, tangents, evaluateAtID_vec);
     torch::Tensor widths_tensor = torch::from_blob(boundaries.data(), {(long)boundaries.size()}, torch::kFloat);
     return widths_tensor.clone();
 }
 
-torch::Tensor compute_curvature(const torch::Tensor &curveYX, const torch::Tensor &tangents) {
-    const CurveYX &curve = tensor_to_curve(curveYX);
-    const PointList &tangents_vec = tensor_to_pointList(tangents);
-    auto const &contiguousCurvesStartEnd = split_contiguous_curves(curve);
+torch::Tensor compute_curvature(const torch::Tensor& curveYX, const torch::Tensor& tangents) {
+    const CurveYX& curve = tensor_to_curve(curveYX);
+    const PointList& tangents_vec = tensor_to_pointList(tangents);
+    auto const& contiguousCurvesStartEnd = split_contiguous_curves(curve);
 
     torch::Tensor curvatures_tensor = torch::empty({(long)curve.size()}, torch::kFloat);
 
-    for (auto const &[start, end] : contiguousCurvesStartEnd) {
-        auto const &curvatures = tangents_to_curvature(tangents_vec, 5, start, end);
+    for (auto const& [start, end] : contiguousCurvesStartEnd) {
+        auto const& curvatures = tangents_to_curvature(tangents_vec, 5, start, end);
 
         for (std::size_t i = start; i < end; i++) curvatures_tensor[i] = curvatures[i - start];
     }
@@ -236,30 +236,30 @@ torch::Tensor compute_curvature(const torch::Tensor &curveYX, const torch::Tenso
     return curvatures_tensor;
 }
 
-torch::Tensor find_inflections_points(const torch::Tensor &curvatures, float K_threshold = 0.05) {
-    auto const &curvatures_vec = tensor_to_scalars(curvatures);
-    auto const &inflections = curve_inflections_points(curvatures_vec, K_threshold);
+torch::Tensor find_inflections_points(const torch::Tensor& curvatures, float K_threshold = 0.05) {
+    auto const& curvatures_vec = tensor_to_scalars(curvatures);
+    auto const& inflections = curve_inflections_points(curvatures_vec, K_threshold);
     return vector_to_tensor(inflections);
 }
 
-std::tuple<torch::Tensor, double, torch::Tensor> fit_bezier_cubic(const torch::Tensor &curveYX,
-                                                                  const torch::Tensor &tangents,
+std::tuple<torch::Tensor, double, torch::Tensor> fit_bezier_cubic(const torch::Tensor& curveYX,
+                                                                  const torch::Tensor& tangents,
                                                                   double bspline_max_error, float tangent_std = 2,
                                                                   std::size_t start = 0, std::size_t end = 0) {
-    const CurveYX &curve = tensor_to_curve(curveYX);
+    const CurveYX& curve = tensor_to_curve(curveYX);
     PointList tangents_vec = tensor_to_pointList(tangents);
     if (tangents_vec.empty()) tangents_vec = fast_curve_tangent(curve, gaussianHalfKernel1D(tangent_std));
-    auto const &curvatures = tangents_to_curvature(tangents_vec, true, 5, start, end);
-    auto const &[bezier, maxError, sqrError, u] = fit_bezier(curve, tangents_vec, bspline_max_error, start, end);
+    auto const& curvatures = tangents_to_curvature(tangents_vec, true, 5, start, end);
+    auto const& [bezier, maxError, sqrError, u] = fit_bezier(curve, tangents_vec, bspline_max_error, start, end);
     return {bspline_to_tensor(bezier), maxError, vector_to_tensor(u)};
 }
 
-std::tuple<torch::Tensor, double> fit_bspline(const torch::Tensor &curveYX_tensor, const torch::Tensor &tangents_tensor,
-                                              const torch::Tensor &curvature_roots_tensor,
+std::tuple<torch::Tensor, double> fit_bspline(const torch::Tensor& curveYX_tensor, const torch::Tensor& tangents_tensor,
+                                              const torch::Tensor& curvature_roots_tensor,
                                               std::map<std::string, double> options) {
     // === Parse input tensors ===
-    const CurveYX &curve = tensor_to_curve(curveYX_tensor);
-    auto const &contiguousCurvesStartEnd = split_contiguous_curves(curve);
+    const CurveYX& curve = tensor_to_curve(curveYX_tensor);
+    auto const& contiguousCurvesStartEnd = split_contiguous_curves(curve);
     float bspline_targetSqrError = pow(get_if_exists(options, "bspline_target_error", 3.0), 2);
     float ignoreGapsSqr = pow(get_if_exists(options, "ignore_gaps", 2.0), 2);
 
@@ -268,8 +268,8 @@ std::tuple<torch::Tensor, double> fit_bspline(const torch::Tensor &curveYX_tenso
         // If tangents are not provided, compute them
         tangents.clear();
         tangents.reserve(curve.size());
-        for (auto const &[start, end] : contiguousCurvesStartEnd) {
-            const auto &t = fast_curve_tangent(curve, TANGENT_HALF_GAUSS, start, end);
+        for (auto const& [start, end] : contiguousCurvesStartEnd) {
+            const auto& t = fast_curve_tangent(curve, TANGENT_HALF_GAUSS, start, end);
             tangents.insert(tangents.end(), t.begin(), t.end());
         }
     }
@@ -280,9 +280,9 @@ std::tuple<torch::Tensor, double> fit_bspline(const torch::Tensor &curveYX_tenso
         curvatureRoots.clear();
         float curv_roots_percentileThreshold = get_if_exists(options, "curvature_roots_percentile_threshold", 0.1);
 
-        for (auto const &[start, end] : contiguousCurvesStartEnd) {
-            auto const &curvature = tangents_to_curvature(tangents, true, 5, start, end);
-            auto const &curveInflections = curve_inflections_points(curvature, curv_roots_percentileThreshold, start);
+        for (auto const& [start, end] : contiguousCurvesStartEnd) {
+            auto const& curvature = tangents_to_curvature(tangents, true, 5, start, end);
+            auto const& curveInflections = curve_inflections_points(curvature, curv_roots_percentileThreshold, start);
             curvatureRoots.insert(curvatureRoots.end(), curveInflections.begin(), curveInflections.end());
         }
     }
@@ -295,7 +295,7 @@ std::tuple<torch::Tensor, double> fit_bspline(const torch::Tensor &curveYX_tenso
     std::size_t prevStart = 0, prevEnd = 0;
     auto itRoots = curvatureRoots.cbegin();
 
-    for (auto const &[start, end] : contiguousCurvesStartEnd) {
+    for (auto const& [start, end] : contiguousCurvesStartEnd) {
         if (start != 0) {
             if ((curve[start] - curve[prevEnd]).squaredNorm() > ignoreGapsSqr) {
                 // If the gap between two curves is larger than the ignoreGapsSqr, we create a new section
@@ -319,8 +319,8 @@ std::tuple<torch::Tensor, double> fit_bspline(const torch::Tensor &curveYX_tenso
     // === Compute BSpline ===
     double maxError = 0;
     BSpline bspline;
-    for (auto const &[start, end] : curveSections) {
-        auto const &[bspline_curve, error] =
+    for (auto const& [start, end] : curveSections) {
+        auto const& [bspline_curve, error] =
             bspline_regression(curve, tangents, nodeCandidates, bspline_targetSqrError, start, end);
         bspline.insert(bspline.end(), bspline_curve.begin(), bspline_curve.end());
         if (maxError < error) maxError = error;
@@ -329,31 +329,44 @@ std::tuple<torch::Tensor, double> fit_bspline(const torch::Tensor &curveYX_tenso
     return {bspline_to_tensor(bspline), maxError};
 }
 
-std::vector<torch::Tensor> compute_intercepts(const std::vector<torch::Tensor> &branchCurvesTensor,
-                                              const torch::Tensor &branchListTensor, const torch::Tensor &nodesYXTensor,
-                                              const torch::Tensor &startsTensor, const torch::Tensor &dirsTensor,
+std::list<std::size_t> discontiguous_index(const torch::Tensor& curveYX) {
+    const CurveYX& curve = tensor_to_curve(curveYX);
+    auto const& contiguousCurvesStartEnd = split_contiguous_curves(curve);
+
+    if (contiguousCurvesStartEnd.size() <= 1) return {};
+
+    std::list<std::size_t> discontiguousIndices;
+    auto it = std::next(contiguousCurvesStartEnd.cbegin(), 1);
+    for (; it != contiguousCurvesStartEnd.end(); ++it) discontiguousIndices.push_back(it->front());
+
+    return discontiguousIndices;
+}
+
+std::vector<torch::Tensor> compute_intercepts(const std::vector<torch::Tensor>& branchCurvesTensor,
+                                              const torch::Tensor& branchListTensor, const torch::Tensor& nodesYXTensor,
+                                              const torch::Tensor& startsTensor, const torch::Tensor& dirsTensor,
                                               float maxDist, float startMaxAngle, float endMaxAngle, float maxSnapDist,
                                               float maxSnapAngle, bool interpolateCurves = true) {
-    const std::vector<CurveYX> &branchCurves = tensors_to_curves(branchCurvesTensor);
-    const std::vector<IntPair> &branchList = tensor_to_vectorIntPair(branchListTensor);
-    const GraphAdjList &graph = edge_list_to_adjlist(branchList);
-    const std::vector<IntPoint> &nodesYX = tensor_to_curve(nodesYXTensor);
-    const std::vector<IntPoint> &starts = tensor_to_curve(startsTensor);
-    const PointList &dirs = tensor_to_pointList(dirsTensor);
+    const std::vector<CurveYX>& branchCurves = tensors_to_curves(branchCurvesTensor);
+    const std::vector<IntPair>& branchList = tensor_to_vectorIntPair(branchListTensor);
+    const GraphAdjList& graph = edge_list_to_adjlist(branchList);
+    const std::vector<IntPoint>& nodesYX = tensor_to_curve(nodesYXTensor);
+    const std::vector<IntPoint>& starts = tensor_to_curve(startsTensor);
+    const PointList& dirs = tensor_to_pointList(dirsTensor);
 
-    const auto &interceptPoints =
+    const auto& interceptPoints =
         intercept_curves(branchCurves, branchList, graph, nodesYX, starts, dirs, maxDist * maxDist, cos(startMaxAngle),
                          cos(endMaxAngle), maxSnapDist * maxSnapDist, cos(maxSnapAngle), interpolateCurves);
 
     std::vector<torch::Tensor> interceptTensors;
     interceptTensors.reserve(nodesYX.size());
 
-    for (const auto &points : interceptPoints) {
+    for (const auto& points : interceptPoints) {
         torch::Tensor interceptTensor = torch::empty({static_cast<int>(points.size()), 4}, torch::kInt);
         auto acc = interceptTensor.accessor<int, 2>();
 
         std::size_t i = 0;
-        for (const auto &p : points) {
+        for (const auto& p : points) {
             acc[i][0] = p.curveID;
             acc[i][1] = p.posInCurve;
             acc[i][2] = p.point.y;
@@ -371,7 +384,7 @@ torch::Tensor drawLine(std::array<int, 2> tip, std::array<float, 2> direction, i
     auto sceneAcc = scene.accessor<int, 2>();
     auto ray = RayIterator(IntPoint(tip[0], tip[1]), Point(direction[0], direction[1]));
     while (ray.step() < length) {
-        auto const &p = *ray;
+        auto const& p = *ray;
         if (!p.is_inside(512, 512)) break;
         sceneAcc[p.y][p.x] += 1;
         ++ray;
@@ -384,7 +397,7 @@ torch::Tensor drawCone(std::array<int, 2> tip, std::array<float, 2> direction, f
     auto sceneAcc = scene.accessor<int, 2>();
     auto coneIter = ConeIterator(IntPoint(tip[0], tip[1]), Point(direction[0], direction[1]), angle);
     while (true) {
-        auto const &p = ++coneIter;
+        auto const& p = ++coneIter;
         if (!p.is_inside(512, 512) || coneIter.height() >= length) break;
         sceneAcc[p.y][p.x] += 1;
     }
@@ -397,7 +410,7 @@ torch::Tensor drawTriangle(std::array<int, 2> v0, std::array<int, 2> v1, std::ar
     auto triangleIter = TriangleIterator(v0, v1, v2);
     // Draw the triangle edges
     while (!triangleIter.finished()) {
-        auto const &p = triangleIter.point();
+        auto const& p = triangleIter.point();
         if (!p.is_inside(30, 30)) break;
         sceneAcc[p.y][p.x] += 1.0 + triangleIter.relativeHeight();
 
@@ -410,11 +423,11 @@ torch::Tensor drawTriangle(std::array<int, 2> v0, std::array<int, 2> v1, std::ar
 /**************************************************************************************
  *             === UTILS ===
  **************************************************************************************/
-void first_index_of(const torch::Tensor &tensor, const torch::Tensor &elements, torch::Tensor &out) {
-    auto const &tensor_acc = tensor.accessor<int, 1>();
+void first_index_of(const torch::Tensor& tensor, const torch::Tensor& elements, torch::Tensor& out) {
+    auto const& tensor_acc = tensor.accessor<int, 1>();
     const int N = tensor_acc.size(0);
 
-    auto const &ele_acc = elements.accessor<int, 1>();
+    auto const& ele_acc = elements.accessor<int, 1>();
     const int E = ele_acc.size(0);
     std::list<IntPair> ele_list;
     for (int i = 0; i < E; i++) ele_list.push_back({i, ele_acc[i]});
@@ -423,7 +436,7 @@ void first_index_of(const torch::Tensor &tensor, const torch::Tensor &elements, 
     TORCH_CHECK_VALUE(out_acc.size(0) == E, "The output tensor must have the same number of rows as the elements.");
 
     for (int i = 0; i < N; i++) {
-        const auto &v = tensor_acc[i];
+        const auto& v = tensor_acc[i];
         auto it = ele_list.begin();
         const auto it_end = ele_list.end();
         while (it != it_end) {
@@ -440,10 +453,10 @@ void first_index_of(const torch::Tensor &tensor, const torch::Tensor &elements, 
     for (auto e : ele_list) out_acc[e[0]] = -1;
 }
 
-void first_two_index_of(const torch::Tensor &tensor, const torch::Tensor &elements, torch::Tensor &out) {
-    auto const &tensor_acc = tensor.accessor<int, 1>();
+void first_two_index_of(const torch::Tensor& tensor, const torch::Tensor& elements, torch::Tensor& out) {
+    auto const& tensor_acc = tensor.accessor<int, 1>();
     const int N = tensor_acc.size(0);
-    auto const &ele_acc = elements.accessor<int, 1>();
+    auto const& ele_acc = elements.accessor<int, 1>();
     const int E = ele_acc.size(0);
     auto out_acc = out.accessor<int, 2>();
 
@@ -455,7 +468,7 @@ void first_two_index_of(const torch::Tensor &tensor, const torch::Tensor &elemen
     for (int i = 0; i < E; i++) elements_left.push_back({i, ele_acc[i]});
 
     for (int i = 0; i < N; i++) {
-        const auto &v = tensor_acc[i];
+        const auto& v = tensor_acc[i];
 
         auto it = elements_left.begin();
         const auto it_end = elements_left.end();
@@ -503,6 +516,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("find_inflections_points", &find_inflections_points, "Find the inflection points of a curve.");
     m.def("fit_bezier_cubic", &fit_bezier_cubic, "Fit a cubic bezier curve to a set of points.");
     m.def("fit_bspline", &fit_bspline, "Fit a B-Spline curve to a set of points.");
+    m.def("discontiguous_index", &discontiguous_index, "Find the indices of discontiguous segments in a curve.");
     m.def("compute_intercepts", &compute_intercepts, "Compute the intercepts of a set of curves.");
     m.def("drawCone", &drawCone, "Draw a cone in a 2D image.");
     m.def("drawLine", &drawLine, "Draw a line in a 2D image.");

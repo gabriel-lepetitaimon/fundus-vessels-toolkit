@@ -23,8 +23,8 @@ class DeteriorationOpts:
     drop_calibre_threshold: float = 10  # Maximum calibre to drop skeleton points
     drop_calibre_smooth: float = 2.0  # Spread of the sigmoid to drop skeleton points
     drop_segment_min_length: int = 8  # Minimum size of a dropped segment
-    drop_segment_avg_length: int = 32  # Minimum size of a dropped segment
-    drop_segment_std_length: int = 16  # Standard deviation of the size of a dropped segment
+    drop_segment_avg_length: int = 16  # Minimum size of a dropped segment
+    drop_segment_std_length: int = 8  # Standard deviation of the size of a dropped segment
     av_swap_p: float = 0.01  # Probability to swap the artery/vein label of each branch
     av_swap_min_segment_length: int = 10  # Minimum size of a AV swapped segment
 

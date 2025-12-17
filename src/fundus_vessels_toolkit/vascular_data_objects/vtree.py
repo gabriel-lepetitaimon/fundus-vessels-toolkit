@@ -530,8 +530,10 @@ class VTree(VGraph):
         nodes = np.unique(self.branch_list[self.as_branch_ids(branch_ids)].flatten())
         subgraph, b_lookup = super().subgraph(nodes, return_branch_lookup=True)
 
-        branch_tree = b_lookup[self._branch_tree + 1] - 1
-        branch_dirs = None if self._branch_dir is None else self._branch_dir[invert_lookup(b_lookup)]
+        branch_mask = b_lookup != -1
+        b_lookup_with_empty = add_empty_to_lookup(b_lookup)
+        branch_tree = b_lookup_with_empty[self._branch_tree[branch_mask] + 1] - 1
+        branch_dirs = None if self._branch_dir is None else self._branch_dir[branch_mask]
 
         return VTree.from_graph(subgraph, branch_tree, branch_dirs, copy=False, check=check)
 
@@ -932,7 +934,7 @@ class VTree(VGraph):
         *,
         return_branch_ids: Literal[False] = False,
         only_traversing: bool = True,
-    ) -> npt.NDArray[np.int_]: ...
+    ) -> NodeIndices: ...
     @overload
     def crossing_nodes_ids(
         self,
@@ -940,14 +942,14 @@ class VTree(VGraph):
         *,
         return_branch_ids: Literal[True],
         only_traversing: bool = True,
-    ) -> Tuple[npt.NDArray[np.int_], List[Dict[int, npt.NDArray[np.int_]]]]: ...
+    ) -> Tuple[NodeIndices, List[Dict[NodeIndex, BranchIndices]]]: ...
     def crossing_nodes_ids(
         self,
         branch_ids: Optional[BranchIndicesLike] = None,
         *,
         return_branch_ids: bool = False,
         only_traversing: bool = True,
-    ) -> npt.NDArray[np.int_] | Tuple[npt.NDArray[np.int_], List[Dict[int, npt.NDArray[np.int_]]]]:
+    ) -> NodeIndices | Tuple[NodeIndices, List[Dict[NodeIndex, BranchIndices]]]:
         """Return the indices of the crossing nodes.
 
         Crossing nodes are nodes with two or more incoming branches with successors.
@@ -1177,15 +1179,12 @@ class VTree(VGraph):
         return np.array(dist, dtype=int)
 
     @overload
-    def passing_nodes(
-        self,
-        *,
-        as_mask: Literal[False] = False,
-        exclude_loop: bool = False,  # , return_branch_index
-    ) -> npt.NDArray[np.int_]: ...
+    def passing_nodes(self, *, as_mask: Literal[False] = False, exclude_loop: bool = True) -> npt.NDArray[np.int32]: ...
     @overload
-    def passing_nodes(self, *, as_mask: Literal[True], exclude_loop: bool = False) -> npt.NDArray[np.bool_]: ...
-    def passing_nodes(self, *, as_mask=False, exclude_loop: bool = False) -> npt.NDArray[np.int_ | np.bool_]:
+    def passing_nodes(self, *, as_mask: Literal[True], exclude_loop: bool = True) -> npt.NDArray[np.bool_]: ...
+    def passing_nodes(
+        self, *, as_mask=False, exclude_loop: bool = True
+    ) -> npt.NDArray[np.int32 | np.bool_] | Tuple[npt.NDArray[np.int32 | np.bool_], List[npt.NDArray[np.int32]]]:
         """Return the indices of the nodes that have exactly one incoming and one outgoing branch.
 
         Parameters
@@ -1209,20 +1208,17 @@ class VTree(VGraph):
 
     @overload
     def passing_nodes_with_branch_index(
-        self,
-        *,
-        exclude_loop: bool = False,
-        return_branch_direction: Literal[False] = False,
-    ) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]: ...
+        self, *, return_branch_direction: Literal[False] = False, exclude_loop: bool = True
+    ) -> Tuple[npt.NDArray[np.int32], npt.NDArray[np.int32]]: ...
     @overload
     def passing_nodes_with_branch_index(
-        self, *, exclude_loop: bool = False, return_branch_direction: Literal[True]
-    ) -> Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_], npt.NDArray[np.bool_]]: ...
+        self, *, return_branch_direction: Literal[True], exclude_loop: bool = True
+    ) -> Tuple[npt.NDArray[np.int32], npt.NDArray[np.int32], npt.NDArray[np.bool_]]: ...
     def passing_nodes_with_branch_index(
-        self, *, exclude_loop: bool = False, return_branch_direction: bool = False
+        self, *, return_branch_direction: bool = False, exclude_loop: bool = True
     ) -> (
-        Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]
-        | Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_], npt.NDArray[np.bool_]]
+        Tuple[npt.NDArray[np.int32], npt.NDArray[np.int32]]
+        | Tuple[npt.NDArray[np.int32], npt.NDArray[np.int32], npt.NDArray[np.bool_]]
     ):
         """Return the indices of the nodes that are connected to exactly two branches along with the indices of these branches.
 
@@ -1406,6 +1402,56 @@ class VTree(VGraph):
         super(tree.__class__, tree).delete_branch(branch_id, delete_orphan_nodes=delete_orphan_nodes, inplace=True)  # type: ignore
         return tree
 
+    @overload
+    def split_node(
+        self,
+        node: NodeIndex,
+        branch_connectivity: List[List[int]],
+        *,
+        inplace=False,
+        return_node_ids: Literal[False] = False,
+    ) -> Self: ...
+    @overload
+    def split_node(
+        self, node: NodeIndex, branch_connectivity: List[List[int]], *, inplace=False, return_node_ids: Literal[True]
+    ) -> Tuple[Self, npt.NDArray[np.int32]]: ...
+    def split_node(
+        self, node: NodeIndex, branch_connectivity: List[List[int]], *, inplace=False, return_node_ids: bool = False
+    ) -> Self | Tuple[Self, npt.NDArray[np.int32]]:
+        """Split a node into multiple nodes according to the given branch connectivity.
+
+        Parameters
+        ----------
+        node_id : int
+            The index of the node to split.
+
+        branch_connectivity : List[List[int]]
+            A list of lists, where each sublist contains the indices of the branches that will stay connected together through a new node.
+
+        inplace : bool, optional
+            If True, the tree is modified in place. Otherwise, a new tree is returned.
+
+        Returns
+        -------
+        VTree
+            The modified tree.
+        """  # noqa: E501
+        tree = self.copy() if not inplace else self
+
+        branch_tree = tree._branch_tree
+        branch_clusters = [tree.as_branch_ids(cluster) for cluster in branch_connectivity]
+        all_branches = np.concatenate(branch_clusters)
+        _, new_node_ids = super(VTree, tree).split_node(node, branch_connectivity, inplace=True, return_node_ids=True)
+
+        # Remove parent dependency if branches are in different clusters
+        for cluster in branch_clusters:
+            for b in cluster:
+                if branch_tree[b] in all_branches and branch_tree[b] not in cluster:
+                    branch_tree[b] = -1
+        tree._branch_tree = branch_tree
+
+        return (tree, new_node_ids) if return_node_ids else tree
+
     def delete_node(self, node_id: NodeIndicesLike, *, inplace: bool = False) -> VTree:
         """Remove the nodes with the given indices from the tree.
 
@@ -1423,7 +1469,7 @@ class VTree(VGraph):
             The modified tree.
         """
         tree = self.copy() if not inplace else self
-        super(tree.__class__, tree).delete_node(node_id, inplace=True)  # type: ignore
+        super(tree.__class__, tree).delete_node(node_id, inplace=True)
         return tree
 
     def fuse_node(

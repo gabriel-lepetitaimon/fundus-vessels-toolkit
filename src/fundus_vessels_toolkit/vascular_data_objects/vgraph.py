@@ -54,6 +54,7 @@ from ..utils.typing import (
     Int1DArrayLike,
     IntPairArrayLike,
     PointArrayLike,
+    PointLike,
 )
 from .vgeometric_data import VBranchGeoData, VBranchGeoDataKey, VGeometricData
 
@@ -210,9 +211,9 @@ class VGraphNode:
         )
 
 
-NodeIndices: TypeAlias = Sequence[VGraphNode] | Indices | pd.Series
-NodeIndex: TypeAlias = VGraphNode | int
-NodeIndicesLike: TypeAlias = NodeIndices | NodeIndex
+NodeIndices: TypeAlias = Indices | pd.Series
+NodeIndex: TypeAlias = int
+NodeIndicesLike: TypeAlias = Sequence[VGraphNode] | VGraphNode | NodeIndices | NodeIndex
 
 
 class VGraphBranch:
@@ -2204,9 +2205,17 @@ class VGraph:
 
         return graph
 
+    @overload
+    def add_branch(
+        self, branch_nodes: IntPairArrayLike, *, return_branch_id: Literal[False] = False, inplace=True
+    ) -> Self: ...
+    @overload
+    def add_branch(
+        self, branch_nodes: IntPairArrayLike, *, return_branch_id: Literal[True], inplace=True
+    ) -> Tuple[Self, npt.NDArray[np.int32]]: ...
     def add_branch(
         self, branch_nodes: IntPairArrayLike, *, return_branch_id=False, inplace=True
-    ) -> Self | Tuple[VGraph, npt.NDArray[np.int32]]:
+    ) -> Self | Tuple[Self, npt.NDArray[np.int32]]:
         """Add branch(es) to the graph.
 
         Parameters
@@ -2594,12 +2603,80 @@ class VGraph:
 
         graph = self.copy() if not inplace else self
         new_nodes = np.arange(graph._node_count, graph._node_count + N)
-        graph._node_count += N
 
+        # Increment node attributes dataframe
+        graph._node_count += N
+        graph._node_attr = graph._node_attr.reindex(pd.RangeIndex(graph._node_count), copy=False)
+
+        # Update geometric data
         for gdata in graph._geometric_data:
             gdata._append_nodes(coord)
 
         return new_nodes
+
+    @overload
+    def split_node(
+        self,
+        node: NodeIndex,
+        branch_connectivity: List[List[int]],
+        *,
+        inplace=False,
+        return_node_ids: Literal[False] = False,
+    ) -> Self: ...
+    @overload
+    def split_node(
+        self, node: NodeIndex, branch_connectivity: List[List[int]], *, inplace=False, return_node_ids: Literal[True]
+    ) -> Tuple[Self, npt.NDArray[np.int32]]: ...
+    def split_node(
+        self, node: NodeIndex, branch_connectivity: List[List[int]], *, inplace=False, return_node_ids: bool = False
+    ) -> Self | Tuple[Self, npt.NDArray[np.int32]]:
+        """Split a node into multiple nodes according to the given branch connectivity.
+
+        Parameters
+        ----------
+        node_id : int
+            The index of the node to split.
+
+        branch_connectivity : List[List[int]]
+            A list of lists, where each sublist contains the indices of the branches that will stay connected together through a new node.
+
+        inplace : bool, optional
+            If True, the graph is modified in place. Otherwise, a new graph is returned.
+
+        Returns
+        -------
+        VGraph
+            The modified graph.
+        """  # noqa: E501
+        graph = self.copy() if not inplace else self
+
+        # Check node and branches indices
+        node_id = graph.as_node_ids(node)[0]
+        branch_clusters = [graph.as_branch_ids(cluster) for cluster in branch_connectivity]
+        if len(branch_clusters) < 2:
+            return graph if not return_node_ids else (graph, np.array([node_id], dtype=np.int32))
+
+        all_branch = np.concatenate(branch_clusters)
+        assert all_branch.size == len(np.unique(all_branch)), "Some branches are duplicated in branch_connectivity."
+
+        adj_branches = graph.adjacent_branches(node_id)
+        assert set(all_branch) == set(adj_branches), (
+            "branch_connectivity must contain all branches adjacent to the node."
+        )
+
+        # Create new nodes
+        n_new_nodes = len(branch_connectivity)
+        yx = graph.geometric_data().node_coord(node_id)
+        new_node_ids = graph.add_nodes(np.repeat(yx[None, :], n_new_nodes - 1, axis=0), inplace=True)
+
+        # Reassign branches to new nodes
+        for cluster_id, branch_cluster in enumerate(branch_clusters[1:]):
+            for branch_id in branch_cluster:
+                n0, _ = graph._branch_list[branch_id]
+                graph._branch_list[branch_id, 0 if n0 == node_id else 1] = new_node_ids[cluster_id]
+
+        new_node_ids = np.concatenate([[node_id], new_node_ids])
+        return graph if not return_node_ids else (graph, new_node_ids)
 
     def delete_node(self, node_id: NodeIndicesLike, *, inplace=False) -> Self:
         """Remove the nodes with the given indices from the graph as well as their incident branches.

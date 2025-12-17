@@ -1,3 +1,4 @@
+from ast import List
 import numpy as np
 import torch
 
@@ -28,4 +29,11 @@ def first_two_index_of(array, search_for, out=None):
 
     fvt_cpp.first_two_index_of(array, search_for, out)
 
+    return out
+
+
+@autocast_torch
+def discontiguous_index(curve) -> list[int]:
+    curve = curve.cpu().int()
+    out = fvt_cpp.discontiguous_index(curve)
     return out

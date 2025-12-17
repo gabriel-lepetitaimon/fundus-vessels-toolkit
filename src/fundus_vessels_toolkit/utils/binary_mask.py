@@ -1,6 +1,7 @@
 from typing import Tuple
 
 import numpy as np
+import numpy.typing as npt
 
 
 def binary1d_hit_or_miss(samples, positive_patterns, negative_patterns=None):
@@ -27,9 +28,9 @@ def binary1d_hit_or_miss(samples, positive_patterns, negative_patterns=None):
         negative_patterns = ~positive_patterns
     else:
         assert negative_patterns.dtype == bool, "negative_patterns must be of type bool"
-        assert (
-            negative_patterns.shape == positive_patterns.shape
-        ), "negative_patterns must have the same shape as positive_patterns"
+        assert negative_patterns.shape == positive_patterns.shape, (
+            "negative_patterns must have the same shape as positive_patterns"
+        )
 
     # Reshape patterns to (1, N, P)
     positive_patterns = np.expand_dims(positive_patterns.transpose(), axis=0)
@@ -85,9 +86,9 @@ def fast_hit_or_miss(
         if negative_patterns.ndim == 2:
             negative_patterns = negative_patterns[np.newaxis, ...]
         assert negative_patterns.dtype == bool, "negative_patterns must be of type bool"
-        assert (
-            positive_patterns.shape == negative_patterns.shape
-        ), "positive_patterns and negative_patterns must have the same shape"
+        assert positive_patterns.shape == negative_patterns.shape, (
+            "positive_patterns and negative_patterns must have the same shape"
+        )
 
     # Extract patches from the map
     pattern_shape = positive_patterns.shape[1:]
@@ -132,7 +133,7 @@ def fast_hit_or_miss(
     return map
 
 
-def index_to_mask(index: np.ndarray, length: int, invert=False):
+def index_to_mask(index: npt.NDArray[np.integer], length: int, invert=False) -> npt.NDArray[np.bool_]:
     """
     Convert a list of indices to a boolean mask.
 
@@ -179,7 +180,7 @@ def extract_patches(
         for the y and x coordinates.
     """
     assert map.shape == mask.shape, (
-        f"map and mask must have the same shape " f"(map.shape={map.shape}, mask.shape={mask.shape})"
+        f"map and mask must have the same shape (map.shape={map.shape}, mask.shape={mask.shape})"
     )
     assert mask.dtype == bool, f"mask must be of type bool, not {mask.dtype}"
 

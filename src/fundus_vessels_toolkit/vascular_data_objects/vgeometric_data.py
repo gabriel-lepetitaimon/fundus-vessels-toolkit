@@ -9,9 +9,14 @@ from weakref import ref
 
 import numpy as np
 import numpy.typing as npt
+from soupsieve import closest
+from traitlets import Int
 
 from fundus_toolkits import FundusData
 from fundus_toolkits.utils.geometric import Point, Rect
+
+from fundus_vessels_toolkit.utils.cpp_optimized import discontiguous_index
+from fundus_vessels_toolkit.utils.math import nearest_point_on_segment
 
 from ..utils.bezier import BSpline
 from ..utils.cluster import remove_consecutive_duplicates
@@ -19,7 +24,14 @@ from ..utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
 from ..utils.fundus_projections import FundusProjection, Translation
 from ..utils.lookup_array import invert_lookup, reorder_array
 from ..utils.numpy import as_1d_array, np_find_sorted, readonly
-from ..utils.typing import Bool1DArrayLike, IndicesLike, Int1DArray
+from ..utils.typing import (
+    Bool1DArrayLike,
+    Float1DArray,
+    IndicesLike,
+    Int1DArray,
+    Int2DArray,
+    PointArrayLike,
+)
 from .vbranch_geodata import (
     BranchGeoDataEditContext,
     T_VBranchGeoData,
@@ -33,7 +45,7 @@ from .vbranch_geodata import (
 )
 
 if TYPE_CHECKING:
-    from .vgraph import VGraph
+    from .vgraph import NodeIndices, VGraph
 
     # T_VBranchGeoData = TypeVar("T_VBranchGeoData", bound=VBranchGeoData)
 
@@ -541,9 +553,32 @@ class VGeometricData:
         else:
             raise TypeError("Invalid type for branches index.")
 
+    @overload
     def branch_closest_index(
-        self, points: npt.ArrayLike[float], branch_ids: Optional[int | npt.NDArray[np.int32]] = None
-    ) -> npt.NDArray[float]:
+        self,
+        yx: PointArrayLike,
+        branch_ids: Optional[int | npt.NDArray[np.int32]] = None,
+        *,
+        return_distance: Literal[False] = False,
+        interpolate: bool = False,
+    ) -> Int1DArray: ...
+    @overload
+    def branch_closest_index(
+        self,
+        yx: PointArrayLike,
+        branch_ids: Optional[int | npt.NDArray[np.int32]] = None,
+        *,
+        return_distance: Literal[True],
+        interpolate: bool = False,
+    ) -> Tuple[Int1DArray, Float1DArray]: ...
+    def branch_closest_index(
+        self,
+        yx: PointArrayLike,
+        branch_ids: Optional[int | npt.NDArray[np.int32]] = None,
+        *,
+        return_distance=False,
+        interpolate: bool = False,
+    ) -> Int1DArray | Tuple[Int1DArray, Float1DArray]:
         """Return the closest point(s) on the branch(es) to a set of point(s).
 
         Parameters
@@ -554,6 +589,13 @@ class VGeometricData:
         branch_ids : Optional[int | np.ndarray], optional
             The id of the branch(es), by default None
 
+        return_distance : bool, optional
+            Whether to return the distance to the closest point(s) as well, by default False.
+
+        interpolate : bool, optional
+            Whether to interpolate the branch curve when it is composed of several disjoint segments, or when no curve points are present, by default False.
+            The interpolation is a linear interpolation between the disjoint segments, or between the branch nodes if no curve points are present.
+
         Returns
         -------
         np.ndarray
@@ -562,25 +604,138 @@ class VGeometricData:
             - If ``branch_ids`` is a scalar, the output is a 1D array of shape (N) containing the indices of the closest points on the branch.
             - If ``branch_ids`` is an iterable of int, the output is a 2D array of shape (len(ids), N,) containing the indices of the closest points on each branch.
         """  # noqa: E501
-        points = np.atleast_2d(points)
+        yx = np.atleast_2d(yx)
+        assert yx.ndim == 2 and yx.shape[1] == 2, "The yx points should be a 2D array of shape (N, 2)."
 
-        def closest_index(curve, points):
+        def closest_index(branch_id, curve, points):
             if curve is None or curve.shape[0] == 0:
-                return np.full(points.shape, np.nan)
+                if interpolate:
+                    nodes_yx = self.node_coord(self.parent_graph.branch_list[branch_id])
+                    _, d = nearest_point_on_segment(points, *nodes_yx, return_distance=True)
+                    return np.full(points.shape[0], -1), d[:, 0]
+                else:
+                    return np.full(points.shape, np.nan), np.full(points.shape[0], np.inf)
             distances = np.linalg.norm(curve[:, None, :] - points[None, :, :], axis=2)
-            return np.argmin(distances, axis=0)
+            curve_ids = np.argmin(distances, axis=0)
+            distances = distances[curve_ids, np.arange(points.shape[0])]
+
+            if interpolate:
+                nodes_yx = self.node_coord(self.parent_graph.branch_list[branch_id])
+                discontinuity = np.array([0] + discontiguous_index(curve) + [len(curve)], dtype=np.int_)
+                discontinuity_yx_a = np.concatenate([nodes_yx[0, None], curve[discontinuity[1:] - 1]])
+                discontinuity_yx_b = np.concatenate([curve[discontinuity[:-1]], nodes_yx[1, None]])
+
+                _, dist = nearest_point_on_segment(points, discontinuity_yx_a, discontinuity_yx_b, return_distance=True)
+                closest_discontinuity = np.argmin(dist, axis=1)
+                closest_discontinuity_dist = dist[np.arange(points.shape[0]), closest_discontinuity]
+                mask = closest_discontinuity_dist < distances
+                curve_ids[mask] = discontinuity[closest_discontinuity[mask]]
+                distances[mask] = closest_discontinuity_dist[mask]
+
+            return curve_ids, distances
 
         if branch_ids is None:
-            branch_ids = range(self.branch_count)
+            branch_ids = np.arange(self.branch_count)
             is_single = False
         else:
             branch_ids, is_single = as_1d_array(branch_ids)
 
         branches_closest_index = []
+        branches_closest_distance = []
         for i in branch_ids:
-            branches_closest_index.append(closest_index(self._branch_curve[i], points))
+            curve_id, dist = closest_index(i, self._branch_curve[i], yx)
+            branches_closest_index.append(curve_id)
+            branches_closest_distance.append(dist)
 
-        return branches_closest_index[0] if is_single else np.stack(branches_closest_index)
+        if not return_distance:
+            return branches_closest_index[0] if is_single else np.stack(branches_closest_index)
+
+        return (
+            branches_closest_index[0] if is_single else np.stack(branches_closest_index),
+            branches_closest_distance[0] if is_single else np.stack(branches_closest_distance),
+        )
+
+    @overload
+    def closest_branches(
+        self, yx: PointArrayLike, *, return_distance: Literal[False] = False, interpolate: bool = False
+    ) -> Int2DArray: ...
+    @overload
+    def closest_branches(
+        self, yx: PointArrayLike, *, return_distance: Literal[True], interpolate: bool = False
+    ) -> Tuple[Int2DArray, Float1DArray]: ...
+    def closest_branches(
+        self, yx: PointArrayLike, *, return_distance=False, interpolate: bool = False
+    ) -> Int2DArray | Tuple[Int2DArray, Float1DArray]:
+        """Return the closest branch for each point.
+
+        Parameters
+        ----------
+        points : Float2DArrayLike
+            The coordinates of the point(s) as a 2D array of shape (N, 2).
+
+        Returns
+        -------
+        np.ndarray
+            A (N, 2) array containing the id of the closest branch and the index of the closest point on the branch for each input point.
+
+        np.ndarray
+            If ``return_distance`` is True, also return a 1D array of shape (N,) containing the distance to the closest point on the closest branch for each input point.
+
+        """  # noqa: E501
+        yx = np.asarray(yx)
+        if is_single := yx.ndim == 1:
+            yx = yx[None, :]
+        assert yx.ndim == 2 and yx.shape[1] == 2, "The yx points should be a 2D array of shape (N, 2)."
+
+        closest_index, closest_distance = self.branch_closest_index(
+            yx, branch_ids=None, return_distance=True, interpolate=interpolate
+        )
+        closest_branch = np.argmin(closest_distance, axis=0)
+        closest_index = closest_index[closest_branch, np.arange(yx.shape[0])]
+        closest_distance = closest_distance[closest_branch, np.arange(yx.shape[0])]
+
+        closest = np.stack((closest_branch, closest_index), axis=1)
+        if is_single:
+            closest = closest[0]
+            closest_distance = closest_distance[0]
+        return closest if not return_distance else (closest, closest_distance)
+
+    @overload
+    def closest_nodes(self, yx: PointArrayLike, *, return_distance: Literal[False] = False) -> NodeIndices: ...
+    @overload
+    def closest_nodes(
+        self, yx: PointArrayLike, *, return_distance: Literal[True]
+    ) -> Tuple[NodeIndices, Float1DArray]: ...
+    def closest_nodes(
+        self, yx: PointArrayLike, *, return_distance=False
+    ) -> NodeIndices | Tuple[NodeIndices, Float1DArray]:
+        """Return the closest node for each point.
+
+        Parameters
+        ----------
+        points : Float2DArrayLike
+            The coordinates of the point(s) as a 2D array of shape (N, 2).
+
+        Returns
+        -------
+        np.ndarray
+            A (N, 2) array containing the id of the closest branch and the index of the closest point on the branch for each input point.
+        """  # noqa: E501
+        yx = np.asarray(yx)
+        if is_single := yx.ndim == 1:
+            yx = yx[None, :]
+
+        assert yx.ndim == 2 and yx.shape[1] == 2, "The yx points should be a 2D array of shape (N, 2)."
+
+        dist = np.linalg.norm(self._nodes_coord[:, None, :] - yx[None, :, :], axis=2)
+        closest_node = np.argmin(dist, axis=0)
+        closest_distance = dist[closest_node, np.arange(yx.shape[0])]
+
+        if is_single:
+            closest_node = closest_node[0]
+            closest_distance = closest_distance[0]
+
+        return closest_node if not return_distance else (closest_node, closest_distance)
 
     def set_branch_curve(
         self,
@@ -711,6 +866,16 @@ class VGeometricData:
         self, graph_ids: Optional[int | Iterable[int]] = None, fast_approximation=True
     ) -> float | npt.NDArray[np.float32]:
         """Return the arc length of the branches.
+
+        Parameters
+        ----------
+        graph_ids : Optional[int | Iterable[int]], optional
+            The id of the branch(es) to retrieve the length.
+            If None (by default), the length of all branches is returned.
+
+        fast_approximation : bool, optional
+            If True (by default), the arc length is approximated by the number of pixels in the branch curve.
+            If False, the arc length is computed as the sum of the Euclidean distances between consecutive points in the branch curve.
 
         Returns
         -------

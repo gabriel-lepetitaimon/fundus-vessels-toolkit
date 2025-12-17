@@ -11,7 +11,6 @@ __all__ = [
     "SimplifyTopology",
 ]
 
-from tracemalloc import start
 import warnings
 from dataclasses import dataclass
 from typing import List, Literal, Optional, Tuple, TypeAlias
@@ -21,7 +20,6 @@ import numpy as np
 import numpy.typing as npt
 
 from fundus_toolkits.utils.geometric import distance_matrix
-
 from fundus_vessels_toolkit.vascular_data_objects.vgraph import BranchIndicesLike, NodeIndicesLike
 
 from ..utils import if_none
@@ -467,6 +465,7 @@ def simplify_passing_nodes(
     graph: VGraph,
     *,
     not_fusable: Optional[npt.ArrayLike] = None,
+    only_fusable: Optional[npt.ArrayLike] = None,
     min_angle: float = 0,
     with_same_label=None,
     inplace=False,
@@ -481,6 +480,9 @@ def simplify_passing_nodes(
 
         not_fusable:
             A list of nodes that should not be merged.
+
+        only_fusable:
+            A list of nodes that can be merged. If not None, only these nodes are considered for merging.
 
         min_angle:
             Under this minimum angle (in degrees) between the two branches connected to a passing node, the node is considered as a junction and is not removed.
@@ -505,19 +507,25 @@ def simplify_passing_nodes(
     if len(nodes_to_fuse) == 0:
         return graph
 
+    # === Filter out nodes that should not be merged ===
+    fusable = np.ones(len(nodes_to_fuse), dtype=bool)
     if not_fusable is not None:
         # === Filter out nodes that should not be merged ===
-        not_fusable = ~np.isin(nodes_to_fuse, not_fusable, assume_unique=True)
-        if np.all(not_fusable):
-            return graph
-        nodes_to_fuse = nodes_to_fuse[not_fusable]
-        incident_branches = incident_branches[not_fusable]
-        idirs = idirs[not_fusable]
+        fusable &= ~np.isin(nodes_to_fuse, not_fusable, assume_unique=True)
 
+    if only_fusable is not None:
+        fusable &= np.isin(nodes_to_fuse, only_fusable, assume_unique=True)
+
+    if not np.any(fusable):
+        return graph
+    nodes_to_fuse = nodes_to_fuse[fusable]
+    incident_branches = incident_branches[fusable]
+    idirs = idirs[fusable]
+
+    # === Filter out nodes with a too small angle between their two incident branches ===
     if min_angle > 0 and graph.geometric_data().has_branch_data(VBranchGeoData.Fields.TANGENTS):
         derive_tips_geometry_from_curve_geometry(graph, tangent=True, inplace=True)
 
-        # === Filter out nodes with a too small angle between their two incident branches ===
         geo_data = graph.geometric_data()
         t = np.stack([geo_data.tip_tangent(b, d) for b, d in zip(incident_branches, idirs, strict=True)])
         cos = np.sum(t[:, 1, :] * t[:, 0, :], axis=1)  # Dot product between the two tangents
@@ -529,8 +537,8 @@ def simplify_passing_nodes(
         nodes_to_fuse = nodes_to_fuse[fuseable_nodes]
         incident_branches = incident_branches[fuseable_nodes]
 
+    # === Filter nodes which don't have the same label ===
     if with_same_label is not None:
-        # === Filter nodes which don't have the same label ===
         if isinstance(with_same_label, str):
             # Attempt to get the labels from the branches attributes
             with_same_label = graph.branch_attr[with_same_label]
@@ -540,6 +548,7 @@ def simplify_passing_nodes(
         nodes_to_fuse = nodes_to_fuse[same_label]
         incident_branches = incident_branches[same_label]
 
+    # === Fuse ! ===
     if len(nodes_to_fuse):
         return graph.merge_consecutive_branches(incident_branches, nodes_to_fuse, inplace=inplace)
     return graph

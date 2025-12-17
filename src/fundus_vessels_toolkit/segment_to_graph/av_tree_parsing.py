@@ -7,6 +7,9 @@ import numpy.typing as npt
 from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.geometric import Point
 
+from fundus_vessels_toolkit.utils.typing import Indices
+from fundus_vessels_toolkit.vascular_data_objects.vgraph import NodeIndicesLike
+
 from ..pipelines.seg_to_graph import SegToGraph
 from ..utils.cluster import cluster_by_distance, reduce_clusters
 from ..utils.math import extract_splits, quantized_higher
@@ -624,11 +627,21 @@ def relabel_av_by_subtree(tree: VTree, *, av_attr: str = "av", inplace: bool = F
     return tree
 
 
-def naive_vgraph_to_vtree(
-    graph: VGraph, root_pos: Point, reorder_nodes: bool = False, reorder_branches: bool = False
+def naive_infer_roots(
+    graph: VGraph,
+    root_pos: Point,
+    *,
+    force_roots: Optional[Indices] = None,
+    reorder_nodes: bool = False,
+    reorder_branches: bool = False,
+    inplace: bool = False,
 ) -> VTree:
     # === Prepare graph ===
-    graph = graph.copy()
+    if not inplace:
+        graph = graph.copy()
+    else:
+        assert isinstance(graph, VTree), "Inplace conversion to VTree is only available for VTree instances."
+
     loop_branches = graph.self_loop_branches()
     if len(loop_branches) > 0:
         warnings.warn("The graph contains self loop branches. They will be ignored.", stacklevel=1)
@@ -666,7 +679,14 @@ def naive_vgraph_to_vtree(
 
     # === Find the root node of each sub tree ===
     roots = {}
+
+    if force_roots is not None:
+        for node in force_roots:
+            roots[node] = np.linalg.norm(nodes_coord[node] - root_pos)
+
     for nodes in graph.node_connected_components():
+        if np.any(np.isin(nodes, list(roots.keys()))):
+            continue
         nodes_dist = np.linalg.norm(nodes_coord[nodes] - root_pos, axis=1)
         min_node_id = np.argmin(nodes_dist)
         roots[nodes[min_node_id]] = nodes_dist[min_node_id]
@@ -748,7 +768,12 @@ def naive_vgraph_to_vtree(
     assert np.all(visited_branches), "Some branches were not added to the tree."
 
     # === Build vtree ===
-    vtree = VTree.from_graph(graph, branch_tree, branch_dirs, copy=False)
+    if inplace:
+        vtree: VTree = graph  # type: ignore
+        vtree._branch_tree = branch_tree
+        vtree._branch_dir = branch_dirs
+    else:
+        vtree = VTree.from_graph(graph, branch_tree, branch_dirs, copy=False)
 
     if reorder_nodes:
         new_order = np.array([n.id for n in vtree.walk_nodes(traversal="dfs")], dtype=int)
