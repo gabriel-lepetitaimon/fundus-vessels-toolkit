@@ -660,7 +660,7 @@ class VGraph:
         return cls(**cls._empty_like_kwargs(other))
 
     @classmethod
-    def _empty_like_kwargs(cls, other: VGraph) -> Dict[str, Any]:
+    def _empty_like_kwargs(cls, other: Self) -> Dict[str, Any]:
         branch_attr = pd.DataFrame(columns=other._branch_attr.columns)
         node_attr = pd.DataFrame(columns=other._node_attr.columns)
 
@@ -1783,8 +1783,13 @@ class VGraph:
         _, inv, counts = np.unique(branch_list, return_inverse=True, return_counts=True, axis=0)
         return [np.argwhere(inv == twin_id).flatten() for twin_id in np.argwhere(counts > 1).flatten()]
 
-    def node_connected_components(self) -> List[npt.NDArray[np.int32]]:
+    def node_connected_components(self, node: NodeIndicesLike | None = None) -> List[npt.NDArray[np.int32]]:
         """Compute the connected components of the graph and return, for each of them, its nodes indices.
+
+        Parameters
+        ----------
+        node : IndexLike, optional
+            If not None, only return the connected components containing at least one of the given nodes.
 
         Returns
         -------
@@ -1797,10 +1802,17 @@ class VGraph:
 
         >>> graph.node_connected_components()
         [array([0, 1, 2, 3]), array([4]), array([5, 6])]
+
+        >>> graph.node_connected_components(node=5)
+        [array([5, 6])]
         """
         if self.node_count == 0:
             return []
-        return [np.asarray(cc, dtype=int) for cc in reduce_clusters(self._branch_list, drop_singleton=False)]
+        components = [np.asarray(cc, dtype=int) for cc in reduce_clusters(self._branch_list, drop_singleton=False)]
+        if node is not None:
+            node = self.as_node_ids(node)
+            components = [cc for cc in components if np.any(np.isin(cc, node))]
+        return components
 
     ####################################################################################################################
     #  === COMBINE GEOMETRIC DATA ===

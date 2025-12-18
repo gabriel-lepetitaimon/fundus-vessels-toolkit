@@ -298,7 +298,7 @@ class VBranchCurveIndex(VBranchGeoDataBase):
         return cls(data)
 
     def flip(self, ctx: BranchGeoDataEditContext) -> Self:
-        data = np.flip(ctx.curve.shape[0] - self.data, axis=0)
+        data = np.flip(ctx.curve.shape[0] - 1 - self.data, axis=0)
         return self.__class__(data)
 
     def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:

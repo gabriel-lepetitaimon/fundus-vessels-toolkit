@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import itertools
+import re
+
 from fundus_vessels_toolkit.utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
 
 __all__ = ["VTree"]
@@ -363,7 +366,7 @@ class VTree(VGraph):
         self,
         branch_list: IntPairArrayLike,
         branch_tree: Int1DArrayLike,
-        branch_dirs: Bool1DArrayLike | None,
+        branch_dirs: Bool1DArrayLike | None = None,
         geometric_data: VGeometricData | Iterable[VGeometricData] = (),
         nodes_attr: Optional[pd.DataFrame] = None,
         branches_attr: Optional[pd.DataFrame] = None,
@@ -573,7 +576,7 @@ class VTree(VGraph):
         return super().empty_like(other)
 
     @classmethod
-    def _empty_like_kwargs(cls, other: VTree) -> Dict[str, Any]:
+    def _empty_like_kwargs(cls, other: Self) -> Dict[str, Any]:
         return super()._empty_like_kwargs(other) | {"branch_tree": np.empty(0, dtype=int), "branch_dirs": None}
 
     def subtree(self, branch_ids: BranchIndicesLike, check: bool = True) -> VTree:
@@ -598,6 +601,64 @@ class VTree(VGraph):
         branch_dirs = None if self._branch_dir is None else self._branch_dir[branch_mask]
 
         return VTree.from_graph(subgraph, branch_tree, branch_dirs, copy=False, check=check)
+
+    @classmethod
+    def parse(cls, branch_list: str) -> Self:
+        """Parse an branch tree from a string.
+
+        Parameters
+        ----------
+        branch_list : str
+            The string containing the branch list using the following format:
+            - Each branch is defined as ``n1->n2`` or ``n1➔n2`` where ``n1`` and ``n2`` are the indices of the nodes connected by the branch.
+            - Each branch is separated by ``;``.
+            - Consecutive branches can be defined without separation: e.g. ``n1➔n2➔n3``.
+            - Whitespace characters (including tabs and new lines) are ignored.
+
+        Returns
+        -------
+        VTree
+            The tree object created from the branch list.
+
+        Examples
+        --------
+        >>> tree = VTree.parse("0->1;3➔2➔1")
+        >>> tree.branch_list.tolist()
+        [[0, 1], [3, 2], [2, 1]]
+
+        >>> tree.branch_tree.tolist()
+        [-1, -1, 1]
+
+        Raises
+        ------
+        ValueError
+            If the branch list is not correctly formatted.
+        """  # noqa: E501
+        branches: List[List[int]] = []
+        branch_parents: List[int] = []
+        branch_list = re.sub(r"\s+", "", branch_list)
+
+        # TODO: Add support for node labelling (e.g. "A➔B➔C")
+
+        for branch in re.split(r";", branch_list):
+            nodes = re.split(r"->|➔", branch)
+            for n1, n2 in itertools.pairwise(nodes):
+                try:
+                    branches.append([int(n1), int(n2)])
+                    parents = [i for i, (_, n) in enumerate(branches) if n == int(n1)]
+                    if len(parents) == 0:
+                        branch_parents.append(-1)
+                    elif len(parents) == 1:
+                        branch_parents.append(parents[0])
+                    else:
+                        raise ValueError(
+                            f"Invalid branch definition: {branch}: node {n1} has multiple incoming branches."
+                        )
+                except ValueError:
+                    raise ValueError(
+                        f"Invalid branch definition: {branch}: {n1} or {n2} is not a valid node index."
+                    ) from None
+        return cls(branches, branch_parents)
 
     ####################################################################################################################
     #  === TREE BRANCHES PROPERTIES ===
@@ -1465,6 +1526,78 @@ class VTree(VGraph):
         return tree
 
     @overload
+    def add_branch(
+        self, branch_nodes: IntPairArrayLike, *, return_branch_id: Literal[False] = False, inplace=True
+    ) -> Self: ...
+    @overload
+    def add_branch(
+        self, branch_nodes: IntPairArrayLike, *, return_branch_id: Literal[True], inplace=True
+    ) -> Tuple[Self, npt.NDArray[np.int32]]: ...
+    def add_branch(
+        self, branch_nodes: IntPairArrayLike, *, return_branch_id=False, inplace=True
+    ) -> Self | Tuple[Self, npt.NDArray[np.int32]]:
+        """Add branch(es) to the tree. The branch(es) are connected to the tree according to the following rules:
+        - If the tail node of the new branch has exactly one incoming branch, the new branch becomes a successor of that branch.
+        - If the head node of the new branch has exactly one outgoing branch, that branch becomes a successor of the new branch.
+
+        Parameters
+        ----------
+        branch_nodes : IntPairArrayLike
+            A 2D array of shape (N, 2) containing the indices of the nodes connected by the new branches.
+
+        return_branch_id : bool, optional
+            If True, return the indices of the added branches.
+
+        inplace : bool, optional
+            If True (by default), the graph is modified in place. Otherwise, a new graph is returned.
+        Returns
+        -------
+        VTree
+            The modified graph.
+
+        new_branch_ids : np.ndarray
+            The indices of the added branches. Only returned if ``return_branch_id`` is True.
+
+        Examples
+        --------
+        >>> tree = VTree.parse("0➔1➔2➔3")
+        >>> tree.branch_list.tolist()
+        [[0, 1], [1, 2], [2, 3]]
+
+        >>> tree.branch_tree.tolist()
+        [-1, 0, 1]
+
+        Add a new branch connecting nodes 1 and 3 (the new branch is a successor of branch 0):
+
+        >>> t1 = tree.add_branch([1, 3])
+        >>> t1.branch_list.tolist()
+        [[0, 1], [1, 2], [2, 3], [1, 3]]
+
+        >>> t1.branch_tree.tolist()
+        [-1, 0, 1, 0]
+
+        """  # noqa: E501
+        tree = self.copy() if not inplace else self
+        branch_nodes = np.atleast_2d(branch_nodes).astype(int)
+        _, new_branch_ids = super(VTree, tree).add_branch(branch_nodes, return_branch_id=True, inplace=True)
+
+        tree._branch_tree = np.concatenate([tree._branch_tree, np.full(len(new_branch_ids), -1, dtype=int)])
+        if tree._branch_dir is not None:
+            tree._branch_dir = np.concatenate([tree._branch_dir, np.ones(len(new_branch_ids), dtype=bool)])
+
+        # Update the branch tree
+        for b_id, (tail, head) in zip(new_branch_ids, branch_nodes, strict=True):
+            incoming_tail_branch = tree.node_incoming_branches(tail)
+            if len(incoming_tail_branch) == 1:
+                tree._branch_tree[b_id] = incoming_tail_branch[0]
+
+            outgoing_head_branch = tree.node_outgoing_branches(head)
+            if len(outgoing_head_branch) == 1:
+                tree._branch_tree[outgoing_head_branch[0]] = b_id
+
+        return (tree, new_branch_ids) if return_branch_id else tree
+
+    @overload
     def split_node(
         self,
         node: NodeIndex,
@@ -2019,8 +2152,8 @@ class VTree(VGraph):
         for b in self.walk_branch_ids(outgoing_branches, traversal=traversal, ignore_provided_id=False):
             yield VTreeNode(self, branch_list[b, 1])
 
-    def node(self, node_id: int, /) -> VGraphNode:
-        return super().node(node_id)
+    def node(self, node_id: int, /) -> VTreeNode:
+        return super().node(node_id)  # type: ignore
 
     def nodes(
         self,

@@ -461,15 +461,15 @@ def remove_orphan_branches(graph: VGraph, min_length: float = 0, inplace=False) 
     return graph.delete_branch(orphan_branches, inplace=inplace)
 
 
-def simplify_passing_nodes(
-    graph: VGraph,
+def simplify_passing_nodes[T: VGraph](
+    graph: T,
     *,
     not_fusable: Optional[npt.ArrayLike] = None,
     only_fusable: Optional[npt.ArrayLike] = None,
     min_angle: float = 0,
     with_same_label=None,
     inplace=False,
-) -> VGraph:
+) -> T:
     """
     Merge nodes of the vessel graph that are connected to only 2 branches.
 
