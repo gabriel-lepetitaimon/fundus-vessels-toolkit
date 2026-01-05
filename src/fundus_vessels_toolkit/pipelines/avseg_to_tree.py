@@ -15,15 +15,16 @@ from skimage.morphology import binary_erosion, disk
 from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.geometric import Point
 
-from ..segment_to_graph.graph_simplification import GraphSimplifyArg
+from ..segment_to_graph.graph_simplification import GraphSimplifyArg, ReconnectEndpointsArg
 from ..utils import if_none
 from ..vascular_data_objects import VGraph, VTree
 from .seg_to_graph import SegToGraph
 
 
 class AVSegToTreeBase(metaclass=ABCMeta):
-    def __init__(self, mask_optic_disc=True):
+    def __init__(self, mask_optic_disc=True, vessel_closing_size=None):
         self.mask_optic_disc = mask_optic_disc
+        self.vessel_closing_size = vessel_closing_size
 
     @abstractmethod
     def __call__(
@@ -48,6 +49,12 @@ class AVSegToTreeBase(metaclass=ABCMeta):
             fundus = FundusData(av=av, od=od)
         else:
             fundus = fundus.update(av=av, od=od)
+        if self.vessel_closing_size is not None:
+            import skimage.morphology as skmorph
+
+            disk = skmorph.disk(self.vessel_closing_size)
+            av = skmorph.closing(fundus.av, disk)
+            fundus = fundus.update(av=av)
         return fundus
 
     @abstractmethod
@@ -305,8 +312,8 @@ FUNDUS_SEG_TO_GRAPH = SegToGraph(
     min_terminal_branch_calibre_ratio=1,
     simplify_graph_arg=GraphSimplifyArg(
         max_spurs_length=0,
-        reconnect_endpoints=True,
-        junctions_merge_distance=20,
+        reconnect_endpoints=ReconnectEndpointsArg(max_distance=10, intercept_snapping_distance=5),
+        junctions_merge_distance=15,
         min_orphan_branches_length=30,
         max_cycles_length=20,
         simplify_topology="node",
@@ -319,6 +326,8 @@ class NaiveAVSegToTree(AVSegToTreeBase):
     def __init__(
         self,
         segToGraph: Optional[SegToGraph] = None,
+        mask_optic_disc: bool = True,
+        vessel_closing_size: Optional[int] = None,
     ):
         """
 
@@ -327,7 +336,7 @@ class NaiveAVSegToTree(AVSegToTreeBase):
         segToGraph: SegToGraph
             The SegToGraph instance to use for the segmentation to graph step.
         """  # noqa: E501
-        super(NaiveAVSegToTree, self).__init__()
+        super(NaiveAVSegToTree, self).__init__(mask_optic_disc=mask_optic_disc, vessel_closing_size=vessel_closing_size)
         self.segToGraph = if_none(segToGraph, FUNDUS_SEG_TO_GRAPH)
 
     def __call__(

@@ -1,9 +1,10 @@
+from copy import copy
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Literal, overload
+from typing import List, Literal, overload
 
 import numpy as np
-from attr import dataclass
 from fundus_data_toolkit.functional import open_image
 from ipywidgets import Button, GridBox, Label, Layout
 from jppype import Mosaic, vscode_theme
@@ -42,24 +43,42 @@ class BranchSelection:
 
 @dataclass
 class AnnotationContext:
-    force_roots: list[VTreeNode] = []
+    force_roots: List[VTreeNode] = field(default_factory=list)
+
+    def copy_to(self, tree: VTree) -> "AnnotationContext":
+        return AnnotationContext(
+            force_roots=[tree.node(n.id) for n in self.force_roots if n.is_valid() and n.id < tree.node_count],
+        )
 
     def clear(self):
         self.force_roots.clear()
 
 
+@dataclass
+class AnnotationState:
+    trees: tuple[VTree, VTree]
+    annotation_ctx: tuple[AnnotationContext, AnnotationContext]
+    selected_branch: BranchSelection
+
+    def tree_ctx(self, artery: bool) -> tuple[VTree, AnnotationContext]:
+        art = 0 if artery else 1
+        return self.trees[art], self.annotation_ctx[art]
+
+
+# TODO: Restore branch from initial tree (Ctrl + Left click)
 class ReviewTool:
     def __init__(
         self,
         raw_path: Path,
         av_path: Path,
         save_path: Path,
-        index: int = 0,
+        index: int | None = None,
         *,
         raw_ext="png",
         av_ext="png",
         height=800,
         av2tree=None,
+        N_MAX_STATES=20,
     ):
         self.raw_path = Path(raw_path)
         self.av_path = Path(av_path)
@@ -74,26 +93,36 @@ class ReviewTool:
         self.img_names = sorted(list(img_names))
         self.current_index = 0
 
-        self.av2tree = av2tree or NaiveAVSegToTree()
+        self.av2tree = av2tree or NaiveAVSegToTree(mask_optic_disc=False)
 
         self.mosaic = Mosaic((2, 3), rows_titles=["Art", "Vei"], cell_height=height // 2)
         self.mosaic[0, 1].on_click(partial(self.handle_click, artery=True))
         self.mosaic[1, 1].on_click(partial(self.handle_click, artery=False))
+
         self.label = Label(value="")
-        self.undo_btn = Button(description="Undo", disabled=True)
+        btn_layout = Layout(width="80px")
+        self.undo_btn = Button(description="Undo", disabled=True, layout=btn_layout)
         self.undo_btn.on_click(lambda btn: self.undo())
+        self.save_btn = Button(description="Save", layout=btn_layout)
+        self.save_btn.on_click(lambda btn: self.save_trees())
 
         # Annotation State
         self.debug_info = {}
         self._fundus: FundusData | None = None
         self.img_name: str = ""
 
-        self._trees: None | tuple[VTree, VTree] = None
-        self._previous_trees: None | tuple[VTree, VTree] = None
-        self.annotation_ctx: tuple[AnnotationContext, AnnotationContext] = (AnnotationContext(), AnnotationContext())
-        self.prev_selected_branch: BranchSelection = BranchSelection()
+        self._states: list[AnnotationState] = []
+        self.N_MAX_STATES = N_MAX_STATES
 
         # Load first image
+        if index is None:
+            for i, img_name in enumerate(self.img_names):
+                art_file = self.save_path / f"{img_name}_art.npz"
+                if not art_file.exists():
+                    index = i
+                    break
+            else:
+                index = 0
         self.load(index)
 
     def widget(self) -> GridBox:
@@ -102,15 +131,13 @@ class ReviewTool:
         bPrev.on_click(lambda btn: self.previous_image())
         bNext = Button(description="Next", layout=btn_layout)
         bNext.on_click(lambda btn: self.next_image())
-        bSave = Button(description="Save", layout=btn_layout)
-        bSave.on_click(lambda btn: self.save_trees())
         bReset = Button(description="Reset", layout=btn_layout)
         bReset.on_click(lambda btn: self.reset_annotations())
         bCompleteReset = Button(description="Complete Reset", layout=btn_layout)
         bCompleteReset.on_click(lambda btn: self.complete_reset())
 
         buttons = GridBox(
-            children=[bPrev, bNext, self.undo_btn, bSave, bReset, bCompleteReset, self.label],
+            children=[bPrev, bNext, self.undo_btn, self.save_btn, bReset, bCompleteReset, self.label],
             layout=Layout(
                 width="100%",
                 grid_template_columns="repeat(6, 150px) auto",
@@ -132,10 +159,16 @@ class ReviewTool:
         return view
 
     @property
+    def state(self) -> AnnotationState:
+        if len(self._states) == 0:
+            raise ValueError("No annotation state available.")
+        return self._states[-1]
+
+    @property
     def trees(self) -> tuple[VTree, VTree]:
-        if self._trees is None:
+        if len(self._states) == 0:
             raise ValueError("No trees loaded.")
-        return self._trees
+        return self._states[-1].trees
 
     @property
     def fundus(self) -> FundusData:
@@ -149,22 +182,28 @@ class ReviewTool:
         self.current_index = index
         self.label.value = f"{img_name} ({index + 1}/{len(self.img_names)})"
 
-        self.reset_annotation_ctx()
-
         fundus = FundusData(
             image=self.raw_path / (img_name + "." + self.raw_ext),
             av=self.av_path / (img_name + "." + self.av_ext),
         )
         # segment_od_mac(fundus)
         od_mac = segment(open_image(self.raw_path / (img_name + "." + self.raw_ext))).numpy(force=True).argmax(axis=0)
-        fundus = fundus.update(od=od_mac == 1, macula=od_mac == 2)
+        fundus = fundus.update(od=od_mac == 1, macula=od_mac == 2, reshape_method="resize")
         self._fundus = fundus
 
         # Draw fundus
         self.mosaic[0, 0].add_image(fundus.image, name="fundus")
-        fundus.draw(view=self.mosaic[1, 0])
+        self.mosaic[1, 0].add_image(fundus.image, name="fundus")
         self.mosaic[0, 1].add_image(fundus.image, name="fundus")
         self.mosaic[1, 1].add_image(fundus.image, name="fundus")
+
+        COLORS = {
+            1: "coral",
+            2: "cornflowerblue",
+            3: "darkorchid",
+            4: "gray",
+        }
+        self.mosaic[1, 0].add_label(fundus.av, "AV", opacity=0.5, colormap=COLORS)
 
         # Load or compute trees
         self.load_saved_trees(draw=False)
@@ -174,30 +213,62 @@ class ReviewTool:
         art_file = self.save_path / f"{self.img_name}_art.npz"
         vei_file = self.save_path / f"{self.img_name}_vei.npz"
         if art_file.exists() and vei_file.exists():
-            self._trees = VTree.load(art_file), VTree.load(vei_file)
+            trees = VTree.load(art_file), VTree.load(vei_file)
+            self.reset_annotation_states(trees, infer_force_roots=True)
+            self.save_btn.disabled = True
         else:
-            self._trees = self.load_trees_from_av(draw=False)
+            print(f"Saved trees not found for image {self.img_name}. Loading from AV map.")
+            trees = self.load_trees_from_av(draw=False)
         if draw:
             self.draw_trees()
-        return self.trees
+        return trees
 
     def load_trees_from_av(self, draw=True) -> tuple[VTree, VTree]:
-        self._trees = self.av2tree(self.fundus)
+        trees = self.av2tree(self.fundus)
+        self.reset_annotation_states(trees)
         if draw:
             self.draw_trees()
-        return self.trees
+        return trees
 
-    def save_trees(self):
-        art_file = self.save_path / f"{self.img_name}_art"
-        vei_file = self.save_path / f"{self.img_name}_vei"
+    def save_trees(self, sanity_check=True):
+        art_file = self.save_path / f"{self.img_name}_art.npz"
+        vei_file = self.save_path / f"{self.img_name}_vei.npz"
+        if sanity_check:
+            art_file = art_file.with_suffix(".tmp.npz")
+            vei_file = vei_file.with_suffix(".tmp.npz")
+
         self.trees[0].save(art_file)
         self.trees[1].save(vei_file)
 
+        if sanity_check:
+            try:
+                loaded_art = VTree.load(art_file)
+                loaded_vei = VTree.load(vei_file)
+            except Exception as e:
+                raise ValueError("Saved tree files could not be loaded back.") from e
+            # TODO: Implement is_equal method in VTree
+            # if not self.trees[0].is_equal(loaded_art):
+            #     raise ValueError("Saved artery tree does not match the original.")
+            # if not self.trees[1].is_equal(loaded_vei):
+            #     raise ValueError("Saved vein tree does not match the original.")
+            art_file_tmp, vei_file_tmp = art_file, vei_file
+            art_file = art_file.with_stem(art_file.stem.replace(".tmp", ""))
+            vei_file = vei_file.with_stem(vei_file.stem.replace(".tmp", ""))
+
+            art_file.unlink(missing_ok=True)
+            vei_file.unlink(missing_ok=True)
+            art_file_tmp.rename(art_file)
+            vei_file_tmp.rename(vei_file)
+
+        self.save_btn.disabled = True
+
     def draw_trees(self, which: Literal["artery", "vein", "both"] = "both"):
         if which in ("artery", "both"):
-            draw_tree(self.trees[0], view=self.mosaic[0, 1], artery=True, node_labels=True)
+            draw_tree(self.trees[0], view=self.mosaic[0, 1], artery=True, bspline_dir=True)
+            draw_tree(self.trees[0], name="art", view=self.mosaic[1, 0], artery=True)
         if which in ("vein", "both"):
-            draw_tree(self.trees[1], view=self.mosaic[1, 1], artery=False, node_labels=True)
+            draw_tree(self.trees[1], view=self.mosaic[1, 1], artery=False, bspline_dir=True)
+            draw_tree(self.trees[1], name="vein", view=self.mosaic[1, 0], artery=False)
 
         for i, tree in enumerate(self.trees):
             if (which == "vein" and i == 0) or (which == "artery" and i == 1):
@@ -213,6 +284,9 @@ class ReviewTool:
                 mask = subtree_map == s
                 color_map[mask] = TopologicalLabel.subtree_color(s, format="rgb") / 255.0
                 subtree_topo = topo_map[mask]
+                if len(subtree_topo) == 0:
+                    continue
+
                 alpha[mask] = 1 - 0.8 * (subtree_topo / subtree_topo.max())
 
             alpha = alpha[:, :, None]
@@ -222,15 +296,65 @@ class ReviewTool:
             self.mosaic[i, 2].add_image(img, name="topo_map")
 
     ##########################################################################
+    # === STATES STACK HANDLERS ===
+    ##########################################################################
+    def reset_annotation_states(self, trees: tuple[VTree, VTree], infer_force_roots=False):
+        self._states.clear()
+        self.undo_btn.disabled = True
+
+        contexts = (AnnotationContext(), AnnotationContext())
+        if infer_force_roots:
+            for tree, ctx in zip(trees, contexts, strict=True):
+                roots = tree.root_nodes_ids()
+                if (od := self.fundus.od_center) is not None:
+                    roots_yx = tree.node_coord()[roots]
+                    roots = roots[np.argsort(od.distance(roots_yx))]
+                ctx.force_roots = list(tree.nodes(roots[::-1]))
+
+        self._states.append(
+            AnnotationState(
+                trees=trees,
+                annotation_ctx=contexts,
+                selected_branch=BranchSelection(),
+            )
+        )
+
+    def _push_annotation_state(self):
+        state = self._states[-1]
+        self._states.insert(
+            -1,
+            AnnotationState(
+                trees=(state.trees[0].copy(), state.trees[1].copy()),
+                annotation_ctx=(
+                    state.annotation_ctx[0].copy_to(state.trees[0]),
+                    state.annotation_ctx[1].copy_to(state.trees[1]),
+                ),
+                selected_branch=copy(state.selected_branch),
+            ),
+        )
+        if len(self._states) > self.N_MAX_STATES:
+            self._states.pop(0)
+        elif len(self._states) > 1:
+            self.undo_btn.disabled = False
+
+    def _pop_annotation_state(self) -> bool:
+        if len(self._states) > 1:
+            self._states.pop()
+        else:
+            return False
+        if len(self._states) <= 1:
+            self.undo_btn.disabled = True
+        return True
+
+    def undo(self):
+        if self._pop_annotation_state():
+            self.draw_trees(which="both")
+
+    ##########################################################################
     # === CLICK HANDLERS ===
     ##########################################################################
     def handle_click(self, event, artery: bool):
-        modified_tree: Literal["artery", "vein", "both"] = "artery" if artery else "vein"
-
-        art = 0 if artery else 1
-        tree = self.trees[art]
-        ctx = self.annotation_ctx[art]
-
+        tree, ctx = self.state.tree_ctx(artery)
         yx = (event["y"], event["x"])
 
         self.debug_info.clear()
@@ -238,105 +362,126 @@ class ReviewTool:
         self.debug_info["artery"] = artery
         self.debug_info["yx"] = yx
         self.debug_info["ctx"] = ctx
-        self.debug_info["previous_trees"] = self._trees
-        self.debug_info["annotation_ctx"] = self.annotation_ctx
-        self.debug_info["prev_selected_branch"] = self.prev_selected_branch
 
-        previous_trees = self._trees
+        roots_pos = []
+        for art in (True, False):
+            t, c = self.state.tree_ctx(art)
+            roots_pos.append([t.node_coord()[n.id] if n.is_valid() else None for n in c.force_roots])
+        self.debug_info["old_roots_pos"] = roots_pos
+        self._push_annotation_state()
 
-        if event["button"] == 0 and event["modifiers"] == ["alt"]:  # Left click + Alt
-            tree = self.connect_branches(tree, yx, ctx, artery)
+        modified_tree: Literal["artery", "vein", "both", "none"] = "artery" if artery else "vein"
+        try:
+            if event["button"] == 0 and event["modifiers"] == ["alt"]:  # Left click + Alt
+                match self.connect_branches(tree, yx, ctx, artery):
+                    case "invalid":
+                        modified_tree = "none"
+                    case "selected":
+                        return
+                    case "connected":
+                        pass
+
+            if event["button"] == 0 and event["modifiers"] == ["shift"]:  # Left click + Shift
+                if not self.add_node(tree, yx, ctx):
+                    modified_tree = "none"
+            elif event["button"] == 2 and event["modifiers"] == []:  # Right click
+                if not self.simplify_nodes(tree, yx):
+                    modified_tree = "none"
+            elif event["button"] == 2 and event["modifiers"] == ["shift"]:  # Right click + Shift
+                if not self.disconnect_crossing(tree, yx, ctx):
+                    modified_tree = "none"
+            elif event["button"] == 2 and (
+                "alt" in event["modifiers"] or "ctrl" in event["modifiers"]
+            ):  # Right click + Alt/Ctrl
+                subtree = "ctrl" in event["modifiers"]
+                if not self.delete_branch(tree, yx, ctx, subtree=subtree):
+                    modified_tree = "none"
+            elif event["button"] == 1 and event["modifiers"] == []:  # Middle click
+                if not self.toggle_force_root(tree, yx, ctx):
+                    modified_tree = "none"
+            elif event["button"] == 1 and (
+                "alt" in event["modifiers"] or "ctrl" in event["modifiers"]
+            ):  # Middle click + Alt/Ctrl
+                subtree = "ctrl" in event["modifiers"]
+                if self.swap_av(artery, yx, subtree=subtree):
+                    modified_tree = "both"
+                else:
+                    modified_tree = "none"
+        except Exception as e:
+            self._pop_annotation_state()
+            raise e
+
+        if modified_tree == "none":
+            self._pop_annotation_state()
         else:
-            self.prev_selected_branch.reset()
-
-        if event["button"] == 0 and event["modifiers"] == ["shift"]:  # Left click + Shift
-            tree = self.add_node(tree, yx, ctx)
-        elif event["button"] == 2 and event["modifiers"] == []:  # Right click
-            tree = self.simplify_nodes(tree, yx)
-        elif event["button"] == 2 and event["modifiers"] == ["shift"]:  # Right click + Shift
-            tree = self.disconnect_crossing(tree, yx, ctx)
-        elif event["button"] == 2 and (
-            "alt" in event["modifiers"] or "ctrl" in event["modifiers"]
-        ):  # Right click + Alt/Ctrl
-            subtree = "ctrl" in event["modifiers"]
-            tree = self.delete_branch(tree, yx, ctx, subtree=subtree)
-        elif event["button"] == 1 and event["modifiers"] == []:  # Middle click
-            tree = self.toggle_force_root(tree, yx, ctx)
-        elif event["button"] == 1 and (
-            "alt" in event["modifiers"] or "ctrl" in event["modifiers"]
-        ):  # Middle click + Alt/Ctrl
-            subtree = "ctrl" in event["modifiers"]
-            tree = self.swap_av(artery, yx, ctx, subtree=subtree)
-            modified_tree = "both"
-
-        if previous_trees is None or tree is not previous_trees[art]:
-            self._trees = (tree, self.trees[1]) if artery else (self.trees[0], tree)
-            self._previous_trees = previous_trees
-            self.undo_btn.disabled = False
             self.draw_trees(which=modified_tree)
+            self.save_btn.disabled = False
+        self.state.selected_branch.reset()
 
-    def undo(self):
-        if self._previous_trees is not None:
-            self._trees, self._previous_trees = self._previous_trees, None
-            self.undo_btn.disabled = True
-            self.draw_trees(which="both")
+        # Check root branch consistency
+        roots_pos = []
+        for art in (True, False):
+            t, c = self.state.tree_ctx(art)
+            roots_pos.append([t.node_coord()[n.id] if n.is_valid() else None for n in c.force_roots])
+        self.debug_info["new_roots_pos"] = roots_pos
 
-    def add_node(self, tree, yx, ctx) -> VTree:
+    def add_node(self, tree, yx, ctx) -> bool:
         branch_id, dist, curve_id = self._closest_branch(tree, yx)
         if dist > 20:
-            return tree
+            return False
 
-        tree = tree.split_branch(branch_id, curve_id, split_coord=yx)
+        tree.split_branch(branch_id, curve_id, split_coord=yx, inplace=True)
         self.infer_roots(tree, ctx, inplace=True)
-        return tree
+        return True
 
-    def connect_branches(self, tree, yx, ctx, artery) -> VTree:
-        branch_id, dist, curve_pos = self._closest_branch(tree, yx, relative_pos=True)
+    def connect_branches(self, tree, yx, ctx, artery) -> Literal["invalid", "selected", "connected"]:
+        branch_id, dist, _ = self._closest_branch(tree, yx)
         if dist > 20:
-            return tree
+            return "invalid"
 
-        tip = 0 if curve_pos < 0.5 else 1
+        nodes_yx = tree.node_coord()[tree.branch_list[branch_id]]
+        tip = int(np.argmin(np.linalg.norm(nodes_yx - np.array(yx)[None, :], axis=1)))
 
-        if not self.prev_selected_branch.is_second_selection(artery):
+        if not self.state.selected_branch.is_second_selection(artery):
             # Select first branch
-            self.prev_selected_branch.select(artery, branch_id, tip)
-            return tree
+            self.state.selected_branch.select(artery, branch_id, tip)
+            return "selected"
 
         # Connect branches
         nodes = [
-            tree.branch_list[self.prev_selected_branch.id][self.prev_selected_branch.tip],
+            tree.branch_list[self.state.selected_branch.id][self.state.selected_branch.tip],
             tree.branch_list[branch_id][tip],
         ]
         if nodes[0] == nodes[1]:
-            return tree
+            return "invalid"
 
-        tree = tree.add_branch(nodes)
+        tree.add_branch(nodes, inplace=True)
 
         self.infer_roots(tree, ctx, inplace=True, simplify_nodes=nodes)
-        self.prev_selected_branch.reset()
-        return tree
+        self.state.selected_branch.reset()
+        return "connected"
 
-    def simplify_nodes(self, tree, yx) -> VTree:
+    def simplify_nodes(self, tree, yx) -> bool:
         node, dist = self._closest_node(tree, yx)
         if dist > 20 or node.id in tree.root_nodes_ids():
-            return tree
+            return False
 
-        tree = simplify_passing_nodes(tree, only_fusable=node.id)
-        return tree
+        simplify_passing_nodes(tree, only_fusable=node.id, inplace=True)
+        return True
 
-    def disconnect_crossing(self, tree, yx, ctx) -> VTree:
+    def disconnect_crossing(self, tree, yx, ctx) -> bool:
         node, dist = self._closest_node(tree, yx)
         if dist > 20 or node.id in tree.root_nodes_ids():
-            return tree
+            return False
 
-        tree, node = disconnect_crossing(tree, node.id, return_new_nodes=True)
+        _, node = disconnect_crossing(tree, node.id, return_new_nodes=True, inplace=True)
         self.infer_roots(tree, ctx, inplace=True, simplify_nodes=node)
-        return tree
+        return True
 
-    def delete_branch(self, tree, yx, ctx, *, subtree=False) -> VTree:
+    def delete_branch(self, tree, yx, ctx, *, subtree=False) -> bool:
         branch_id, dist, _ = self._closest_branch(tree, yx)
         if dist > 20:
-            return tree
+            return False
 
         if subtree:
             subtrees = tree.branch_ids_by_subtree()
@@ -345,18 +490,17 @@ class ReviewTool:
                     branch_id = subtree
                     break
 
-        tree = tree.delete_branch(branch_id)
+        tree.delete_branch(branch_id, inplace=True)
         self.infer_roots(tree, ctx, inplace=True)
-        return tree
+        return True
 
-    def swap_av(self, artery, yx, ctx, *, subtree=False) -> VTree:
-        art = 0 if artery else 1
-        tree = self.trees[art]
-        other_tree = self.trees[1 - art]
+    def swap_av(self, artery, yx, *, subtree=False) -> bool:
+        tree, ctx = self.state.tree_ctx(artery)
+        other_tree, other_ctx = self.state.tree_ctx(not artery)
 
         branch_id, dist, _ = self._closest_branch(tree, yx)
         if dist > 20:
-            return tree
+            return False
 
         if subtree:
             subtrees = tree.branch_ids_by_subtree()
@@ -367,39 +511,41 @@ class ReviewTool:
 
         subtree = tree.subtree(branch_id)
 
-        self._previous_trees = self._trees
-
         # Add to other tree
-        other_tree = other_tree.append_graph(subtree)
-        self.infer_roots(other_tree, self.annotation_ctx[1 - art], inplace=True)
+        other_tree.append_graph(subtree, inplace=True)
+        self.infer_roots(other_tree, other_ctx, inplace=True)
 
         # Remove from current tree
-        tree = tree.delete_branch(branch_id)
+        tree.delete_branch(branch_id, inplace=True)
         self.infer_roots(tree, ctx, inplace=True)
 
-        self._trees = (tree, other_tree) if artery else (other_tree, tree)
+        return True
 
-        return tree
-
-    def toggle_force_root(self, tree: VTree, yx, ctx) -> VTree:
+    def toggle_force_root(self, tree: VTree, yx, ctx) -> bool:
         node, dist = self._closest_node(tree, yx)
         if dist > 20:
-            return tree
+            return False
         if node in ctx.force_roots:
             ctx.force_roots.remove(node)
         else:
             ctx.force_roots.append(node)
-        tree = self.infer_roots(tree, ctx)
-        return tree
+        tree = self.infer_roots(tree, ctx, inplace=True)
+        return True
 
     def infer_roots(
         self, tree: VTree, ctx: AnnotationContext, *, inplace=False, simplify_nodes: None | NodeIndices = None
     ) -> VTree:
-        old_force_roots = [n for n in ctx.force_roots if n.is_valid()]
-        ctx.force_roots = []
-        while root := old_force_roots.pop() if old_force_roots else None:
-            ctx.force_roots.insert(0, root)
-            old_force_roots = [n for n in old_force_roots if n.id != root.id]
+        # Clean force roots:
+        # - Remove invalid nodes
+        old_roots_id = [n.id for n in ctx.force_roots if n.is_valid()]
+        # - Keep only one node per connected component
+        new_force_roots = []
+        while old_roots_id:
+            root_id = old_roots_id.pop()
+            new_force_roots.insert(0, tree.node(root_id))
+            cc_node_ids = tree.node_connected_components(root_id)[0]
+            old_roots_id = [n_id for n_id in old_roots_id if n_id not in cc_node_ids]
+        ctx.force_roots = new_force_roots
 
         od_center = self.fundus.od_center
         if od_center is None:
@@ -407,7 +553,7 @@ class ReviewTool:
         tree = naive_infer_roots(
             tree,
             root_pos=od_center,
-            force_roots=[n.id for n in ctx.force_roots if n.is_valid()],
+            force_roots=[n.id for n in ctx.force_roots],
             inplace=inplace,
         )
         if simplify_nodes is not None:
@@ -436,9 +582,6 @@ class ReviewTool:
     def debug_retrigger_event(self):
         if "event" not in self.debug_info:
             return
-        self._trees = self.debug_info.get("previous_trees", self._trees)
-        self.annotation_ctx = self.debug_info.get("annotation_ctx", self.annotation_ctx)
-        self.prev_selected_branch = self.debug_info.get("prev_selected_branch", self.prev_selected_branch)
         event = self.debug_info["event"]
         artery = self.debug_info["artery"]
         self.handle_click(event, artery)
@@ -456,16 +599,6 @@ class ReviewTool:
 
     def reset_annotations(self):
         self.load_saved_trees(draw=True)
-        for tree, ctx in zip(self.trees, self.annotation_ctx, strict=True):
-            ctx.force_roots = list(tree.nodes(tree.root_nodes_ids()))
 
     def complete_reset(self):
         self.load_trees_from_av(draw=True)
-        self.reset_annotation_ctx()
-
-    def reset_annotation_ctx(self):
-        for ctx in self.annotation_ctx:
-            ctx.clear()
-        self._previous_trees = None
-        self.undo_btn.disabled = True
-        self.prev_selected_branch.reset()

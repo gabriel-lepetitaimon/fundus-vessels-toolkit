@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Tuple, overload
 from weakref import ref
 
+from click import INT
 import numpy as np
 import numpy.typing as npt
 
@@ -26,6 +27,7 @@ from ..utils.typing import (
     Float1DArray,
     IndicesLike,
     Int1DArray,
+    Int1DArrayLike,
     Int2DArray,
     PointArrayLike,
 )
@@ -47,7 +49,7 @@ if TYPE_CHECKING:
     # T_VBranchGeoData = TypeVar("T_VBranchGeoData", bound=VBranchGeoData)
 
 EMPTY_CURVE = readonly(np.empty((0, 2), dtype=np.int_))
-INTEGRITY_CHECK = True
+INTEGRITY_CHECK = "raise"
 
 
 class VGeometricData:
@@ -1490,6 +1492,7 @@ class VGeometricData:
 
         for i, data in enumerate(attr_data):
             if data is None:
+                attr_data[i] = attr_desc.empty
                 continue
 
             ctx = self._geodata_edit_ctx(branch_id[i], attr_name)
@@ -1528,10 +1531,7 @@ class VGeometricData:
         attr_data = self._branch_data_dict.get(desc.name, None)
 
         if attr_data is None:
-            if issubclass(desc.geo_type, VBranchGeoData.TipsData):
-                attr_data = [desc.geo_type.create_empty() for _ in range(self.branch_count)]
-            else:
-                attr_data = [None] * self.branch_count
+            attr_data = [desc.empty] * self.branch_count
             self._branch_data_dict[desc.name] = attr_data
         return attr_data
 
@@ -1824,7 +1824,7 @@ class VGeometricData:
                 attr_data += [self._branches_attrs_descriptors[attr_name].empty] * len(self._branch_curve)
 
         if INTEGRITY_CHECK:
-            self._check_geofields_integrity()
+            self._check_integrity()
 
     def _append_empty_branches(self, n: int):
         """Append empty branches to the graph geometry data.
@@ -1838,15 +1838,12 @@ class VGeometricData:
             self._branch_curve += [EMPTY_CURVE] * n
 
             for attr_name, attr in self._branch_data_dict.items():
-                attr_type = self._branches_attrs_descriptors[attr_name].geo_type
-                if issubclass(attr_type, VBranchGeoData.TipsData):
-                    attr += [attr_type.create_empty()] * n
-                else:
-                    attr += [None] * n
+                empty = self._branches_attrs_descriptors[attr_name].empty
+                attr += [empty] * n
         else:
             raise NotImplementedError("Appending branches is not supported for indexed graphs.")
 
-    def _append_branch_duplicates(self, branches_id: npt.ArrayLike[int], new_branches_id: npt.ArrayLike[int]):
+    def _append_branch_duplicates(self, branches_id: Int1DArrayLike, new_branches_id: Int1DArrayLike):
         """Append duplicates of the branches to the graph geometry data.
 
         Parameters
@@ -1859,7 +1856,7 @@ class VGeometricData:
         assert len(branches_id) == len(new_branches_id), "Invalid number of new branches ids."
 
         if INTEGRITY_CHECK:
-            self._check_geofields_integrity()
+            self._check_integrity()
 
         if self._branches_id is None:
             B = len(self._branch_curve)
@@ -1880,7 +1877,7 @@ class VGeometricData:
                 attr += [attr_v.copy() if (attr_v := attr[branches_id[i]]) is not None else None for i in new_ids]
 
             if INTEGRITY_CHECK:
-                self._check_geofields_integrity()
+                self._check_integrity()
         else:
             raise NotImplementedError
 
@@ -1899,7 +1896,7 @@ class VGeometricData:
             consecutive_branches = self._graph_to_internal_branch_ids(consecutive_branches, sort_index=False)
 
         if INTEGRITY_CHECK:
-            self._check_geofields_integrity()
+            self._check_integrity()
 
         branch0 = consecutive_branches[0]
 
@@ -1918,7 +1915,7 @@ class VGeometricData:
                 )
 
         if INTEGRITY_CHECK:
-            self._check_geofields_integrity()
+            self._check_integrity()
 
     def _split_branch(
         self,
@@ -1967,9 +1964,6 @@ class VGeometricData:
         if split_coord is not None:
             assert split_coord.shape == (n_splits, 2), "Invalid split coordinates."
 
-        if INTEGRITY_CHECK:
-            self._check_geofields_integrity()
-
         # === Split the curves ===
         if len(curve) == 0:
             split_bin = [0 for _ in range(n_splits + 2)]
@@ -1978,10 +1972,10 @@ class VGeometricData:
             nodes = self.parent_graph.branch_list[branch_id]
             n1, n2 = self.node_coord(nodes)
             if split_coord is None:
-                a = np.linspace(0, 1, n_splits + 2, endpoint=True)[:, None]
+                a = np.linspace(0, 1, n_splits + 2, endpoint=True)[1:-1, None]
                 explicit_split_coord = a * n1[None, :] + (1 - a) * n2[None, :]
             else:
-                explicit_split_coord = np.concatenate([n1[None, :], split_coord, n2[None, :]])
+                explicit_split_coord = split_coord
         else:
             #: The indices in the curve where it should be splitted (including the start and last index of the curve)
             split_bin = [0]
@@ -1989,12 +1983,9 @@ class VGeometricData:
                 if 0 < split_pos < 1:
                     split_pos = int(split_pos * len(curve))
                 split_bin.append(int(split_pos))
-            split_bin.append(len(curve) - 1)
-            if split_coord is None:
-                explicit_split_coord = curve[split_bin]
-            else:
-                explicit_split_coord = np.concatenate([curve[None, 0], split_coord, curve[None, -1]])
+            split_bin.append(len(curve))
             new_curves = [curve[start_id:end_id] for start_id, end_id in itertools.pairwise(split_bin)]
+            explicit_split_coord = curve[split_bin[1:-1]] if split_coord is None else split_coord
 
         # === Split the curve and add new curves ===
         self._branch_curve[internal_id] = new_curves[0]
@@ -2003,18 +1994,17 @@ class VGeometricData:
             self._branches_id = np.concatenate([self._branches_id, new_branch_ids])
 
         # === Add the new nodes ===
-        self._nodes_coord = np.concatenate([self._nodes_coord, np.array(explicit_split_coord[1:-1])])
+        self._nodes_coord = np.concatenate([self._nodes_coord, np.array(explicit_split_coord, dtype=np.float32)])
         if self._nodes_id is not None:
             self._nodes_id = np.concatenate([self._nodes_id, new_node_ids])
 
         # === Split the branch geo data ===
         ctx = self._geodata_edit_ctx(internal_id)
         ctx.info["new_curves"] = new_curves
-        split_node_points: List[Point] = [Point.from_array(coord) for coord in explicit_split_coord]
         for attr_name, attr_data in self._branch_data_dict.items():
             attr = attr_data[internal_id]
             if attr is not None:
-                branch_attrs = attr.split(split_node_points, split_bin, ctx.set_name(attr_name))
+                branch_attrs = attr.split(split_bin, ctx.set_name(attr_name))
                 assert len(branch_attrs) == len(new_branch_ids) + 1, "Invalid number of attributes after split."
                 self._branch_data_dict[attr_name][internal_id] = branch_attrs[0]
                 self._branch_data_dict[attr_name].extend(branch_attrs[1:])
@@ -2025,7 +2015,7 @@ class VGeometricData:
         self._sort_internal_node_ids()
 
         if INTEGRITY_CHECK:
-            self._check_geofields_integrity()
+            self._check_integrity(ignore_parent_data=True)
 
     def _flip_branch_direction(self, branch_id: int | Iterable[int]):
         """Swap the direction of a branch.
@@ -2039,7 +2029,7 @@ class VGeometricData:
         internal_ids = self._graph_to_internal_branch_ids(ids)
 
         if INTEGRITY_CHECK:
-            self._check_geofields_integrity()
+            self._check_integrity()
 
         for branch_id in internal_ids:
             ctx = self._geodata_edit_ctx(branch_id)
@@ -2053,16 +2043,32 @@ class VGeometricData:
                     attr_data[branch_id] = attr.flip(ctx.set_name(attr_name))
 
         if INTEGRITY_CHECK:
-            self._check_geofields_integrity()
+            self._check_integrity()
 
-    def _check_geofields_integrity(self) -> bool:
+    def _check_integrity(self, ignore_parent_data=False) -> bool:
         """Check the integrity of the geometric fields."""
-        B = self.branch_count
+
+        check_parent = not ignore_parent_data and self.parent_graph is not None
+
+        # === BRANCH GEOMETRIC DATA CHECK ===
         invalid = {}
         for attr_name, attr in self._branches_attrs_descriptors.items():
             attr_data = self._branch_data_dict[attr_name]
+            if check_parent and len(attr_data) != self.parent_graph.branch_count:
+                msg = (
+                    f"Geometric data integrity check failed:\n"
+                    f" - Invalid number of branches for attribute '{attr_name}': {len(attr_data)} "
+                    f"(expected: {self.parent_graph.branch_count})\n"
+                )
+                if INTEGRITY_CHECK == "raise":
+                    raise RuntimeError(msg)
+                else:
+                    warnings.warn(msg, stacklevel=2)
+                return False
+
             for i, data in enumerate(attr_data):
                 if data is None:
+                    invalid.setdefault(attr_name, {})[i] = "Missing data"
                     continue
                 ctx = self._geodata_edit_ctx(i, attr_name)
                 is_invalid = data.is_invalid(ctx=ctx)
@@ -2074,8 +2080,49 @@ class VGeometricData:
                 msg += f" --- Attribute '{attr_name}' --- \n"
                 for branch_id, reason in attr_invalid.items():
                     msg += f"    - Branch {branch_id}: {reason}\n"
-            warnings.warn(msg, stacklevel=2)
+            if INTEGRITY_CHECK == "raise":
+                raise RuntimeError(msg)
+            else:
+                warnings.warn(msg, stacklevel=2)
             return False
+
+        # === NODES COORDINATES CHECK ===
+        if not self.domain.contains(self._nodes_coord).all():
+            msg = (
+                f"Geometric data integrity check failed:\n"
+                f" - Some node coordinates are outside the domain: {self.domain}\n"
+            )
+            if INTEGRITY_CHECK == "raise":
+                raise RuntimeError(msg)
+            else:
+                warnings.warn(msg, stacklevel=2)
+            return False
+
+        # === NODES CHECK ===
+        if check_parent and self._nodes_coord.shape[0] != self.parent_graph.node_count:
+            msg = (
+                f"Geometric data integrity check failed:\n"
+                f" - Invalid number of nodes: {self._nodes_coord.shape[0]} (expected: {self.parent_graph.node_count})\n"
+            )
+            if INTEGRITY_CHECK == "raise":
+                raise RuntimeError(msg)
+            else:
+                warnings.warn(msg, stacklevel=2)
+            return False
+
+        # === BRANCHES CURVES CHECK ===
+        if check_parent and len(self._branch_curve) != self.parent_graph.branch_count:
+            msg = (
+                f"Geometric data integrity check failed:\n"
+                f" - Invalid number of branches curves: {len(self._branch_curve)} "
+                f"(expected: {self.parent_graph.branch_count})\n"
+            )
+            if INTEGRITY_CHECK == "raise":
+                raise RuntimeError(msg)
+            else:
+                warnings.warn(msg, stacklevel=2)
+            return False
+
         return True
 
     def clear_branch_gdata(self, branch_id: int | Iterable[int]) -> None:

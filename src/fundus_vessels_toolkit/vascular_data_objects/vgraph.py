@@ -2221,14 +2221,14 @@ class VGraph:
 
     @overload
     def add_branch(
-        self, branch_nodes: IntPairArrayLike, *, return_branch_id: Literal[False] = False, inplace=True
+        self, branch_nodes: IntPairArrayLike, *, return_branch_id: Literal[False] = False, inplace=False
     ) -> Self: ...
     @overload
     def add_branch(
-        self, branch_nodes: IntPairArrayLike, *, return_branch_id: Literal[True], inplace=True
+        self, branch_nodes: IntPairArrayLike, *, return_branch_id: Literal[True], inplace=False
     ) -> Tuple[Self, npt.NDArray[np.int32]]: ...
     def add_branch(
-        self, branch_nodes: IntPairArrayLike, *, return_branch_id=False, inplace=True
+        self, branch_nodes: IntPairArrayLike, *, return_branch_id=False, inplace=False
     ) -> Self | Tuple[Self, npt.NDArray[np.int32]]:
         """Add branch(es) to the graph.
 
@@ -3127,7 +3127,7 @@ class VGraph:
         clusters: Iterable[Iterable[int]],
         *,
         nodes_weight: Optional[npt.NDArray[np.float32]] = None,
-        inplace=True,
+        inplace=False,
         assume_reduced=False,
     ) -> Self:
         """Merge a cluster of nodes into a single node.
@@ -3252,6 +3252,9 @@ class VGraph:
             A reference to the node.
         """
         assert 0 <= node_id < self.node_count, f"Node index {node_id} is out of range."
+        for node_ref in self._node_refs:
+            if node_ref._id == node_id:
+                return node_ref
         return self.__class__.NODE_ACCESSOR_TYPE(self, node_id)
 
     def nodes(
@@ -3290,14 +3293,14 @@ class VGraph:
             nodes_ids = np.argwhere(np.isin(node_degree, only_degree)).flatten()
 
         if dynamic_iterator:
-            nodes = [self.__class__.NODE_ACCESSOR_TYPE(self, int(i)) for i in nodes_ids]
+            nodes = [self.node(int(i)) for i in nodes_ids]
             while len(nodes) > 0:
                 node = nodes.pop(0)
                 if node.is_valid():
                     yield node
         else:
             for i in nodes_ids:
-                yield self.__class__.NODE_ACCESSOR_TYPE(self, int(i))
+                yield self.node(int(i))
 
     def walk_nodes(
         self, root_id: NodeIndicesLike, /, traversal: Literal["bfs", "dfs"] = "bfs"
@@ -3359,6 +3362,9 @@ class VGraph:
             A reference to the branch.
         """
         assert 0 <= branch_id < self.branch_count, f"Branch index {branch_id} is out of range."
+        for branch_ref in self._branch_refs:
+            if branch_ref._id == branch_id:
+                return branch_ref
         return self.__class__.BRANCH_ACCESSOR_TYPE(self, branch_id)
 
     def branches(
@@ -3397,14 +3403,14 @@ class VGraph:
         branches_ids = self.as_branch_ids(ids, filter=filter)
 
         if dynamic_iterator:
-            branches = [self.__class__.BRANCH_ACCESSOR_TYPE(self, int(i)) for i in branches_ids]
+            branches = [self.branch(int(i)) for i in branches_ids]
             while len(branches) > 0:
                 branch = branches.pop(0)
                 if branch.is_valid():
                     yield branch
         else:
             for i in branches_ids:
-                yield self.__class__.BRANCH_ACCESSOR_TYPE(self, int(i))
+                yield self.branch(int(i))
 
     ####################################################################################################################
     #  === VISUALISATION UTILITIES ===

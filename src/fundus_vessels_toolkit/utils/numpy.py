@@ -102,7 +102,7 @@ def np_group_by(array: npt.NDArray, keys: npt.NDArray) -> list[tuple[npt.NDArray
     return [(unique_keys[i], array[inverse_indices == i]) for i in range(len(unique_keys))]
 
 
-def as_1d_array(data: IndicesLike, *, dtype=None) -> Tuple[npt.NDArray, bool]:
+def as_1d_array(data: npt.ArrayLike, *, dtype=None) -> Tuple[npt.NDArray, bool]:
     """Convert the data to a numpy array.
 
     Parameters

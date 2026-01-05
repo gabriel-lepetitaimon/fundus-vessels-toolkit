@@ -8,6 +8,7 @@ import numpy.typing as npt
 import torch
 
 from fundus_toolkits.utils.geometric import Point
+from fundus_vessels_toolkit.utils.numpy import as_1d_array
 
 from ..utils.fundus_projections import FundusProjection
 from .graph.measures import curve_tangent
@@ -28,8 +29,7 @@ class BezierCubic(NamedTuple):
     def from_array(cls, curve: npt.ArrayLike) -> BezierCubic:
         curve = np.asarray(curve, dtype=float)
         assert curve.shape == (4, 2), "BezierCubic must be defined with a 2D array of shape (4, 2)"
-        points = [Point(float(p[0]), float(p[1])) for p in curve]
-        return cls(*points)
+        return cls(*[Point(float(p[0]), float(p[1])) for p in curve])
 
     def to_path(self, offset: Optional[Point] = None) -> str:
         if self.p0.is_nan() or self.c0.is_nan() or self.c1.is_nan() or self.p1.is_nan():
@@ -514,7 +514,25 @@ class BSpline(tuple[BezierCubic]):
 
         return filling
 
-    def extend_bpsline(self, start: Optional[Point] = None, end: Optional[Point] = None, *, smoothing=0.2) -> BSpline:
+    def interpolate_missing_curves(
+        self, start: Optional[Point] = None, end: Optional[Point] = None, *, smoothing: int | float = 0
+    ) -> List[BezierCubic]:
+        filling_curves = self.filling_curves(start, end, smoothing=smoothing)
+        curves = list(self)
+
+        bsplines = []
+        if start is not None:
+            bsplines.append(filling_curves.pop(0))
+        for curve, filling in itertools.zip_longest(curves, filling_curves):
+            bsplines.append(curve)
+            if filling is not None:
+                bsplines.append(filling)
+        if end is not None and filling_curves:
+            bsplines.append(filling_curves.pop())
+
+        return bsplines
+
+    def extend_bspline(self, start: Optional[Point] = None, end: Optional[Point] = None, *, smoothing=0.2) -> BSpline:
         extended = []
         if len(self) == 0:
             if start is not None and end is not None:
@@ -544,6 +562,87 @@ class BSpline(tuple[BezierCubic]):
             extended.append(BezierCubic(p_last, last_c, end, end))
 
         return BSpline(extended)
+
+    def evaluate(self, t: npt.ArrayLike) -> npt.NDArray[np.float64]:
+        """Evaluate the position of the BSpline for a set of parameters t.
+
+        Parameters
+        ----------
+        t : npt.ArrayLike
+            The parameters to evaluate the BSpline at. Each parameter corresponds to a position on the BSpline, where the integer part is the index of the Bezier curve and the fractional part is the relative position on that Bezier curve.
+
+        Returns
+        -------
+        npt.NDArray[np.float64]
+            The evaluated points on the BSpline as a (n, 2) array if t is a vector, or as a (2,) array if t is scalar.
+        """  # noqa: E501
+        t, is_single = as_1d_array(t, dtype=float)
+        assert t.ndim == 1, "t must be a 1D array"
+
+        points = np.empty((len(t), 2), dtype=float)
+        curves_id = np.clip(np.floor(t).astype(int), 0, len(self) - 1)
+        u = t - curves_id
+        for c in np.unique(curves_id):
+            mask = curves_id == c
+            points[mask] = self[c].evaluate(u[mask])
+
+        return points[0] if is_single else points
+
+    def evaluate_tangent(self, t: npt.ArrayLike, normalized=False) -> npt.NDArray[np.float64]:
+        """Evaluate the tangent of the BSpline for a set of parameters t.
+
+        Parameters
+        ----------
+        t : npt.ArrayLike
+            The parameters to evaluate the BSpline at. Each parameter corresponds to a position on the BSpline, where the integer part is the index of the Bezier curve and the fractional part is the relative position on that Bezier curve.
+
+        normalized : bool, optional
+            If True, return normalized tangents, by default False.
+
+        Returns
+        -------
+        npt.NDArray[np.float64]
+            The evaluated tangents on the BSpline as a (n, 2) array if t is a vector, or as a (2,) array if t is scalar.
+        """  # noqa: E501
+        t, is_single = as_1d_array(t, dtype=float)
+        assert t.ndim == 1, "t must be a 1D array"
+
+        tangents = np.empty((len(t), 2), dtype=float)
+        curves_id = np.clip(np.floor(t).astype(int), 0, len(self) - 1)
+        u = t - curves_id
+        for c in np.unique(curves_id):
+            mask = curves_id == c
+            tangents[mask] = self[c].evaluate_tangent(u[mask], normalized=normalized)
+
+        return tangents[0] if is_single else tangents
+
+    def relative_pos_to_t(self, pos: npt.ArrayLike, fast_approximation=False) -> npt.NDArray[np.float64]:
+        """
+        Convert relative positions on the BSpline to the corresponding parameter t.
+
+        Parameters
+        ----------
+        pos : npt.ArrayLike
+            The relative positions on the BSpline (between 0 and 1).
+
+        Returns
+        -------
+        npt.NDArray[np.float64]
+            The corresponding parameter t on the BSpline.
+        """
+        pos, is_single = as_1d_array(pos, dtype=float)
+        assert pos.ndim == 1, "pos must be a 1D array"
+
+        lengths = np.array([curve.arc_length(fast_approximation=fast_approximation) for curve in self])
+        lengths = np.concatenate(([0], np.cumsum(lengths)))
+        lengths /= lengths[-1]  # Normalize to [0, 1]
+
+        curve_ids = np.clip(np.searchsorted(lengths, pos, side="right") - 1, 0, len(self) - 1)
+        curve_start = lengths[curve_ids]
+        curve_end = lengths[curve_ids + 1]
+        t = curve_ids + (pos - curve_start) / (curve_end - curve_start + 1e-10)
+
+        return t[0] if is_single else t
 
     def tips_tangents(self, normalize=True) -> Tuple[Point, Point]:
         t0 = self[0].c0 - self[0].p0

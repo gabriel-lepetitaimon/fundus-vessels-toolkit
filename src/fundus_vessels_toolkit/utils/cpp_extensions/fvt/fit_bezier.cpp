@@ -14,6 +14,12 @@ from "Graphics Gems", Academic Press, 1990
  * int first, last : Indices of first and last  (included!) pts in region
  * Vector t0, t1 : Unit tangent vectors at endpoints
  * double error : User-defined error squared
+ *
+ * Returns: tuple of
+ *   BezierCurve bezCurve : Fitted Bezier curve
+ *   double maxSqrError : Maximum squared error of fit
+ *   std::vector<double> sqrErrors : Squared errors for each point
+ *   std::vector<double> u : Parameterization of points
  */
 std::tuple<BezierCurve, double, std::vector<double>, std::vector<double>> fit_bezier(
     const CurveYX& d, const std::vector<Point>& tangent, double targetSqrError, std::size_t first, std::size_t last) {
@@ -24,18 +30,37 @@ std::tuple<BezierCurve, double, std::vector<double>, std::vector<double>> fit_be
     if (last == 0) last = d.size() - 1;
     std::size_t nPts = last - first + 1;
 
-    Vector t0 = tangent[first], t1 = -tangent[last];
-
     /*  Use heuristic if region only has two points in it */
     if (nPts == 2) {
         float dist = distance(d[last], d[first]) / 3.0;
+        Point mid = (d[first] + d[last]) / 2.0;
 
         bezCurve[0] = d[first];
         bezCurve[3] = d[last];
-        bezCurve[1] = d[first] + t0 * dist;
-        bezCurve[2] = d[last] + t1 * dist;
-        return {bezCurve, 0, {0.0, 0.0}, {(double)first, (double)last}};
+        bezCurve[1] = d[first];  // d[first] + t0 * dist;
+        bezCurve[2] = d[last];   // d[last] + t1 * dist;
+        return {bezCurve, 0, {0.0, 0.0}, {0.0, 1.0}};
+    } else if (nPts == 3) {
+        bezCurve[0] = d[first];
+        bezCurve[1] = d[first + 1];
+        bezCurve[2] = d[first + 1];
+        bezCurve[3] = d[last];
+
+        std::vector<double> u = {0.0, 0.5, 1.0};
+        auto const& [sqrErrors, maxSqrError, _] = computeMaxError(d, first, last, bezCurve, u);
+        return {bezCurve, maxSqrError, sqrErrors, u};
+    } else if (nPts == 4) {
+        bezCurve[0] = d[first];
+        bezCurve[1] = d[first + 1];
+        bezCurve[2] = d[first + 2];
+        bezCurve[3] = d[last];
+
+        std::vector<double> u = {0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0};
+        auto const& [sqrErrors, maxSqrError, _] = computeMaxError(d, first, last, bezCurve, u);
+        return {bezCurve, maxSqrError, sqrErrors, u};
     }
+
+    Vector t0 = tangent[first], t1 = -tangent[last];
 
     /*  Parameterize points, and attempt to fit curve */
     std::vector<double> u = chordLengthParameterize(d, first, last);

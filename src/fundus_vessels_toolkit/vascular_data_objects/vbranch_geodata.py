@@ -7,6 +7,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Generic, List, NamedTuple, Optional, Self, Sequence, Tuple, Type, TypeAlias, TypeVar
 
+import attr
 import numpy as np
 import numpy.typing as npt
 
@@ -17,7 +18,7 @@ from ..utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
 from ..utils.fundus_projections import FundusProjection, Translation
 from ..utils.lookup_array import invert_lookup
 
-_registered_vbranch_geo_data_types: Dict[str, MetaVBranchGeoDataBase] = {}
+_registered_vbranch_geo_data_types: Dict[str, Type[VBranchGeoDataBase]] = {}
 
 
 class BranchGeoDataEditContext(NamedTuple):
@@ -55,7 +56,7 @@ class MetaVBranchGeoDataBase(ABCMeta):
     def __new__(mcs, name, bases, namespace):
         cls = super().__new__(mcs, name, bases, namespace)
         if name != "VBranchGeoDataBase" and name not in _registered_vbranch_geo_data_types:
-            _registered_vbranch_geo_data_types[name] = cls
+            _registered_vbranch_geo_data_types[name] = cls  # type: ignore
         return cls
 
 
@@ -136,19 +137,19 @@ class VBranchGeoDataBase(ABC, metaclass=MetaVBranchGeoDataBase):
         ...
 
     @abstractmethod
-    def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> Sequence[Self]:
+    def split(self, splits_id: List[int], ctx: BranchGeoDataEditContext) -> Sequence[Self]:
         """Split the parametric data at a given position.
 
         Parameters
         ----------
-        split_position : Point
-            The position at which to split the parametric data.
+        splits_id : List[int]
+            The curve indices at which to split the parametric data. The first and last indices should correspond to the start and end of the curve (i.e., 0 and len(curve)).
 
         Returns
         -------
         Tuple[VBranchParametricData, VBranchParametricData]
             The parametric data of the two branches after the split.
-        """
+        """  # noqa: E501
         ...
 
     @abstractmethod
@@ -217,7 +218,7 @@ class VBranchCurveData(VBranchGeoDataBase):
         data = np.flip(self.data, axis=0)
         return self.__class__(data)
 
-    def split(self, splits_point: Sequence[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:  # noqa: F821
+    def split(self, splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:  # noqa: F821
         return [self.__class__(self.data[start:end]) for start, end in itertools.pairwise(splits_id)]
 
     def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
@@ -301,7 +302,7 @@ class VBranchCurveIndex(VBranchGeoDataBase):
         data = np.flip(ctx.curve.shape[0] - 1 - self.data, axis=0)
         return self.__class__(data)
 
-    def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
+    def split(self, splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
         if len(self.data) == 0:
             return [self.__class__(self.data) for _ in range(len(splits_id) - 1)]
 
@@ -309,8 +310,9 @@ class VBranchCurveIndex(VBranchGeoDataBase):
         start = 0
         start_id = 0
         for split_id in splits_id[1:-1]:
-            end = np.searchsorted(self.data[start:], split_id)
-            splitted_curveId.append(self.__class__(self.data[start : start + end] - start_id))
+            end = np.searchsorted(self.data[start:], split_id, side="left")
+            section_data = self.data[start : start + end]
+            splitted_curveId.append(self.__class__(section_data - start_id))
             start += end
             start_id = split_id
         splitted_curveId.append(self.__class__(self.data[start:] - start_id))
@@ -367,7 +369,7 @@ class VBranchTangents(VBranchGeoDataBase):
         data = -np.flip(self.data, axis=0)
         return self.__class__(data)
 
-    def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
+    def split(self, splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
         return [self.__class__(self.data[start:end]) for start, end in itertools.pairwise(splits_id)]
 
     def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
@@ -435,7 +437,7 @@ class VBranchTipsData(VBranchGeoDataBase):
         data = np.flip(self.data, axis=0)
         return self.__class__(data)
 
-    def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
+    def split(self, splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
         nan = self.empty_data()
         cls = self.__class__
         return (
@@ -522,7 +524,7 @@ class VBranchBSpline(VBranchGeoDataBase):
 
     def is_invalid(self, ctx: BranchGeoDataEditContext) -> str:
         curve = ctx.curve
-        if curve is None or not len(curve):
+        if curve is None or len(curve) <= 1:
             if len(self.data):
                 return "The B-spline representation of a curve-less branch must be empty."
             else:
@@ -552,7 +554,7 @@ class VBranchBSpline(VBranchGeoDataBase):
     def flip(self, ctx: BranchGeoDataEditContext) -> VBranchBSpline:
         return self.__class__(self.data.flip())
 
-    def split(self, splits_point: List[Point], splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
+    def split(self, splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
         return [self.__class__(BSpline.fit(c)[0]) for c in ctx.info["new_curves"]]
 
     def __repr__(self) -> str:
@@ -633,7 +635,7 @@ class VBranchGeoFields:
     TANGENTS = VBranchGeoDescriptor("TANGENTS", VBranchTangents, VBranchTangents(np.empty((0, 2), dtype=np.float32)))
 
     #: The calibre of the branch at each skeleton point.
-    CALIBRES = VBranchGeoDescriptor("CALIBRES", VBranchCurveData, VBranchCurveData(np.empty((0, 2), dtype=np.float32)))
+    CALIBRES = VBranchGeoDescriptor("CALIBRES", VBranchCurveData, VBranchCurveData(np.empty((0,), dtype=np.float32)))
 
     #: The position of the left and right boundaries of the branch.
     BOUNDARIES = VBranchGeoDescriptor("BOUNDARIES", BoundariesData, BoundariesData(np.empty((0, 2, 2), dtype=np.int_)))
@@ -819,7 +821,9 @@ class VBranchGeoData:
 
             for branch_id, attr_data in enumerate(branches_data):
                 try:
-                    attr_data = VBranchGeoData.from_data(attr_data, geo_type)
+                    attr_data = (
+                        VBranchGeoData.from_data(attr_data, geo_type) if attr_data is not None else geo_desc.empty
+                    )
                 except ValueError as e:
                     raise ValueError(
                         f"Invalid type for attribute {geo_desc} of branch {branch_id}. " + str(e)
@@ -889,7 +893,8 @@ class VBranchGeoData:
             assert type_name in _registered_vbranch_geo_data_types, (
                 f"Unknown type: {type_name}. Make sure corresponding type was imported."
             )
-            data[k] = [VBranchGeoData.from_data(_, _registered_vbranch_geo_data_types[type_name]) for _ in v]
+            geodata_type = _registered_vbranch_geo_data_types[type_name]
+            data[k] = [VBranchGeoData.from_data(_, geodata_type) if _ is not None else None for _ in v]
 
         return data
 

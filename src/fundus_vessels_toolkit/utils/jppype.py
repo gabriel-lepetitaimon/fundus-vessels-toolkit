@@ -1,13 +1,17 @@
 from typing import Dict, Literal, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 from coloraide import Color
 from jppype import Mosaic, View2D, View2dGroup, imshow, vscode_theme
 from jppype.layers import Layer, LayerGraph, LayerImage, LayerQuiver
 
 from fundus_toolkits import AVLabel
+from fundus_toolkits.utils.geometric import Point
 
 from ..vascular_data_objects import VGraph, VTree
+from ..vascular_data_objects.vbranch_geodata import VBranchGeoData
+from .bezier import BSpline, BezierCubic
 
 vscode_theme()
 
@@ -30,10 +34,35 @@ def draw_tree(
     node_labels=False,
     edge: Literal["bspline", "line", "skeleton"] = "bspline",
     branch_color: Literal["av", "rank", "subtree"] = "rank",
+    bspline_dir: bool = False,
 ) -> LayerGraph:
     layer = tree.jppype_layer(
         edge_map=edge == "skeleton", bspline=edge == "bspline", edge_labels=edge_labels, node_labels=node_labels
     )
+
+    if bspline_dir and edge == "bspline":
+        geodata = tree.geometric_data()
+        branches_bspline = geodata.branch_data(VBranchGeoData.Fields.BSPLINE)
+        branch_dir = tree.branch_dirs()
+        nodes_coord = geodata.node_coord()
+        for i, path in enumerate(layer._edges_path):
+            n1, n2 = [Point(*nodes_coord[_]) for _ in tree.branch_list[i]]
+            bspline = branches_bspline[i]
+            if isinstance(bspline, VBranchGeoData.BSpline):
+                bspline = bspline.data.extend_bspline(start=n1, end=n2, smoothing=0.5)
+            else:
+                bspline = BSpline([BezierCubic(n1, n1, n2, n2)])
+
+            t = bspline.relative_pos_to_t(0.5)
+            p = Point.from_array(bspline.evaluate(t))
+            tan = Point.from_array(bspline.evaluate_tangent(t, normalized=True)) * 10
+            if not branch_dir[i]:
+                tan = -tan
+
+            left, right = p - tan.rotate(np.pi / 4), p - tan.rotate(-np.pi / 4)
+
+            path = path + f" M {left.x:.2f} {left.y:.2f} L {p.x:.2f} {p.y:.2f} L {right.x:.2f} {right.y:.2f}"
+            layer._edges_path[i] = path
 
     if artery:
         root_color = "#7a1a1a"

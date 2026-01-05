@@ -1486,6 +1486,7 @@ class VTree(VGraph):
         branches_reindex = super()._delete_branch(branch_id, update_refs=update_refs)
         reindex = add_empty_to_lookup(branches_reindex, increment_index=False)
         self._branch_tree = reindex[np.delete(self.branch_tree, branch_id) + 1]
+        assert self._branch_tree.shape[0] == self.branch_count, "Branch tree size mismatch after branch deletion."
         if self._branch_dir is not None:
             self._branch_dir = np.delete(self._branch_dir, branch_id)
         return branches_reindex
@@ -1527,14 +1528,14 @@ class VTree(VGraph):
 
     @overload
     def add_branch(
-        self, branch_nodes: IntPairArrayLike, *, return_branch_id: Literal[False] = False, inplace=True
+        self, branch_nodes: IntPairArrayLike, *, return_branch_id: Literal[False] = False, inplace=False
     ) -> Self: ...
     @overload
     def add_branch(
-        self, branch_nodes: IntPairArrayLike, *, return_branch_id: Literal[True], inplace=True
+        self, branch_nodes: IntPairArrayLike, *, return_branch_id: Literal[True], inplace=False
     ) -> Tuple[Self, npt.NDArray[np.int32]]: ...
     def add_branch(
-        self, branch_nodes: IntPairArrayLike, *, return_branch_id=False, inplace=True
+        self, branch_nodes: IntPairArrayLike, *, return_branch_id=False, inplace=False
     ) -> Self | Tuple[Self, npt.NDArray[np.int32]]:
         """Add branch(es) to the tree. The branch(es) are connected to the tree according to the following rules:
         - If the tail node of the new branch has exactly one incoming branch, the new branch becomes a successor of that branch.
@@ -1852,7 +1853,7 @@ class VTree(VGraph):
         clusters: Iterable[Iterable[int]],
         *,
         nodes_weight: Optional[npt.NDArray[np.float32]] = None,
-        inplace=True,
+        inplace=False,
         assume_reduced=False,
     ) -> Self:
         """Merge a cluster of nodes into a single node.
