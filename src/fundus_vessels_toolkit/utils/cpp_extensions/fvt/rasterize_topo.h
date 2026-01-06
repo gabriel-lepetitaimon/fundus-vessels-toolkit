@@ -14,18 +14,18 @@
  */
 void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& root_branches,
                         const std::vector<torch::Tensor>& curves, const std::vector<torch::Tensor>& boundaries,
-                        int N_nodes, float bridge_gap_smaller_than, bool fill_junctions, torch::Tensor& branchLabelsMap,
+                        int N_nodes, float bspline_interpolate, bool fill_junctions, torch::Tensor& branchLabelsMap,
                         torch::Tensor& topoMap);
 
 torch::Tensor& rasterize_branch(const torch::Tensor& curveTensor, const torch::Tensor& boundariesTensor,
-                                torch::Tensor& outTensor, int fill_value = 1, float bridge_gap_smaller_than = 2);
+                                torch::Tensor& outTensor, int fill_value = 1, float bspline_interpolate = 0.5);
 
 void rasterize_branch_topo(const torch::Tensor& curve, const torch::Tensor& boundaries, int branchID, float branchRank,
-                           torch::Tensor& branchLabelsMap, torch::Tensor& topoMap, float bridge_gap_smaller_than = 2);
+                           torch::Tensor& branchLabelsMap, torch::Tensor& topoMap, float bspline_interpolate = 0.5);
 
-void _rasterize_branch_topo(const Tensor2DAcc<int>& curve, const Tensor3DAcc<int>& boundaries, int branchID,
+void _rasterize_branch_topo(const torch::Tensor& curve, const Tensor3DAcc<int>& boundaries, int branchID,
                             float branchRank, Tensor2DAcc<int> branchLabelsMap, Tensor2DAcc<float> topoMap,
-                            float bridge_gap_smaller_than_sqr = 2, bool reverse = false);
+                            float bspline_interpolate = 0.5, bool reverse = false);
 
 torch::Tensor drawQuad(const IntPair& p1, const IntPair& p2, const IntPair& p3, const IntPair& p4,
                        const IntPair& maxShape);
@@ -40,12 +40,17 @@ class QuadIterator {
     const IntPoint& point() const;
     const std::array<int, 4>& crossProd() const;
 
+    double fromP12toP34() const;
+    double fromP1toP4() const;
+    void precomputeInvDiffNorms();
+
     const IntPoint p1, p2, p3, p4, pMin, pMax;
     const std::array<IntPoint, 4> pDiff;  // Differences between points for cross product calculations
 
    private:
     IntPoint p;
     std::array<int, 4> _crossProd;
+    std::array<double, 4> _invDiffNorm;
     bool hourGlassQuad;
 };
 

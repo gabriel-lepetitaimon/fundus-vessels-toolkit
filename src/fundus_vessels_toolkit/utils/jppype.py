@@ -111,6 +111,7 @@ def draw_trees(
     node_labels=False,
     edge: Literal["bspline", "line", "skeleton"] = "bspline",
     branch_color: Literal["av", "rank", "subtree"] = "rank",
+    bspline_dir: bool = False,
 ) -> None:
     """
     Draw a vessel tree on a given view.
@@ -131,6 +132,7 @@ def draw_trees(
         node_labels=node_labels,
         edge=edge,
         branch_color=branch_color,
+        bspline_dir=bspline_dir,
     )
     draw_tree(
         trees[1],
@@ -141,6 +143,7 @@ def draw_trees(
         node_labels=node_labels,
         edge=edge,
         branch_color=branch_color,
+        bspline_dir=bspline_dir,
     )
 
 

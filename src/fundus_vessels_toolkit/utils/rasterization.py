@@ -16,8 +16,8 @@ def rasterize_topology(
     boundaries: List[torch.Tensor],
     shape: Tuple[int, int],
     node_count: int = -1,
-    bridge_gap_smaller_than: float = 2,
     fill_junctions: bool = True,
+    bezier_interpolate: bool | float = 0.5,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Rasterizes the topology of branches given their curves and boundaries.
@@ -45,8 +45,9 @@ def rasterize_topology(
     N_nodes : int, optional
         The number of nodes in the topology. Default is -1, which means it will be determined automatically.
 
-    bridge_gap_smaller_than : float, optional
-        A threshold for the bridge gap. Default is 2.
+    bezier_interpolate: bool | float = 0.5, optional
+        If a float is provided, it indicates the interpolation step for discretizing Bezier curves.
+        If True, a default step of 0.5 is used. If False, no interpolation is performed.
 
     fill_junctions : bool, optional
         A flag indicating whether to fill junctions in the topology. Default is True.
@@ -70,7 +71,7 @@ def rasterize_topology(
         [c.cpu().int() for c in curves],
         [b.cpu().int() for b in boundaries],
         node_count,
-        bridge_gap_smaller_than,
+        bezier_interpolate if isinstance(bezier_interpolate, float) else (0.5 if bezier_interpolate else -1.0),
         fill_junctions,
         branchLabelsMap,
         topoMap,

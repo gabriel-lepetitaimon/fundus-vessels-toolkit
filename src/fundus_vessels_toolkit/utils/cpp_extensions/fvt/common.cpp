@@ -110,10 +110,11 @@ Point Point::rot90() const { return Point(-x, y); }
 Point Point::rot270() const { return Point(x, -y); }
 double Point::norm() const { return sqrt(y * y + x * x); }
 Point Point::abs() const { return Point(std::abs(y), std::abs(x)); }
+Point Point::sqr() const { return Point(y * y, x * x); }
 double Point::max() const { return std::max(y, x); }
 double Point::min() const { return std::min(y, x); }
 double Point::angle() const { return atan2(y, x); }
-double Point::angle(const Point& p) const { return acos(dot(p) / (norm() * p.norm())); }
+double Point::angle(const Point& p) const { return atan2(cross(p), dot(p)); }
 /// @brief Rotate the point by an angle in radians. Positive rotation is
 /// clockwise.
 /// @param angle

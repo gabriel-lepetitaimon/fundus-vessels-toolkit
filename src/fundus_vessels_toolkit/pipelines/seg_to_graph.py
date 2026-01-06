@@ -27,7 +27,7 @@ class SegToGraph:
         fix_hollow=True,
         clean_branches_tips=20,
         min_terminal_branch_length=4,
-        min_terminal_branch_calibre_ratio=1,
+        min_terminal_branch_calibre_ratio: float = 1,
         max_spurs_length=30,
         simplify_graph: bool = True,
         simplify_graph_arg: Optional[GraphSimplifyArg] = None,

@@ -89,10 +89,11 @@ class ReviewTool:
         img_names = {_.stem for _ in self.raw_path.glob(f"*.{raw_ext}")} & {
             _.stem for _ in self.av_path.glob(f"*.{av_ext}")
         }
-        assert len(img_names) > 0, "No images found in the specified directories."
+        assert len(img_names) > 0, (
+            "No images found in the specified directories:\n" + f"{self.raw_path}, {self.av_path}"
+        )
         self.img_names = sorted(list(img_names))
         self.current_index = 0
-
         self.av2tree = av2tree or NaiveAVSegToTree(mask_optic_disc=False)
 
         self.mosaic = Mosaic((2, 3), rows_titles=["Art", "Vei"], cell_height=height // 2)
@@ -274,7 +275,7 @@ class ReviewTool:
             if (which == "vein" and i == 0) or (which == "artery" and i == 1):
                 continue
 
-            label_map, topo_map = rasterize_tree_topology(tree, bridge_gap_smaller_than=50)
+            label_map, topo_map = rasterize_tree_topology(tree)
             subtree_map = TopologicalLabel.decode_subtree(label_map)
             N_subtree = int(subtree_map.max()) + 1
             color_map = np.zeros(self.fundus.shape + (3,), dtype=np.float32)

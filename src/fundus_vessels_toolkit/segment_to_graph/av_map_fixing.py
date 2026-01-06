@@ -4,6 +4,7 @@ import numpy as np
 import numpy.typing as npt
 from skimage.segmentation import expand_labels
 
+from fundus_toolkits.utils.geometric import Rect
 from fundus_vessels_toolkit.utils.lookup_array import invert_complete_lookup
 from fundus_vessels_toolkit.vascular_data_objects.vgraph import VGraph
 
@@ -17,7 +18,7 @@ def rasterize_tree_topology(
     *,
     topological_labels: bool = True,
     expand_labels_by: int = 0,
-    bridge_gap_smaller_than: float = 20,
+    bezier_interpolate: float = 0.5,
     fill_junctions: bool = True,
     geodata_id=0,
     boundaries_field: VBranchGeoData.Key = VBranchGeoData.Fields.BOUNDARIES,
@@ -53,7 +54,7 @@ def rasterize_tree_topology(
         ],
         shape=geodata.domain.shape,
         node_count=tree.node_count,
-        bridge_gap_smaller_than=bridge_gap_smaller_than,
+        bezier_interpolate=bezier_interpolate,
         fill_junctions=fill_junctions,
     )
 
@@ -196,36 +197,40 @@ def evaluate_topology(
     # === UNKNOWN BRANCHES AND BRANCH DIRECTIONS ===
     unknown_branches = np.zeros_like(branches, dtype=np.bool_)
     branches_dir = np.zeros_like(branches, dtype=np.float32)
+    domain = Rect.from_size(topo_map.shape).exclude_bottom_right_edges()  # type: ignore
+
+    tips_coord = domain.clip(nodes_yx[tree.branch_list.flatten()]).reshape(B, 2, 2)  # [B, (tail, head), (y,x)]
+
     for b in tree.branches():
-        if (curve := b.curve()) is None:
-            t1, t2 = [topo_map[*_.coord().int_tuple()] for _ in b.nodes()]
-            if t1 == 0 and t2 == 0:
+        curve = b.curve()
+        if curve is None:
+            t1, t2 = topo_map[*tips_coord[b.id].T]
+            if t1 == 0 or t2 == 0:
                 unknown_branches[b.id] = True
             elif t2 - t1 > epsilon:
                 branches_dir[b.id] = 1
             elif t1 - t2 > epsilon:
                 branches_dir[b.id] = -1
             continue
+        else:
+            curve = curve[domain.contains(curve)]
+            topo_values = topo_map[*curve.T]
+            null_topo = topo_values == 0
+            topo_values = topo_values[~null_topo]
+            if np.mean(null_topo) > 2 / 3 or len(topo_values) < 2:
+                unknown_branches[b.id] = True
+                continue
 
-        topo_values = topo_map[*curve.T]
-        null_topo = topo_values == 0
-        topo_values = topo_values[~null_topo]
-        if np.mean(null_topo) > 2 / 3 or len(topo_values) < 2:
-            unknown_branches[b.id] = True
-            continue
-
-        diff = np.diff(topo_values)
-        forward_diff = diff > epsilon
-        backward_diff = diff < -epsilon
-        branches_dir[b.id] = np.mean(1 * forward_diff - 1 * backward_diff)
+            diff = np.diff(topo_values)
+            forward_diff = diff > epsilon
+            backward_diff = diff < -epsilon
+            branches_dir[b.id] = np.mean(1 * forward_diff - 1 * backward_diff)
 
     # === BRANCH BEST PARENT ===
-    head_nodes = tree.branch_list[np.arange(B), (branches_dir >= 0).astype(np.int32)]
-    heads_yx = nodes_yx[head_nodes].astype(np.int32)
+    heads_yx = tips_coord[np.arange(B), (branches_dir >= 0).astype(np.int32)].astype(np.int32)
     heads_label, heads_rank = topo_labels[*heads_yx.T], topo_map[*heads_yx.T]
 
-    tail_nodes = tree.branch_list[np.arange(B), (branches_dir < 0).astype(np.int32)]
-    tails_yx = nodes_yx[tail_nodes].astype(np.int32)
+    tails_yx = tips_coord[np.arange(B), (branches_dir < 0).astype(np.int32)].astype(np.int32)
     tails_label, tails_rank = topo_labels[*tails_yx.T], topo_map[*tails_yx.T]
 
     best_parent = np.full(tree.branch_count, -1, dtype=np.int32)

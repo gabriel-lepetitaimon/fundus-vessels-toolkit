@@ -307,12 +307,13 @@ class GNNAVSegToTree(AVSegToTree):
 FUNDUS_SEG_TO_GRAPH = SegToGraph(
     skeletonize_method="lee",
     fix_hollow=True,
-    clean_branches_tips=30,
+    clean_branches_tips=15,
     min_terminal_branch_length=4,
-    min_terminal_branch_calibre_ratio=1,
+    min_terminal_branch_calibre_ratio=0.5,
+    max_spurs_length=10,
     simplify_graph_arg=GraphSimplifyArg(
         max_spurs_length=0,
-        reconnect_endpoints=ReconnectEndpointsArg(max_distance=10, intercept_snapping_distance=5),
+        reconnect_endpoints=ReconnectEndpointsArg(endpoints_to_endpoints_max_distance=45),
         junctions_merge_distance=15,
         min_orphan_branches_length=30,
         max_cycles_length=20,

@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Tuple, overload
 from weakref import ref
 
-from click import INT
 import numpy as np
 import numpy.typing as npt
 
@@ -49,7 +48,7 @@ if TYPE_CHECKING:
     # T_VBranchGeoData = TypeVar("T_VBranchGeoData", bound=VBranchGeoData)
 
 EMPTY_CURVE = readonly(np.empty((0, 2), dtype=np.int_))
-INTEGRITY_CHECK = "raise"
+INTEGRITY_CHECK: Literal[False, "raise"] = False
 
 
 class VGeometricData:

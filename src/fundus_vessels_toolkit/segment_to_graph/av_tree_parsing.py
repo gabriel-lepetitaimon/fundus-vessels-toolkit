@@ -6,7 +6,6 @@ import numpy.typing as npt
 
 from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.geometric import Point
-
 from fundus_vessels_toolkit.utils.typing import Indices
 from fundus_vessels_toolkit.vascular_data_objects.vgraph import NodeIndicesLike
 

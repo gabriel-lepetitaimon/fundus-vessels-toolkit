@@ -1,5 +1,5 @@
+#include "bezier.h"
 #include "branch.h"
-#include "fit_bezier.h"
 
 /**
  * @brief Evaluate the tangent of a curve.

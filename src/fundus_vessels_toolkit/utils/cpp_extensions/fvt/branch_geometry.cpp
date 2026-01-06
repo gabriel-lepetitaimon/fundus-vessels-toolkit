@@ -267,7 +267,7 @@ std::tuple<BSpline, double> bspline_regression(const CurveYX& curve, const Curve
  * than the given error (provided that enough split candidates are available).
  */
 std::tuple<BSpline, double> iterative_fit_bspline(const CurveYX& d, const std::vector<Point>& tangents,
-                                                  const BezierCurve& bezier, const std::vector<double>& u,
+                                                  const BezierCubic& bezier, const std::vector<double>& u,
                                                   const std::vector<double>& sqrErrors,
                                                   const std::vector<std::size_t>& splitCandidates, double targetError,
                                                   std::size_t first, std::size_t last) {

@@ -4,7 +4,7 @@ by Philip J. Schneider
 from "Graphics Gems", Academic Press, 1990
 */
 
-#include "fit_bezier.h"
+#include "bezier.h"
 
 /*
  *  FitCubic :
@@ -16,14 +16,14 @@ from "Graphics Gems", Academic Press, 1990
  * double error : User-defined error squared
  *
  * Returns: tuple of
- *   BezierCurve bezCurve : Fitted Bezier curve
+ *   BezierCubic bezCurve : Fitted Bezier curve
  *   double maxSqrError : Maximum squared error of fit
  *   std::vector<double> sqrErrors : Squared errors for each point
  *   std::vector<double> u : Parameterization of points
  */
-std::tuple<BezierCurve, double, std::vector<double>, std::vector<double>> fit_bezier(
+std::tuple<BezierCubic, double, std::vector<double>, std::vector<double>> fit_bezier(
     const CurveYX& d, const std::vector<Point>& tangent, double targetSqrError, std::size_t first, std::size_t last) {
-    BezierCurve bezCurve;          /*Control points of fitted Bezier curve*/
+    BezierCubic bezCurve;          /*Control points of fitted Bezier curve*/
     const int MAX_ITERATIONS = 10; /*  Max times to try iterating  */
 
     double iterationError = targetSqrError * 4.0; /* fixed issue 23 */
@@ -32,8 +32,8 @@ std::tuple<BezierCurve, double, std::vector<double>, std::vector<double>> fit_be
 
     /*  Use heuristic if region only has two points in it */
     if (nPts == 2) {
-        float dist = distance(d[last], d[first]) / 3.0;
-        Point mid = (d[first] + d[last]) / 2.0;
+        // float dist = distance(d[last], d[first]) / 3.0;
+        // Point mid = (d[first] + d[last]) / 2.0;
 
         bezCurve[0] = d[first];
         bezCurve[3] = d[last];
@@ -92,7 +92,7 @@ std::tuple<BezierCurve, double, std::vector<double>, std::vector<double>> fit_be
  * double *uPrime : Parameter values for region
  * Vector2 tHat1, tHat2 : Unit tangents at endpoints
  */
-BezierCurve bezier_regression(const CurveYX& d, std::size_t first, std::size_t last, const std::vector<double>& uPrime,
+BezierCubic bezier_regression(const CurveYX& d, std::size_t first, std::size_t last, const std::vector<double>& uPrime,
                               const Vector& t0, const Vector& t1) {
     int nPts = last - first + 1;
 
@@ -136,7 +136,7 @@ BezierCurve bezier_regression(const CurveYX& d, std::size_t first, std::size_t l
     double alpha_r = (det_C0_C1 == 0) ? 0.0 : det_C0_X / det_C0_C1;
 
     /* Create the Bezier Curve*/
-    BezierCurve bezCurve = {d[first], 0, 0, d[last]};
+    BezierCubic bezCurve = {d[first], 0, 0, d[last]};
 
     double segLength = distance(d[last], d[first]);
     double epsilon = 1.0e-6 * segLength;
@@ -160,14 +160,15 @@ BezierCurve bezier_regression(const CurveYX& d, std::size_t first, std::size_t l
     }
 }
 
-PointList evaluate_bezier(const BezierCurve& bezCurve, const std::vector<double>& u) {
+PointList evaluate_bezier(const BezierCubic& bezCurve, const std::vector<double>& u) {
     PointList curve;
     curve.reserve(u.size());
-    for (int i = 0; i < (int)u.size(); i++) curve.push_back(BezierPolynomialTriangle(bezCurve, u[i]));
+    for (int i = 0; i < (int)u.size(); i++) curve.push_back(bezierPolynomialTriangle(bezCurve, u[i]));
     return curve;
 }
+Point evaluate_bezier(const BezierCubic& bezCurve, const double& u) { return bezierPolynomialTriangle(bezCurve, u); }
 
-PointList evaluate_bezier_tangent(const BezierCurve& bezCurve, const std::vector<double>& u) {
+PointList evaluate_bezier_tangent(const BezierCubic& bezCurve, const std::vector<double>& u) {
     PointList curve;
     curve.reserve(u.size());
 
@@ -175,7 +176,7 @@ PointList evaluate_bezier_tangent(const BezierCurve& bezCurve, const std::vector
     std::array<Point, 3> Q;
     for (int i = 0; i <= 2; i++) Q[i] = (bezCurve[i + 1] - bezCurve[i]) * 3.0;
 
-    for (int i = 0; i < (int)u.size(); i++) curve.push_back(BezierPolynomialTriangle(Q, u[i]));
+    for (int i = 0; i < (int)u.size(); i++) curve.push_back(bezierPolynomialTriangle(Q, u[i]));
     return curve;
 }
 
@@ -201,6 +202,68 @@ std::vector<double> chordLengthParameterize(const CurveYX& d, std::size_t first,
 }
 
 /*
+ *  DiscretizeBezier
+ *	Discretize a bezier cubic curve into a succession of "flat" lines.
+ *  Iteratively subdivides the curve until the maximum distance between
+ *  the curve and the line is below a threshold.
+ */
+std::tuple<PointList, std::vector<double>> discretizeBezier(const BezierCubic& bezCurve) {
+    PointList points = {bezCurve[0]};
+    std::vector<double> us = {0.0};
+    _recursiveDiscretizeBezier(bezCurve, 0.0, 1.0, points, us);
+
+    return {points, us};
+}
+
+/*
+ *  SubdivideBezier
+ *	Subdivide a bezier cubic curve into two halves at parameter u, using de Casteljau's algorithm.
+ */
+std::pair<BezierCubic, BezierCubic> subdivideBezier(const BezierCubic& curve, const double& u) {
+    BezierCubic left, right;
+    std::array<Point, 7> V;
+
+    // Initialize V with control points
+    for (int i = 0; i < 4; i++) V[i] = curve[i];
+
+    // de Casteljau's algorithm
+    for (int i = 1; i <= 3; i++) {
+        for (int j = 0; j <= 3 - i; j++) {
+            V[j] = V[j] * (1.0 - u) + V[j + 1] * u;
+        }
+        left[i] = V[0];
+        right[3 - i] = V[3 - i];
+    }
+    left[0] = curve[0];
+    right[3] = curve[3];
+
+    return {left, right};
+}
+
+bool _isFlatEnough(const BezierCubic& curve) {
+    const Point& a = (curve[1] * 3.0 - curve[0] * 2.0 - curve[3]).sqr();
+    const Point& b = (curve[2] * 3.0 - curve[3] * 2.0 - curve[0]).sqr();
+    return std::max(a.x, b.x) + std::max(a.y, b.y) <= 8;
+}
+
+void _recursiveDiscretizeBezier(const BezierCubic& curveSegment, double u_start, double u_end, PointList& points,
+                                std::vector<double>& us) {
+    // Check flatness
+    const auto &p0 = curveSegment[0], p3 = curveSegment[3];
+    if (distanceSqr(p0, p3) <= 2 || _isFlatEnough(curveSegment)) {
+        // Add endpoint to the list
+        points.push_back(p3);
+        us.push_back(u_end);
+    } else {
+        // Subdivide curve at midpoint
+        double u_mid = findNewtonRaphsonRoot(curveSegment, evaluate_bezier(curveSegment, 0.5).toInt(), 0.5);
+        auto [left, right] = subdivideBezier(curveSegment, u_mid);
+        u_mid = u_start + (u_end - u_start) * u_mid;
+        _recursiveDiscretizeBezier(left, u_start, u_mid, points, us);
+        _recursiveDiscretizeBezier(right, u_mid, u_end, points, us);
+    }
+}
+/*
  *  Reparameterize:
  *	Given set of points and their parameterization, try to find
  *   a better parameterization.
@@ -208,9 +271,9 @@ std::vector<double> chordLengthParameterize(const CurveYX& d, std::size_t first,
  * Point2 *d : Array of digitized points
  * int first, last : Indices defining region
  * double *u : Current parameter values
- * BezierCurve bezCurve : Current fitted curve
+ * BezierCubic bezCurve : Current fitted curve
  */
-void reparameterize(std::vector<double>& u, const BezierCurve& bezCurve, const CurveYX& d, std::size_t first,
+void reparameterize(std::vector<double>& u, const BezierCubic& bezCurve, const CurveYX& d, std::size_t first,
                     std::size_t last) {
     int nPts = (int)u.size();
     for (int i = 0; i < nPts; i++) u[i] = findNewtonRaphsonRoot(bezCurve, d[linspace_int(i, first, last, nPts)], u[i]);
@@ -220,11 +283,11 @@ void reparameterize(std::vector<double>& u, const BezierCurve& bezCurve, const C
  *  NewtonRaphsonRootFind :
  *	Use Newton-Raphson iteration to find better root.
  *
- * BezierCurve Q : Current fitted curve
+ * BezierCubic Q : Current fitted curve
  * Point2 P : Digitized point
  * double u : Parameter value for "P"
  */
-double findNewtonRaphsonRoot(const BezierCurve& Q, const Point& P, double u) {
+double findNewtonRaphsonRoot(const BezierCubic& Q, const Point& P, double u) {
     double numerator, denominator;
     std::vector<Point> Q1;
     std::vector<Point> Q2; /*  Q' and Q''			*/
@@ -260,7 +323,7 @@ double findNewtonRaphsonRoot(const BezierCurve& Q, const Point& P, double u) {
  *  	Evaluate a Bezier curve at a particular parameter value
  *
  * int degree : Degree of bezier curve
- * BezierCurve V : Control points
+ * BezierCubic V : Control points
  * double t : Parametric value to find point for
  */
 Point BezierII(std::vector<Point> V, double t) {
@@ -304,12 +367,12 @@ double B3(double u) { return u * u * u; }
  *
  * Point2 *d : Array of digitized points
  * int first, last : Indices defining region
- * BezierCurve bezCurve : Fitted Bezier curve
+ * BezierCubic bezCurve : Fitted Bezier curve
  * double *u : Parameterization of points
  * int *splitPoint : Point of maximum error
  */
 std::tuple<std::vector<double>, double, std::size_t> computeMaxError(const CurveYX& d, std::size_t first,
-                                                                     std::size_t last, const BezierCurve& bezCurve,
+                                                                     std::size_t last, const BezierCubic& bezCurve,
                                                                      const std::vector<double>& u) {
     double maxDist; /*  Maximum error		*/
     double dist;    /*  Current error		*/
@@ -321,7 +384,7 @@ std::tuple<std::vector<double>, double, std::size_t> computeMaxError(const Curve
     std::size_t splitPoint = (last - first + 1) / 2;
     maxDist = 0.0;
     for (std::size_t i = first; i <= last; i++) {
-        P = BezierPolynomialTriangle(bezCurve, u[i - first]);
+        P = bezierPolynomialTriangle(bezCurve, u[i - first]);
         v = P - d[i];
         dist = v.squaredNorm();
         sqrErrors.push_back(dist);
@@ -333,7 +396,7 @@ std::tuple<std::vector<double>, double, std::size_t> computeMaxError(const Curve
     return {sqrErrors, maxDist, splitPoint};
 }
 
-torch::Tensor bspline_to_tensor(const BezierCurve& bspline) {
+torch::Tensor bspline_to_tensor(const BezierCubic& bspline) {
     torch::Tensor spline_t = torch::zeros({4, 2}, torch::kFloat);
     auto spline_acc = spline_t.accessor<float, 2>();
     for (int j = 0; j < 4; j++) {

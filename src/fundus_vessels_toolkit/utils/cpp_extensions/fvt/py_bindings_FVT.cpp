@@ -1,5 +1,6 @@
 #include <pybind11/stl.h>
 
+#include "bezier.h"
 #include "branch.h"
 #include "disjoint_set.h"
 #include "edit_distance.h"
@@ -498,6 +499,19 @@ void first_two_index_of(const torch::Tensor& tensor, const torch::Tensor& elemen
     for (auto e : elements_left) out_acc[e[0]][1] = -1;
 }
 
+std::tuple<std::vector<std::array<int, 2>>, std::vector<double>> discretize_bezier_cubic(
+    const torch::Tensor& bezier_tensor) {
+    const auto& points = tensor_to_pointList(bezier_tensor);
+    BezierCubic bezier = {points[0], points[1], points[2], points[3]};
+    auto [p, u] = discretizeBezier(bezier);
+    std::vector<std::array<int, 2>> pixelPoints;
+    pixelPoints.reserve(p.size());
+    for (const auto& pt : p) {
+        pixelPoints.push_back({(int)round(pt.y), (int)round(pt.x)});
+    }
+    return std::make_tuple(pixelPoints, u);
+}
+
 /**************************************************************************************
  *             === PYBIND11 BINDINGS ===
  **************************************************************************************/
@@ -546,6 +560,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("rasterize_topology", &rasterize_topology, "Rasterize the topology of a set of branches.");
     m.def("rasterize_branch", &rasterize_branch, "Rasterize a branch from its curve and boundaries.");
     m.def("drawQuad", &drawQuad, "Draw a quadrilateral in a 2D image.");
+
+    // === bspline.h ===
+    m.def("discretize_bezier_cubic", &discretize_bezier_cubic, "Discretize a cubic bezier curve.");
 
     // === disjoint_set.h ===
     m.def("has_cycle", &has_cycle, "Find cycles in a list of parent.");

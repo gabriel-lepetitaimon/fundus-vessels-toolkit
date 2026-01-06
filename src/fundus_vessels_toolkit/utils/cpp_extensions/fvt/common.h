@@ -159,6 +159,7 @@ struct Point {
     double squaredNorm() const;
     double norm() const;
     Point abs() const;
+    Point sqr() const;
     double max() const;
     double min() const;
     Point positiveCoordinates() const;
@@ -230,6 +231,16 @@ float distance(const Point& p1, const Point& p2);
 float distance(const IntPoint& p1, const IntPoint& p2);
 float distanceSqr(const Point& p1, const Point& p2);
 float distanceSqr(const IntPoint& p1, const IntPoint& p2);
+
+template <typename T>
+T lerp(const T& v0, const T& v1, float t) {
+    return v0 * (1.0f - t) + v1 * t;
+}
+
+template <typename T>
+T clip(const T& val, const T& minVal, const T& maxVal) {
+    return std::max(minVal, std::min(maxVal, val));
+}
 
 // === Gaussian ===
 float gaussian(float x, float sigma = 1, float mu = 0);
