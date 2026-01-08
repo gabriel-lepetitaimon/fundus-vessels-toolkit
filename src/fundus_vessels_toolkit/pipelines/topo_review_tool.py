@@ -6,7 +6,7 @@ from typing import List, Literal, overload
 
 import numpy as np
 from fundus_data_toolkit.functional import open_image
-from ipywidgets import Button, GridBox, Label, Layout
+from ipywidgets import Button, GridBox, Label, Layout, Output
 from jppype import Mosaic, vscode_theme
 
 from fundus_odmac_toolkit.models.segmentation import segment
@@ -99,6 +99,8 @@ class ReviewTool:
         self.mosaic = Mosaic((2, 3), rows_titles=["Art", "Vei"], cell_height=height // 2)
         self.mosaic[0, 1].on_click(partial(self.handle_click, artery=True))
         self.mosaic[1, 1].on_click(partial(self.handle_click, artery=False))
+        self.mosaic[0, 2].on_click(partial(self.print_topo_info, art=0))
+        self.mosaic[1, 2].on_click(partial(self.print_topo_info, art=1))
 
         self.label = Label(value="")
         btn_layout = Layout(width="80px")
@@ -106,9 +108,11 @@ class ReviewTool:
         self.undo_btn.on_click(lambda btn: self.undo())
         self.save_btn = Button(description="Save", layout=btn_layout)
         self.save_btn.on_click(lambda btn: self.save_trees())
+        self.debug_output = Output()
 
         # Annotation State
         self.debug_info = {}
+        self.trees_topology = [None, None]
         self._fundus: FundusData | None = None
         self.img_name: str = ""
 
@@ -148,11 +152,11 @@ class ReviewTool:
         )
 
         view = GridBox(
-            children=[buttons, self.mosaic.draw_mosaic()],
+            children=[buttons, self.mosaic.draw_mosaic(), self.debug_output],
             layout=Layout(
                 width="100%",
                 grid_template_columns="100%",
-                grid_template_rows="auto auto",
+                grid_template_rows="auto auto auto",
                 row_gap="10px",
             ),
         )
@@ -265,10 +269,19 @@ class ReviewTool:
 
     def draw_trees(self, which: Literal["artery", "vein", "both"] = "both"):
         if which in ("artery", "both"):
-            draw_tree(self.trees[0], view=self.mosaic[0, 1], artery=True, bspline_dir=True)
+            draw_tree(
+                self.trees[0], view=self.mosaic[0, 1], artery=True, bspline_dir=True, edge_labels=True, node_labels=True
+            )
             draw_tree(self.trees[0], name="art", view=self.mosaic[1, 0], artery=True)
         if which in ("vein", "both"):
-            draw_tree(self.trees[1], view=self.mosaic[1, 1], artery=False, bspline_dir=True)
+            draw_tree(
+                self.trees[1],
+                view=self.mosaic[1, 1],
+                artery=False,
+                bspline_dir=True,
+                edge_labels=True,
+                node_labels=True,
+            )
             draw_tree(self.trees[1], name="vein", view=self.mosaic[1, 0], artery=False)
 
         for i, tree in enumerate(self.trees):
@@ -276,6 +289,7 @@ class ReviewTool:
                 continue
 
             label_map, topo_map = rasterize_tree_topology(tree)
+            self.trees_topology[i] = label_map, topo_map
             subtree_map = TopologicalLabel.decode_subtree(label_map)
             N_subtree = int(subtree_map.max()) + 1
             color_map = np.zeros(self.fundus.shape + (3,), dtype=np.float32)
@@ -295,6 +309,15 @@ class ReviewTool:
             img = self.fundus.image.transpose(1, 2, 0) * 0.5
             img = (1 - alpha) * img + alpha * color_map
             self.mosaic[i, 2].add_image(img, name="topo_map")
+
+    def print_topo_info(self, event, art):
+        y, x = int(event["y"]), int(event["x"])
+        if self.trees_topology[art] is None:
+            return
+        topo = str(TopologicalLabel(self.trees_topology[art][0][y, x])).ljust(10)
+        d = self.trees_topology[art][1][y, x]
+        with self.debug_output:
+            print(f"({y}, {x}): {topo:}, d={d:.4f}")
 
     ##########################################################################
     # === STATES STACK HANDLERS ===

@@ -18,6 +18,8 @@ PointList evaluate_bezier(const BezierCubic& bezCurve, const std::vector<double>
 Point evaluate_bezier(const BezierCubic& bezCurve, const double& u);
 PointList evaluate_bezier_tangent(const BezierCubic& bezCurve, const std::vector<double>& u);
 
+Point infer_bezier_t0(const Point& p0, const Point& p1, const Point& t1, double smoothness = 0.5);
+
 std::tuple<PointList, std::vector<double>> discretizeBezier(const BezierCubic& bezCurve);
 void _recursiveDiscretizeBezier(const BezierCubic& curveSegment, double u_start, double u_end, PointList& points,
                                 std::vector<double>& us);

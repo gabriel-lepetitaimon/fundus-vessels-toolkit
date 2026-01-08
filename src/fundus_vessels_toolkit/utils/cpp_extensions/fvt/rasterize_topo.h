@@ -1,6 +1,7 @@
 #ifndef RASTERIZE_TOPO_H
 #define RASTERIZE_TOPO_H
 
+#include "bezier.h"
 #include "common.h"
 
 /**
@@ -12,9 +13,10 @@
  * @param branchLabelsMap The tensor to store the branch labels.
  * @param topoMap The tensor to store the topology map.
  */
-void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& root_branches,
-                        const std::vector<torch::Tensor>& curves, const std::vector<torch::Tensor>& boundaries,
-                        int N_nodes, float bspline_interpolate, bool fill_junctions, torch::Tensor& branchLabelsMap,
+void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& branch_parents,
+                        const torch::Tensor& branch_dirs, std::vector<torch::Tensor> curves,
+                        std::vector<torch::Tensor> boundaries, const torch::Tensor& nodes_yx_tensor,
+                        float bspline_interpolate, bool fill_junctions, torch::Tensor& branchLabelsMap,
                         torch::Tensor& topoMap);
 
 torch::Tensor& rasterize_branch(const torch::Tensor& curveTensor, const torch::Tensor& boundariesTensor,
@@ -23,9 +25,15 @@ torch::Tensor& rasterize_branch(const torch::Tensor& curveTensor, const torch::T
 void rasterize_branch_topo(const torch::Tensor& curve, const torch::Tensor& boundaries, int branchID, float branchRank,
                            torch::Tensor& branchLabelsMap, torch::Tensor& topoMap, float bspline_interpolate = 0.5);
 
-void _rasterize_branch_topo(const torch::Tensor& curve, const Tensor3DAcc<int>& boundaries, int branchID,
-                            float branchRank, Tensor2DAcc<int> branchLabelsMap, Tensor2DAcc<float> topoMap,
-                            float bspline_interpolate = 0.5, bool reverse = false);
+void rasterize_bezier(std::function<void(IntPoint, float)> updater, const IntPoint& p0, const IntPoint& p1,
+                      const Point& t0, const Point& t1, const IntPointPair& b0, const IntPointPair& b1,
+                      float bezier_smoothness, const IntPoint& maxShape);
+void rasterize_bezier(std::function<void(IntPoint, float)> updater, const BezierCubic& bezier, const IntPointPair& b0,
+                      const IntPointPair& b1, const IntPoint& maxShape);
+
+void rasterize_branch_topo(const CurveYX& curve, const Tensor3DAcc<int>& boundaries,
+                           std::function<void(IntPoint, float)> draw, const IntPoint& maxShape,
+                           float bspline_interpolate = 0.5);
 
 torch::Tensor drawQuad(const IntPair& p1, const IntPair& p2, const IntPair& p3, const IntPair& p4,
                        const IntPair& maxShape);

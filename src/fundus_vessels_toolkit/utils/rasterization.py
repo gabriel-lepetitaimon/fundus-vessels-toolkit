@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import numpy as np
 import torch
@@ -11,11 +11,12 @@ from .torch import autocast_torch
 @autocast_torch
 def rasterize_topology(
     branch_list: torch.Tensor,
-    root_branches: torch.Tensor,
+    branch_tree: torch.Tensor,
+    branch_dirs: torch.Tensor,
     curves: List[torch.Tensor],
     boundaries: List[torch.Tensor],
+    nodes_yx: torch.Tensor,
     shape: Tuple[int, int],
-    node_count: int = -1,
     fill_junctions: bool = True,
     bezier_interpolate: bool | float = 0.5,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -27,8 +28,11 @@ def rasterize_topology(
     branch_list : torch.Tensor
         A tensor containing the list of branches, where each branch is represented by its ID.
 
-    root_branches : torch.Tensor
-        A tensor containing the root branches, where each root branch is represented by its ID.
+    branch_tree : torch.Tensor
+        A tensor containing the branch tree, where each branch's parent is represented by its ID.
+
+    branch_dirs : torch.Tensor
+        A tensor containing the direction of each branch.
 
     curves : List[torch.Tensor]
         A list of tensors, each representing a curve of a branch.
@@ -39,11 +43,11 @@ def rasterize_topology(
         A list of tensors, each representing the boundaries of a branch.
         The tensors shape must be (N, 2, 2) where N is the length of the branch. The second dimensions stores the left and right boundaries of the branch at each point as (y, x) coordinates.
 
+    nodes_yx : torch.Tensor
+        A tensor containing the (y, x) coordinates of the nodes in the vascular tree.
+
     shape : Tuple[int, int]
         The shape of the output topology map.
-
-    N_nodes : int, optional
-        The number of nodes in the topology. Default is -1, which means it will be determined automatically.
 
     bezier_interpolate: bool | float = 0.5, optional
         If a float is provided, it indicates the interpolation step for discretizing Bezier curves.
@@ -62,15 +66,13 @@ def rasterize_topology(
     branchLabelsMap = torch.from_numpy(np.zeros(shape, dtype=np.int32)).int()
     topoMap = torch.from_numpy(np.zeros(shape, dtype=np.float32))
 
-    if node_count == -1:
-        node_count = int(branch_list.max().item() + 1)
-
     rasterize_topology_cpp(
         branch_list.cpu().int(),
-        root_branches.cpu().int(),
+        branch_tree.cpu().int(),
+        branch_dirs.cpu().bool(),
         [c.cpu().int() for c in curves],
         [b.cpu().int() for b in boundaries],
-        node_count,
+        nodes_yx.cpu().int(),
         bezier_interpolate if isinstance(bezier_interpolate, float) else (0.5 if bezier_interpolate else -1.0),
         fill_junctions,
         branchLabelsMap,

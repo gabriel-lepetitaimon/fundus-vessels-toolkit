@@ -49,6 +49,12 @@ IntPoint IntPoint::clamp(IntPoint min, IntPoint max) const {
     return IntPoint(std::clamp(y, min.y, max.y), std::clamp(x, min.x, max.x));
 }
 
+std::array<IntPoint, 2> IntPoint::left_right_pair(const Point& direction, double distance, bool assume_unitary) const {
+    const auto& dir = assume_unitary ? direction : direction.normalize();
+    return {IntPoint(y + static_cast<int>(round(-dir.x * distance)), x + static_cast<int>(round(+dir.y * distance))),
+            IntPoint(y + static_cast<int>(round(+dir.x * distance)), x + static_cast<int>(round(-dir.y * distance)))};
+}
+
 // === Point ===
 Point::Point(double y, double x) : y(y), x(x) {}
 Point::Point(const IntPair& yx) : y(yx[0]), x(yx[1]) {}
@@ -70,6 +76,11 @@ Point& Point::operator+=(const Point& p) {
 Point& Point::operator-=(const Point& p) {
     this->x -= p.x;
     this->y -= p.y;
+    return *this;
+}
+Point& Point::operator*=(const double& f) {
+    this->x *= f;
+    this->y *= f;
     return *this;
 }
 Point& Point::operator/=(const double& p) {
@@ -413,11 +424,14 @@ torch::Tensor remove_rows(const torch::Tensor& tensor, std::vector<int> rows) {
     return new_tensor;
 }
 
-CurveYX tensor_to_curve(const torch::Tensor& tensor) {
+CurveYX tensor_to_curve(const torch::Tensor& tensor, bool reverse) {
     auto accessor = tensor.accessor<int, 2>();
     CurveYX curveYX;
     curveYX.reserve(tensor.size(0));
-    for (int i = 0; i < tensor.size(0); i++) curveYX.push_back({accessor[i][0], accessor[i][1]});
+    if (!reverse)
+        for (int i = 0; i < tensor.size(0); i++) curveYX.push_back({accessor[i][0], accessor[i][1]});
+    else
+        for (int i = tensor.size(0) - 1; i >= 0; i--) curveYX.push_back({accessor[i][0], accessor[i][1]});
     return curveYX;
 }
 
@@ -558,6 +572,48 @@ AdjList graph_adjlist_to_edge_adjlist(const GraphAdjList& graph_adjlist, int N) 
         }
     }
     return graph;
+}
+
+std::tuple<Hierarchy, int> edge_list_to_hierarchy(const Tensor2DAcc<int>& edges, const Tensor1DAcc<int>& edges_parent,
+                                                  const Tensor1DAcc<bool>& edge_dir) {
+    const std::size_t E = (std::size_t)edges.size(0);
+    Hierarchy hierarchy(E);
+
+    std::stack<int> q;
+    for (std::size_t e = 0; e < E; e++) {
+        hierarchy[e].id = e;
+
+        const int& parent = edges_parent[e];
+        hierarchy[e].parent = parent;
+        if (parent != -1)
+            hierarchy[parent].children.push_back(e);
+        else
+            q.push(e);
+
+        if (edge_dir[e]) {
+            hierarchy[e].tail_node = edges[e][0];
+            hierarchy[e].head_node = edges[e][1];
+        } else {
+            hierarchy[e].tail_node = edges[e][1];
+            hierarchy[e].head_node = edges[e][0];
+        }
+    }
+
+    // Traverse graph to establish rank
+    int max_rank = 0;
+    while (!q.empty()) {
+        const int e = q.top();
+        q.pop();
+
+        for (const int child : hierarchy[e].children) {
+            int rank = hierarchy[e].rank + 1;
+            hierarchy[child].rank = rank;
+            max_rank = std::max(max_rank, rank);
+            q.push(child);
+        }
+    }
+
+    return std::make_tuple(hierarchy, max_rank);
 }
 
 torch::Tensor edge_list_to_tensor(const EdgeList& edge_list) {

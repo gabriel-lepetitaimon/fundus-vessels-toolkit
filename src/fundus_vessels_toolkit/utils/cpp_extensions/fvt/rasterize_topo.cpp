@@ -4,9 +4,10 @@
 #include "branch.h"
 #include "ray_iterators.h"
 
-void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& root_nodes,
-                        const std::vector<torch::Tensor>& curves, const std::vector<torch::Tensor>& boundaries,
-                        int N_nodes, float bspline_interpolate, bool fill_junctions, torch::Tensor& branchLabelsMap,
+void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& branch_parents,
+                        const torch::Tensor& branch_dirs, std::vector<torch::Tensor> curves_tensor,
+                        std::vector<torch::Tensor> boundaries, const torch::Tensor& nodes_yx_tensor,
+                        float bspline_interpolate, bool fill_junctions, torch::Tensor& branchLabelsMap,
                         torch::Tensor& topoMap) {
     // Ensure the branchLabelsMap and topoMap are initialized correctly
     TORCH_CHECK(branchLabelsMap.dim() == 2 && topoMap.dim() == 2, "branchLabelsMap and topoMap must be 2D tensors.");
@@ -19,92 +20,171 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& r
     auto topoMapAcc = topoMap.accessor<float, 2>();
     IntPoint maxShape = {(int)branchLabelsMap.size(0), (int)branchLabelsMap.size(1)};
 
-    // Initialize the adjacency list for the topology
+    // === Initialize the adjacency list for the topology ===
     const auto& branchListAcc = branch_list.accessor<int, 2>();
+    const auto& branchParentsAcc = branch_parents.accessor<int, 1>();
+    const auto& branchDirsAcc = branch_dirs.accessor<bool, 1>();
     std::size_t N_branches = branchListAcc.size(0);
-    GraphAdjList adjList = edge_list_to_adjlist(branchListAcc, N_nodes);
+    auto [hierarchy, max_rank] = edge_list_to_hierarchy(branchListAcc, branchParentsAcc, branchDirsAcc);
 
-    // Traverse the graph starting from root branches
-    std::vector<int> branchRanks(N_branches);
-    std::vector<int> branchDirs(N_branches, 0);
-    auto rootNodesAcc = root_nodes.accessor<int, 1>();
-    std::stack<int> q;
-    for (std::size_t i = 0; i < (std::size_t)rootNodesAcc.size(0); i++) {
-        const int& rootNode = rootNodesAcc[i];
-        for (const auto& branch : adjList[rootNode]) {
-            if (branch.id == -1) continue;
-            q.push(branch.id);
-            branchRanks[branch.id] = 1;                                 // Initialize rank for the branch
-            branchDirs[branch.id] = branch.start == rootNode ? 1 : -1;  // Determine direction based on edge start
+    std::vector<std::list<int>> branchByRank(max_rank + 1);
+    for (std::size_t b = 0; b < N_branches; b++) branchByRank[hierarchy[b].rank].push_back(b);
+
+    // === Flip curves and boundaries according to branch direction ===
+    for (std::size_t b = 0; b < N_branches; b++) {
+        if (!branchDirsAcc[b]) {
+            curves_tensor[b] = curves_tensor[b].flip({0});
+            boundaries[b] = boundaries[b].flip({0, 1});
         }
     }
+    const auto& curves = tensors_to_curves(curves_tensor);
+    const auto& nodes_yx = tensor_to_curve(nodes_yx_tensor);
+
+    // === Compute Tips info ===
+    struct TipInfo {
+        IntPoint yx = IntPoint::Invalid();
+        Point t = {0, 0};
+        IntPointPair b = {IntPoint::Invalid(), IntPoint::Invalid()};
+        float w = -1;
+    };
+    std::vector<std::array<TipInfo, 2>> tips(N_branches);
+    for (auto branches = branchByRank.rbegin(); branches != branchByRank.rend(); ++branches) {
+        for (const int branchID : *branches) {
+            const CurveYX& curve = curves[branchID];
+            const auto& boundary = boundaries[branchID].accessor<int, 3>();
+            if (curve.size() == 0) continue;
+            for (const auto headTip : {0, 1}) {
+                std::size_t i = headTip ? curve.size() - 1 : 0;
+                tips[branchID][headTip].yx = curve[i];
+                IntPointPair b = {IntPoint(boundary[i][0]), IntPoint(boundary[i][1])};
+                float w = distance(b[0], b[1]);
+                Point t = adaptative_curve_tangent(curve, i, w, headTip == 0, headTip == 1).normalize();
+                tips[branchID][headTip].t = t;
+                tips[branchID][headTip].b = b;
+                tips[branchID][headTip].w = w;
+            }
+        }
+    }
+
+    // Infer missing tips
+    for (auto branches = branchByRank.rbegin(); branches != branchByRank.rend(); ++branches) {
+        for (const int branchID : *branches) {
+            auto &tailTip = tips[branchID][0], &headTip = tips[branchID][1];
+            const auto& branch = hierarchy[branchID];
+
+            if (headTip.w < 0 && !branch.children.empty()) {
+                // If missing head tip try to copy tail tip from child
+
+                if (branch.children.size() == 1) {
+                    // If only one child, copy its tip directly
+                    const auto& childTailTip = tips[branch.children[0]][0];
+                    if (childTailTip.w >= 0) headTip = childTailTip;
+                } else {
+                    // otherwise average tips from all children
+                    headTip.yx = nodes_yx[branch.head_node];  // set head position to node
+
+                    float w = 1.0;
+                    Point t = {0, 0};
+                    int child_N = 0;
+                    for (const int childID : branch.children) {
+                        const auto& childTailTip = tips[childID][0];
+                        if (childTailTip.w >= 0) {
+                            w *= childTailTip.w;
+                            const Point& t0 =
+                                infer_bezier_t0(headTip.yx, childTailTip.yx, -childTailTip.t) * childTailTip.w;
+                            t += t0;
+                            child_N++;
+                        }
+                    }
+                    if (child_N > 0) {
+                        headTip.w = child_N > 1 ? std::pow(w, 1.0 / child_N) : w;
+                        headTip.b = headTip.yx.left_right_pair(t, headTip.w * 0.5);
+                        // Leave tangent as zero (to not affect the drawn bezier curve )
+                    }
+                }
+            }
+
+            if (tailTip.w < 0) {  // If missing tail tip ...
+                if (branch.parent != -1 && tips[branch.parent][1].w >= 0) {
+                    // ... try to copy head tip from direct parent
+                    tailTip = tips[branch.parent][1];
+                } else if (headTip.w >= 0) {
+                    // ... or propagate from head tip
+                    tailTip.w = headTip.w;
+                    tailTip.yx = nodes_yx[branch.tail_node];  // set tail position to node
+                    // leave tangent as zero
+                    // Infer boundary points by estimating tangent with bezier cubic
+                    const auto& t = infer_bezier_t0(tailTip.yx, headTip.yx, -headTip.t);
+                    tailTip.b = tailTip.yx.left_right_pair(t, tailTip.w * 0.5);
+                }
+            }
+
+            // Not handled cases are:
+            //      - isolated branch
+            //      - no child (or without tip info) and missing tip info from direct parent
+            // In those cases, at least set tip position to node
+            if (!headTip.yx.is_valid()) headTip.yx = nodes_yx[branch.head_node];
+            if (!tailTip.yx.is_valid()) tailTip.yx = nodes_yx[branch.tail_node];
+        }
+    }
+
+    // === Draw the tree from root to leaves ===
+    std::stack<int> q;
+    for (const int branchID : branchByRank[0]) q.push(branchID);
 
     while (!q.empty()) {
         // Read branch info
         int branchID = q.top();
         q.pop();
-        int rank = branchRanks[branchID];
-        bool reversed = branchDirs[branchID] == -1;
-        int headNode = branchListAcc[branchID][reversed ? 0 : 1];
-
-        std::list<std::tuple<int, bool>> nextBranches;
-
-        // Iterate over the neighbors of the current branch
-        for (const auto& nextBranch : adjList[headNode]) {
-            // Skip the current branch or already visited branches
-            if (nextBranch.id == branchID || branchDirs[nextBranch.id] != 0) continue;
-
-            // Assign the neighbor branch rank and direction, and enqueue it
-            branchRanks[nextBranch.id] = rank + 1;
-            bool nextBranchReversed = nextBranch.start != headNode;
-            branchDirs[nextBranch.id] = nextBranchReversed ? -1 : 1;
-            q.push(nextBranch.id);
-            nextBranches.push_back({nextBranch.id, nextBranchReversed});
-        }
-
-        // Get the corresponding curve
+        const auto& branch = hierarchy[branchID];
         const auto& curve = curves[branchID];
-        if (curve.size(0) == 0) continue;
-
-        // Get the corresponding boundaries
         const auto& boundary = boundaries[branchID].accessor<int, 3>();
-        std::array<IntPoint, 2> headBounds;
-        if (!reversed) {
-            const auto last = boundary.size(0) - 1;
-            headBounds = {IntPoint(boundary[last][0]), IntPoint(boundary[last][1])};
-        } else {
-            headBounds = {IntPoint(boundary[0][1]), IntPoint(boundary[0][0])};
-        }
+        const auto N = curve.size();
 
-        // Rasterize the branch
-        _rasterize_branch_topo(curve, boundary, branchID + 1, rank, branchLabelsMapAcc, topoMapAcc, bspline_interpolate,
-                               reversed);
-
-        // Fill junctions
-        if (!fill_junctions) continue;
-        for (const auto& [nextBranchID, nextBranchReversed] : nextBranches) {
-            auto nextBoundariesAcc = boundaries[nextBranchID].accessor<int, 3>();
-            if (nextBoundariesAcc.size(0) == 0) continue;  // If the boundaries are empty, skip this filling
-
-            std::array<IntPoint, 2> nextBounds;
-            if (!nextBranchReversed) {
-                nextBounds = {IntPoint(nextBoundariesAcc[0][0]), IntPoint(nextBoundariesAcc[0][1])};
-            } else {
-                const auto last = nextBoundariesAcc.size(0) - 1;
-                nextBounds = {IntPoint(nextBoundariesAcc[last][1]), IntPoint(nextBoundariesAcc[last][0])};
-            }
-            continue;
-
-            // Draw the quad for the junction
-            auto it = QuadIterator(headBounds[0], headBounds[1], nextBounds[1], nextBounds[0], maxShape);
-            it.precomputeInvDiffNorms();
-            while (it.iter()) {
-                IntPoint p = it.point();
-                branchLabelsMapAcc[p.y][p.x] = branchID + 1;  // Use branchID + 1 to avoid zero
-                float topoValue = rank + 0.9 + 0.1 * it.fromP12toP34();
-                if (topoMapAcc[p.y][p.x] < topoValue) topoMapAcc[p.y][p.x] = topoValue;
+        // === DRAW THE BRANCH ===
+        auto drawTopo = [&](IntPoint pt, float u) {
+            branchLabelsMapAcc[pt.y][pt.x] = branchID + 1;
+            float topoValue = branch.rank + u;
+            if (topoMapAcc[pt.y][pt.x] < topoValue) topoMapAcc[pt.y][pt.x] = topoValue;
+        };
+        if (N != 0) {  // If the branch is not empty rasterize it
+            auto drawBranchTopo = [&](IntPoint pt, float u) { drawTopo(pt, 0.9 * u); };
+            rasterize_branch_topo(curve, boundary, drawBranchTopo, maxShape, bspline_interpolate);
+        } else {  // Otherwise draw bezier cubic interpolation
+            const auto &tailTip = tips[branchID][0], &headTip = tips[branchID][1];
+            if (tailTip.w >= 0 && headTip.w >= 0) {
+                rasterize_bezier(drawTopo, tailTip.yx, headTip.yx, tailTip.t, headTip.t, tailTip.b, headTip.b, 0.5,
+                                 maxShape);
             }
         }
+
+        // === FILL HEAD JUNCTION ===
+        if (fill_junctions) {
+            auto drawJunctionTopo = [&](IntPoint pt, float u) { drawTopo(pt, 0.9 + 0.1 * u); };
+
+            const auto& headTip = tips[branchID][1];
+            if (headTip.w < 0) continue;  // If the head tip is invalid, skip this filling
+
+            for (const auto& childID : branch.children) {
+                const auto& childTip = tips[childID][0];
+                if (childTip.w < 0) continue;  // If the child tip is invalid, skip this filling
+
+                if (distance(headTip.yx, childTip.yx) <= (headTip.w + childTip.w) && headTip.t.dot(childTip.t) > 0.5) {
+                    // If tips are close enough, draw a simple quad
+                    auto it = QuadIterator(headTip.b[0], headTip.b[1], childTip.b[1], childTip.b[0], maxShape);
+                    it.precomputeInvDiffNorms();
+                    while (it.iter()) drawJunctionTopo(it.point(), it.fromP12toP34());
+                } else {
+                    // Otherwise draw bezier cubic interpolation
+                    const IntPoint& node_yx = nodes_yx[branch.head_node];
+                    rasterize_bezier(drawJunctionTopo, {headTip.yx, node_yx, node_yx, childTip.yx}, headTip.b,
+                                     childTip.b, maxShape);
+                }
+            }
+        }
+
+        // Enqueue the branch's children
+        for (const auto& nextBranchID : branch.children) q.push(nextBranchID);
     }
 }
 
@@ -124,28 +204,41 @@ void rasterize_branch_topo(const torch::Tensor& curve, const torch::Tensor& boun
                 "curve must have shape [N, 2] and boundaries must have shape [N, 2, 2].");
     TORCH_CHECK(curve.size(0) == boundaries.size(0), "curve and boundaries must have the same first dimension size.");
 
-    return _rasterize_branch_topo(curve, boundaries.accessor<int, 3>(), branchID, branchRank,
-                                  branchLabelsMap.accessor<int, 2>(), topoMap.accessor<float, 2>(),
-                                  bspline_interpolate);
+    auto branchLabelsMapAcc = branchLabelsMap.accessor<int, 2>();
+    auto topoMapAcc = topoMap.accessor<float, 2>();
+    auto drawBranchTopo = [&](IntPoint pt, float u) {
+        branchLabelsMapAcc[pt.y][pt.x] = branchID;
+        float topoValue = branchRank + 0.9 * u;
+        if (topoMapAcc[pt.y][pt.x] < topoValue) topoMapAcc[pt.y][pt.x] = topoValue;
+    };
+
+    IntPoint maxShape = {(int)branchLabelsMap.size(0), (int)branchLabelsMap.size(1)};
+    const auto& curve_vec = tensor_to_curve(curve);
+
+    return rasterize_branch_topo(curve_vec, boundaries.accessor<int, 3>(), drawBranchTopo, maxShape,
+                                 bspline_interpolate);
 }
 
-void _rasterize_bezier(const IntPoint& p0, const IntPoint& p1, const IntPointPair& b0, const IntPointPair& b1,
-                       const Point& t0, const Point& t1, const IntPoint& maxShape, float bezier_smoothness,
-                       std::function<void(IntPoint, float)> updater) {
-    const float w0 = distance(b0[0], b0[1]), w1 = distance(b1[0], b1[1]);
+void rasterize_bezier(std::function<void(IntPoint, float)> updater, const IntPoint& p0, const IntPoint& p1,
+                      const Point& t0, const Point& t1, const IntPointPair& b0, const IntPointPair& b1,
+                      float bezier_smoothness, const IntPoint& maxShape) {
+    bezier_smoothness *= distance(Point(p0), Point(p1));
+    BezierCubic bezier = {Point(p0), Point(p0) + t0 * bezier_smoothness, Point(p1) - t1 * bezier_smoothness, Point(p1)};
+    rasterize_bezier(updater, bezier, b0, b1, maxShape);
+}
+
+void rasterize_bezier(std::function<void(IntPoint, float)> updater, const BezierCubic& bezier, const IntPointPair& b0,
+                      const IntPointPair& b1, const IntPoint& maxShape) {
+    const float w0 = std::max(distance(b0[0], b0[1]), 1.0f), w1 = std::max(distance(b1[0], b1[1]), 1.0f);
 
     // == Discretize Bezier ==
-    bezier_smoothness *= distance(Point(p0), Point(p1));
-
-    const BezierCubic bezier = {Point(p0), Point(p0) + t0 * bezier_smoothness, Point(p1) - t1 * bezier_smoothness,
-                                Point(p1)};
     auto [interpPoints, us] = discretizeBezier(bezier);
     auto tangents = evaluate_bezier_tangent(bezier, us);
     auto N = interpPoints.size();
 
     double u = 0.0f, nextU;
-    IntPoint p = interpPoints[0].toInt(), nextP;
-    Point t = t0, nextT;
+    IntPoint p = bezier[0].toInt(), nextP;
+    Point t = tangents[0].normalize(), nextT;
     float w = w0, nextW;
     IntPointPair b = b0, nextB;
 
@@ -155,18 +248,17 @@ void _rasterize_bezier(const IntPoint& p0, const IntPoint& p1, const IntPointPai
             nextP = interpPoints[i + 1].toInt();
             nextT = tangents[i + 1].normalize();
             nextW = lerp(w0, w1, nextU);
-            auto dB = (nextT.rot90() * (nextW / 2.0)).toInt();
-            nextB = {nextP + dB, nextP - dB};
+            nextB = nextP.left_right_pair(nextT, nextW * 0.5, true);
         } else {
-            nextP = p1;
-            nextT = t1;
+            nextP = bezier[3].toInt();
+            nextT = tangents[N - 1].normalize();
+            nextW = w1;
             nextB = b1;
         }
         updater(p, u);
-        auto externalError = t.angle(nextT) * w / 2.0;
+        auto externalError = t.angle(nextT) * w * 0.5;
         for (int lr = 0; lr < 2; ++lr) {  // Iterate over left and right quads
-            /// TODO: if t.dot(nextT)*W/2 is large, subdivide the exterior quad further
-            int lr_sign = 1 - lr * 2;  // +1 for left, -1 for right
+            int lr_sign = 1 - lr * 2;     // +1 for left, -1 for right
             if (externalError * lr_sign < 0 && std::ceil(std::abs(externalError)) > 1) {
                 // Subdivide exterior perimeter
                 int N_splits = std::ceil(std::abs(externalError));
@@ -201,49 +293,38 @@ void _rasterize_bezier(const IntPoint& p0, const IntPoint& p1, const IntPointPai
     }
 }
 
-void _rasterize_branch_topo(const torch::Tensor& curve_tensor, const Tensor3DAcc<int>& boundaries, int branchID,
-                            float rank, Tensor2DAcc<int> branchLabelsMap, Tensor2DAcc<float> topoMap,
-                            float bspline_interpolate, bool reverse) {
-    const IntPoint maxShape = {(int)branchLabelsMap.size(0), (int)branchLabelsMap.size(1)};
-    const auto curve = tensor_to_curve(curve_tensor);
-    int N = (int)curve.size();
+void rasterize_branch_topo(const CurveYX& curve, const Tensor3DAcc<int>& boundaries,
+                           std::function<void(IntPoint, float)> draw, const IntPoint& maxShape,
+                           float bspline_interpolate) {
+    auto N = curve.size();
 
-    long first = reverse ? N - 1 : 0, last = reverse ? 0 : N - 1;
-    long d_it = reverse ? -1 : 1;
-    IntPoint p = curve[first], nextP;
-    IntPointPair b = {boundaries[first][0], boundaries[first][1]}, nextB;
+    auto last = N - 1;
+    IntPoint p = curve[0];
+    IntPointPair b = {boundaries[0][0], boundaries[0][1]}, nextB;
 
-    for (int i = first; i != last; i += d_it) {
-        auto nextI = i + d_it;
-        IntPoint nextP = curve[nextI];
+    for (std::size_t i = 0; i != last; i++) {
+        auto nextI = i + 1;
+        const auto& nextP = curve[nextI];
         IntPointPair nextB = {boundaries[nextI][0], boundaries[nextI][1]};
 
-        auto drawTopo = [&](IntPoint pt, float u) {
-            branchLabelsMap[pt.y][pt.x] = branchID;
-            float topoValue = rank + 0.9 * (u + i) / N;
-            if (topoMap[pt.y][pt.x] < topoValue) topoMap[pt.y][pt.x] = topoValue;
-        };
+        auto localDraw = [&](IntPoint pt, float u) { draw(pt, (u + i) / N); };
 
         IntPoint diff = nextP - p;
         if (diff.squaredNorm() <= 9) {
             for (int lr = 0; lr < 2; ++lr) {
                 // Draw the center point
-                drawTopo(p, 0.0f);
+                localDraw(p, 0.0f);
 
                 // Iterate over left and right quads
                 QuadIterator it(p, b[lr], nextB[lr], nextP, maxShape);
                 it.precomputeInvDiffNorms();
-                while (it.iter()) drawTopo(it.point(), it.fromP12toP34());
+                while (it.iter()) localDraw(it.point(), it.fromP12toP34());
             }
         } else if (bspline_interpolate > 0.0f) {
             // Rasterize a bezier curve between p and nextP
-            Point t = adaptative_curve_tangent(curve, i, distance(b[0], b[1]), reverse, !reverse),
-                  nextT = adaptative_curve_tangent(curve, nextI, distance(nextB[0], nextB[1]), !reverse, reverse);
-            if (!reverse)
-                _rasterize_bezier(p, nextP, b, nextB, t, nextT, maxShape, bspline_interpolate, drawTopo);
-            else
-                _rasterize_bezier(p, nextP, {b[1], b[0]}, {nextB[1], nextB[0]}, -t, -nextT, maxShape,
-                                  bspline_interpolate, drawTopo);
+            Point t = adaptative_curve_tangent(curve, i, distance(b[0], b[1]), false, true),
+                  nextT = adaptative_curve_tangent(curve, nextI, distance(nextB[0], nextB[1]), true, false);
+            rasterize_bezier(localDraw, p, nextP, t, nextT, b, nextB, bspline_interpolate, maxShape);
         }
 
         // Move to the next point
@@ -266,7 +347,7 @@ torch::Tensor& rasterize_branch(const torch::Tensor& curveTensor, const torch::T
     TORCH_CHECK(outTensor.dtype() == torch::kInt, "out must be an integer tensor");
 
     // Prepare accessors and constants
-    const auto curve = tensor_to_curve(curveTensor);
+    const CurveYX& curve = tensor_to_curve(curveTensor);
     auto boundaries = boundariesTensor.accessor<int, 3>();
     auto out = outTensor.accessor<int, 2>();
 
@@ -293,8 +374,8 @@ torch::Tensor& rasterize_branch(const torch::Tensor& curveTensor, const torch::T
             Point t = adaptative_curve_tangent(curve, i, distance(b[0], b[1]), false, true),
                   nextT = adaptative_curve_tangent(curve, nextI, distance(nextB[0], nextB[1]), true, false);
 
-            _rasterize_bezier(p, nextP, b, nextB, t, nextT, maxShape, bspline_interpolate,
-                              [&](IntPoint pt, float u) { out[pt.y][pt.x] = fill_value; });
+            rasterize_bezier([&](IntPoint pt, float u) { out[pt.y][pt.x] = fill_value; }, p, nextP, t, nextT, b, nextB,
+                             bspline_interpolate, maxShape);
         }
 
         // Move to the next point

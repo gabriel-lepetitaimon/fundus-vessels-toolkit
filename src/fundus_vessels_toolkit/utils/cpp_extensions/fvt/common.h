@@ -111,6 +111,8 @@ struct IntPoint {
     IntPoint clamp(IntPoint max) const;
     IntPoint clamp(IntPoint min, IntPoint max) const;
 
+    std::array<IntPoint, 2> left_right_pair(const Point& direction, double distance, bool assume_unitary = false) const;
+
     Point normalize() const;
 
     friend std::ostream& operator<<(std::ostream& os, const IntPoint& p) {
@@ -139,6 +141,7 @@ struct Point {
     Point& operator=(const Point& p);
     Point& operator+=(const Point& p);
     Point& operator-=(const Point& p);
+    Point& operator*=(const double& f);
     Point& operator/=(const double& p);
     Point operator+(const Point& p) const;
     Point operator+(const IntPoint& p) const;
@@ -376,7 +379,7 @@ std::vector<torch::Tensor> vectors_to_tensors(const std::vector<std::vector<T>>&
     return tensors;
 }
 
-CurveYX tensor_to_curve(const torch::Tensor& tensor);
+CurveYX tensor_to_curve(const torch::Tensor& tensor, bool reverse = false);
 std::vector<CurveYX> tensors_to_curves(const std::vector<torch::Tensor>& tensors);
 std::vector<IntPair> tensor_to_vectorIntPair(const torch::Tensor& tensor);
 PointList tensor_to_pointList(const torch::Tensor& tensor);
@@ -403,9 +406,19 @@ struct Edge {
     bool is_first(int node) const;
 };
 
+struct HierarchyEdge {
+    int id;
+    int parent;
+    int head_node;
+    int tail_node;
+    int rank;
+    std::vector<int> children;
+};
+
 using EdgeList = std::vector<Edge>;
 using GraphAdjList = std::vector<std::set<Edge>>;
 using AdjList = std::vector<std::set<int>>;
+using Hierarchy = std::vector<HierarchyEdge>;
 #pragma omp declare reduction(merge : std::vector<Edge> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
 
 /**
@@ -421,7 +434,8 @@ GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N = -1,
                                   bool keep_orientation = true);
 GraphAdjList edge_list_to_adjlist(const EdgeList& edges, int N = -1, bool directed = false);
 GraphAdjList edge_list_to_adjlist(const Tensor2DAcc<int>& edges, int N = -1, bool directed = false);
-
+std::tuple<Hierarchy, int> edge_list_to_hierarchy(const Tensor2DAcc<int>& edges, const Tensor1DAcc<int>& edges_parent,
+                                                  const Tensor1DAcc<bool>& edge_dir);
 AdjList graph_adjlist_to_edge_adjlist(const GraphAdjList& adjlist, int N = -1);
 
 torch::Tensor edge_list_to_tensor(const EdgeList& vec);

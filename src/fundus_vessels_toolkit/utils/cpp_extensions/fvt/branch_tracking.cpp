@@ -276,12 +276,12 @@ std::list<SizePair> split_contiguous_curves(const CurveYX& curve) {
     if (curve.size() < 2) return {{0, curve.size()}};
 
     std::list<SizePair> curvesBoundaries;
-    std::size_t start = 0;
-    for (auto it = curve.begin() + 1; it != curve.end(); it++) {
-        auto const&& diff = *it - *(it - 1);
+    std::size_t start = 0, N = curve.size();
+    for (std::size_t i = 1; i < N; i++) {
+        auto const&& diff = curve[i] - curve[i - 1];
         if (abs(diff.x) > 1 || abs(diff.y) > 1) {
-            curvesBoundaries.push_back(SizePair{start, (std::size_t)(it - curve.begin())});
-            start = it - curve.begin();
+            curvesBoundaries.push_back(SizePair{start, i});
+            start = i;
         }
     }
     curvesBoundaries.push_back(SizePair{start, curve.size()});

@@ -29,6 +29,7 @@ class BezierCubic(NamedTuple):
     def from_array(cls, curve: npt.ArrayLike) -> BezierCubic:
         curve = np.asarray(curve, dtype=float)
         assert curve.shape == (4, 2), "BezierCubic must be defined with a 2D array of shape (4, 2)"
+        assert not np.isnan(curve).any(), "BezierCubic control points cannot be NaN"
         return cls(*[Point(float(p[0]), float(p[1])) for p in curve])
 
     def to_path(self, offset: Optional[Point] = None) -> str:

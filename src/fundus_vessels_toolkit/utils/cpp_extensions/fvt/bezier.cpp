@@ -180,6 +180,12 @@ PointList evaluate_bezier_tangent(const BezierCubic& bezCurve, const std::vector
     return curve;
 }
 
+Point infer_bezier_t0(const Point& p0, const Point& p1, const Point& t1, double smoothness) {
+    Point c1 = p1 + t1 * (distance(p1, p0) * smoothness);
+    Point t0 = evaluate_bezier_tangent({p0, p0, c1, p1}, {0.01})[0];
+    return t0;
+}
+
 /*
  *  ChordLengthParameterize :
  *	Assign parameter values to digitized points
@@ -250,7 +256,7 @@ void _recursiveDiscretizeBezier(const BezierCubic& curveSegment, double u_start,
                                 std::vector<double>& us) {
     // Check flatness
     const auto &p0 = curveSegment[0], p3 = curveSegment[3];
-    if (distanceSqr(p0, p3) <= 2 || _isFlatEnough(curveSegment)) {
+    if (distanceSqr(p0, p3) <= 6 || _isFlatEnough(curveSegment)) {
         // Add endpoint to the list
         points.push_back(p3);
         us.push_back(u_end);

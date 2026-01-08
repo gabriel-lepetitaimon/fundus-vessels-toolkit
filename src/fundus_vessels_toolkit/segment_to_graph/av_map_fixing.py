@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Literal, Optional, Self, Sequence, Tuple, overload
 
+from networkx import nodes
 import numpy as np
 import numpy.typing as npt
 from skimage.segmentation import expand_labels
@@ -46,14 +47,15 @@ def rasterize_tree_topology(
     geodata = tree.geometric_data(geodata_id)
     labels_map, topo_map = rasterize_topology(
         branch_list=tree.branch_list,
-        root_branches=tree.root_nodes_ids(),
+        branch_tree=tree.branch_tree,
+        branch_dirs=tree.branch_dirs(),
         curves=geodata.branch_curve(),
         boundaries=[
             _.data if _ is not None else np.empty((0, 2, 2), dtype=np.int_)
             for _ in geodata.branch_data(boundaries_field)
         ],
+        nodes_yx=geodata.node_coord(),
         shape=geodata.domain.shape,
-        node_count=tree.node_count,
         bezier_interpolate=bezier_interpolate,
         fill_junctions=fill_junctions,
     )
@@ -457,6 +459,12 @@ class TopologicalLabel(np.uint64):
     @property
     def branching_pattern(self) -> npt.NDArray[np.bool_]:
         return np.array([(self & np.uint64(1 << i)) != 0 for i in range(self.rank)], dtype=np.bool_)
+
+    def __repr__(self) -> str:
+        return f"TopologicalLabel(subtree={self.subtree}, rank={self.rank}, branching_pattern={self.branching_pattern.tolist()})"
+
+    def __str__(self) -> str:
+        return f"{self.subtree}-" + "".join(["1" if b else "0" for b in self.branching_pattern])
 
     def is_same_subtree(self, other: Self | np.int32) -> bool:
         """

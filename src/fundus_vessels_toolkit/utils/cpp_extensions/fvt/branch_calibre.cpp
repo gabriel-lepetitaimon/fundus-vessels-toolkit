@@ -1,13 +1,13 @@
 #include "branch.h"
 #include "ray_iterators.h"
 
-std::array<IntPoint, 2> fast_branch_boundaries(const CurveYX &curveYX, const std::size_t i,
-                                               const Tensor2DAcc<bool> &segmentation, const Point &tangent) {
+std::array<IntPoint, 2> fast_branch_boundaries(const CurveYX& curveYX, const std::size_t i,
+                                               const Tensor2DAcc<bool>& segmentation, const Point& tangent) {
     return track_nearest_edges(curveYX[i], tangent.rot90(), segmentation);
 }
 
-std::array<IntPoint, 2> fast_branch_boundaries(const CurveYX &curveYX, const std::size_t i,
-                                               const Tensor2DAcc<bool> &segmentation) {
+std::array<IntPoint, 2> fast_branch_boundaries(const CurveYX& curveYX, const std::size_t i,
+                                               const Tensor2DAcc<bool>& segmentation) {
     return fast_branch_boundaries(curveYX, i, segmentation, fast_curve_tangent(curveYX, i));
 }
 
@@ -23,10 +23,10 @@ std::array<IntPoint, 2> fast_branch_boundaries(const CurveYX &curveYX, const std
  *
  * @return A list of pairs of floats representing the left and right width at each point.
  */
-std::vector<std::array<IntPoint, 2>> fast_branch_boundaries(const CurveYX &curveYX,
-                                                            const Tensor2DAcc<bool> &segmentation,
-                                                            const std::vector<Point> &tangents,
-                                                            const std::vector<int> &evaluateAtID) {
+std::vector<std::array<IntPoint, 2>> fast_branch_boundaries(const CurveYX& curveYX,
+                                                            const Tensor2DAcc<bool>& segmentation,
+                                                            const std::vector<Point>& tangents,
+                                                            const std::vector<int>& evaluateAtID) {
     const std::size_t curveSize = curveYX.size();
     bool evaluateAll = evaluateAtID.size() == 0;
     const std::size_t outSize = evaluateAll ? curveSize : evaluateAtID.size();
@@ -39,7 +39,7 @@ std::vector<std::array<IntPoint, 2>> fast_branch_boundaries(const CurveYX &curve
     for (std::size_t pointI = 0; pointI < outSize; pointI++) {
         const std::size_t i = evaluateAll ? pointI : evaluateAtID[pointI];
         if (i < 0 || i >= curveSize) continue;
-        const Point &tangent = tangents[pointI];
+        const Point& tangent = tangents[pointI];
         boundaries[pointI] = fast_branch_boundaries(curveYX, i, segmentation, tangent);
     }
 
@@ -57,7 +57,7 @@ std::vector<std::array<IntPoint, 2>> fast_branch_boundaries(const CurveYX &curve
  *
  * @return A float representing the width at the point.
  */
-float fast_branch_calibre(const Point &boundL, const Point &boundR, const Point &tangent) {
+float fast_branch_calibre(const Point& boundL, const Point& boundR, const Point& tangent) {
     float dist = distance(boundL, boundR);
 
     // If the skeleton is diagonal, we take into account the neighbors pixels to compensate for the discretization
@@ -95,8 +95,8 @@ float fast_branch_calibre(const Point &boundL, const Point &boundR, const Point 
  *
  * @return A float representing the width at the point.
  */
-float fast_branch_calibre(const CurveYX &curveYX, std::size_t i, const Tensor2DAcc<bool> &segmentation,
-                          const Point &tangent) {
+float fast_branch_calibre(const CurveYX& curveYX, std::size_t i, const Tensor2DAcc<bool>& segmentation,
+                          const Point& tangent) {
     auto [boundL, boundR] = fast_branch_boundaries(curveYX, i, segmentation, tangent);
     if (!boundL.is_valid() || !boundR.is_valid()) return INVALID_CALIBRE;
     return fast_branch_calibre(boundL, boundR, tangent);
@@ -116,8 +116,8 @@ float fast_branch_calibre(const CurveYX &curveYX, std::size_t i, const Tensor2DA
  *
  * @return A list of floats representing the width at each point.
  */
-Scalars fast_branch_calibre(const CurveYX &curveYX, const Tensor2DAcc<bool> &segmentation,
-                            const std::vector<Point> &tangents, const std::vector<int> &evaluateAtID) {
+Scalars fast_branch_calibre(const CurveYX& curveYX, const Tensor2DAcc<bool>& segmentation,
+                            const std::vector<Point>& tangents, const std::vector<int>& evaluateAtID) {
     const std::size_t curveSize = curveYX.size();
     bool evaluateAll = evaluateAtID.size() == 0;
     const std::size_t outSize = evaluateAll ? curveSize : evaluateAtID.size();
@@ -147,8 +147,8 @@ Scalars fast_branch_calibre(const CurveYX &curveYX, const Tensor2DAcc<bool> &seg
  * @return A list of floats representing the width at each point.
  */
 
-Scalars fast_branch_calibre(const CurveYX &curveYX, const Tensor2DAcc<bool> &segmentation,
-                            const std::vector<int> &evaluateAtID) {
+Scalars fast_branch_calibre(const CurveYX& curveYX, const Tensor2DAcc<bool>& segmentation,
+                            const std::vector<int>& evaluateAtID) {
     return fast_branch_calibre(curveYX, segmentation, fast_curve_tangent(curveYX, TANGENT_HALF_GAUSS, evaluateAtID),
                                evaluateAtID);
 }
