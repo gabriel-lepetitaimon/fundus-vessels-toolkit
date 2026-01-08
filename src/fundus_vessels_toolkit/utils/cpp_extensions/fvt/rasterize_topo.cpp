@@ -177,8 +177,11 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
                 } else {
                     // Otherwise draw bezier cubic interpolation
                     const IntPoint& node_yx = nodes_yx[branch.head_node];
-                    rasterize_bezier(drawJunctionTopo, {headTip.yx, node_yx, node_yx, childTip.yx}, headTip.b,
-                                     childTip.b, maxShape);
+                    double d = distance(Point(headTip.yx), Point(childTip.yx));
+                    const Point c0 = headTip.yx + headTip.t * d;    // distance(Point(headTip.yx), Point(node_yx));
+                    const Point c1 = childTip.yx - childTip.t * d;  // distance(Point(childTip.yx), Point(node_yx));
+                    rasterize_bezier(drawJunctionTopo, {headTip.yx, c0, c1, childTip.yx}, headTip.b, childTip.b,
+                                     maxShape);
                 }
             }
         }
