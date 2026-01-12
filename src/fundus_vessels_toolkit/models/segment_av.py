@@ -104,6 +104,7 @@ def segment_av(
     *,
     model: SegmentAVModels = SegmentAVModel.MULTILABEL_FUNDUS,
     device: DeviceLikeType | Literal["auto"] = "auto",
+    ignore_segmentation: bool = False,
 ) -> torch.Tensor:
     """
     Segments the fundus image using the specified model.
@@ -153,13 +154,23 @@ def segment_av(
 
     # --- Convert probabilities to labels ---
     if SegmentAVModel.is_multilabel(model):
-        a_map = y_proba[..., 2, :, :] > 0.5  # Artery
-        v_map = y_proba[..., 1, :, :] > 0.5  # Vein
-        av_pred = (a_map * 1 + v_map * 2).to(torch.uint8)
+        a_map = y_proba[..., 2, :, :]  # Artery
+        v_map = y_proba[..., 1, :, :]  # Vein
+        if ignore_segmentation:
+            av_pred = torch.ones_like(a_map, dtype=torch.uint8)  # Artery by default
+            av_pred[v_map > a_map] = 2  # Vein
+            av_pred[abs(v_map - a_map) < 0.05] = 3  # Unknown
+        else:
+            av_pred = ((a_map > 0.5) * 1 + (v_map > 0.5) * 2).to(torch.uint8)
     else:
-        av_lookup = torch.tensor([0, 2, 1], device=y_proba.device, dtype=torch.uint8)  # Background, Vein, Artery
-        av_pred = y_proba.argmax(-3).int()
-        av_pred = av_lookup[av_pred.flatten()].reshape(av_pred.shape)
+        if ignore_segmentation:
+            av_pred = torch.ones_like(y_proba[..., 0, :, :], dtype=torch.uint8)  # Artery by default
+            av_pred[y_proba[..., 2, :, :] > y_proba[..., 1, :, :]] = 2  # Vein
+            av_pred[abs(y_proba[..., 2, :, :] - y_proba[..., 1, :, :]) < 0.05] = 3  # Unknown
+        else:
+            av_lookup = torch.tensor([0, 2, 1], device=y_proba.device, dtype=torch.uint8)  # Background, Vein, Artery
+            av_pred = y_proba.argmax(-3).int()
+            av_pred = av_lookup[av_pred.flatten()].reshape(av_pred.shape)
 
     return av_pred
 
