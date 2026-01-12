@@ -11,7 +11,9 @@ from jppype import Mosaic, vscode_theme
 
 from fundus_odmac_toolkit.models.segmentation import segment
 from fundus_toolkits import FundusData
-from fundus_vessels_toolkit.pipelines.avseg_to_tree import NaiveAVSegToTree
+from fundus_vessels_toolkit.models import segment_av
+from fundus_vessels_toolkit.models.segment_av import SegmentAVModel, segment_av_model, segment_av_pre_postprocessing
+from fundus_vessels_toolkit.pipelines.avseg_to_tree import GNNAVSegToTree, NaiveAVSegToTree
 from fundus_vessels_toolkit.segment_to_graph.av_map_fixing import TopologicalLabel, rasterize_tree_topology
 from fundus_vessels_toolkit.segment_to_graph.av_tree_parsing import naive_infer_roots
 from fundus_vessels_toolkit.segment_to_graph.graph_simplification import simplify_passing_nodes
@@ -72,7 +74,7 @@ class ReviewTool:
         raw_path: Path,
         av_path: Path,
         save_path: Path,
-        index: int | None = None,
+        index: int | str | None = None,
         *,
         raw_ext="png",
         av_ext="png",
@@ -83,11 +85,10 @@ class ReviewTool:
         self.raw_path = Path(raw_path)
         self.av_path = Path(av_path)
         self.save_path = Path(save_path)
-        self.raw_ext = raw_ext
-        self.av_ext = av_ext
-
-        img_names = {_.stem for _ in self.raw_path.glob(f"*.{raw_ext}")} & {
-            _.stem for _ in self.av_path.glob(f"*.{av_ext}")
+        self.raw_ext = raw_ext if "." in raw_ext else "." + raw_ext
+        self.av_ext = av_ext if "." in av_ext else "." + av_ext
+        img_names = {_.name[: -len(self.raw_ext)] for _ in self.raw_path.glob(f"*{self.raw_ext}")} & {
+            _.name[: -len(self.av_ext)] for _ in self.av_path.glob(f"*{self.av_ext}")
         }
         assert len(img_names) > 0, (
             "No images found in the specified directories:\n" + f"{self.raw_path}, {self.av_path}"
@@ -95,6 +96,7 @@ class ReviewTool:
         self.img_names = sorted(list(img_names))
         self.current_index = 0
         self.av2tree = av2tree or NaiveAVSegToTree(mask_optic_disc=False)
+        self.av2tree_pred = GNNAVSegToTree()
 
         self.mosaic = Mosaic((2, 3), rows_titles=["Art", "Vei"], cell_height=height // 2)
         self.mosaic[0, 1].on_click(partial(self.handle_click, artery=True))
@@ -112,8 +114,10 @@ class ReviewTool:
 
         # Annotation State
         self.debug_info = {}
-        self.trees_topology = [None, None]
+        self.trees_topo_maps = [None, None]
+        self.trees_from_av: None | tuple[VTree, VTree] = None
         self._fundus: FundusData | None = None
+        self._av_pred: bool = False
         self.img_name: str = ""
 
         self._states: list[AnnotationState] = []
@@ -128,6 +132,12 @@ class ReviewTool:
                     break
             else:
                 index = 0
+        elif isinstance(index, str):
+            if index.endswith(f".{self.raw_ext}"):
+                index = index[: -len(self.raw_ext) - 1]
+            if index not in self.img_names:
+                raise ValueError(f"Image {index} not found in the dataset.")
+            index = self.img_names.index(index)
         self.load(index)
 
     def widget(self) -> GridBox:
@@ -187,12 +197,19 @@ class ReviewTool:
         self.current_index = index
         self.label.value = f"{img_name} ({index + 1}/{len(self.img_names)})"
 
-        fundus = FundusData(
-            image=self.raw_path / (img_name + "." + self.raw_ext),
-            av=self.av_path / (img_name + "." + self.av_ext),
-        )
+        fundus = FundusData(image=self.raw_path / (img_name + self.raw_ext))
+        try:
+            fundus = fundus.update(av=FundusData.load_av(self.av_path / (img_name + self.av_ext), ensure_valid_av=True))
+            self._av_pred = False
+        except ValueError as e:
+            vessels = FundusData.load_vessels(self.av_path / (img_name + self.av_ext))
+            av = segment_av(fundus.image, ignore_segmentation=True)
+            av *= vessels
+            fundus = fundus.update(av=av)
+            self._av_pred = True
+
         # segment_od_mac(fundus)
-        od_mac = segment(open_image(self.raw_path / (img_name + "." + self.raw_ext))).numpy(force=True).argmax(axis=0)
+        od_mac = segment(open_image(self.raw_path / (img_name + self.raw_ext))).numpy(force=True).argmax(axis=0)
         fundus = fundus.update(od=od_mac == 1, macula=od_mac == 2, reshape_method="resize")
         self._fundus = fundus
 
@@ -211,6 +228,7 @@ class ReviewTool:
         self.mosaic[1, 0].add_label(fundus.av, "AV", opacity=0.5, colormap=COLORS)
 
         # Load or compute trees
+        self.trees_from_av = (self.av2tree_pred if self._av_pred else self.av2tree)(self.fundus)
         self.load_saved_trees(draw=False)
         self.draw_trees()
 
@@ -229,11 +247,12 @@ class ReviewTool:
         return trees
 
     def load_trees_from_av(self, draw=True) -> tuple[VTree, VTree]:
-        trees = self.av2tree(self.fundus)
-        self.reset_annotation_states(trees)
+        if self.trees_from_av is None:
+            self.trees_from_av = (self.av2tree_pred if self._av_pred else self.av2tree)(self.fundus)
+        self.reset_annotation_states(self.trees_from_av)
         if draw:
             self.draw_trees()
-        return trees
+        return self.trees_from_av
 
     def save_trees(self, sanity_check=True):
         art_file = self.save_path / f"{self.img_name}_art.npz"
@@ -269,19 +288,10 @@ class ReviewTool:
 
     def draw_trees(self, which: Literal["artery", "vein", "both"] = "both"):
         if which in ("artery", "both"):
-            draw_tree(
-                self.trees[0], view=self.mosaic[0, 1], artery=True, bspline_dir=True, edge_labels=True, node_labels=True
-            )
+            draw_tree(self.trees[0], view=self.mosaic[0, 1], artery=True, bspline_dir=True)
             draw_tree(self.trees[0], name="art", view=self.mosaic[1, 0], artery=True)
         if which in ("vein", "both"):
-            draw_tree(
-                self.trees[1],
-                view=self.mosaic[1, 1],
-                artery=False,
-                bspline_dir=True,
-                edge_labels=True,
-                node_labels=True,
-            )
+            draw_tree(self.trees[1], view=self.mosaic[1, 1], artery=False, bspline_dir=True)
             draw_tree(self.trees[1], name="vein", view=self.mosaic[1, 0], artery=False)
 
         for i, tree in enumerate(self.trees):
@@ -289,7 +299,7 @@ class ReviewTool:
                 continue
 
             label_map, topo_map = rasterize_tree_topology(tree)
-            self.trees_topology[i] = label_map, topo_map
+            self.trees_topo_maps[i] = label_map, topo_map
             subtree_map = TopologicalLabel.decode_subtree(label_map)
             N_subtree = int(subtree_map.max()) + 1
             color_map = np.zeros(self.fundus.shape + (3,), dtype=np.float32)
@@ -312,10 +322,10 @@ class ReviewTool:
 
     def print_topo_info(self, event, art):
         y, x = int(event["y"]), int(event["x"])
-        if self.trees_topology[art] is None:
+        if self.trees_topo_maps[art] is None:
             return
-        topo = str(TopologicalLabel(self.trees_topology[art][0][y, x])).ljust(10)
-        d = self.trees_topology[art][1][y, x]
+        topo = str(TopologicalLabel(self.trees_topo_maps[art][0][y, x])).ljust(10)
+        d = self.trees_topo_maps[art][1][y, x]
         with self.debug_output:
             print(f"({y}, {x}): {topo:}, d={d:.4f}")
 
@@ -408,6 +418,9 @@ class ReviewTool:
             if event["button"] == 0 and event["modifiers"] == ["shift"]:  # Left click + Shift
                 if not self.add_node(tree, yx, ctx):
                     modified_tree = "none"
+            elif event["button"] == 0 and event["modifiers"] == ["ctrl"]:  # Left click + Ctrl
+                if not self.add_branch_from_av(tree, yx, ctx):
+                    modified_tree = "none"
             elif event["button"] == 2 and event["modifiers"] == []:  # Right click
                 if not self.simplify_nodes(tree, yx):
                     modified_tree = "none"
@@ -449,13 +462,23 @@ class ReviewTool:
             roots_pos.append([t.node_coord()[n.id] if n.is_valid() else None for n in c.force_roots])
         self.debug_info["new_roots_pos"] = roots_pos
 
-    def add_node(self, tree, yx, ctx) -> bool:
+    def add_node(self, tree: VTree, yx: tuple[int, int], ctx: AnnotationContext) -> bool:
         branch_id, dist, curve_id = self._closest_branch(tree, yx)
         if dist > 20:
             return False
 
         tree.split_branch(branch_id, curve_id, split_coord=yx, inplace=True)
         self.infer_roots(tree, ctx, inplace=True)
+        return True
+
+    def add_branch_from_av(self, tree: VTree, yx: tuple[int, int], ctx: AnnotationContext) -> bool:
+        art = 0 if tree == self.state.trees[0] else 1
+        av_tree = self.trees_from_av[art]
+        branch_id, dist, _ = self._closest_branch(av_tree, yx)
+        if dist > 20:
+            return False
+
+        tree.append(av_tree.subtree(branch_id), inplace=True)
         return True
 
     def connect_branches(self, tree, yx, ctx, artery) -> Literal["invalid", "selected", "connected"]:
@@ -536,7 +559,7 @@ class ReviewTool:
         subtree = tree.subtree(branch_id)
 
         # Add to other tree
-        other_tree.append_graph(subtree, inplace=True)
+        other_tree.append(subtree, inplace=True)
         self.infer_roots(other_tree, other_ctx, inplace=True)
 
         # Remove from current tree
