@@ -18,6 +18,7 @@ dependencies = [
 
     'pygmtools',
     'networkx>=3.1',
+    'ortools',
 
     'torch>=2.0.0',
     'segmentation-models-pytorch',
