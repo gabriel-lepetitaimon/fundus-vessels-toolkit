@@ -31,11 +31,14 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
     for (std::size_t b = 0; b < N_branches; b++) branchByRank[hierarchy[b].rank].push_back(b);
 
     // === Flip curves and boundaries according to branch direction ===
+    std::vector<Tensor3DAcc<int>> boundariesAcc;
+    boundariesAcc.reserve(boundaries.size());
     for (std::size_t b = 0; b < N_branches; b++) {
         if (!branchDirsAcc[b]) {
             curves_tensor[b] = curves_tensor[b].flip({0});
             boundaries[b] = boundaries[b].flip({0, 1});
         }
+        boundariesAcc.push_back(boundaries[b].accessor<int, 3>());
     }
     const auto& curves = tensors_to_curves(curves_tensor);
     const auto& nodes_yx = tensor_to_curve(nodes_yx_tensor);
@@ -51,7 +54,7 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
     for (auto branches = branchByRank.rbegin(); branches != branchByRank.rend(); ++branches) {
         for (const int branchID : *branches) {
             const CurveYX& curve = curves[branchID];
-            const auto& boundary = boundaries[branchID].accessor<int, 3>();
+            const auto& boundary = boundariesAcc[branchID];
             if (curve.size() == 0) continue;
             for (const auto headTip : {0, 1}) {
                 std::size_t i = headTip ? curve.size() - 1 : 0;
@@ -129,65 +132,70 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
     }
 
     // === Draw the tree from root to leaves ===
-    std::stack<int> q;
-    for (const int branchID : branchByRank[0]) q.push(branchID);
+    const std::vector<int> roots(branchByRank[0].begin(), branchByRank[0].end());
+#pragma omp parallel for schedule(dynamic)
+    for (const int root : roots) {
+        std::stack<int> q;
+        q.push(root);
 
-    while (!q.empty()) {
-        // Read branch info
-        int branchID = q.top();
-        q.pop();
-        const auto& branch = hierarchy[branchID];
-        const auto& curve = curves[branchID];
-        const auto& boundary = boundaries[branchID].accessor<int, 3>();
-        const auto N = curve.size();
+        while (!q.empty()) {
+            // Read branch info
+            int branchID = q.top();
+            q.pop();
+            const auto& branch = hierarchy[branchID];
+            const auto& curve = curves[branchID];
+            const auto& boundary = boundariesAcc[branchID];
+            const auto N = curve.size();
 
-        // === DRAW THE BRANCH ===
-        auto drawTopo = [&](IntPoint pt, float u) {
-            branchLabelsMapAcc[pt.y][pt.x] = branchID + 1;
-            float topoValue = branch.rank + u;
-            if (topoMapAcc[pt.y][pt.x] < topoValue) topoMapAcc[pt.y][pt.x] = topoValue;
-        };
-        if (N != 0) {  // If the branch is not empty rasterize it
-            auto drawBranchTopo = [&](IntPoint pt, float u) { drawTopo(pt, 0.9 * u); };
-            rasterize_branch_topo(curve, boundary, drawBranchTopo, maxShape, bspline_interpolate);
-        } else {  // Otherwise draw bezier cubic interpolation
-            const auto &tailTip = tips[branchID][0], &headTip = tips[branchID][1];
-            if (tailTip.w >= 0 && headTip.w >= 0) {
-                rasterize_bezier(drawTopo, tailTip.yx, headTip.yx, tailTip.t, headTip.t, tailTip.b, headTip.b, 0.5,
-                                 maxShape);
-            }
-        }
-
-        // === FILL HEAD JUNCTION ===
-        if (fill_junctions) {
-            auto drawJunctionTopo = [&](IntPoint pt, float u) { drawTopo(pt, 0.9 + 0.1 * u); };
-
-            const auto& headTip = tips[branchID][1];
-            if (headTip.w < 0) continue;  // If the head tip is invalid, skip this filling
-
-            for (const auto& childID : branch.children) {
-                const auto& childTip = tips[childID][0];
-                if (childTip.w < 0) continue;  // If the child tip is invalid, skip this filling
-
-                if (distance(headTip.yx, childTip.yx) <= (headTip.w + childTip.w) && headTip.t.dot(childTip.t) > 0.5) {
-                    // If tips are close enough, draw a simple quad
-                    auto it = QuadIterator(headTip.b[0], headTip.b[1], childTip.b[1], childTip.b[0], maxShape);
-                    it.precomputeInvDiffNorms();
-                    while (it.iter()) drawJunctionTopo(it.point(), it.fromP12toP34());
-                } else {
-                    // Otherwise draw bezier cubic interpolation
-                    const IntPoint& node_yx = nodes_yx[branch.head_node];
-                    double d = distance(Point(headTip.yx), Point(childTip.yx)) * 0.5;
-                    const Point c0 = headTip.yx + headTip.t * d;    // distance(Point(headTip.yx), Point(node_yx));
-                    const Point c1 = childTip.yx - childTip.t * d;  // distance(Point(childTip.yx), Point(node_yx));
-                    rasterize_bezier(drawJunctionTopo, {headTip.yx, c0, c1, childTip.yx}, headTip.b, childTip.b,
+            // === DRAW THE BRANCH ===
+            auto drawTopo = [&](IntPoint pt, float u) {
+                branchLabelsMapAcc[pt.y][pt.x] = branchID + 1;
+                float topoValue = branch.rank + u;
+                if (topoMapAcc[pt.y][pt.x] < topoValue) topoMapAcc[pt.y][pt.x] = topoValue;
+            };
+            if (N != 0) {  // If the branch is not empty rasterize it
+                auto drawBranchTopo = [&](IntPoint pt, float u) { drawTopo(pt, 0.9 * u); };
+                rasterize_branch_topo(curve, boundary, drawBranchTopo, maxShape, bspline_interpolate);
+            } else {  // Otherwise draw bezier cubic interpolation
+                const auto &tailTip = tips[branchID][0], &headTip = tips[branchID][1];
+                if (tailTip.w >= 0 && headTip.w >= 0) {
+                    rasterize_bezier(drawTopo, tailTip.yx, headTip.yx, tailTip.t, headTip.t, tailTip.b, headTip.b, 0.5,
                                      maxShape);
                 }
             }
-        }
 
-        // Enqueue the branch's children
-        for (const auto& nextBranchID : branch.children) q.push(nextBranchID);
+            // === FILL HEAD JUNCTION ===
+            if (fill_junctions) {
+                auto drawJunctionTopo = [&](IntPoint pt, float u) { drawTopo(pt, 0.9 + 0.1 * u); };
+
+                const auto& headTip = tips[branchID][1];
+                if (headTip.w < 0) continue;  // If the head tip is invalid, skip this filling
+
+                for (const auto& childID : branch.children) {
+                    const auto& childTip = tips[childID][0];
+                    if (childTip.w < 0) continue;  // If the child tip is invalid, skip this filling
+
+                    if (distance(headTip.yx, childTip.yx) <= (headTip.w + childTip.w) &&
+                        headTip.t.dot(childTip.t) > 0.5) {
+                        // If tips are close enough, draw a simple quad
+                        auto it = QuadIterator(headTip.b[0], headTip.b[1], childTip.b[1], childTip.b[0], maxShape);
+                        it.precomputeInvDiffNorms();
+                        while (it.iter()) drawJunctionTopo(it.point(), it.fromP12toP34());
+                    } else {
+                        // Otherwise draw bezier cubic interpolation
+                        // const IntPoint& node_yx = nodes_yx[branch.head_node];
+                        double d = distance(Point(headTip.yx), Point(childTip.yx)) * 0.5;
+                        const Point c0 = headTip.yx + headTip.t * d;    // distance(Point(headTip.yx), Point(node_yx));
+                        const Point c1 = childTip.yx - childTip.t * d;  // distance(Point(childTip.yx), Point(node_yx));
+                        rasterize_bezier(drawJunctionTopo, {headTip.yx, c0, c1, childTip.yx}, headTip.b, childTip.b,
+                                         maxShape);
+                    }
+                }
+            }
+
+            // Enqueue the branch's children
+            for (const auto& nextBranchID : branch.children) q.push(nextBranchID);
+        }
     }
 }
 
@@ -253,6 +261,7 @@ void rasterize_bezier(std::function<void(IntPoint, float)> updater, const Bezier
             nextW = lerp(w0, w1, nextU);
             nextB = nextP.left_right_pair(nextT, nextW * 0.5, true);
         } else {
+            nextU = 1.0f;
             nextP = bezier[3].toInt();
             nextT = tangents[N - 1].normalize();
             nextW = w1;
