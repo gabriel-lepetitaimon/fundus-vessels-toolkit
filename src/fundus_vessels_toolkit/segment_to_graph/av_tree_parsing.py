@@ -191,7 +191,7 @@ def assign_av_label(
                     # Insert branches in the graph
                     new_branches = np.arange(graph.branch_count, graph.branch_count + g.branch_count)
                     new_nodes = np.arange(graph.node_count, graph.node_count + g.node_count)
-                    graph.append_graph(g, inplace=True)
+                    graph.append(g, inplace=True)
                     graph.node_attr.loc[new_nodes, av_attr] = av_label
                     graph.branch_attr.loc[new_branches, av_attr] = av_label
 

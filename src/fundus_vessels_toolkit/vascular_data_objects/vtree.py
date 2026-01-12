@@ -1454,6 +1454,49 @@ class VTree(VGraph):
         super(tree.__class__, tree).reindex_nodes(indices, inverse_lookup=inverse_lookup, inplace=True)  # type: ignore
         return tree
 
+    def append(self, other: VGraph, *, inplace=False) -> Self:
+        """Append another tree to this tree.
+
+        Parameters
+        ----------
+        other : VTree
+            The tree to append.
+
+        inplace : bool, optional
+            If True (by default), the tree is modified in place. Otherwise, a new tree is returned.
+
+        Returns
+        -------
+        VTree
+            The modified tree.
+        """
+        if not inplace:
+            return self.copy().append(other, inplace=True)
+
+        N_branch = self.branch_count
+        super(self.__class__, self).append(other, inplace=True)  # type: ignore
+
+        if not isinstance(other, VTree):
+            from fundus_vessels_toolkit.segment_to_graph.av_tree_parsing import naive_infer_roots
+
+            if (
+                (fundus := self.geometric_data().fundus_data) is not None
+                and fundus.has_od
+                and fundus.od_center is not None
+            ):
+                root_pos = fundus.od_center
+            else:
+                root_pos = self.geometric_data().domain.center
+            other = naive_infer_roots(other, root_pos=root_pos)
+
+        self._branch_tree = np.concatenate([self._branch_tree, other._branch_tree + N_branch])
+        if self._branch_dir is None and other._branch_dir is None:
+            pass
+        else:
+            self._branch_dir = np.concatenate([self.branch_dirs(), other.branch_dirs()])
+
+        return self
+
     def flip_branch_to_tree_dir(self, inplace=False) -> VTree:
         """Flip the direction of the branches to match the tree structure.
 

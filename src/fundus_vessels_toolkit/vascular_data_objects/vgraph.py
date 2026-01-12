@@ -1879,7 +1879,7 @@ class VGraph:
     ####################################################################################################################
     #  === GRAPH MANIPULATION ===
     ####################################################################################################################
-    def append_graph(self, other: Self, *, inplace=False) -> Self:
+    def append(self, other: VGraph, *, inplace=False) -> Self | tuple[Self, npt.NDArray[np.int32]]:
         """Append another graph to this one.
 
         Parameters
@@ -1897,7 +1897,7 @@ class VGraph:
 
         """
         if not inplace:
-            return self.copy().append_graph(other, inplace=True)
+            return self.copy().append(other, inplace=True)
 
         # Update branch list and node count
         self._branch_list = np.vstack((self._branch_list, other._branch_list + self._node_count))
