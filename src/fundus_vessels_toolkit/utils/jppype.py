@@ -163,9 +163,11 @@ def draw_graph(
         The attribute to use for coloring the vessels.
     """
     layer = graph.jppype_layer(edge_labels=edge_labels, node_labels=node_labels, bspline=True)
+    if av_attr is None:
+        av_attr = "av"
     if av_attr:
         if av_attr in graph.node_attr:
-            layer.nodes_cmap = graph.node_attr[av_attr].map(AV_COLORS).to_dict()
+            layer.nodes_cmap = graph.node_attr[av_attr].fillna(0).map(AV_COLORS).to_dict()
         if av_attr in graph.branch_attr:
-            layer.edges_cmap = graph.branch_attr[av_attr].map(AV_COLORS).to_dict()
+            layer.edges_cmap = graph.branch_attr[av_attr].fillna(0).map(AV_COLORS).to_dict()
     view["vessel_graph"] = layer
