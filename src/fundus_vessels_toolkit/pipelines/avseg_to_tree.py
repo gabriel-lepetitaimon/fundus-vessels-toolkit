@@ -161,7 +161,7 @@ class AVSegToTree(AVSegToTreeBase):
         npt.NDArray[np.int_],
         npt.NDArray[np.float64],
     ]:
-        from ..segment_to_graph.line_digraph_solving import build_line_digraph
+        from ..segment_to_graph.branch_digraph_heuristic_solver import build_line_digraph
 
         return build_line_digraph(graph, fundus_data, av_attr=self.av_attr, inplace=inplace)
 
@@ -174,7 +174,7 @@ class AVSegToTree(AVSegToTreeBase):
         line_through_node: npt.NDArray[np.int_],
         branches_dir_p: npt.NDArray[np.float64],
     ) -> VTree:
-        from ..segment_to_graph.line_digraph_solving import resolve_digraph_to_vtree
+        from ..segment_to_graph.branch_digraph_heuristic_solver import resolve_digraph_to_vtree
 
         vtree = resolve_digraph_to_vtree(
             vgraph, line_list, line_tips, line_probability, line_through_node, branches_dir_p
@@ -278,7 +278,7 @@ class GNNAVSegToTree(AVSegToTree):
         npt.NDArray[np.int_],
         npt.NDArray[np.float64],
     ]:
-        from ..segment_to_graph.line_digraph_solving import build_line_digraph
+        from ..segment_to_graph.branch_digraph_heuristic_solver import build_line_digraph
 
         return build_line_digraph(graph, fundus_data, av_attr=self.av_attr, inplace=inplace)
 
@@ -291,7 +291,7 @@ class GNNAVSegToTree(AVSegToTree):
         line_through_node: npt.NDArray[np.int_],
         branches_dir_p: npt.NDArray[np.float64],
     ) -> VTree:
-        from ..segment_to_graph.line_digraph_solving import resolve_digraph_to_vtree
+        from ..segment_to_graph.branch_digraph_heuristic_solver import resolve_digraph_to_vtree
 
         vtree = resolve_digraph_to_vtree(
             vgraph, line_list, line_tips, line_probability, line_through_node, branches_dir_p

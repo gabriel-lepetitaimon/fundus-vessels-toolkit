@@ -738,6 +738,52 @@ def find_reconnection_candidates(
     return np.concatenate(intercepts_with_nodes, axis=0)
 
 
+def find_facing_tips(
+    graph: VGraph,
+    max_distance: float = 100,
+    max_angle: float = 30,
+    tangent: VBranchGeoData.Key = VBranchGeoData.Fields.TIPS_TANGENT,
+) -> npt.NDArray[np.int_]:
+    """
+    Find pairs of tips that are facing each other.
+    Parameters
+    ----------
+    graph: VGraph
+        The vasculature graph.
+
+    max_distance: float
+        The maximum distance between the two tips.
+
+    max_angle: float
+        The maximum angle between the two tips tangents.
+
+    tangent: VBranchGeoData.Key | npt.NDArray[np.float64]
+        The tangent field to use to find the facing tips.
+
+    Returns
+    -------
+    facing_tips: npt.NDArray[np.int]
+        An (E, 4) array where each row contains the indices of two tips as [b0, b0_tip, b1, b1_tip] where b0 and b1 are the branch indices and b0_tip and b1_tip are 0 for the first tip and 1 for the second tip of the branch.
+    """  # noqa: E501
+    geodata = graph.geometric_data()
+    tips_pos = geodata.tip_coord().astype(np.float_).reshape(-1, 2)  # [branch_id x (tip0, tip1), (y,x)]
+    tips_tan = geodata.tip_tangent(attr=tangent).reshape(-1, 2)  # [branch_id x (tip0, tip1), (y,x)]
+
+    close_enough = np.square(tips_pos[:, None, :] - tips_pos[None, :, :]).sum(axis=2) <= max_distance * max_distance
+    facing = (tips_tan[:, None, :] * tips_tan[None, :, :]).sum(axis=2) <= np.cos(np.deg2rad(max_angle))
+
+    facing_tips = close_enough & facing & np.triu(np.ones_like(close_enough, dtype=bool), k=1)
+    facing_tips_id = np.argwhere(facing_tips)
+    return np.stack(
+        [
+            facing_tips_id[:, 0] // 2,
+            facing_tips_id[:, 0] % 2,
+            facing_tips_id[:, 1] // 2,
+            facing_tips_id[:, 1] % 2,
+        ]
+    ).T
+
+
 def find_branch_intercepts(
     graph: VGraph,
     yx: npt.NDArray[np.float32],

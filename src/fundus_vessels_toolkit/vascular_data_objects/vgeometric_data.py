@@ -1287,7 +1287,7 @@ class VGeometricData:
             - If an array of bool, return the coordinates of the first or the second tip of each branch according to the value of the array.
 
         use_nodes_if_missing : bool, optional
-            If True, infer the branch directions from the nodes if the tip is missing, by default True.
+            If True, infer the tip position from the nodes if the branch curve is missing, by default True.
 
             .. warning::
                 This option requires the parent graph to be set.

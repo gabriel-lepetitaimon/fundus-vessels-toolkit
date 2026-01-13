@@ -1,10 +1,11 @@
-from dataclasses import dataclass
-from typing import Optional
 import warnings
+from dataclasses import dataclass
+from typing import Optional, Self
 
 import numpy as np
 import numpy.typing as npt
 
+from fundus_vessels_toolkit.segment_to_graph.graph_simplification import find_facing_tips
 from fundus_vessels_toolkit.utils.cluster import cluster_by_distance
 from fundus_vessels_toolkit.utils.numpy import np_group_by
 from fundus_vessels_toolkit.vascular_data_objects.vgraph import BranchIndicesLike, NodeIndicesLike
@@ -37,7 +38,10 @@ def prepare_graph_for_reconnections(
     -------
     VTree
         A tree storing the best reconnection candidates.
-    """
+
+    npt.NDArray[np.int_]
+        An array of shape (N, 2) representing the reconnections made. Each row is in the format ``(node1, node2)``, where ``node1`` and ``node2`` are the ids of the nodes to connect.
+    """  # noqa: E501
     from .graph_simplification import find_reconnection_candidates
 
     if not inplace:
@@ -152,15 +156,68 @@ class BranchDigraph(LineDigraph):
         self.line_p = line_p
         self.branch_dir_p = branch_dir_p
 
-    def resolve_arborescence(self) -> ...:
+    def optimize_tree(self) -> VTree:
         """Resolve the directed graph into an arborescence (a directed tree).
 
         Returns
         -------
-        BranchDiTree
+        VTree
             The tree representation of the directed graph.
         """
-        ...
+        assert self.line_p is not None, (
+            "Impossible to resolve the tree: the probabilities of link between branches (line_p) is missing."
+        )
+
+        # === Solve the directed graph into an arborescence ===
+        branch_parents, branch_dir = resolve_line_digraph_arborescence_legacy(
+            line_list=self.line_list,
+            line_p=self.line_p,
+            branch_dir_p=self.branch_dir_p,
+            ignore_branch_dir_in_MSA=self.branch_dir_p is None,
+        )
+
+        vgraph = self.graph.copy()
+
+        # === Insert branches on connections of not-adjacent branches ===
+        added_branch_parents = []
+        for b1, b0 in enumerate(branch_parents):
+            if b0 == -1:
+                continue
+
+            # If branches are not adjacent (namely if the nodes b0_head != b1_tail) ...
+            b0_head = vgraph.branch_list[b0, 1 if branch_dir[b0] else 0]
+            b1_tail = vgraph.branch_list[b1, 0 if branch_dir[b1] else 1]
+            if b0_head != b1_tail:
+                # ... insert a branch in the graph
+                new_b = vgraph.add_branch([b0_head, b1_tail], return_branch_id=True, inplace=True)[1][0]
+                assert new_b == len(branch_parents) + len(added_branch_parents), "Unexpected branch id"
+
+                # ... update parent of b1 and new_b so that b0 -> new_b --> b1
+                branch_parents[b1] = new_b
+                added_branch_parents.append(b0)
+
+        # === Build the final VTree ===
+        branch_parents = np.hstack([branch_parents, np.array(added_branch_parents, dtype=np.int_)])
+        branch_dir = np.hstack([branch_dir, np.ones(len(added_branch_parents), dtype=np.bool_)])
+        return VTree.from_graph(vgraph, branch_parents, branch_dir, copy=False)
+
+    @classmethod
+    def from_graph(cls, graph: VGraph, max_distance=100, max_angle=30) -> Self:
+        """Create a BranchDigraph from a VGraph.
+
+        Parameters
+        ----------
+        graph : VGraph
+            The vascular graph.
+
+        Returns
+        -------
+        Self
+            The BranchDigraph instance.
+        """
+        graph, _ = prepare_graph_for_reconnections(graph, max_distance=max_distance, max_angle=max_angle, inplace=False)
+        line_list = find_facing_tips(graph, max_distance=max_distance, max_angle=max_angle)
+        return cls(graph=graph, line_list=line_list)
 
 
 def resolve_line_digraph_arborescence_legacy(
@@ -168,7 +225,7 @@ def resolve_line_digraph_arborescence_legacy(
     line_p: npt.NDArray[np.float_],
     branch_dir_p: Optional[npt.NDArray[np.float_]] = None,
     ignore_branch_dir_in_MSA: bool = False,
-) -> LineDigraph:
+) -> tuple[npt.NDArray[np.int_], npt.NDArray[np.bool_]]:
     """Resolve the directed graph into an arborescence (a directed tree).
 
     Parameters
@@ -178,8 +235,7 @@ def resolve_line_digraph_arborescence_legacy(
     line_list : npt.NDArray[np.int_]
         An array of shape (N, 4) representing the directed edges connecting the branch b0 to the branch b1. Each row is in the format ``(b0, b1, b0_tip, b1_tip)``, where ``b0_tip`` and ``b1_tip`` are in {0, 1} indicates if the branches are connected through their first (0) or second (1) node.
         (Namely: ``graph.branch_list[b0,b0_tip]`` and ``graph.branch_list[b1,b1_tip]``).
-    branch_list: npt.NDArray[np.int_]
-        An array of shape (B, 2) representing the branches in the graph. Each row is in the format ``(n0, n1)``, where ``n0`` and ``n1`` are the indices of the nodes at the tips of each branch.
+        The number of branches B is inferred as ``line_list.max() + 1``.
     line_p : Optional[npt.NDArray[np.float_]], optional
         An array of shape (N,) representing the probabilities of each edge, by default None.
     branch_dir_p : Optional[npt.NDArray[np.float_]], optional
@@ -188,8 +244,8 @@ def resolve_line_digraph_arborescence_legacy(
         Whether to ignore the branch direction i.e. a branch can be both a parent and a daughter at a single node.
     Returns
     -------
-    BranchDiTree
-        The tree representation of the directed graph.
+    tuple[npt.NDArray[np.int_], npt.NDArray[np.bool_]]
+        The branch parents and branch directions as arrays of shape (B,).
     """  # noqa: E501
     import networkx as nx
     from networkx.algorithms.tree.branchings import maximum_spanning_arborescence
@@ -200,11 +256,11 @@ def resolve_line_digraph_arborescence_legacy(
         "line_p must be a 1D array of the same length as line_list"
     )
 
-    N_branch = line_list.max() + 1
+    B = line_list.max() + 1
 
     if not ignore_branch_dir_in_MSA:
         assert branch_dir_p is not None, "branch_dir_p must be provided if ignore_branch_dir is False"
-        assert branch_dir_p.ndim == 1 and branch_dir_p.shape[0] >= N_branch, (
+        assert branch_dir_p.ndim == 1 and branch_dir_p.shape[0] >= B, (
             "branch_dir_p must be a 1D array of length at least the number of branches in line_list"
         )
 
@@ -270,12 +326,11 @@ def resolve_line_digraph_arborescence_legacy(
             return resolve_line_digraph_arborescence_legacy(line_list, line_p, branch_dir_p, True)
 
     # === Clean the MSA to prevent rebound ===
-    branch_tree = np.empty(N_branch, dtype=np.int_)
-    incoming_tip = np.empty(N_branch, dtype=np.int_)
+    branch_tree = np.empty(B, dtype=np.int_)
+    branch_dir = np.empty(B, dtype=np.bool_)
+    incoming_tip = np.empty(B, dtype=np.int_)
 
-    new_line_list = np.empty((nx.number_of_edges(optimal_tree), 4), dtype=line_list.dtype)
-
-    for i, (b0, b1) in enumerate(nx.edge_bfs(optimal_tree, -1)):
+    for b0, b1 in nx.edge_bfs(optimal_tree, -1):
         data = optimal_tree[b0][b1]
         b0_tip, b1_tip = data["tips"]
 
@@ -287,46 +342,6 @@ def resolve_line_digraph_arborescence_legacy(
 
         branch_tree[b1] = b0
         incoming_tip[b1] = b1_tip
+        branch_dir[b1] = b1_tip == 0  # Direction is True if incoming tip is 0 (tail)
 
-        new_line_list[i] = b0, b1, b0_tip, b1_tip
-
-    return LineDigraph(line_list=new_line_list)
-
-
-def resolve_line_digraph_arborescence_mmc(
-    line_list: npt.NDArray[np.int_] | LineDigraph,
-    line_p: npt.NDArray[np.float_],
-    branch_dir_p: Optional[npt.NDArray[np.float_]] = None,
-    ignore_branch_dir_in_MSA: bool = False,
-) -> LineDigraph:
-    """Resolve the directed graph into an arborescence (a directed tree).
-
-    Parameters
-    ----------
-    graph : VGraph
-        The vascular graph.
-    line_list : npt.NDArray[np.int_]
-        An array of shape (N, 4) representing the directed edges connecting the branch b0 to the branch b1. Each row is in the format ``(b0, b1, b0_tip, b1_tip)``, where ``b0_tip`` and ``b1_tip`` are in {0, 1} indicates if the branches are connected through their first (0) or second (1) node.
-        (Namely: ``graph.branch_list[b0,b0_tip]`` and ``graph.branch_list[b1,b1_tip]``).
-    branch_list: npt.NDArray[np.int_]
-        An array of shape (B, 2) representing the branches in the graph. Each row is in the format ``(n0, n1)``, where ``n0`` and ``n1`` are the indices of the nodes at the tips of each branch.
-    line_p : Optional[npt.NDArray[np.float_]], optional
-        An array of shape (N,) representing the probabilities of each edge, by default None.
-    branch_dir_p : Optional[npt.NDArray[np.float_]], optional
-        An array of shape (B,) representing the direction probabilities of each branch, by default None
-    ignore_branch_dir : bool, optional
-        Whether to ignore the branch direction i.e. a branch can be both a parent and a daughter at a single node.
-    Returns
-    -------
-    BranchDiTree
-        The tree representation of the directed graph.
-    """  # noqa: E501
-    from ortools.graph.python import min_cost_flow
-
-    line_digraph = LineDigraph(line_list=line_list) if not isinstance(line_list, LineDigraph) else line_list
-    line_list = line_digraph.line_list
-
-    # === Create nodes ===
-    # →
-
-    model = min_cost_flow.SimpleMinCostFlow()
+    return branch_tree, branch_dir
