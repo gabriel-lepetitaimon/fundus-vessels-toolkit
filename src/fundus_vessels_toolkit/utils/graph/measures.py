@@ -496,7 +496,9 @@ def nodes_tangent(
     tangent_vectors = np.zeros((N, 2), dtype=np.float64)
     for i, ((y, x), branch_id) in enumerate(zip(nodes_coord, branches_id, strict=True)):
         pos = Point(y, x)
-        window_rect = Rect.from_center(pos, 2 * (2 * gaussian_std + gaussian_offset)).clip(branch_label_map.shape)
+        window_rect = Rect.from_center(pos, 2 * (2 * gaussian_std + gaussian_offset)).intersection(
+            Rect.from_size(branch_label_map.shape)
+        )
         window = branch_label_map[window_rect.slice()]
         pos = pos - window_rect.top_left
 

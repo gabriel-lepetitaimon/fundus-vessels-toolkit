@@ -33,6 +33,17 @@ IntPair IntPoint::toIntPair() const { return {y, x}; }
 int IntPoint::max() const { return std::max(y, x); }
 int IntPoint::min() const { return std::min(y, x); }
 IntPoint IntPoint::abs() const { return IntPoint(std::abs(y), std::abs(x)); }
+IntPoint IntPoint::neighbor(Point direction) const {
+    IntPoint p(y, x);
+    if (std::abs(direction.y) > std::abs(direction.x)) {
+        p.y += (direction.y > 0) ? 1 : -1;
+        if (std::abs(direction.y) < std::abs(direction.x) * 2) p.x += (direction.x > 0) ? 1 : -1;
+    } else {
+        p.x += (direction.x > 0) ? 1 : -1;
+        if (std::abs(direction.x) < std::abs(direction.y) * 2) p.y += (direction.y > 0) ? 1 : -1;
+    }
+    return p;
+}
 int IntPoint::squaredNorm() const { return y * y + x * x; }
 double IntPoint::norm() const { return sqrt(y * y + x * x); }
 Point IntPoint::normalize() const {
@@ -51,8 +62,11 @@ IntPoint IntPoint::clamp(IntPoint min, IntPoint max) const {
 
 std::array<IntPoint, 2> IntPoint::left_right_pair(const Point& direction, double distance, bool assume_unitary) const {
     const auto& dir = assume_unitary ? direction : direction.normalize();
-    return {IntPoint(y + static_cast<int>(round(-dir.x * distance)), x + static_cast<int>(round(+dir.y * distance))),
-            IntPoint(y + static_cast<int>(round(+dir.x * distance)), x + static_cast<int>(round(-dir.y * distance)))};
+    const double dx_float = dir.x * distance, dy_float = dir.y * distance;
+    const int dx = static_cast<int>(round(dx_float)), dy = static_cast<int>(round(dy_float));
+    const int lx = std::abs(dx_float - dx) > 0.25 ? (dx_float > 0 ? 1 : -1) : 0;
+    const int ly = std::abs(dy_float - dy) > 0.25 ? (dy_float > 0 ? 1 : -1) : 0;
+    return {IntPoint(y - dx - lx, x + dy + ly), IntPoint(y + dx, x - dy)};
 }
 
 // === Point ===
@@ -149,6 +163,7 @@ bool Point::is_inside(double y0, double x0, double y1, double x1) const {
     return (x >= x0 && x < x1 && y >= y0 && y < y1);
 }
 bool Point::is_inside(const Point& p) const { return (x >= 0 && x < p.x && y >= 0 && y < p.y); }
+bool Point::is_adjacent(const Point& p) const { return (std::abs(x - p.x) <= 1 && std::abs(y - p.y) <= 1); }
 bool Point::is_null() const { return (x == 0 && y == 0); }
 
 IntPoint Point::toInt() const { return IntPoint((int)round(y), (int)round(x)); }
@@ -304,104 +319,115 @@ std::vector<int> quantize_triband(const std::vector<float>& x, float low, float 
  *             === TORCH ===
  *******************************************************************************************************************/
 // === FROM_VECTOR ===
-torch::Tensor vector_to_tensor(const std::vector<int>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size()}, torch::kInt32);
+torch::Tensor vector_to_tensor(const std::vector<int>& vec, std::size_t first, std::size_t last) {
+    if (last == 0) last = vec.size();
+    torch::Tensor tensor = torch::empty({(long)(last - first)}, torch::kInt32);
     auto accessor = tensor.accessor<int, 1>();
-    for (int i = 0; i < (int)vec.size(); i++) accessor[i] = vec[i];
+    for (auto i = first; i < last; i++) accessor[i - first] = vec[i];
     return tensor;
 }
 
-torch::Tensor vector_to_tensor(const std::vector<float>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size()}, torch::kFloat32);
+torch::Tensor vector_to_tensor(const std::vector<float>& vec, std::size_t first, std::size_t last) {
+    if (last == 0) last = vec.size();
+    torch::Tensor tensor = torch::empty({(long)(last - first)}, torch::kFloat32);
     auto accessor = tensor.accessor<float, 1>();
-    for (int i = 0; i < (int)vec.size(); i++) accessor[i] = vec[i];
+    for (auto i = first; i < last; i++) accessor[i - first] = vec[i];
     return tensor;
 }
 
-torch::Tensor vector_to_tensor(const std::vector<double>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size()}, torch::kFloat64);
+torch::Tensor vector_to_tensor(const std::vector<double>& vec, std::size_t first, std::size_t last) {
+    if (last == 0) last = vec.size();
+    torch::Tensor tensor = torch::empty({(long)(last - first)}, torch::kFloat64);
     auto accessor = tensor.accessor<double, 1>();
-    for (int i = 0; i < (int)vec.size(); i++) accessor[i] = vec[i];
+    for (auto i = first; i < last; i++) accessor[i - first] = vec[i];
     return tensor;
 }
 
-torch::Tensor vector_to_tensor(const std::vector<std::size_t>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size()}, torch::kInt64);
+torch::Tensor vector_to_tensor(const std::vector<std::size_t>& vec, std::size_t first, std::size_t last) {
+    if (last == 0) last = vec.size();
+    torch::Tensor tensor = torch::empty({(long)(last - first)}, torch::kInt64);
     auto accessor = tensor.accessor<int64_t, 1>();
-    for (int i = 0; i < (int)vec.size(); i++) accessor[i] = vec[i];
+    for (auto i = first; i < last; i++) accessor[i - first] = vec[i];
     return tensor;
 }
 
-torch::Tensor vector_to_tensor(const std::vector<IntPair>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kInt32);
+torch::Tensor vector_to_tensor(const std::vector<IntPair>& vec, std::size_t first, std::size_t last) {
+    if (last == 0) last = vec.size();
+    torch::Tensor tensor = torch::empty({(long)(last - first), 2}, torch::kInt32);
     auto accessor = tensor.accessor<int, 2>();
-    for (int i = 0; i < (int)vec.size(); i++) {
-        accessor[i][0] = vec[i][0];
-        accessor[i][1] = vec[i][1];
+    for (auto i = first; i < last; i++) {
+        accessor[i - first][0] = vec[i][0];
+        accessor[i - first][1] = vec[i][1];
     }
     return tensor;
 }
 
-torch::Tensor vector_to_tensor(const std::vector<UIntPair>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kInt32);
+torch::Tensor vector_to_tensor(const std::vector<UIntPair>& vec, std::size_t first, std::size_t last) {
+    if (last == 0) last = vec.size();
+    torch::Tensor tensor = torch::empty({(long)(last - first), 2}, torch::kInt32);
     auto accessor = tensor.accessor<int, 2>();
-    for (int i = 0; i < (int)vec.size(); i++) {
-        accessor[i][0] = vec[i][0];
-        accessor[i][1] = vec[i][1];
+    for (auto i = first; i < last; i++) {
+        accessor[i - first][0] = vec[i][0];
+        accessor[i - first][1] = vec[i][1];
     }
     return tensor;
 }
 
-torch::Tensor vector_to_tensor(const std::vector<FloatPair>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kFloat32);
+torch::Tensor vector_to_tensor(const std::vector<FloatPair>& vec, std::size_t first, std::size_t last) {
+    if (last == 0) last = vec.size();
+    torch::Tensor tensor = torch::empty({(long)(last - first), 2}, torch::kFloat32);
     auto accessor = tensor.accessor<float, 2>();
-    for (int i = 0; i < (int)vec.size(); i++) {
-        accessor[i][0] = vec[i][0];
-        accessor[i][1] = vec[i][1];
+    for (auto i = first; i < last; i++) {
+        accessor[i - first][0] = vec[i][0];
+        accessor[i - first][1] = vec[i][1];
     }
     return tensor;
 }
 
-torch::Tensor vector_to_tensor(const std::vector<std::array<IntPair, 2>>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size(), 2, 2}, torch::kInt32);
+torch::Tensor vector_to_tensor(const std::vector<std::array<IntPair, 2>>& vec, std::size_t first, std::size_t last) {
+    if (last == 0) last = vec.size();
+    torch::Tensor tensor = torch::empty({(long)(last - first), 2, 2}, torch::kInt32);
     auto accessor = tensor.accessor<int, 3>();
-    for (int i = 0; i < (int)vec.size(); i++) {
-        accessor[i][0][0] = vec[i][0][0];
-        accessor[i][0][1] = vec[i][0][1];
-        accessor[i][1][0] = vec[i][1][0];
-        accessor[i][1][1] = vec[i][1][1];
+    for (auto i = first; i < last; i++) {
+        accessor[i - first][0][0] = vec[i][0][0];
+        accessor[i - first][0][1] = vec[i][0][1];
+        accessor[i - first][1][0] = vec[i][1][0];
+        accessor[i - first][1][1] = vec[i][1][1];
     }
     return tensor;
 }
 
-torch::Tensor vector_to_tensor(const std::vector<Point>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kDouble);
+torch::Tensor vector_to_tensor(const std::vector<Point>& vec, std::size_t first, std::size_t last) {
+    if (last == 0) last = vec.size();
+    torch::Tensor tensor = torch::empty({(long)(last - first), 2}, torch::kDouble);
     auto accessor = tensor.accessor<double, 2>();
-    for (int i = 0; i < (int)vec.size(); i++) {
-        accessor[i][0] = vec[i].y;
-        accessor[i][1] = vec[i].x;
+    for (auto i = first; i < last; i++) {
+        accessor[i - first][0] = vec[i].y;
+        accessor[i - first][1] = vec[i].x;
     }
     return tensor;
 }
 
-torch::Tensor vector_to_tensor(const std::vector<IntPoint>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size(), 2}, torch::kInt32);
+torch::Tensor vector_to_tensor(const std::vector<IntPoint>& vec, std::size_t first, std::size_t last) {
+    if (last == 0) last = vec.size();
+    torch::Tensor tensor = torch::empty({(long)(last - first), 2}, torch::kInt32);
     auto accessor = tensor.accessor<int, 2>();
-    for (int i = 0; i < (int)vec.size(); i++) {
-        accessor[i][0] = vec[i].y;
-        accessor[i][1] = vec[i].x;
+    for (auto i = first; i < last; i++) {
+        accessor[i - first][0] = vec[i].y;
+        accessor[i - first][1] = vec[i].x;
     }
     return tensor;
 }
 
-torch::Tensor vector_to_tensor(const std::vector<std::array<IntPoint, 2>>& vec) {
-    torch::Tensor tensor = torch::empty({(long)vec.size(), 2, 2}, torch::kInt32);
+torch::Tensor vector_to_tensor(const std::vector<std::array<IntPoint, 2>>& vec, std::size_t first, std::size_t last) {
+    if (last == 0) last = vec.size();
+    torch::Tensor tensor = torch::empty({(long)(last - first), 2, 2}, torch::kInt32);
     auto accessor = tensor.accessor<int, 3>();
-    for (int i = 0; i < (int)vec.size(); i++) {
-        accessor[i][0][0] = vec[i][0].y;
-        accessor[i][0][1] = vec[i][0].x;
-        accessor[i][1][0] = vec[i][1].y;
-        accessor[i][1][1] = vec[i][1].x;
+    for (auto i = first; i < last; i++) {
+        accessor[i - first][0][0] = vec[i][0].y;
+        accessor[i - first][0][1] = vec[i][0].x;
+        accessor[i - first][1][0] = vec[i][1].y;
+        accessor[i - first][1][1] = vec[i][1].x;
     }
     return tensor;
 }

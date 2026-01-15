@@ -20,9 +20,9 @@ PointList evaluate_bezier_tangent(const BezierCubic& bezCurve, const std::vector
 
 Point infer_bezier_t0(const Point& p0, const Point& p1, const Point& t1, double smoothness = 0.5);
 
-std::tuple<PointList, std::vector<double>> discretizeBezier(const BezierCubic& bezCurve);
-void _recursiveDiscretizeBezier(const BezierCubic& curveSegment, double u_start, double u_end, PointList& points,
-                                std::vector<double>& us);
+std::tuple<CurveYX, std::vector<double>> discretizeBezier(const BezierCubic& bezCurve, float flatness = 8.0);
+void _recursiveDiscretizeBezier(const BezierCubic& curveSegment, double u_start, double u_end, CurveYX& points,
+                                std::vector<double>& us, float flatness = 8.0);
 std::pair<BezierCubic, BezierCubic> subdivideBezier(const BezierCubic& curve, const double& u);
 std::vector<double> chordLengthParameterize(const CurveYX& d, std::size_t first, std::size_t last);
 void reparameterize(std::vector<double>& u, const BezierCubic& bezCurve, const CurveYX& d, std::size_t first,
@@ -49,5 +49,6 @@ std::tuple<std::vector<double>, double, std::size_t> computeMaxError(const Curve
 torch::Tensor bspline_to_tensor(const BezierCubic& bspline);
 torch::Tensor bspline_to_tensor(const BSpline& bspline);
 std::vector<torch::Tensor> bsplines_to_tensor(const std::vector<BSpline>& bsplines);
+BSpline tensor_to_bspline(const torch::Tensor& bspline_tensor);
 
 #endif /* _FITCURVE_H_ */

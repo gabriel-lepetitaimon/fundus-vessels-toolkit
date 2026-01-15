@@ -330,6 +330,23 @@ std::tuple<torch::Tensor, double> fit_bspline(const torch::Tensor& curveYX_tenso
     return {bspline_to_tensor(bspline), maxError};
 }
 
+std::tuple<torch::Tensor, torch::Tensor> discretize_bspline(const torch::Tensor& bspline_tensor, float flatness) {
+    const BSpline& bspline = tensor_to_bspline(bspline_tensor);
+    const auto& B = bspline.size();
+
+    std::vector<torch::Tensor> discreteCurve(B);
+    std::vector<torch::Tensor> discreteU(B);
+
+#pragma omp parallel for schedule(dynamic)
+    for (std::size_t b = 0; b < B; b++) {
+        const auto& [points, us] = discretizeBezier(bspline[b], flatness);
+        discreteCurve[b] = vector_to_tensor(points, 0, b == B - 1 ? points.size() : points.size() - 1);
+        discreteU[b] = vector_to_tensor(us, 0, b == B - 1 ? us.size() : us.size() - 1) + b;
+    }
+
+    return {torch::cat(discreteCurve, 0), torch::cat(discreteU, 0)};
+}
+
 std::list<std::size_t> discontiguous_index(const torch::Tensor& curveYX) {
     const CurveYX& curve = tensor_to_curve(curveYX);
     auto const& contiguousCurvesStartEnd = split_contiguous_curves(curve);
@@ -499,19 +516,6 @@ void first_two_index_of(const torch::Tensor& tensor, const torch::Tensor& elemen
     for (auto e : elements_left) out_acc[e[0]][1] = -1;
 }
 
-std::tuple<std::vector<std::array<int, 2>>, std::vector<double>> discretize_bezier_cubic(
-    const torch::Tensor& bezier_tensor) {
-    const auto& points = tensor_to_pointList(bezier_tensor);
-    BezierCubic bezier = {points[0], points[1], points[2], points[3]};
-    auto [p, u] = discretizeBezier(bezier);
-    std::vector<std::array<int, 2>> pixelPoints;
-    pixelPoints.reserve(p.size());
-    for (const auto& pt : p) {
-        pixelPoints.push_back({(int)round(pt.y), (int)round(pt.x)});
-    }
-    return std::make_tuple(pixelPoints, u);
-}
-
 /**************************************************************************************
  *             === PYBIND11 BINDINGS ===
  **************************************************************************************/
@@ -530,6 +534,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("find_inflections_points", &find_inflections_points, "Find the inflection points of a curve.");
     m.def("fit_bezier_cubic", &fit_bezier_cubic, "Fit a cubic bezier curve to a set of points.");
     m.def("fit_bspline", &fit_bspline, "Fit a B-Spline curve to a set of points.");
+    m.def("discretize_bspline", &discretize_bspline, "Discretize a B-Spline curve.");
     m.def("discontiguous_index", &discontiguous_index, "Find the indices of discontiguous segments in a curve.");
     m.def("compute_intercepts", &compute_intercepts, "Compute the intercepts of a set of curves.");
     m.def("drawCone", &drawCone, "Draw a cone in a 2D image.");
@@ -560,9 +565,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("rasterize_topology", &rasterize_topology, "Rasterize the topology of a set of branches.");
     m.def("rasterize_branch", &rasterize_branch, "Rasterize a branch from its curve and boundaries.");
     m.def("drawQuad", &drawQuad, "Draw a quadrilateral in a 2D image.");
-
-    // === bspline.h ===
-    m.def("discretize_bezier_cubic", &discretize_bezier_cubic, "Discretize a cubic bezier curve.");
 
     // === disjoint_set.h ===
     m.def("has_cycle", &has_cycle, "Find cycles in a list of parent.");

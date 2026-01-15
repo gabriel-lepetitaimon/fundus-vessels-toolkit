@@ -12,12 +12,11 @@ from jppype import Mosaic, vscode_theme
 from fundus_odmac_toolkit.models.segmentation import segment
 from fundus_toolkits import FundusData
 from fundus_vessels_toolkit.models import segment_av
-from fundus_vessels_toolkit.models.segment_av import SegmentAVModel, segment_av_model, segment_av_pre_postprocessing
 from fundus_vessels_toolkit.pipelines.avseg_to_tree import GNNAVSegToTree, NaiveAVSegToTree
-from fundus_vessels_toolkit.segment_to_graph.av_map_fixing import TopologicalLabel, rasterize_tree_topology
 from fundus_vessels_toolkit.segment_to_graph.av_tree_parsing import naive_infer_roots
 from fundus_vessels_toolkit.segment_to_graph.graph_simplification import simplify_passing_nodes
 from fundus_vessels_toolkit.segment_to_graph.tree_simplification import disconnect_crossing
+from fundus_vessels_toolkit.segment_to_graph.tree_topology import TopologicalLabel, TreeTopology
 from fundus_vessels_toolkit.utils.jppype import draw_tree
 from fundus_vessels_toolkit.vascular_data_objects.vgraph import NodeIndices
 from fundus_vessels_toolkit.vascular_data_objects.vtree import VTree, VTreeNode
@@ -114,7 +113,7 @@ class ReviewTool:
 
         # Annotation State
         self.debug_info = {}
-        self.trees_topo_maps = [None, None]
+        self.trees_topology = [None, None]
         self.trees_from_av: None | tuple[VTree, VTree] = None
         self._fundus: FundusData | None = None
         self._av_pred: bool = False
@@ -230,6 +229,7 @@ class ReviewTool:
         # Load or compute trees
         self.trees_from_av = (self.av2tree_pred if self._av_pred else self.av2tree)(self.fundus)
         self.load_saved_trees(draw=False)
+
         self.draw_trees()
 
     def load_saved_trees(self, draw=True) -> tuple[VTree, VTree]:
@@ -298,17 +298,17 @@ class ReviewTool:
             if (which == "vein" and i == 0) or (which == "artery" and i == 1):
                 continue
 
-            label_map, topo_map = rasterize_tree_topology(tree)
-            self.trees_topo_maps[i] = label_map, topo_map
-            subtree_map = TopologicalLabel.decode_subtree(label_map)
+            tree_topo = TreeTopology.from_tree(tree)
+            self.trees_topology[i] = tree_topo
+            subtree_map = TopologicalLabel.decode_subtree(tree_topo.branch_map)
             N_subtree = int(subtree_map.max()) + 1
             color_map = np.zeros(self.fundus.shape + (3,), dtype=np.float32)
-            alpha = np.zeros_like(topo_map)
+            alpha = np.zeros_like(tree_topo.distance_map)
 
             for s in range(1, N_subtree):
                 mask = subtree_map == s
                 color_map[mask] = TopologicalLabel.subtree_color(s, format="rgb") / 255.0
-                subtree_topo = topo_map[mask]
+                subtree_topo = tree_topo.distance_map[mask]
                 if len(subtree_topo) == 0:
                     continue
 
@@ -322,10 +322,10 @@ class ReviewTool:
 
     def print_topo_info(self, event, art):
         y, x = int(event["y"]), int(event["x"])
-        if self.trees_topo_maps[art] is None:
+        if self.trees_topology[art] is None:
             return
-        topo = str(TopologicalLabel(self.trees_topo_maps[art][0][y, x])).ljust(10)
-        d = self.trees_topo_maps[art][1][y, x]
+        topo = str(TopologicalLabel(self.trees_topology[art].branch_map[y, x])).ljust(10)
+        d = self.trees_topology[art].distance_map[y, x]
         with self.debug_output:
             print(f"({y}, {x}): {topo:}, d={d:.4f}")
 

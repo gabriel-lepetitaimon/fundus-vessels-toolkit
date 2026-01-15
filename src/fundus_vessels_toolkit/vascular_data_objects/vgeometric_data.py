@@ -1267,8 +1267,8 @@ class VGeometricData:
 
     def tip_coord(
         self,
-        branch_id: Optional[int | npt.ArrayLike[int]] = None,
-        first_tip: Optional[bool | npt.ArrayLike[bool]] = None,
+        branch_id: Optional[int | Int1DArrayLike] = None,
+        first_tip: Optional[bool | Bool1DArrayLike] = None,
         *,
         use_nodes_if_missing: bool = True,
         graph_index=True,
@@ -1344,7 +1344,7 @@ class VGeometricData:
         attr: VBranchGeoDataKey = VBranchGeoData.Fields.TIPS_TANGENT,
         graph_index=True,
     ) -> npt.NDArray[np.float32]:
-        """Return the tangent of the tips of the branches.
+        """Return the tangent of the tips of the branches. Tangents are unit vectors oriented towards the inside of the branch.
 
         Parameters
         ----------
@@ -1617,15 +1617,21 @@ class VGeometricData:
         self.set_branch_data(name, bspline, branch_id, graph_index=graph_index, no_check=no_check)
 
     @overload
-    def branch_bspline(self, branch_id: int, attr: VBranchGeoDataKey = VBranchGeoData.Fields.BSPLINE) -> BSpline: ...
+    def branch_bspline(
+        self, branch_id: int, attr: VBranchGeoDataKey = VBranchGeoData.Fields.BSPLINE, fill: bool = False
+    ) -> BSpline: ...
     @overload
     def branch_bspline(
-        self, branch_id: Optional[npt.NDArray[np.int32]] = None, attr: VBranchGeoDataKey = VBranchGeoData.Fields.BSPLINE
+        self,
+        branch_id: Optional[npt.NDArray[np.int32]] = None,
+        attr: VBranchGeoDataKey = VBranchGeoData.Fields.BSPLINE,
+        fill: bool = False,
     ) -> List[BSpline]: ...
     def branch_bspline(
         self,
         branch_id: Optional[int | npt.NDArray[np.int32]] = None,
         attr: VBranchGeoDataKey = VBranchGeoData.Fields.BSPLINE,
+        fill: bool = False,
     ) -> BSpline | List[BSpline]:
         """Return the BSpline representation of a branch.
 
@@ -1638,6 +1644,9 @@ class VGeometricData:
 
         attr : str
             The name of the attribute
+
+        fill : bool, optional
+            If True, interpolate missing BSpline data.
 
 
         Returns
@@ -1652,15 +1661,24 @@ class VGeometricData:
         if branch_id is None:
             data = self.branch_data(attr)
             is_single = False
+            branch_ids = np.arange(len(data))
         else:
-            branch_id, is_single = as_1d_array(branch_id)
-            data = self.branch_data(attr, branch_id)
+            branch_ids, is_single = as_1d_array(branch_id)
+            data = self.branch_data(attr, branch_ids)
 
         empty = BSpline()
-        if is_single:
-            return empty if data[0] is None else data[0].data
-        else:
-            return [empty if d is None else d.data for d in data]
+        bsplines = [empty if d is None else d.data for d in data]
+        if fill:
+
+            def fill_bspline(b_id: int, bspline: BSpline) -> BSpline:
+                tips_yx = self.node_coord(self.parent_graph.branch_list[b_id])
+                return bspline.interpolate_missing_curves(
+                    Point.from_array(tips_yx[0]), Point.from_array(tips_yx[1]), smoothing=0.5
+                )
+
+            bsplines = [fill_bspline(b, d) for b, d in zip(branch_ids, bsplines, strict=True)]
+
+        return bsplines[0] if is_single else bsplines
 
     ####################################################################################################################
     #  === GRAPH MANIPULATION ===

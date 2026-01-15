@@ -7,7 +7,7 @@
 void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& branch_parents,
                         const torch::Tensor& branch_dirs, std::vector<torch::Tensor> curves_tensor,
                         std::vector<torch::Tensor> boundaries, const torch::Tensor& nodes_yx_tensor,
-                        float bspline_interpolate, bool fill_junctions, torch::Tensor& branchLabelsMap,
+                        float bezier_interpolate, bool fill_junctions, torch::Tensor& branchLabelsMap,
                         torch::Tensor& topoMap) {
     // Ensure the branchLabelsMap and topoMap are initialized correctly
     TORCH_CHECK(branchLabelsMap.dim() == 2 && topoMap.dim() == 2, "branchLabelsMap and topoMap must be 2D tensors.");
@@ -155,12 +155,12 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
             };
             if (N != 0) {  // If the branch is not empty rasterize it
                 auto drawBranchTopo = [&](IntPoint pt, float u) { drawTopo(pt, 0.9 * u); };
-                rasterize_branch_topo(curve, boundary, drawBranchTopo, maxShape, bspline_interpolate);
+                rasterize_branch_topo(curve, boundary, drawBranchTopo, maxShape, bezier_interpolate);
             } else {  // Otherwise draw bezier cubic interpolation
                 const auto &tailTip = tips[branchID][0], &headTip = tips[branchID][1];
-                if (tailTip.w >= 0 && headTip.w >= 0) {
-                    rasterize_bezier(drawTopo, tailTip.yx, headTip.yx, tailTip.t, headTip.t, tailTip.b, headTip.b, 0.5,
-                                     maxShape);
+                if (tailTip.w >= 0 && headTip.w >= 0 && bezier_interpolate > 0.0f) {
+                    rasterize_bezier(drawTopo, tailTip.yx, headTip.yx, tailTip.t, headTip.t, tailTip.b, headTip.b,
+                                     bezier_interpolate, maxShape);
                 }
             }
 
@@ -175,8 +175,9 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
                     const auto& childTip = tips[childID][0];
                     if (childTip.w < 0) continue;  // If the child tip is invalid, skip this filling
 
-                    if (distance(headTip.yx, childTip.yx) <= (headTip.w + childTip.w) &&
-                        headTip.t.dot(childTip.t) > 0.5) {
+                    if ((distance(headTip.yx, childTip.yx) <= (headTip.w + childTip.w) &&
+                         headTip.t.dot(childTip.t) > 0.5) ||
+                        bezier_interpolate <= 0.0f) {
                         // If tips are close enough, draw a simple quad
                         auto it = QuadIterator(headTip.b[0], headTip.b[1], childTip.b[1], childTip.b[0], maxShape);
                         it.precomputeInvDiffNorms();
@@ -184,7 +185,7 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
                     } else {
                         // Otherwise draw bezier cubic interpolation
                         // const IntPoint& node_yx = nodes_yx[branch.head_node];
-                        double d = distance(Point(headTip.yx), Point(childTip.yx)) * 0.5;
+                        double d = distance(Point(headTip.yx), Point(childTip.yx)) * bezier_interpolate;
                         const Point c0 = headTip.yx + headTip.t * d;    // distance(Point(headTip.yx), Point(node_yx));
                         const Point c1 = childTip.yx - childTip.t * d;  // distance(Point(childTip.yx), Point(node_yx));
                         rasterize_bezier(drawJunctionTopo, {headTip.yx, c0, c1, childTip.yx}, headTip.b, childTip.b,
@@ -248,7 +249,7 @@ void rasterize_bezier(std::function<void(IntPoint, float)> updater, const Bezier
     auto N = interpPoints.size();
 
     double u = 0.0f, nextU;
-    IntPoint p = bezier[0].toInt(), nextP;
+    IntPoint p = interpPoints[0], nextP;
     Point t = tangents[0].normalize(), nextT;
     float w = w0, nextW;
     IntPointPair b = b0, nextB;
@@ -256,13 +257,13 @@ void rasterize_bezier(std::function<void(IntPoint, float)> updater, const Bezier
     for (std::size_t i = 0; i < N - 1; i++) {
         if (i != N - 2) {
             nextU = us[i + 1];
-            nextP = interpPoints[i + 1].toInt();
+            nextP = interpPoints[i + 1];
             nextT = tangents[i + 1].normalize();
             nextW = lerp(w0, w1, nextU);
             nextB = nextP.left_right_pair(nextT, nextW * 0.5, true);
         } else {
             nextU = 1.0f;
-            nextP = bezier[3].toInt();
+            nextP = interpPoints[N - 1];
             nextT = tangents[N - 1].normalize();
             nextW = w1;
             nextB = b1;
@@ -278,9 +279,9 @@ void rasterize_bezier(std::function<void(IntPoint, float)> updater, const Bezier
                 float ds = 1.0f / N_splits;
                 for (float s = ds; s < 1; s += ds) {
                     double s_u = lerp(u, nextU, s);
-                    auto s_t = lerp(t, nextT, s).normalize();
-                    auto s_w = lerp(w, nextW, s);
-                    b = (evaluate_bezier(bezier, s_u) + s_t.rot90() * (s_w * lr_sign * 0.5)).toInt();
+                    auto s_t = lerp(t, nextT, s);
+                    auto s_w = lerp(w, nextW, s) * 0.5;
+                    b = evaluate_bezier(bezier, s_u).toInt().left_right_pair(s_t, s_w)[lr];
                     QuadIterator it(p, prev_b, b, nextP, maxShape);
                     it.precomputeInvDiffNorms();
                     while (it.iter()) updater(it.point(), lerp(u, nextU, it.fromP1toP4()));

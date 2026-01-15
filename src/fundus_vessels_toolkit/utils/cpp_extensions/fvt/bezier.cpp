@@ -213,10 +213,10 @@ std::vector<double> chordLengthParameterize(const CurveYX& d, std::size_t first,
  *  Iteratively subdivides the curve until the maximum distance between
  *  the curve and the line is below a threshold.
  */
-std::tuple<PointList, std::vector<double>> discretizeBezier(const BezierCubic& bezCurve) {
-    PointList points = {bezCurve[0]};
+std::tuple<CurveYX, std::vector<double>> discretizeBezier(const BezierCubic& bezCurve, float flatness) {
+    CurveYX points = {bezCurve[0].toInt()};
     std::vector<double> us = {0.0};
-    _recursiveDiscretizeBezier(bezCurve, 0.0, 1.0, points, us);
+    _recursiveDiscretizeBezier(bezCurve, 0.0, 1.0, points, us, flatness);
 
     return {points, us};
 }
@@ -246,27 +246,53 @@ std::pair<BezierCubic, BezierCubic> subdivideBezier(const BezierCubic& curve, co
     return {left, right};
 }
 
-bool _isFlatEnough(const BezierCubic& curve) {
+bool _isFlatEnough(const BezierCubic& curve, float flatness) {
     const Point& a = (curve[1] * 3.0 - curve[0] * 2.0 - curve[3]).sqr();
     const Point& b = (curve[2] * 3.0 - curve[3] * 2.0 - curve[0]).sqr();
-    return std::max(a.x, b.x) + std::max(a.y, b.y) <= 8;
+    return std::max(a.x, b.x) + std::max(a.y, b.y) <= flatness;
 }
 
-void _recursiveDiscretizeBezier(const BezierCubic& curveSegment, double u_start, double u_end, PointList& points,
-                                std::vector<double>& us) {
+void _recursiveDiscretizeBezier(const BezierCubic& curveSegment, double u_start, double u_end, CurveYX& points,
+                                std::vector<double>& us, float flatness) {
     // Check flatness
-    const auto &p0 = curveSegment[0], p3 = curveSegment[3];
-    if (distanceSqr(p0, p3) <= 6 || _isFlatEnough(curveSegment)) {
+    const auto &p0 = curveSegment[0].toInt(), p3 = curveSegment[3].toInt();
+    if (p0 == p3) {
+        return;
+    }
+    if (p0.is_adjacent(p3) || (flatness > 0 && _isFlatEnough(curveSegment, flatness))) {
         // Add endpoint to the list
         points.push_back(p3);
         us.push_back(u_end);
     } else {
-        // Subdivide curve at midpoint
-        double u_mid = findNewtonRaphsonRoot(curveSegment, evaluate_bezier(curveSegment, 0.5).toInt(), 0.5);
-        auto [left, right] = subdivideBezier(curveSegment, u_mid);
-        u_mid = u_start + (u_end - u_start) * u_mid;
-        _recursiveDiscretizeBezier(left, u_start, u_mid, points, us);
-        _recursiveDiscretizeBezier(right, u_mid, u_end, points, us);
+        // Subdivide curve at intermediate point
+        double u_mid = 0.5, step = 0.25;
+        IntPoint p_mid = evaluate_bezier(curveSegment, u_mid).toInt();
+        while (p_mid == p0 || p_mid == p3) {
+            u_mid += p_mid == p0 ? step : -step;
+            step *= 0.5;
+            p_mid = evaluate_bezier(curveSegment, u_mid).toInt();
+        }
+
+        if (p_mid.is_adjacent(p0)) {
+            auto [_, right] = subdivideBezier(curveSegment, u_mid);
+
+            u_mid = lerp(u_start, u_end, u_mid);
+            points.push_back(p_mid);
+            us.push_back(u_mid);
+            _recursiveDiscretizeBezier(right, u_mid, u_end, points, us, flatness);
+        } else if (p_mid.is_adjacent(p3)) {
+            auto [left, _] = subdivideBezier(curveSegment, u_mid);
+
+            u_mid = lerp(u_start, u_end, u_mid);
+            _recursiveDiscretizeBezier(left, u_start, u_mid, points, us, flatness);
+            points.push_back(p3);
+            us.push_back(u_end);
+        } else {
+            auto [left, right] = subdivideBezier(curveSegment, u_mid);
+            u_mid = lerp(u_start, u_end, u_mid);
+            _recursiveDiscretizeBezier(left, u_start, u_mid, points, us, flatness);
+            _recursiveDiscretizeBezier(right, u_mid, u_end, points, us, flatness);
+        }
     }
 }
 /*
@@ -295,24 +321,24 @@ void reparameterize(std::vector<double>& u, const BezierCubic& bezCurve, const C
  */
 double findNewtonRaphsonRoot(const BezierCubic& Q, const Point& P, double u) {
     double numerator, denominator;
-    std::vector<Point> Q1;
-    std::vector<Point> Q2; /*  Q' and Q''			*/
-    Point Q_u, Q1_u, Q2_u; /*u evaluated at Q, Q', & Q''	*/
-    double uPrime;         /*  Improved u			*/
+    std::array<Point, 3> Q1;
+    std::array<Point, 2> Q2; /*  Q' and Q''			*/
+    Point Q_u, Q1_u, Q2_u;   /*u evaluated at Q, Q', & Q''	*/
+    double uPrime;           /*  Improved u			*/
     int i;
 
     /* Compute Q(u)	*/
-    Q_u = BezierII(std::vector<Point>(Q.begin(), Q.end()), u);
+    Q_u = bezierPolynomialTriangle(Q, u);
 
     /* Generate control vertices for Q'	*/
-    for (i = 0; i <= 2; i++) Q1.push_back((Q[i + 1] - Q[i]) * 3.0);
+    for (i = 0; i < 3; i++) Q1[i] = (Q[i + 1] - Q[i]) * 3.0;
 
     /* Generate control vertices for Q'' */
-    for (i = 0; i <= 1; i++) Q2.push_back((Q1[i + 1] - Q1[i]) * 2.0);
+    for (i = 0; i < 2; i++) Q2[i] = (Q1[i + 1] - Q1[i]) * 2.0;
 
     /* Compute Q'(u) and Q''(u)	*/
-    Q1_u = BezierII(Q1, u);
-    Q2_u = BezierII(Q2, u);
+    Q1_u = bezierPolynomialTriangle(Q1, u);
+    Q2_u = bezierPolynomialTriangle(Q2, u);
 
     /* Compute f(u)/f'(u) */
     numerator = (Q_u.x - P.x) * (Q1_u.x) + (Q_u.y - P.y) * (Q1_u.y);
@@ -429,4 +455,15 @@ std::vector<torch::Tensor> bsplines_to_tensor(const std::vector<BSpline>& bsplin
     tensors.reserve(bsplines.size());
     for (const auto& bspline : bsplines) tensors.push_back(bspline_to_tensor(bspline));
     return tensors;
+}
+
+BSpline tensor_to_bspline(const torch::Tensor& bspline_tensor) {
+    auto spline_acc = bspline_tensor.accessor<float, 3>();
+    std::size_t N_cubic = spline_acc.size(0);
+
+    BSpline bspline(N_cubic);
+    for (std::size_t b = 0; b < N_cubic; b++)
+        for (int j = 0; j < 4; j++) bspline[b][j] = {spline_acc[b][j][0], spline_acc[b][j][1]};
+
+    return bspline;
 }

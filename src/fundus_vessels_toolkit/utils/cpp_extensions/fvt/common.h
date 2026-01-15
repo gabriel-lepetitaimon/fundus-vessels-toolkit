@@ -102,6 +102,7 @@ struct IntPoint {
     int max() const;
     int min() const;
     IntPoint abs() const;
+    IntPoint neighbor(Point direction) const;
     int squaredNorm() const;
     double norm() const;
     int cross(const IntPoint& p) const;
@@ -178,6 +179,7 @@ struct Point {
     bool is_inside(double H, double W) const;
     bool is_inside(double y0, double x0, double y1, double x1) const;
     bool is_inside(const Point& p) const;
+    bool is_adjacent(const Point& p) const;
     bool is_null() const;
 
     friend std::ostream& operator<<(std::ostream& os, const Point& p) {
@@ -357,17 +359,18 @@ inline std::size_t matrix_index(const std::array<uint, N>& index, std::array<std
  *             === TORCH ===
  *******************************************************************************************************************/
 
-torch::Tensor vector_to_tensor(const std::vector<int>& vec);
-torch::Tensor vector_to_tensor(const std::vector<float>& vec);
-torch::Tensor vector_to_tensor(const std::vector<double>& vec);
-torch::Tensor vector_to_tensor(const std::vector<std::size_t>& vec);
-torch::Tensor vector_to_tensor(const std::vector<Point>& vec);
-torch::Tensor vector_to_tensor(const std::vector<IntPoint>& vec);
-torch::Tensor vector_to_tensor(const std::vector<IntPair>& vec);
-torch::Tensor vector_to_tensor(const std::vector<UIntPair>& vec);
-torch::Tensor vector_to_tensor(const std::vector<FloatPair>& vec);
-torch::Tensor vector_to_tensor(const std::vector<std::vector<IntPair>>& vec);
-torch::Tensor vector_to_tensor(const IntPointPairs& vec);
+torch::Tensor vector_to_tensor(const std::vector<int>& vec, std::size_t first = 0, std::size_t last = 0);
+torch::Tensor vector_to_tensor(const std::vector<float>& vec, std::size_t first = 0, std::size_t last = 0);
+torch::Tensor vector_to_tensor(const std::vector<double>& vec, std::size_t first = 0, std::size_t last = 0);
+torch::Tensor vector_to_tensor(const std::vector<std::size_t>& vec, std::size_t first = 0, std::size_t last = 0);
+torch::Tensor vector_to_tensor(const std::vector<Point>& vec, std::size_t first = 0, std::size_t last = 0);
+torch::Tensor vector_to_tensor(const std::vector<IntPoint>& vec, std::size_t first = 0, std::size_t last = 0);
+torch::Tensor vector_to_tensor(const std::vector<IntPair>& vec, std::size_t first = 0, std::size_t last = 0);
+torch::Tensor vector_to_tensor(const std::vector<UIntPair>& vec, std::size_t first = 0, std::size_t last = 0);
+torch::Tensor vector_to_tensor(const std::vector<FloatPair>& vec, std::size_t first = 0, std::size_t last = 0);
+torch::Tensor vector_to_tensor(const std::vector<std::vector<IntPair>>& vec, std::size_t first = 0,
+                               std::size_t last = 0);
+torch::Tensor vector_to_tensor(const IntPointPairs& vec, std::size_t first = 0, std::size_t last = 0);
 
 torch::Tensor remove_rows(const torch::Tensor& tensor, std::vector<int> rows);
 

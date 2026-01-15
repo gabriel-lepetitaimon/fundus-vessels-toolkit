@@ -9,6 +9,7 @@ import torch
 
 from fundus_toolkits.utils.geometric import Point
 from fundus_vessels_toolkit.utils.numpy import as_1d_array
+from fundus_vessels_toolkit.utils.typing import Float1DArray, Int2DArray
 
 from ..utils.fundus_projections import FundusProjection
 from .graph.measures import curve_tangent
@@ -260,6 +261,9 @@ class BezierCubic(NamedTuple):
     def has_nan(self) -> bool:
         return any(p.is_nan() for p in self)
 
+    def is_null(self) -> bool:
+        return self.p0 == self.p1 and self.c0 == self.p0 and self.c1 == self.p1
+
     def c0_sym(self, d: float = -1, relative=True) -> Point:
         """Compute the symmetric control point of c0 with respect to p0.
 
@@ -498,8 +502,6 @@ class BSpline(tuple[BezierCubic]):
             filling.append(BezierCubic(start, start, start_c, p_start))
 
         for prev, next in zip(self[:-1], self[1:], strict=True):
-            if prev.p1 == next.p0:
-                continue
             if smoothing:
                 dist = prev.p1.distance(next.p0)
                 prev_c = prev.c1_sym(-dist * smoothing, relative=False)
@@ -517,7 +519,7 @@ class BSpline(tuple[BezierCubic]):
 
     def interpolate_missing_curves(
         self, start: Optional[Point] = None, end: Optional[Point] = None, *, smoothing: int | float = 0
-    ) -> List[BezierCubic]:
+    ) -> BSpline:
         filling_curves = self.filling_curves(start, end, smoothing=smoothing)
         curves = list(self)
 
@@ -531,7 +533,7 @@ class BSpline(tuple[BezierCubic]):
         if end is not None and filling_curves:
             bsplines.append(filling_curves.pop())
 
-        return bsplines
+        return BSpline([b for b in bsplines if not b.is_null()])
 
     def extend_bspline(self, start: Optional[Point] = None, end: Optional[Point] = None, *, smoothing=0.2) -> BSpline:
         extended = []
@@ -563,6 +565,32 @@ class BSpline(tuple[BezierCubic]):
             extended.append(BezierCubic(p_last, last_c, end, end))
 
         return BSpline(extended)
+
+    def discretize(self, flat_tolerance: float = 0) -> tuple[Int2DArray, Float1DArray]:
+        """Discretize the BSpline into a set of integer points.
+
+        Parameters
+        ----------
+        flat_tolerance : float, optional
+            The flatness tolerance for the discretization. If 0 (default), return consecutive points to form a continuous line.
+
+        Returns
+        -------
+        points: Int2DArray
+            The discretized points as a (n, 2) array of integers.
+
+        u: Float1DArray
+            The corresponding parameters on the BSpline for each discretized point as a (n,) array of floats.
+        """  # noqa: E501
+        from .cpp_extensions.fvt_cpp import discretize_bspline
+
+        if len(self) == 0:
+            return np.empty((0, 2), dtype=np.int32), np.empty((0,), dtype=np.float64)
+
+        bspline = torch.tensor(self.to_array(), dtype=torch.float32)
+        points, u = discretize_bspline(bspline, float(flat_tolerance))
+
+        return points.numpy().astype(np.int32), u.numpy().astype(np.float64)
 
     def evaluate(self, t: npt.ArrayLike) -> npt.NDArray[np.float64]:
         """Evaluate the position of the BSpline for a set of parameters t.

@@ -337,11 +337,11 @@ class VGraphBranch:
             geodata = self.graph.geometric_data(geodata)
         return geodata.branch_midpoint(self._id)
 
-    def bspline(self, geodata: VGeometricData | int = 0) -> BSpline:
+    def bspline(self, geodata: VGeometricData | int = 0, fill: bool = False) -> BSpline:
         assert self.is_valid(), "The branch has been removed from the graph."
         if not isinstance(geodata, VGeometricData):
             geodata = self.__graph.geometric_data(geodata)
-        return geodata.branch_bspline(self._id)
+        return geodata.branch_bspline(self._id, fill=fill)
 
     def geodata(
         self, attr_name: VBranchGeoDescriptor[T_VBranchGeoData], geodata: VGeometricData | int = 0

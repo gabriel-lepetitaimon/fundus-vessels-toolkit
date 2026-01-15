@@ -765,23 +765,35 @@ def find_facing_tips(
     facing_tips: npt.NDArray[np.int]
         An (E, 4) array where each row contains the indices of two tips as [b0, b0_tip, b1, b1_tip] where b0 and b1 are the branch indices and b0_tip and b1_tip are 0 for the first tip and 1 for the second tip of the branch.
     """  # noqa: E501
+
+    sqr_max_dist = max_distance * max_distance
+    sqr_min_dist = 30 * 30  # Distance below which tips are considered connectable without checking their angle
+    min_cos = np.cos(np.deg2rad(max_angle))
+
     geodata = graph.geometric_data()
     tips_pos = geodata.tip_coord().astype(np.float_).reshape(-1, 2)  # [branch_id x (tip0, tip1), (y,x)]
     tips_tan = geodata.tip_tangent(attr=tangent).reshape(-1, 2)  # [branch_id x (tip0, tip1), (y,x)]
 
-    close_enough = np.square(tips_pos[:, None, :] - tips_pos[None, :, :]).sum(axis=2) <= max_distance * max_distance
-    facing = (tips_tan[:, None, :] * tips_tan[None, :, :]).sum(axis=2) <= np.cos(np.deg2rad(max_angle))
+    tips_dsqr = np.square(tips_pos[:, None, :] - tips_pos[None, :, :]).sum(axis=2)
+    tips_dtan = tips_pos[:, None, :] - tips_pos[None, :, :]  # (tip_origin, tip_destination, yx)
+    tips_dtan = tips_dtan / (np.linalg.norm(tips_dtan, axis=2, keepdims=True) + 1e-8)
 
-    facing_tips = close_enough & facing & np.triu(np.ones_like(close_enough, dtype=bool), k=1)
+    ahead = (tips_dtan * tips_tan).sum(axis=2) >= 0
+    ahead_and_close = (ahead & ahead.T & (tips_dsqr <= sqr_max_dist)) | (tips_dsqr <= sqr_min_dist)
+    facing = (tips_tan[:, None, :] * -tips_tan[None, :, :]).sum(axis=2) >= min_cos
+
+    facing_tips = ahead_and_close & facing & np.triu(np.ones_like(facing), k=1)
     facing_tips_id = np.argwhere(facing_tips)
-    return np.stack(
-        [
-            facing_tips_id[:, 0] // 2,
-            facing_tips_id[:, 0] % 2,
-            facing_tips_id[:, 1] // 2,
-            facing_tips_id[:, 1] % 2,
-        ]
-    ).T
+    b0 = facing_tips_id[:, 0] // 2
+    b0_tip = facing_tips_id[:, 0] % 2
+    b1 = facing_tips_id[:, 1] // 2
+    b1_tip = facing_tips_id[:, 1] % 2
+
+    stacked_ids = np.stack([b0, b0_tip, b1, b1_tip], axis=1)
+    self_loop = graph.self_loop_branches()
+    # Remove facing tips from the same branch unless it is a self-loop
+    stacked_ids = stacked_ids[(b0 != b1) | np.isin(b0, self_loop)]
+    return stacked_ids
 
 
 def find_branch_intercepts(
