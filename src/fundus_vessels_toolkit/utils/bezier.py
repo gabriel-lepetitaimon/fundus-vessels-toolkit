@@ -253,7 +253,10 @@ class BezierCubic(NamedTuple):
 
     def evaluate_tangent(self, t: float, normalized=False):
         tangent = qprime(self.to_array(), t)
-        return tangent / np.linalg.norm(tangent, axis=1)[:, None] if normalized else tangent
+        if normalized:
+            norm = np.linalg.norm(tangent, axis=1)
+            tangent[norm != 0, :] /= norm[norm != 0]
+        return tangent
 
     def flip(self) -> BezierCubic:
         return BezierCubic(self.p1, self.c1, self.c0, self.p0)
@@ -664,7 +667,10 @@ class BSpline(tuple[BezierCubic]):
 
         lengths = np.array([curve.arc_length(fast_approximation=fast_approximation) for curve in self])
         lengths = np.concatenate(([0], np.cumsum(lengths)))
-        lengths /= lengths[-1]  # Normalize to [0, 1]
+        if lengths[-1] == 0:
+            lengths[:] = 0
+        else:
+            lengths /= lengths[-1]  # Normalize to [0, 1]
 
         curve_ids = np.clip(np.searchsorted(lengths, pos, side="right") - 1, 0, len(self) - 1)
         curve_start = lengths[curve_ids]

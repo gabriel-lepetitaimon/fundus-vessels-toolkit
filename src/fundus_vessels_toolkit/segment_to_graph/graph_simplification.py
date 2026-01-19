@@ -20,6 +20,7 @@ import numpy as np
 import numpy.typing as npt
 
 from fundus_toolkits.utils.geometric import distance_matrix
+from fundus_vessels_toolkit.utils.typing import IntPairArrayLike
 from fundus_vessels_toolkit.vascular_data_objects.vgraph import BranchIndicesLike, NodeIndicesLike
 
 from ..utils import if_none
@@ -639,7 +640,7 @@ def find_reconnection_candidates(
     snap_max_angle: float = 30,
     interpolate_curve: bool = True,
     ignore_endpoints: Optional[NodeIndicesLike] = None,
-    endpoint_ids: Optional[NodeIndicesLike] = None,
+    endpoint_ids: Optional[NodeIndicesLike | IntPairArrayLike] = None,
     branch_ids: Optional[BranchIndicesLike] = None,
     tangent_key: VBranchGeoData.Key = VBranchGeoData.Fields.TIPS_TANGENT,
 ) -> npt.NDArray[np.int_]:
@@ -673,6 +674,14 @@ def find_reconnection_candidates(
     interpolate_curve: bool
         If True, the branch curves are interpolated according to the graph topology to fill gaps in the skeleton map.
 
+    ignore_endpoints: Optional[NodeIndicesLike]
+        A list of endpoints to ignore when searching for reconnection candidates.
+
+    endpoint_ids: Optional[NodeIndicesLike | IntPairArrayLike]
+        A list of endpoints to consider when searching for reconnection candidates.
+        If the provided array is 1D consider it as a list of node indices. If the provided array is 2D consider it as a list of (branch index, tip index) pairs.
+        If None, all endpoints are considered.
+
     Returns
     -------
     intercept_branches: List[npt.NDArray[np.int_]]
@@ -685,26 +694,34 @@ def find_reconnection_candidates(
         - the y coordinate of the intercept point,
         - the x coordinate of the intercept point.
     """  # noqa: E501
-    endpoints, endpoints_branches, idirs = graph.endpoint_nodes_with_branch_id(return_branch_direction=True)
-    if ignore_endpoints is not None or endpoint_ids is not None:
-        if endpoint_ids is not None:
-            endpoints_mask = np.isin(endpoints, graph.as_node_ids(endpoint_ids))
+    if endpoint_ids is not None:
+        endpoints_ids = np.asarray(endpoint_ids)
+        if endpoints_ids.ndim == 1:
+            endpoints_ids = graph.as_node_ids(endpoints_ids)
+            endp_ids, endp_branch, endp_first_tip = graph.endpoint_nodes_with_branch_id(
+                endpoints_ids, return_branch_direction=True
+            )
+        elif endpoints_ids.ndim == 2:
+            endp_branch = endpoints_ids[:, 0]
+            endp_first_tip = endpoints_ids[:, 1] == 0
+            endp_ids = graph.branch_list[endpoints_ids[:, 0], endpoints_ids[:, 1]]
         else:
-            endpoints_mask = np.ones(len(endpoints), dtype=bool)
-        if ignore_endpoints is not None:
-            ignore_mask = np.isin(endpoints, graph.as_node_ids(ignore_endpoints), invert=True)
-            endpoints_mask &= ignore_mask
-        if np.any(~endpoints_mask):
-            endpoints = endpoints[endpoints_mask]
-            endpoints_branches = endpoints_branches[endpoints_mask]
-            idirs = idirs[endpoints_mask]
-    if len(endpoints) == 0:
+            raise ValueError("endpoint_ids must be a 1D or 2D array.")
+    else:
+        endp_ids, endp_branch, endp_first_tip = graph.endpoint_nodes_with_branch_id(return_branch_direction=True)
+    if ignore_endpoints is not None:
+        ignore_mask = np.isin(endp_ids, graph.as_node_ids(ignore_endpoints), invert=True)
+        if np.any(np.invert(ignore_mask)):
+            endp_ids = endp_ids[ignore_mask]
+            endp_branch = endp_branch[ignore_mask]
+            endp_first_tip = endp_first_tip[ignore_mask]
+    if len(endp_ids) == 0:
         return np.empty((0, 6), dtype=np.int_)
 
     gdata = graph.geometric_data()
-    endpoints_yx = gdata.node_coord()[endpoints]
+    endpoints_yx = gdata.node_coord()[endp_ids]
     endpoints_t = -np.stack(
-        [gdata.tip_tangent(b, d, attr=tangent_key) for b, d in zip(endpoints_branches, idirs, strict=True)]
+        [gdata.tip_tangent(b, d, attr=tangent_key) for b, d in zip(endp_branch, endp_first_tip, strict=True)]
     )
 
     intercepts = find_branch_intercepts(
@@ -723,7 +740,7 @@ def find_reconnection_candidates(
     branches_length = gdata.branch_arc_length()
 
     intercepts_with_nodes = []
-    for branch_id, first_tip, intercepts_data in zip(endpoints_branches, idirs, intercepts, strict=True):
+    for branch_id, first_tip, intercepts_data in zip(endp_branch, endp_first_tip, intercepts, strict=True):
         intercept_is_tail = intercepts_data[:, 1] == 0
         intercept_is_head = intercepts_data[:, 1] == branches_length[intercepts_data[:, 0]] - 1
         intercepts_existing_node = -np.ones(len(intercepts_data), dtype=np.int_)
@@ -827,7 +844,7 @@ def find_facing_tips(
     # Given tips p0 and p1 with tangents t0 and t1 (oriented towards their curves)
     # they are facing each other if u=(p1-p0)/||p1-p0|| is aligned with -t0 and t1
     facing = (tips_dtan * -tips_tan).sum(axis=2) >= min_tan_cos
-    facing &= facing.T
+    facing |= facing.T
 
     facing_tips = vicinity & facing
     facing_tips = facing_tips.reshape(B, 2, B, 2)
@@ -840,8 +857,8 @@ def find_facing_tips(
 
 def find_branch_intercepts(
     graph: VGraph,
-    yx: npt.NDArray[np.float32],
-    vu: npt.NDArray[np.float32],
+    yx: npt.NDArray[np.float64],
+    vu: npt.NDArray[np.float64],
     *,
     branch_ids: Optional[BranchIndicesLike] = None,
     max_distance: float = 100,
@@ -998,7 +1015,7 @@ def find_endpoints_branches_intercept_legacy(
 
     # === Intercept all branches with the endpoints tangents ===
     nearest_branch, intercept = find_closest_branches_cpp(
-        torch.from_numpy(gdata.branch_label_map(connect_nodes=True)).int(),
+        torch.from_numpy(gdata.skeleton_label_map(connect_nodes=True)).int(),
         torch.from_numpy(endpoints_yx).int(),
         torch.from_numpy(endpoints_t).float(),
         max_distance,

@@ -4,19 +4,22 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-RecursiveIntList: TypeAlias = List[int] | List["RecursiveIntList"]
-IntArrayLike: TypeAlias = npt.NDArray[np.int_] | int | RecursiveIntList
-Int1DArrayLike: TypeAlias = npt.NDArray[np.int_] | int | List[int]
-Int2DArrayLike: TypeAlias = npt.NDArray[np.int_] | List[int] | List[List[int]]
-Int3DArrayLike: TypeAlias = npt.NDArray[np.int_] | List[List[int]] | List[List[List[int]]]
 Int1DArray: TypeAlias = npt.NDArray[np.int_]
 Int2DArray: TypeAlias = npt.NDArray[np.int_]
+Int3DArray: TypeAlias = npt.NDArray[np.int_]
+RecursiveIntList: TypeAlias = List[int] | List["RecursiveIntList"]
+IntArrayLike: TypeAlias = npt.NDArray[np.int_] | int | RecursiveIntList
+Int1DArrayLike: TypeAlias = Int1DArray | int | List[int]
+Int2DArrayLike: TypeAlias = Int2DArray | List[int] | List[List[int]]
+Int3DArrayLike: TypeAlias = Int3DArray | List[List[int]] | List[List[List[int]]]
 
+Bool1DArray: TypeAlias = npt.NDArray[np.bool_]
+Bool2DArray: TypeAlias = npt.NDArray[np.bool_]
 RecursiveBoolList: TypeAlias = List[bool] | List["RecursiveBoolList"]
 BoolArrayLike: TypeAlias = npt.NDArray[np.bool_] | bool | RecursiveBoolList
-Bool1DArrayLike: TypeAlias = npt.NDArray[np.bool_] | bool | List[bool]
-Bool2DArrayLike: TypeAlias = npt.NDArray[np.bool_] | List[bool] | List[List[bool]]
-Bool1DArray: TypeAlias = npt.NDArray[np.bool_]
+Bool1DArrayLike: TypeAlias = Bool1DArray | bool | List[bool]
+Bool2DArrayLike: TypeAlias = Bool2DArray | List[bool] | List[List[bool]]
+
 
 RecursiveFloatList: TypeAlias = List[float] | List["RecursiveFloatList"]
 FloatArrayLike: TypeAlias = npt.NDArray[np.float64] | float | RecursiveFloatList

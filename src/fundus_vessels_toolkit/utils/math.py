@@ -25,6 +25,19 @@ def gaussian_filter1d(x, sigma, integrate=False):
     return convolve(x, kernel, mode="same")
 
 
+def gaussian_kernel2d(sigma, size=None, normalize=True):
+    if size is None:
+        size = int(ensure_superior_multiple(sigma * 6, 2) + 1)
+    elif size % 2 == 0:
+        size += 1
+    ax = np.arange(-(size // 2), size // 2 + 1)
+    xx, yy = np.meshgrid(ax, ax)
+    kernel = np.exp(-(xx**2 + yy**2) / (2 * sigma**2))
+    if normalize:
+        kernel = kernel / kernel.sum()
+    return kernel
+
+
 def angle_diff(a, b, degrees=False):
     """
     Return the difference between angles a and b in the range [-pi, pi].

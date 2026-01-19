@@ -9,6 +9,8 @@ from skimage.segmentation import expand_labels
 from fundus_toolkits.utils.geometric import Rect
 
 from ..utils.lookup_array import invert_complete_lookup
+from ..utils.math import gaussian_kernel2d
+from ..utils.numpy import binary_sparse_conv2d, bit_invert
 from ..utils.rasterization import rasterize_line, rasterize_topology
 from ..utils.typing import Bool1DArray, Float1DArray, Float2DArray, Int1DArray
 from ..vascular_data_objects.vbranch_geodata import VBranchGeoData
@@ -24,6 +26,7 @@ class TreeTopology:
         self,
         branch_map: npt.NDArray[TopologicalLabel],
         distance_map: npt.NDArray[np.float32],
+        fuzzy_skeleton_map: npt.NDArray[np.float32],
         tree: Optional[VTree] = None,
         branch_mapping: Optional[npt.NDArray[TopologicalLabel]] = None,
     ) -> None:
@@ -42,6 +45,7 @@ class TreeTopology:
         """
         self.branch_map = branch_map.astype(TopologicalLabel)
         self.distance_map = distance_map
+        self.fuzzy_skeleton_map = fuzzy_skeleton_map
         assert branch_map.shape == distance_map.shape, "Branch map and topo distance map must have the same shape."
 
         self._tree = tree
@@ -95,10 +99,17 @@ class TreeTopology:
             labels_map = expand_labels(labels_map, distance=expand_labels_by)
             topo_map = expand_labels(topo_map, distance=expand_labels_by)
 
+        skeleton = tree.geometric_data().skeleton_label_map(connect_nodes=True, interpolate=True) > 0
+        gaussian_kernel = gaussian_kernel2d(expand_labels_by / 2 + 4)
+        gaussian_kernel /= gaussian_kernel[gaussian_kernel.shape[0] // 2].sum()  # Normalize so lines sum to 1
+        fuzzy_skeleton_map = binary_sparse_conv2d(skeleton, gaussian_kernel) & (labels_map > 0)
+
         branch_mapping = branch_topological_mapping(tree)
         labels_map = branch_mapping[labels_map]
 
-        return cls(labels_map.astype(TopologicalLabel), topo_map, tree=tree, branch_mapping=branch_mapping)
+        return cls(
+            labels_map.astype(TopologicalLabel), topo_map, fuzzy_skeleton_map, tree=tree, branch_mapping=branch_mapping
+        )
 
     def has_tree(self) -> bool:
         return self._tree is not None
@@ -130,8 +141,8 @@ def read_branch_topology(
     graph: VGraph,
     topology: TreeTopology,
     *,
-    tip_d_threshold: float = 0.15,
-) -> tuple[npt.NDArray[TopologicalLabel], Float1DArray, npt.NDArray[TopologicalLabel], Float2DArray]:
+    tip_d_threshold: float = 0.25,
+) -> tuple[npt.NDArray[TopologicalLabel], Float1DArray, Float1DArray, npt.NDArray[TopologicalLabel], Float2DArray]:
     """
     Read the topological labels and distances for each branch in the graph based on the given tree topology.
 
@@ -151,6 +162,9 @@ def read_branch_topology(
     branch_dir: npt.NDArray[np.float32]
         A 1D array of size (B,) indicating, for each branch, its direction. Positive value indicates to keep the branch original direction in ``graph``, negative value indicates to flip it. Zero indicates unknown direction.
 
+    branch_plausibility: Float1DArray
+        A 1D array of size (B,) indicating, the mean of the fuzzy_skeleton_map values under each branch's skeleton.
+
     tips_label: npt.NDArray[TopologicalLabel]
         A 2D array of size (B, 2) indicating, for each branch, the topological labels of its two tips (tail, head).
 
@@ -162,6 +176,7 @@ def read_branch_topology(
     B = graph.branch_count
     branch_dir = np.zeros(B, dtype=float)
     branch_label = np.zeros(B, dtype=TopologicalLabel)
+    branch_plausibility = np.zeros(B, dtype=float)
 
     tips_label = np.zeros((B, 2), dtype=TopologicalLabel)
     tips_d = np.zeros((B, 2), dtype=float)
@@ -211,13 +226,31 @@ def read_branch_topology(
         branch_dir[branch.id] = dir
         branch_label[branch.id] = max(labels_occurence, key=lambda x: labels_occurence[x][0])
 
+        # → Get the plausibility of the branch based on the fuzzy_skeleton_map
+        branch_plausibility[branch.id] = topology.fuzzy_skeleton_map[*curve.T].mean()
+
         # → Get the tip labels and distances
         tips_label[branch.id, 0] = curve_label[0]
         tips_label[branch.id, 1] = curve_label[-1]
         tips_d[branch.id, 0] = curve_d[0]
         tips_d[branch.id, 1] = curve_d[-1]
 
-    return branch_label, branch_dir, tips_label, tips_d
+    # → Filter branches that overlap on gt to keep only the most plausible one
+    inters = dict(start=tips_label[:, 0], end=tips_label[:, 1], strict=False)
+    inters |= dict(start_d=tips_d[:, 0], end_d=tips_d[:, 1], strict_d=True)
+    tip0_inside = TopologicalLabel.is_between(tips_label[:, 0], point_d=tips_d[:, 0], **inters)  # type: ignore
+    tip1_inside = TopologicalLabel.is_between(tips_label[:, 1], point_d=tips_d[:, 1], **inters)  # type: ignore
+
+    for b0, b1 in zip(*np.where(tip0_inside | tip1_inside), strict=True):
+        if b0 >= b1:
+            continue
+        plaus0, plaus1 = branch_plausibility[b0], branch_plausibility[b1]
+        if plaus0 > plaus1:
+            branch_label[b1] = TopologicalLabel(0)
+        else:
+            branch_label[b0] = TopologicalLabel(0)
+
+    return branch_label, branch_dir, branch_plausibility, tips_label, tips_d
 
 
 def optimal_branch_tree(graph: VGraph, topology: TreeTopology) -> tuple[Int1DArray, Float1DArray, Bool1DArray]:
@@ -251,7 +284,7 @@ def optimal_branch_tree(graph: VGraph, topology: TreeTopology) -> tuple[Int1DArr
     B = graph.branch_count
     branch_tree = np.full(B, -1, dtype=np.int32)
 
-    branch_label, branch_dir, tips_label, tips_d = read_branch_topology(graph, topology)
+    branch_label, branch_dir, branch_plausibility, tips_label, tips_d = read_branch_topology(graph, topology)
     missing = branch_label == 0
 
     B_idx = np.arange(B)
@@ -308,7 +341,7 @@ def optimal_lines(
     """  # noqa: E501
     B = graph.branch_count
 
-    branch_label, branch_dir, tips_label, tips_d = read_branch_topology(graph, topology)
+    branch_label, branch_dir, _, tips_label, tips_d = read_branch_topology(graph, topology)
     missing = branch_label == 0
 
     B_idx = np.arange(B)
@@ -599,7 +632,8 @@ class TopologicalLabel(np.uint64):
         if max_rank is None:
             return np.uint64(0xFFFFFFFFFFFFFF00)  # cls.SUBTREE_MASK | cls.BRANCHING_PATTERN_MASK
         assert np.all(max_rank <= 44), "Max rank must be less than or equal to 44."
-        return ~(np.uint64(2) ** (np.uint64(52) - max_rank) - np.uint64(1))  # type: ignore
+        max_rank_ = max_rank.astype(np.uint64) if isinstance(max_rank, np.ndarray) else np.uint64(max_rank)
+        return bit_invert(np.uint64(2) ** (np.uint64(52) - max_rank_) - np.uint64(1))  # type: ignore
 
     @classmethod
     @overload
@@ -619,7 +653,7 @@ class TopologicalLabel(np.uint64):
         pattern = (label & cls.BRANCHING_PATTERN_MASK) >> np.uint64(8)
         if max_rank is not None:
             assert np.all(max_rank <= 44), "Max rank must be less than or equal to 44."
-            mask = ~(np.uint64(2) ** (np.uint64(44) - max_rank) - np.uint(1)) & np.uint64(0x00000FFFFFFFFFFF)
+            mask = bit_invert(np.uint64(2) ** (np.uint64(44) - max_rank) - np.uint(1)) & np.uint64(0x00000FFFFFFFFFFF)
             pattern &= mask
         return pattern
 
@@ -684,6 +718,112 @@ class TopologicalLabel(np.uint64):
         """
         o = TopologicalLabel(other)
         return self.subtree == o.subtree
+
+    @classmethod
+    def ancestor_check(
+        cls, parent: npt.NDArray[np.uint64], child: npt.NDArray[np.uint64], strict: bool = True
+    ) -> npt.NDArray[np.bool_]:
+        """
+        Check if each label in `parent` is an ancestor of the corresponding label in `child`.
+
+        Parameters
+        ----------
+        parent : npt.NDArray[np.uint64]
+            Array of N parent labels.
+        child : npt.NDArray[np.uint64]
+            Array of M child labels.
+
+        Returns
+        -------
+        npt.NDArray[np.bool_]
+            Boolean 2D array of shape (N, M) indicating ancestor relationships.
+
+        Examples
+        --------
+        >>> parent = np.array([TopologicalLabel.encode(subtree=1, branching_pattern=[True]),
+        ...                    TopologicalLabel.encode(subtree=1, branching_pattern=[True, False])])
+        >>> child = np.array([TopologicalLabel.encode(subtree=1, branching_pattern=[True, False, True]),
+        ...                   TopologicalLabel.encode(subtree=1, branching_pattern=[True, True]),
+        ...                   TopologicalLabel.encode(subtree=1, branching_pattern=[False, True])])
+        >>> TopologicalLabel.ancestor_check(parent, child)
+        array([[ True, True, False],
+               [ True, False, False]])
+        """
+        assert parent.ndim == 1 and child.ndim == 1, "Input arrays must be 1D."
+        parent, child = np.asarray(parent)[:, None], np.asarray(child)[None, :]
+        parent_rank_masks = cls.subtree_branching_bit_mask(cls.decode_rank(parent))
+        is_higher_rank = parent < child if strict else parent <= child
+        return is_higher_rank & ((parent & parent_rank_masks) == (child & parent_rank_masks))
+
+    @classmethod
+    def is_between(
+        cls,
+        point: npt.NDArray[np.uint64],
+        start: npt.NDArray[np.uint64],
+        end: npt.NDArray[np.uint64],
+        point_d: npt.NDArray[np.float64] | None = None,
+        start_d: npt.NDArray[np.float64] | None = None,
+        end_d: npt.NDArray[np.float64] | None = None,
+        *,
+        strict: bool = True,
+        strict_d: Optional[bool] = None,
+    ) -> npt.NDArray[np.bool_]:
+        """
+        Check if each label in `point` is between the corresponding labels in `start` and `end`.
+
+        Parameters
+        ----------
+        point : npt.NDArray[np.uint64]
+            1D array of N point labels.
+        start : npt.NDArray[np.uint64]
+            1D array of M start labels.
+        end : npt.NDArray[np.uint64]
+            1D array of M end labels.
+        point_d : npt.NDArray[np.float64] | None, optional
+            1D array storing the topological distances of points, by default None
+        start_d : npt.NDArray[np.float64] | None, optional
+            1D array storing the topological distances of start points, by default None
+        end_d : npt.NDArray[np.float64] | None, optional
+            1D array storing the topological distances of end points, by default None
+        strict : bool, optional
+            Whether to use strict inequalities, by default True
+
+        Returns
+        -------
+        npt.NDArray[np.bool_]
+            Boolean 2D array indicating if each point is between the corresponding start and end labels.
+        """
+        assert point.ndim == 1 and start.ndim == 1 and end.ndim == 1, "Input arrays must be 1D."
+        assert start.shape == end.shape, "start and end must have the same shape."
+
+        point, start, end = np.asarray(point)[:, None], np.asarray(start)[None, :], np.asarray(end)[None, :]
+
+        start_rank_masks = cls.subtree_branching_bit_mask(cls.decode_rank(start))
+        is_descendant = (start < point) if strict else (start <= point)
+        is_descendant &= (point & start_rank_masks) == (start & start_rank_masks)
+
+        point_rank_masks = cls.subtree_branching_bit_mask(cls.decode_rank(point))
+        is_ancestor = (point < end) if strict else (point <= end)
+        is_ancestor &= (point & point_rank_masks) == (end & point_rank_masks)
+
+        between_mask = is_descendant & is_ancestor
+
+        if point_d is not None:
+            assert start_d is not None and end_d is not None, (
+                "start_d and end_d must be provided if point_d is provided."
+            )
+            assert point_d.ndim == 1 and start_d.ndim == 1 and end_d.ndim == 1, "Input distance arrays must be 1D."
+            assert point_d.shape[0] == point.shape[0], "point_d must have the same length as point."
+            assert start_d.shape[0] == start.shape[1], "start_d must have the same length as start."
+            assert end_d.shape[0] == end.shape[1], "end_d must have the same length as end."
+
+            point_d, start_d, end_d = point_d[:, None], start_d[None, :], end_d[None, :]
+            if strict_d is True or strict_d is None and strict is True:
+                between_mask &= (start_d < point_d) & (point_d < end_d)
+            else:
+                between_mask &= (start_d <= point_d) & (point_d <= end_d)
+
+        return between_mask
 
     @overload
     def is_parent_of(self, other: Self | np.uint64, or_self: bool = False) -> bool: ...

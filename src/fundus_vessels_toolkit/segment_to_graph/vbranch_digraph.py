@@ -1,14 +1,16 @@
 import warnings
 from typing import Optional, Self
 
+from cli_ui import debug
 import numpy as np
 import numpy.typing as npt
 
-from fundus_vessels_toolkit.utils.typing import Int2DArrayLike
+from fundus_vessels_toolkit.vascular_data_objects.fundus_data import AVLabel
 
 from ..utils.cluster import cluster_by_distance
 from ..utils.math import sigmoid, softmax
 from ..utils.numpy import np_group_by
+from ..utils.typing import Int2DArrayLike
 from ..vascular_data_objects import VGraph
 from ..vascular_data_objects.vbranch_geodata import VBranchGeoData
 from ..vascular_data_objects.vgraph import BranchIndicesLike, NodeIndicesLike
@@ -122,87 +124,6 @@ class VBranchDigraph(LineDigraph):
             return np.ones(self.graph.branch_count, dtype=bool)
         return 1 - self.branch_av_p.sum(axis=1) >= self.branch_av_p.max(axis=1)
 
-    def optimize_tree(self, keep_invalid_branch: bool = False) -> VTree:
-        """Resolve the directed graph into an arborescence (a directed tree).
-
-        Returns
-        -------
-        VTree
-            The tree representation of the directed graph.
-        """
-        assert self.line_p is not None, (
-            "Impossible to resolve the tree: the probabilities of link between branches (line_p) is missing."
-        )
-
-        # === Ignore invalid branches ===
-        invalid_branch = self.invalid_branch()
-        B_inv = np.sum(invalid_branch)
-
-        # Filter out lines connected to invalid branches
-        invalid_lines = invalid_branch[self.line_list[:, 0]] | invalid_branch[self.line_list[:, 2]]
-        line_list = self.line_list[~invalid_lines]
-        line_p = self.line_p[~invalid_lines]
-
-        # Add dummy lines from root to invalid branch
-        if self.branch_dir_p is not None:
-            dummy_lines = [
-                np.repeat([[-1, 0]], B_inv, axis=0),
-                np.argwhere(invalid_branch),
-                self.branch_dir_p[invalid_branch, None] < 0.5,
-            ]
-            line_list = np.vstack([line_list, np.hstack(dummy_lines)])
-            line_p = np.concat([line_p, np.ones(B_inv)])
-            dir_p = np.concat([self.branch_dir_p[~invalid_branch], self.branch_dir_p[invalid_branch]])
-        else:
-            dir_p = None
-            dummy_lines = [
-                np.repeat([[-1, 0]], B_inv, axis=0),
-                np.argwhere(invalid_branch),
-                np.ones(B_inv),
-            ]
-            line_list = np.vstack([line_list, np.hstack(dummy_lines)])
-            line_p = np.concat([line_p, np.ones(B_inv)])
-
-        # === Solve the directed graph into an arborescence ===
-        branch_parents, branch_dir = solve_line_digraph_approx(
-            line_list=line_list,
-            line_p=line_p,
-            branch_dir_p=dir_p,
-            ignore_branch_dir_in_MSA=dir_p is None,
-        )
-
-        vgraph = self.graph.copy()
-
-        # === Insert branches on connections of not-adjacent branches ===
-        added_branch_parents = []
-        for b1, b0 in enumerate(branch_parents):
-            if b0 == -1:
-                continue
-
-            # If branches are not adjacent (namely if the nodes b0_head != b1_tail) ...
-            b0_head = vgraph.branch_list[b0, 1 if branch_dir[b0] else 0]
-            b1_tail = vgraph.branch_list[b1, 0 if branch_dir[b1] else 1]
-            if b0_head != b1_tail:
-                # ... insert a branch in the graph
-                new_b = vgraph.add_branch([b0_head, b1_tail], return_branch_id=True, inplace=True)[1][0]
-                assert new_b == len(branch_parents) + len(added_branch_parents), "Unexpected branch id"
-
-                # ... update parent of b1 and new_b so that b0 -> new_b --> b1
-                branch_parents[b1] = new_b
-                added_branch_parents.append(b0)
-
-        # === Build the final VTree ===
-        branch_parents = np.hstack([branch_parents, np.array(added_branch_parents, dtype=np.int_)])
-        branch_dir = np.hstack([branch_dir, np.ones(len(added_branch_parents), dtype=np.bool_)])
-        tree = VTree.from_graph(vgraph, branch_parents, branch_dir, copy=False)
-
-        # === Optionally remove invalid branches from the tree ===
-        if not keep_invalid_branch and B_inv > 0:
-            tree.delete_branch(np.where(invalid_branch)[0], inplace=True)
-            warnings.warn(f"Removed {B_inv} invalid branches from the optimized tree.", UserWarning)
-
-        return tree
-
     @classmethod
     def from_graph(cls, graph: VGraph, *, max_distance=100, max_angle=30, tan_max_angle=60, pos_tolerance=25) -> Self:
         """Create a BranchDigraph from a VGraph.
@@ -222,7 +143,7 @@ class VBranchDigraph(LineDigraph):
             all_except={VBranchGeoData.Fields.TANGENTS, VBranchGeoData.Fields.TIPS_TANGENT}
         )
         _, candidates = prepare_graph_for_reconnections(
-            graph, max_distance=max_distance, max_angle=max_angle, inplace=True
+            graph, max_distance=max_distance, max_angle=max_angle, av_attr="av", inplace=True
         )
         derive_tips_geometry_from_curve_geometry(graph, tangent=True, inplace=True)
 
@@ -250,7 +171,8 @@ class VBranchDigraph(LineDigraph):
         ]
         line_list = np.vstack(line_list)
 
-        return cls(graph=graph, line_list=line_list)
+        digraph = cls(graph=graph, line_list=line_list)
+        return digraph
 
     def compute_p_from_gt(self, art_topology: TreeTopology, vei_topology: TreeTopology) -> None:
         """Compute the probabilities of each edge in the directed graph from a ground truth tree topology.
@@ -300,6 +222,86 @@ class VBranchDigraph(LineDigraph):
         self.line_p = (art_lines | vei_lines).astype(float)
         self.branch_dir_p = sigmoid((art_branch_dir * art_b + vei_branch_dir * vei_b).astype(float) * 6)
 
+    def optimize_tree(self, keep_invalid_branch: bool = False) -> VTree:
+        """Resolve the directed graph into an arborescence (a directed tree).
+
+        Returns
+        -------
+        VTree
+            The tree representation of the directed graph.
+        """
+        assert self.line_p is not None, (
+            "Impossible to resolve the tree: the probabilities of link between branches (line_p) is missing."
+        )
+
+        # === Ignore invalid branches ===
+        invalid_branch = self.invalid_branch()
+        B_inv = int(np.sum(invalid_branch))
+
+        # Filter out lines connected to invalid branches
+        invalid_lines = invalid_branch[self.line_list[:, 0]] | invalid_branch[self.line_list[:, 2]]
+        line_list = self.line_list[np.invert(invalid_lines)]
+        line_p = self.line_p[np.invert(invalid_lines)]
+
+        # Add dummy lines from root to invalid branch
+        if self.branch_dir_p is not None:
+            dummy_lines = [
+                np.repeat([[-1, 0]], B_inv, axis=0),
+                np.argwhere(invalid_branch),
+                self.branch_dir_p[invalid_branch, None] < 0.5,
+            ]
+            line_list = np.vstack([line_list, np.hstack(dummy_lines)])
+            line_p = np.concatenate([line_p, np.ones(B_inv)])
+            dir_p = np.concatenate([self.branch_dir_p[~invalid_branch], self.branch_dir_p[invalid_branch]])
+        else:
+            dir_p = None
+            dummy_lines = [
+                np.repeat([[-1, 0]], B_inv, axis=0),
+                np.argwhere(invalid_branch),
+                np.ones(B_inv),
+            ]
+            line_list = np.vstack([line_list, np.hstack(dummy_lines)])
+            line_p = np.concatenate([line_p, np.ones(B_inv)])
+
+        # === Solve the directed graph into an arborescence ===
+        branch_parents, branch_dir = solve_line_digraph_approx(
+            line_list=line_list,
+            line_p=line_p,
+            branch_dir_p=dir_p,
+            ignore_branch_dir_in_MSA=dir_p is None,
+        )
+
+        vgraph = self.graph.copy()
+
+        # === Insert branches on connections of not-adjacent branches ===
+        added_branch_parents = []
+        for b1, b0 in enumerate(branch_parents):
+            if b0 == -1:
+                continue
+
+            # If branches are not adjacent (namely if the nodes b0_head != b1_tail) ...
+            b0_head = vgraph.branch_list[b0, 1 if branch_dir[b0] else 0]
+            b1_tail = vgraph.branch_list[b1, 0 if branch_dir[b1] else 1]
+            if b0_head != b1_tail:
+                # ... insert a branch in the graph
+                new_b = vgraph.add_branch([b0_head, b1_tail], return_branch_id=True, inplace=True)[1][0]
+                assert new_b == len(branch_parents) + len(added_branch_parents), "Unexpected branch id"
+
+                # ... update parent of b1 and new_b so that b0 -> new_b --> b1
+                branch_parents[b1] = new_b
+                added_branch_parents.append(b0)
+
+        # === Build the final VTree ===
+        branch_parents = np.hstack([branch_parents, np.array(added_branch_parents, dtype=np.int_)])
+        branch_dir = np.hstack([branch_dir, np.ones(len(added_branch_parents), dtype=np.bool_)])
+        tree = VTree.from_graph(vgraph, branch_parents, branch_dir, copy=False)
+
+        # === Optionally remove invalid branches from the tree ===
+        if not keep_invalid_branch and B_inv > 0:
+            tree.delete_branch(np.where(invalid_branch)[0], inplace=True)
+
+        return tree
+
     def lines_by_branch(self, branch: int, sort_by_p: Optional[bool] = None) -> npt.NDArray[np.float64]:
         """Get the lines in the directed graph that start from a given branch.
 
@@ -330,6 +332,8 @@ class VBranchDigraph(LineDigraph):
                 b1_dir_p = np.where(~b1_reversed, self.branch_dir_p[b1], 1 - self.branch_dir_p[b1])
                 line_dir_p = np.where(b0 != -1, (b0_dir_p + b1_dir_p) / 2, b1_dir_p)
                 total_p += line_dir_p
+            else:
+                b0_dir_p = b1_dir_p = np.array([])
             sorted_ids = np.argsort(total_p)[::-1]
             lines = lines[sorted_ids]
             lines[:, 1] = self.graph.branch_list[lines[:, 0], lines[:, 1]]
@@ -348,12 +352,10 @@ def prepare_graph_for_reconnections(
     *,
     max_distance: float = 100,
     max_angle: float = 30,
-    end_max_angle: Optional[float] = 20,
     snap_tip_max_distance: float = 30,
     snap_tip_max_angle: float = 30,
     snap_new_node_max_distance: float = 25,
-    endpoint_ids: Optional[NodeIndicesLike] = None,
-    branch_ids: Optional[BranchIndicesLike] = None,
+    av_attr: Optional[str] = None,
     inplace: bool = False,
 ) -> tuple[VGraph, npt.NDArray[np.int_]]:
     """Find reconnection candidates in the graph using a directed line graph approach.
@@ -362,6 +364,27 @@ def prepare_graph_for_reconnections(
     ----------
     graph : VGraph
         The input vascular graph.
+
+    max_distance : float, optional
+        The maximum distance between two endpoints or between an endpoint and a branch to consider a reconnection
+        candidate, by default 100.
+
+    max_angle : float, optional
+        The maximum angle between two branches or between an endpoint and a branch to consider a reconnection
+        candidate, by default 30.
+
+    snap_tip_max_distance : float, optional
+        The maximum distance between two endpoints to snap them together as a reconnection candidate, by default 30.
+
+    snap_tip_max_angle : float, optional
+        The maximum angle between two endpoints to snap them together as a reconnection candidate, by default 30.
+
+    snap_new_node_max_distance : float, optional
+        The maximum distance between two new nodes created on branches to snap them together as a single new node,
+        by default 25.
+
+    av_attr : Optional[str], optional
+        The name of the branch attribute containing the artery/vein class probabilities. If provided, branches tips who are not connected to any branch of the same class will be considered as endpoints, by default None.
 
     Returns
     -------
@@ -380,15 +403,28 @@ def prepare_graph_for_reconnections(
     if not inplace:
         graph = graph.copy()
 
+    if av_attr is not None and av_attr in graph.branch_attr.columns:
+        endpoints = []
+        for node in graph.nodes():
+            branch = np.array(node.adjacent_branch_ids)
+            tips = np.where(node.adjacent_branches_first_node, 0, 1)
+            branch_av = graph.branch_attr.loc[branch, av_attr].to_numpy()
+            a_branch = np.isin(branch_av, [AVLabel.ART, AVLabel.BOTH])
+            v_branch = np.isin(branch_av, [AVLabel.VEI, AVLabel.BOTH])
+            if np.sum(a_branch) == 1:
+                endpoints += [(branch[a_branch][0], tips[a_branch][0])]
+            if np.sum(v_branch) == 1:
+                endpoints += [(branch[v_branch][0], tips[v_branch][0])]
+    else:
+        endpoints = None
+
     candidates = find_reconnection_candidates(
         graph,
         max_distance=max_distance,
         max_angle=max_angle,
-        end_max_angle=end_max_angle,
         snap_max_distance=snap_tip_max_distance,
         snap_max_angle=snap_tip_max_angle,
-        endpoint_ids=endpoint_ids,
-        branch_ids=branch_ids,
+        endpoint_ids=endpoints,
     )
     # Candidates format:  0     1   2          3         4  5  6
     #                   (b0, tip0, n1, branch_id, curve_id, y, x)

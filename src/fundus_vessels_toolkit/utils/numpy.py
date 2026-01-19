@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Literal, Tuple
 
 import numpy as np
 import numpy.typing as npt
 
-from ..utils.typing import IndicesLike
+from ..utils.typing import Bool2DArray
 
 
 def readonly(arr: npt.NDArray) -> npt.NDArray:
@@ -100,6 +100,43 @@ def np_group_by(array: npt.NDArray, keys: npt.NDArray) -> list[tuple[npt.NDArray
     assert array.shape[0] == keys.shape[0], "array and keys must have the same length."
     unique_keys, inverse_indices = np.unique(keys, return_inverse=True)
     return [(unique_keys[i], array[inverse_indices == i]) for i in range(len(unique_keys))]
+
+
+def bit_invert(bits: npt.NDArray[np.uint64]) -> npt.NDArray[np.uint64]:
+    """Invert the bits of a numpy array of uint64.
+
+    Parameters
+    ----------
+    bits : np.ndarray[np.uint64]
+        The bits to invert.
+
+    Returns
+    -------
+    np.ndarray[np.uint64]
+        The inverted bits.
+    """
+    return bits ^ np.uint64(0xFFFFFFFFFFFFFFFF)
+
+
+def binary_sparse_conv2d[T: np.generic](
+    binary_array: Bool2DArray, kernel: npt.NDArray[T], mode: Literal["same", "safe", "full"] = "same"
+) -> npt.NDArray[T]:
+    """Convolve a sparse binary mask with a convolution kernel."""
+    assert binary_array.ndim == 2 and binary_array.dtype == np.bool_, "binary_array must be a 2D boolean array"
+    kH, kW = kernel.shape
+    H, W = binary_array.shape
+    out = np.zeros((H + kH, W + kW), dtype=kernel.dtype)
+
+    ys, xs = np.nonzero(binary_array)
+    for ky in range(kH):
+        for kx in range(kW):
+            out[ys + ky, xs + kx] += kernel[ky, kx]
+    if mode == "full":
+        return out
+    elif mode == "same":
+        return out[kH // 2 : H + kH // 2, kW // 2 : W + kW // 2]
+    elif mode == "safe":
+        return out[kH - 1 : H, kW - 1 : W]
 
 
 def as_1d_array(data: npt.ArrayLike, *, dtype=None) -> Tuple[npt.NDArray, bool]:

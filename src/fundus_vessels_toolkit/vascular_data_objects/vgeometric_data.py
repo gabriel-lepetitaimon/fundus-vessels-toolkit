@@ -784,7 +784,7 @@ class VGeometricData:
     ####################################################################################################################
     #  === COMPUTABLE GEOMETRIC PROPERTIES ===
     ####################################################################################################################
-    def branch_label_map(
+    def skeleton_label_map(
         self,
         calibre_attr=None,
         only_tip=False,
@@ -1138,7 +1138,7 @@ class VGeometricData:
             attr_data = self._branch_data_dict[attrs_desc[0]]
             data = [attr_data[_].data for _ in branch_ids]
             if first_tip is not None:
-                if type(first_tip) in (bool, np.bool_):
+                if isinstance(first_tip, (bool, np.bool_)):
                     data = [d[0] for d in data] if first_tip else [d[1] for d in data]
                 else:
                     data = [d[0 if first else 1] for d, first in zip(data, first_tip, strict=True)]
@@ -1339,12 +1339,12 @@ class VGeometricData:
     def tip_tangent(
         self,
         branch_id: Optional[int | npt.ArrayLike] = None,
-        first_tip: Optional[bool | npt.ArrayLike] = None,
+        first_tip: Optional[Bool1DArrayLike] = None,
         *,
         infer_from_nodes_if_missing: bool = True,
         attr: VBranchGeoDataKey = VBranchGeoData.Fields.TIPS_TANGENT,
         graph_index=True,
-    ) -> npt.NDArray[np.float32]:
+    ) -> npt.NDArray[np.float64]:
         """Return the tangent of the tips of the branches. Tangents are unit vectors oriented towards the inside of the branch.
 
         Parameters

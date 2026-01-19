@@ -99,7 +99,30 @@ def draw_tree(
     elif branch_color == "subtree":
 
         def colormap(x):
-            cmap = ["red", "blue", "purple", "green", "orange", "cyan", "pink", "yellow", "teal", "lime"]
+            cmap = [
+                "red",
+                "blue",
+                "purple",
+                "green",
+                "orange",
+                "cyan",
+                "pink",
+                "yellow",
+                "teal",
+                "lime",
+                "magenta",
+                "brown",
+                "navy",
+                "olive",
+                "maroon",
+                "aqua",
+                "fuchsia",
+                "silver",
+                "gold",
+                "coral",
+                "indigo",
+                "violet",
+            ]
             return cmap[x % len(cmap)]
 
         layer.edges_cmap = pd.Series(tree.subtrees_branch_labels()).map(colormap).to_dict()

@@ -751,7 +751,7 @@ class VGraph:
         *,
         return_node_lookup: Literal[True],
         return_branch_lookup: Literal[False] = False,
-    ) -> tuple[Self, Indices]: ...
+    ) -> tuple[VGraph, Indices]: ...
     @overload
     def subgraph(
         self,
@@ -759,7 +759,7 @@ class VGraph:
         *,
         return_node_lookup: Literal[False] = False,
         return_branch_lookup: Literal[True],
-    ) -> tuple[Self, Indices]: ...
+    ) -> tuple[VGraph, Indices]: ...
     @overload
     def subgraph(
         self,
@@ -767,10 +767,10 @@ class VGraph:
         *,
         return_node_lookup: Literal[True],
         return_branch_lookup: Literal[True],
-    ) -> tuple[Self, Indices, Indices]: ...
+    ) -> tuple[VGraph, Indices, Indices]: ...
     def subgraph(
         self, nodes: NodeIndicesLike, *, return_node_lookup: bool = False, return_branch_lookup: bool = False
-    ) -> Self | tuple[Self, Indices] | tuple[Self, Indices, Indices]:
+    ) -> VGraph | tuple[VGraph, Indices] | tuple[VGraph, Indices, Indices]:
         """Create a subgraph from the current graph.
 
         Parameters
@@ -798,7 +798,7 @@ class VGraph:
             gdata._reindex_nodes(nodes_lookup)
             gdata._reindex_branches(branch_lookup)
 
-        graph = type(self)(
+        graph = VGraph(
             branch_list,
             geodata,
             self._node_attr.loc[nodes].reset_index(drop=True),
@@ -1460,19 +1460,23 @@ class VGraph:
 
     @overload
     def endpoint_nodes_with_branch_id(
-        self, *, return_branch_direction: Literal[False] = False
+        self, endpoint_nodes: Optional[NodeIndicesLike] = None, *, return_branch_direction: Literal[False] = False
     ) -> tuple[Indices, Indices]: ...
     @overload
     def endpoint_nodes_with_branch_id(
-        self, *, return_branch_direction: Literal[True]
+        self, endpoint_nodes: Optional[NodeIndicesLike] = None, *, return_branch_direction: Literal[True]
     ) -> tuple[Indices, Indices, Bool1DArray]: ...
     def endpoint_nodes_with_branch_id(
-        self, *, return_branch_direction: bool = False
+        self, endpoint_nodes: Optional[NodeIndicesLike] = None, *, return_branch_direction: bool = False
     ) -> tuple[Indices, Indices] | tuple[Indices, Indices, Bool1DArray]:
         """Return the indices of the nodes that are connected to exactly one branch along with the indices of their incident branches.
 
         Parameters
         ----------
+        endpoint_nodes : IndexLike, optional
+            The indices of the endpoint nodes to consider. If None, all endpoint nodes are considered.
+            Valid indices are the same as for :meth:`VGraph.as_node_ids`.
+
         return_branch_direction : bool, optional
             If True, also return whether the branch is outgoing from the node. Default is False.
 
@@ -1502,7 +1506,10 @@ class VGraph:
         (array([0, 3, 4]), array([0, 2, 3], dtype=int32), array([ True, False, False]))
 
         """  # noqa: E501
-        endpoint_nodes = self.endpoint_nodes(as_mask=False)
+        if endpoint_nodes is not None:
+            endpoint_nodes = self.as_node_ids(endpoint_nodes)
+        else:
+            endpoint_nodes = self.endpoint_nodes(as_mask=False)
         incident_branches: npt.NDArray = first_index_of(self._branch_list.flatten(), endpoint_nodes)  # type: ignore
         branch_index = incident_branches // 2
         if return_branch_direction:
@@ -3467,7 +3474,7 @@ class VGraph:
         layer = LayerGraph(
             self._branch_list,
             geodata.node_coord() - np.array(domain.top_left)[None, :],
-            geodata.branch_label_map(calibre_attr=boundaries, only_tip=boundaries_only_tip),
+            geodata.skeleton_label_map(calibre_attr=boundaries, only_tip=boundaries_only_tip),
         )
         layer.set_options(
             {
