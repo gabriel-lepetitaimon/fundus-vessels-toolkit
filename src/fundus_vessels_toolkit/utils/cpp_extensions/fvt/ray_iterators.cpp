@@ -326,7 +326,7 @@ Line::Line(const IntPoint& p0, const IntPoint& p1, bool skipLast, bool skipFirst
     }
     if (skipLast && _length > 0) _length--;
 }
-
+const int& Line::length() const { return _length; }
 RayIterator Line::begin() const { return RayIterator(_p0, _delta, _octant); }
 RayIterator Line::end() const { return RayIterator(_p0, _delta, _octant).skip(_length + 1); }
 

@@ -148,32 +148,34 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
             const auto N = curve.size();
 
             // === DRAW THE BRANCH ===
-            auto drawTopo = [&](IntPoint pt, float u) {
+            auto drawTopo = [&](IntPoint pt, float u, int branchID, float rank) {
                 branchLabelsMapAcc[pt.y][pt.x] = branchID + 1;
-                float topoValue = branch.rank + u;
+                float topoValue = rank + u;
                 if (topoMapAcc[pt.y][pt.x] < topoValue) topoMapAcc[pt.y][pt.x] = topoValue;
             };
+            auto drawBranchTopo = [&](IntPoint pt, float u) { drawTopo(pt, 0.1 + 0.9 * u, branchID, branch.rank); };
             if (N != 0) {  // If the branch is not empty rasterize it
-                auto drawBranchTopo = [&](IntPoint pt, float u) { drawTopo(pt, 0.9 * u); };
                 rasterize_branch_topo(curve, boundary, drawBranchTopo, maxShape, bezier_interpolate);
             } else {  // Otherwise draw bezier cubic interpolation
                 const auto &tailTip = tips[branchID][0], &headTip = tips[branchID][1];
                 if (tailTip.w >= 0 && headTip.w >= 0 && bezier_interpolate > 0.0f) {
-                    rasterize_bezier(drawTopo, tailTip.yx, headTip.yx, tailTip.t, headTip.t, tailTip.b, headTip.b,
+                    rasterize_bezier(drawBranchTopo, tailTip.yx, headTip.yx, tailTip.t, headTip.t, tailTip.b, headTip.b,
                                      bezier_interpolate, maxShape);
                 }
             }
 
             // === FILL HEAD JUNCTION ===
             if (fill_junctions) {
-                auto drawJunctionTopo = [&](IntPoint pt, float u) { drawTopo(pt, 0.9 + 0.1 * u); };
-
                 const auto& headTip = tips[branchID][1];
                 if (headTip.w < 0) continue;  // If the head tip is invalid, skip this filling
 
                 for (const auto& childID : branch.children) {
                     const auto& childTip = tips[childID][0];
                     if (childTip.w < 0) continue;  // If the child tip is invalid, skip this filling
+
+                    auto drawJunctionTopo = [&](IntPoint pt, float u) {
+                        drawTopo(pt, 0.1 * u, childID, branch.rank + 1);
+                    };
 
                     if ((distance(headTip.yx, childTip.yx) <= (headTip.w + childTip.w) &&
                          headTip.t.dot(childTip.t) > 0.5) ||

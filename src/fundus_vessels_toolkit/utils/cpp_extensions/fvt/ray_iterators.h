@@ -131,6 +131,7 @@ class Line {
     const IntPoint& p0() const;
     const IntPoint& p1() const;
     const Point& dir() const;
+    const int& length() const;
 
    protected:
     IntPoint _p0, _p1;

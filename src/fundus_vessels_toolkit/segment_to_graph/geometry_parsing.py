@@ -4,6 +4,7 @@ import numpy as np
 
 from fundus_toolkits import FundusData
 from fundus_toolkits.utils.geometric import Rect
+from fundus_vessels_toolkit.utils.bezier import BSpline
 
 from ..utils.graph.measures import extract_branch_geometry
 from ..utils.math import intercept_segment
@@ -129,6 +130,40 @@ def populate_geometry(
     return vgraph
 
 
+def bsplines_from_curves(vgraph: VGraph, bspline_target_error: float = 2) -> list[BSpline]:
+    """Compute the B-Spline representation of the branches from their curves.
+    Parameters
+    ----------
+    vgraph : VGraph
+        The graph to compute the B-Splines for.
+    bspline_target_error : float, optional
+        The target error for the bspline interpolation, by default 3.
+    Returns
+    -------
+    list[BSpline]
+        The list of B-Spline representations of the branches. Empty curves are represented as empty bsplines.
+    """
+    geo_data = vgraph.geometric_data()
+    curves = geo_data.branch_curve()
+
+    bsplines: list[BSpline] = []
+    for b, curve in enumerate(curves):
+        if curve is not None and len(curve) >= 3:
+            TAN_DATA, ROOTS_DATA = VBranchGeoData.Fields.TANGENTS, VBranchGeoData.Fields.CURVATURE_ROOTS
+            tangents = geo_data.branch_data(TAN_DATA, branch_id=b) if geo_data.has_branch_data(TAN_DATA) else None
+            roots = geo_data.branch_data(ROOTS_DATA, branch_id=b) if geo_data.has_branch_data(ROOTS_DATA) else None
+            bspline, _ = BSpline.fit(
+                curve,
+                tangents=None if tangents is None else tangents.data,
+                curvature_roots=None if roots is None else roots.data,
+                max_error=bspline_target_error,
+            )
+            bsplines.append(bspline)
+        else:
+            bsplines.append(BSpline())
+    return bsplines
+
+
 def derive_tips_geometry_from_curve_geometry(
     vgraph: VGraph,
     *,
@@ -148,17 +183,17 @@ def derive_tips_geometry_from_curve_geometry(
 
 
     calibre : bool | int, optional
-        If neither False nor null, derive ``TERMINATION_CALIBRE`` from ``CALIBRE``.
+        If neither False nor null, derive ``TIP_CALIBRE`` from ``CALIBRE``.
         If True, average the calibre of the 10 points closest to the tips.
         If a int, average the calibre of the n points closest to the tips.
 
     tangent : Literal["bspline"] | bool | int | None, optional
-        If neither False nor null, derive ``TERMINATION_TANGENT`` from ``TANGENT``.
+        If neither False nor null, derive ``TIP_TANGENT`` from ``TANGENT``.
         If True, average the tangent of the 10 points closest to the tips.
         If a int, average the tangent of the n points closest to the tips.
 
     boundaries : bool | None, optional
-        If neither False nor null, derive ``TERMINATION_BOUNDARIES`` from ``BOUNDARIES``.
+        If neither False nor null, derive ``TIP_BOUNDARIES`` from ``BOUNDARIES``.
 
     tangent_from_nodes : bool | int, optional
         If not False, when the tangent is not available, derive it from the nodes coordinates if the distance between the nodes is less than the value (30 px if True).

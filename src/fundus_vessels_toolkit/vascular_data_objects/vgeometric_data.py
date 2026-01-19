@@ -24,6 +24,7 @@ from ..utils.numpy import as_1d_array, np_find_sorted, readonly
 from ..utils.typing import (
     Bool1DArrayLike,
     Float1DArray,
+    Float2DArray,
     IndicesLike,
     Int1DArray,
     Int1DArrayLike,
@@ -56,7 +57,7 @@ class VGeometricData:
 
     def __init__(
         self,
-        nodes_coord: npt.ArrayLike,
+        nodes_coord: Float2DArray,
         branches_curve: List[npt.NDArray[np.uint32]],
         domain: Rect,
         branches_attr: Optional[VBranchGeoDictUncurated] = None,
@@ -98,10 +99,10 @@ class VGeometricData:
         self._domain: Rect = Rect.from_tuple(domain)
 
         # Check and define nodes coordinates and index
-        nodes_coord = np.asarray(nodes_coord, dtype=np.float32)
+        nodes_coord = np.asarray(nodes_coord, dtype=np.float64)
         if not nodes_coord.ndim == 2 and nodes_coord.shape[1] == 2:
             raise ValueError("The node coordinates should be a 2D array with shape (n_nodes, 2).")
-        self._nodes_coord: npt.NDArray[np.float32] = nodes_coord.astype(np.float32)
+        self._nodes_coord: npt.NDArray[np.float64] = nodes_coord.astype(np.float64)
 
         if nodes_id is not None:
             nodes_id = np.asarray(nodes_id, dtype=np.uint32)
@@ -349,7 +350,7 @@ class VGeometricData:
 
     def node_coord(
         self, ids: Optional[int | npt.NDArray[np.int_]] = None, *, graph_index=True, apply_domain=False
-    ) -> npt.NDArray[np.float32]:
+    ) -> npt.NDArray[np.float64]:
         """Return the coordinates of the nodes in the graph."""
 
         if ids is None:
@@ -359,7 +360,7 @@ class VGeometricData:
 
         if isinstance(ids, np.ndarray):
             internal_id = self._graph_to_internal_nodes_index(ids, graph_index=graph_index)
-            coord: npt.NDArray[np.float32] = self._nodes_coord[internal_id]
+            coord: npt.NDArray[np.float64] = self._nodes_coord[internal_id]
             if apply_domain:
                 coord += np.array(self.domain.top_left)[None, :]
             return coord if not is_single else coord[0]
@@ -377,7 +378,7 @@ class VGeometricData:
                 assert coord.shape[0] == self.node_count, (
                     "The number of coordinates should be the same as the number of nodes."
                 )
-                self._nodes_coord = np.asarray(coord, dtype=np.float32)
+                self._nodes_coord = np.asarray(coord, dtype=np.float64)
                 return
             else:
                 ids = np.arange(coord.shape[0])
@@ -2163,6 +2164,26 @@ class VGeometricData:
             else:
                 for i in internal_ids:
                     attr_data[i] = None
+
+    def clear_attribute(
+        self, *attr: VBranchGeoDataKey, all_except: VBranchGeoDataKey | Iterable[VBranchGeoDataKey] | None = None
+    ) -> None:
+        """Clear a geometric attribute from all branches.
+
+        Parameters
+        ----------
+        attr_name : VBranchGeoDataKey | Iterable[VBranchGeoDataKey]
+            The name of the attribute(s) to clear.
+        """
+        attr_ = set(attr)
+        if len(attr) == 0 and all_except is not None:
+            attr_ = set(self._branch_data_dict.keys())
+        if all_except is not None:
+            attr_ -= {all_except} if VBranchGeoData.isinstance_key(all_except) else set(all_except)
+        attr_ &= set(self._branch_data_dict.keys())
+
+        for name in attr_:
+            self._remove_branch_data(name)
 
     def transform(self, projection: FundusProjection, inplace: bool = False) -> VGeometricData:
         """Apply a transformation to the geometric data.

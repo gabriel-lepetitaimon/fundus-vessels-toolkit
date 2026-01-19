@@ -13,7 +13,7 @@ __all__ = [
 
 import warnings
 from dataclasses import dataclass
-from typing import List, Literal, Optional, Tuple, TypeAlias
+from typing import List, Literal, Optional, Tuple, TypeAlias, overload
 
 import networkx as nx
 import numpy as np
@@ -677,7 +677,8 @@ def find_reconnection_candidates(
     -------
     intercept_branches: List[npt.NDArray[np.int_]]
         A list of length N (number of rays). Each element is an (M, 6) array where each row contains:
-        - the index of the node where the ray originates,
+        - the index of the branch where the ray originates,
+        - the index of the branch tip where the ray originates,
         - the index of an existing node close to the intercept (or -1 if no node is close),
         - the index of the branch where the intercept occurs,
         - the index of the closest point on the branch curve,
@@ -722,14 +723,15 @@ def find_reconnection_candidates(
     branches_length = gdata.branch_arc_length()
 
     intercepts_with_nodes = []
-    for node_id, intercepts_data in zip(endpoints, intercepts, strict=True):
+    for branch_id, first_tip, intercepts_data in zip(endpoints_branches, idirs, intercepts, strict=True):
         intercept_is_tail = intercepts_data[:, 1] == 0
         intercept_is_head = intercepts_data[:, 1] == branches_length[intercepts_data[:, 0]] - 1
         intercepts_existing_node = -np.ones(len(intercepts_data), dtype=np.int_)
         intercepts_existing_node[intercept_is_tail] = graph.branch_list[intercepts_data[intercept_is_tail, 0], 0]
         intercepts_existing_node[intercept_is_head] = graph.branch_list[intercepts_data[intercept_is_head, 0], 1]
         data = (
-            np.full(len(intercepts_data), node_id, dtype=np.int_),
+            np.full(len(intercepts_data), branch_id, dtype=np.int_),
+            np.full(len(intercepts_data), 0 if first_tip else 1, dtype=np.int_),
             intercepts_existing_node,
             intercepts_data,
         )
@@ -738,12 +740,38 @@ def find_reconnection_candidates(
     return np.concatenate(intercepts_with_nodes, axis=0)
 
 
+@overload
 def find_facing_tips(
     graph: VGraph,
+    *,
     max_distance: float = 100,
     max_angle: float = 30,
+    tan_max_angle: float = 60,
+    pos_tolerance: float = 25,
     tangent: VBranchGeoData.Key = VBranchGeoData.Fields.TIPS_TANGENT,
-) -> npt.NDArray[np.int_]:
+    as_mask: Literal[False] = False,
+) -> npt.NDArray[np.int_]: ...
+@overload
+def find_facing_tips(
+    graph: VGraph,
+    *,
+    max_distance: float = 100,
+    max_angle: float = 30,
+    tan_max_angle: float = 60,
+    pos_tolerance: float = 25,
+    tangent: VBranchGeoData.Key = VBranchGeoData.Fields.TIPS_TANGENT,
+    as_mask: Literal[True],
+) -> npt.NDArray[np.bool_]: ...
+def find_facing_tips(
+    graph: VGraph,
+    *,
+    max_distance: float = 100,
+    max_angle: float = 30,
+    tan_max_angle: float = 60,
+    pos_tolerance: float = 25,
+    tangent: VBranchGeoData.Key = VBranchGeoData.Fields.TIPS_TANGENT,
+    as_mask: bool = False,
+) -> npt.NDArray[np.int_] | npt.NDArray[np.bool_]:
     """
     Find pairs of tips that are facing each other.
     Parameters
@@ -765,35 +793,49 @@ def find_facing_tips(
     facing_tips: npt.NDArray[np.int]
         An (E, 4) array where each row contains the indices of two tips as [b0, b0_tip, b1, b1_tip] where b0 and b1 are the branch indices and b0_tip and b1_tip are 0 for the first tip and 1 for the second tip of the branch.
     """  # noqa: E501
+    B = graph.branch_count
 
     sqr_max_dist = max_distance * max_distance
-    sqr_min_dist = 30 * 30  # Distance below which tips are considered connectable without checking their angle
+    sqr_pos_tolerance = pos_tolerance * pos_tolerance
+
     min_cos = np.cos(np.deg2rad(max_angle))
+    min_tan_cos = np.cos(np.deg2rad(tan_max_angle))
 
     geodata = graph.geometric_data()
-    tips_pos = geodata.tip_coord().astype(np.float_).reshape(-1, 2)  # [branch_id x (tip0, tip1), (y,x)]
+    tips_pos = geodata.tip_coord().astype(np.float64).reshape(-1, 2)  # [branch_id x (tip0, tip1), (y,x)]
     tips_tan = geodata.tip_tangent(attr=tangent).reshape(-1, 2)  # [branch_id x (tip0, tip1), (y,x)]
 
-    tips_dsqr = np.square(tips_pos[:, None, :] - tips_pos[None, :, :]).sum(axis=2)
     tips_dtan = tips_pos[:, None, :] - tips_pos[None, :, :]  # (tip_origin, tip_destination, yx)
-    tips_dtan = tips_dtan / (np.linalg.norm(tips_dtan, axis=2, keepdims=True) + 1e-8)
+    tips_dsqr = np.square(tips_dtan).sum(axis=2)
+    tips_dtan /= np.sqrt(tips_dsqr)[..., None] + 1e-8
 
-    ahead = (tips_dtan * tips_tan).sum(axis=2) >= 0
-    ahead_and_close = (ahead & ahead.T & (tips_dsqr <= sqr_max_dist)) | (tips_dsqr <= sqr_min_dist)
-    facing = (tips_tan[:, None, :] * -tips_tan[None, :, :]).sum(axis=2) >= min_cos
+    # === VICINITY CHECK ===
+    # Given a tip p0 with tangent t0 (oriented towards its curve)
+    # we define a cone oriented towards -t0 with apex at p0 + t0 * pos_tolerance (so the tip itself is inside the cone)
+    # and opening angle max_angle
+    apex = tips_pos + tips_tan * pos_tolerance  # Cone apex position
+    apex2tips = apex[:, None, :] - tips_pos[None, :, :]
+    apex2tips_dsqr = np.square(apex2tips).sum(axis=2)
+    apex2tips /= np.sqrt(apex2tips_dsqr)[..., None] + 1e-8
+    apex_cos = (tips_tan[:, None, :] * apex2tips).sum(axis=2)
+    inside_cone = ((apex_cos >= min_cos) | (tips_dsqr <= sqr_pos_tolerance)) & (tips_dsqr <= sqr_max_dist)
 
-    facing_tips = ahead_and_close & facing & np.triu(np.ones_like(facing), k=1)
-    facing_tips_id = np.argwhere(facing_tips)
-    b0 = facing_tips_id[:, 0] // 2
-    b0_tip = facing_tips_id[:, 0] % 2
-    b1 = facing_tips_id[:, 1] // 2
-    b1_tip = facing_tips_id[:, 1] % 2
+    # Both tips must be inside each other's cones
+    vicinity = inside_cone | inside_cone.T
 
-    stacked_ids = np.stack([b0, b0_tip, b1, b1_tip], axis=1)
-    self_loop = graph.self_loop_branches()
+    # === FACING CHECK ===
+    # Given tips p0 and p1 with tangents t0 and t1 (oriented towards their curves)
+    # they are facing each other if u=(p1-p0)/||p1-p0|| is aligned with -t0 and t1
+    facing = (tips_dtan * -tips_tan).sum(axis=2) >= min_tan_cos
+    facing &= facing.T
+
+    facing_tips = vicinity & facing
+    facing_tips = facing_tips.reshape(B, 2, B, 2)
+
     # Remove facing tips from the same branch unless it is a self-loop
-    stacked_ids = stacked_ids[(b0 != b1) | np.isin(b0, self_loop)]
-    return stacked_ids
+    not_self_loop = ~graph.self_loop_branches(as_mask=True)
+    facing_tips[not_self_loop, :, not_self_loop, :] = False
+    return np.argwhere(facing_tips) if as_mask else facing_tips
 
 
 def find_branch_intercepts(

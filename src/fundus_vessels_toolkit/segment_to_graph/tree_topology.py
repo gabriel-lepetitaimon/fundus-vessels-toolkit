@@ -9,8 +9,8 @@ from skimage.segmentation import expand_labels
 from fundus_toolkits.utils.geometric import Rect
 
 from ..utils.lookup_array import invert_complete_lookup
-from ..utils.rasterization import rasterize_topology
-from ..utils.typing import Bool1DArray, Float1DArray, Int1DArray
+from ..utils.rasterization import rasterize_line, rasterize_topology
+from ..utils.typing import Bool1DArray, Float1DArray, Float2DArray, Int1DArray
 from ..vascular_data_objects.vbranch_geodata import VBranchGeoData
 from ..vascular_data_objects.vgraph import VGraph
 from ..vascular_data_objects.vtree import VTree, VTreeBranch
@@ -122,83 +122,105 @@ class TreeTopology:
     def shape(self) -> Tuple[int, int]:
         return self.branch_map.shape  # type: ignore
 
-    def conform_branch_tree(
-        self,
-        graph: VGraph,
-        restrict_line: Optional[npt.NDArray[np.int_]] = None,
-    ) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.float32], npt.NDArray[np.bool_]]:
-        """
-        Compute the optimal branch tree for the given vessel graph based on this tree topology.
-
-        Parameters
-        ----------
-        graph : VGraph
-            The vessel graph to conform.
-
-        Returns
-        -------
-        branch_tree: Int1DArray
-            A 1D array of size (B,) indicating, for each branch, the index of its parent branch in the optimal arborescence. -1 indicates no parent (root branch).
-
-        branch_dir: Float1DArray
-            A 1D array of size (B,) indicating, for each branch, its direction. Positive value indicates to keep the branch original direction in ``graph``, negative value indicates to flip it. Zero indicates unknown direction.
-
-        missing: Bool1DArray
-            A 1D array of size (B,) indicating if each branch is missing (True) in the topology gt or not (False).
-        """  # noqa: E501
-        domain = Rect.from_size(self.branch_map.shape).exclude_bottom_right_edges()  # type: ignore
-
-        B = graph.branch_count
-        unknown_branches = np.zeros(B, dtype=np.bool_)
-        branch_tree = np.full(B, -1, dtype=np.int32)
-        branch_dir = np.zeros(B, dtype=np.float32)
-
-        tips_label = np.zeros((B, 2), dtype=TopologicalLabel)
-        tips_d = np.zeros((B, 2), dtype=np.float32)
-
-        for branch in graph.branches():
-            curve = branch.curve()
-            if branch.curve() is None:
-                curve = branch.bspline(fill=True).discretize()[0]
-            curve = domain.clip(curve)
-            curve_yx = tuple(curve.T)
-
-            branch_label = self.branch_map[curve_yx]
-            # → Check that at least half the branch is inside the gt tree topology
-            known_label = branch_label != 0
-            if known_label.mean() < 0.5 or known_label.sum() < 2:
-                unknown_branches[branch.id] = True
-                continue
-
-            # → Check that at least 2/3 of the branch is labeled with the same branch label
-            labels = TopologicalLabel.hierarchical_count(branch_label[known_label])
-            label: TopologicalLabel = max(labels, key=labels.get)
-            if labels[label] < 0.66 * known_label.sum():
-                unknown_branches[branch.id] = True
-                continue
-            valid_curve = curve[branch_label == label]
-            curve_yx = tuple(valid_curve.T)
-            N = valid_curve.shape[0]
-
-            # → Get the direction of the branch based on the topological distance map
-            curve_d = self.distance_map[curve_yx]
-            dir = curve_d[: N // 3].mean() - curve_d[-(N // 3) :].mean()
-            branch_dir[branch.id] = dir
-
-            # → Get the tip
-        # TODO: Move the previous section in a autonomous method read_branch_topology(graph: VGraph, topology: TreeTopology)
-        # TODO: For the direction estimation should we use only the branch tip or the branch curve? In the second case, what should we do with the tips distance. The key problem occurs when a branch unifies two branches of opposite direction in the gt topology.  # noqa: E501
-
-        return branch_tree, branch_dir, unknown_branches
-
 
 ########################################################################################################################
 #       === TOPOLOGICAL METRICS UTILS ===
 ########################################################################################################################
-def optimal_branch_tree(
+def read_branch_topology(
     graph: VGraph,
     topology: TreeTopology,
-) -> tuple[Int1DArray, Float1DArray, Bool1DArray]:
+    *,
+    tip_d_threshold: float = 0.15,
+) -> tuple[npt.NDArray[TopologicalLabel], Float1DArray, npt.NDArray[TopologicalLabel], Float2DArray]:
+    """
+    Read the topological labels and distances for each branch in the graph based on the given tree topology.
+
+    Parameters
+    ----------
+    graph : VGraph
+        The vessel graph including B branches.
+
+    topology : TreeTopology
+        The tree topology ground truth.
+
+    Returns
+    -------
+    branch_label: npt.NDArray[TopologicalLabel]
+        A 1D array of size (B,) indicating, for each branch, its topological label. Zero indicates that the branch was not found in the topology ground truth.
+
+    branch_dir: npt.NDArray[np.float32]
+        A 1D array of size (B,) indicating, for each branch, its direction. Positive value indicates to keep the branch original direction in ``graph``, negative value indicates to flip it. Zero indicates unknown direction.
+
+    tips_label: npt.NDArray[TopologicalLabel]
+        A 2D array of size (B, 2) indicating, for each branch, the topological labels of its two tips (tail, head).
+
+    tips_d: npt.NDArray[np.float32]
+        A 2D array of size (B, 2) indicating, for each branch, the topological distances of its two tips (tail, head).
+    """  # noqa: E501
+    domain = Rect.from_size(topology.shape).exclude_bottom_right_edges()  # type: ignore
+
+    B = graph.branch_count
+    branch_dir = np.zeros(B, dtype=float)
+    branch_label = np.zeros(B, dtype=TopologicalLabel)
+
+    tips_label = np.zeros((B, 2), dtype=TopologicalLabel)
+    tips_d = np.zeros((B, 2), dtype=float)
+
+    for branch in graph.branches():
+        curve = branch.curve()
+        if curve is None or len(curve) < 3:
+            p0, p1 = branch.tip_coord()
+            curve = rasterize_line(p0.to_int_pair(), p1.to_int_pair())
+        curve = curve[domain.contains(curve)]
+        if len(curve) < 3:
+            continue
+
+        curve_label = topology.branch_map[*curve.T]
+        # → Check that at least half the branch is inside the gt tree topology
+        known_label = curve_label != 0
+        if known_label.mean() < 0.5:
+            continue
+
+        if tip_d_threshold > 0:
+            # → Exclude curve points which are part of the transition between labels (i.e. 0<=(d%1)<tip_d_threshold)
+            curve_d = topology.distance_map[*curve.T][known_label]
+            valid_mask = (curve_d % 1) > tip_d_threshold
+            first, last = np.argmin(~valid_mask), len(valid_mask) - np.argmin(~valid_mask[::-1])
+            if last - first >= 3:
+                known_label_id = np.where(known_label)[0][first:last]
+                known_label = np.zeros_like(known_label, dtype=bool)
+                known_label[known_label_id] = True
+
+        # → Check that at least 3/4 of the branch is labeled with the main ancestor branch label
+        labels_occurence = TopologicalLabel.descendance_count(curve_label[known_label])
+        main_label: TopologicalLabel = max(labels_occurence, key=lambda x: labels_occurence[x][1])
+        if labels_occurence[main_label][1] < 0.75 * known_label.sum():
+            continue
+
+        valid_mask = main_label.is_parent_of(curve_label, or_self=True) & known_label
+        if valid_mask.sum() < 3:
+            continue
+        curve = curve[valid_mask]
+        curve_label = curve_label[valid_mask]
+        N = curve.shape[0]
+
+        # → Get the direction of the branch based on the topological distance map
+        curve_d = topology.distance_map[*curve.T]
+        curve_diff = np.diff(curve_d)
+        dir = np.mean(curve_diff > 0) - np.mean(curve_diff < 0)
+        branch_dir[branch.id] = dir
+        branch_label[branch.id] = max(labels_occurence, key=lambda x: labels_occurence[x][0])
+
+        # → Get the tip labels and distances
+        tips_label[branch.id, 0] = curve_label[0]
+        tips_label[branch.id, 1] = curve_label[-1]
+        tips_d[branch.id, 0] = curve_d[0]
+        tips_d[branch.id, 1] = curve_d[-1]
+
+    return branch_label, branch_dir, tips_label, tips_d
+
+
+def optimal_branch_tree(graph: VGraph, topology: TreeTopology) -> tuple[Int1DArray, Float1DArray, Bool1DArray]:
     """
     Compute the optimal arborescence of branches for the given graph based on the topological labels.
 
@@ -206,8 +228,14 @@ def optimal_branch_tree(
     ----------
     graph : VGraph
         The vessel graph including B branches.
+
     topology : TreeTopology
         The tree topology ground truth.
+
+    restrict_lines : Optional[npt.NDArray[np.int_]], optional
+        An optional 2D array of size (N, 4) indicating which branch tips can be connected together. Each row is of the form (b0, b0_tip, b1, b1_tip), where b0 and b1 are branch indices, and b0_tip and b1_tip are tip indices (0 for beginning, 1 for end of the curve).
+
+        If None (by default), all tips are allowed to connect.
 
     Returns
     -------
@@ -220,66 +248,118 @@ def optimal_branch_tree(
     missing: Bool1DArray
         A 1D array of size (B,) indicating if each branch is missing (True) in the topology gt or not (False).
     """  # noqa: E501
-
-    nodes_yx = graph.geometric_data().node_coord()
     B = graph.branch_count
-    branches = np.arange(graph.branch_count)
+    branch_tree = np.full(B, -1, dtype=np.int32)
 
-    # === UNKNOWN BRANCHES AND BRANCH DIRECTIONS ===
-    unknown_branches = np.zeros(B, dtype=np.bool_)
-    branches_dir = np.zeros(B, dtype=np.float32)
-    domain = Rect.from_size(topology.shape).exclude_bottom_right_edges()  # type: ignore
+    branch_label, branch_dir, tips_label, tips_d = read_branch_topology(graph, topology)
+    missing = branch_label == 0
 
-    tips_coord = domain.clip(nodes_yx[graph.branch_list.flatten()]).reshape(B, 2, 2)  # [B, (tail, head), (y,x)]
+    B_idx = np.arange(B)
+    B_dir = np.where(branch_dir >= 0, 1, 0)
+    heads_label, heads_d = tips_label[B_idx, B_dir], tips_d[B_idx, B_dir]
+    tails_label, tails_d = tips_label[B_idx, 1 - B_dir], tips_d[B_idx, 1 - B_dir]
 
-    for b in graph.branches():
-        curve = b.curve()
-        if curve is None:
-            t1, t2 = topology.distance_map[*tips_coord[b.id].T]
-            if t1 == 0 or t2 == 0:
-                unknown_branches[b.id] = True
-            else:
-                branches_dir[b.id] = np.clip(t2 - t1, -1, 1)
-            continue
-        else:
-            curve = curve[domain.contains(curve)]
-            topo_values = topo_map[*curve.T]
-            null_topo = topo_values == 0
-            topo_values = topo_values[~null_topo]
-            if np.mean(null_topo) > 2 / 3 or len(topo_values) < 2:
-                unknown_branches[b.id] = True
-                continue
-
-            diff = np.diff(topo_values)
-            forward_diff = diff > epsilon
-            backward_diff = diff < -epsilon
-            branches_dir[b.id] = np.mean(1 * forward_diff - 1 * backward_diff)
-
-    # === BRANCH BEST PARENT ===
-    heads_yx = tips_coord[np.arange(B), (branches_dir >= 0).astype(np.int32)].astype(np.int32)
-    heads_label, heads_rank = topo_labels[*heads_yx.T], topo_map[*heads_yx.T]
-
-    tails_yx = tips_coord[np.arange(B), (branches_dir < 0).astype(np.int32)].astype(np.int32)
-    tails_label, tails_rank = topo_labels[*tails_yx.T], topo_map[*tails_yx.T]
-
-    best_parent = np.full(graph.branch_count, -1, dtype=np.int32)
-    for b_id in branches[~unknown_branches]:
-        b = graph.branch(b_id)
+    for b_id in np.where(~missing)[0]:
         tail_label = TopologicalLabel(tails_label[b_id])
-        tail_rank = tails_rank[b_id]
+        tail_d = tails_d[b_id]
 
-        ancestors = (tail_label == heads_label) | tail_label.is_child_of(heads_label)
+        ancestors = tail_label.is_child_of(heads_label, or_self=True)
         ancestors[b_id] = False  # A branch cannot be its own parent
-        ancestors[heads_rank > tail_rank] = False  # Parent must have a lower rank
+        ancestors[heads_d > tail_d] = False  # Parent must have a lower distance
         ancestors = np.where(ancestors)[0]
 
         if len(ancestors) == 0:
             continue
 
-        best_ancestors = ancestors[np.argsort(heads_rank[ancestors])[::-1]]  # Prefer the highest rank
-        best_parent[b_id] = best_ancestors[0]
+        best_ancestor = ancestors[np.argmax(heads_d[ancestors])]  # Prefer the nearest (i.e. highest) distance
+        branch_tree[b_id] = best_ancestor
 
-    return best_parent, branches_dir, unknown_branches
+    return branch_tree, branch_dir, missing
+
+
+def optimal_lines(
+    graph: VGraph, topology: TreeTopology, lines: npt.NDArray[np.int_]
+) -> tuple[npt.NDArray[np.bool_], Float1DArray, Bool1DArray]:
+    """
+    Determine which lines between branch tips are valid based on the topological labels.
+
+    Parameters
+    ----------
+    graph : VGraph
+        The vessel graph including B branches.
+
+    topology : TreeTopology
+        The tree topology ground truth.
+
+    lines : npt.NDArray[np.int_]
+        A 2D array of size (N, 4) indicating lines between branch tips. Each row is of the form (b0, b0_tip, b1, b1_tip), where b0 and b1 are branch indices, and b0_tip and b1_tip are tip indices (0 for beginning, 1 for end of the curve).
+        This array should not contains any duplicate lines.
+
+    Returns
+    -------
+    optimal_lines: npt.NDArray[np.bool_]
+        A 1D boolean array of size (N,) indicating which lines are optimal (True).
+
+    branch_dir: Float1DArray
+        A 1D array of size (B,) indicating, for each branch, its direction. Positive value indicates to keep the branch original direction in ``graph`, negative value indicates to flip it. Zero indicates unknown direction.
+
+    branch_found: npt.NDArray[np.bool_]
+        A 1D boolean array of size (B,) indicating which branches were found (True) in the topology gt.
+    """  # noqa: E501
+    B = graph.branch_count
+
+    branch_label, branch_dir, tips_label, tips_d = read_branch_topology(graph, topology)
+    missing = branch_label == 0
+
+    B_idx = np.arange(B)
+    B_dir = np.where(branch_dir >= 0, 1, 0)
+    heads_label, heads_d = tips_label[B_idx, B_dir], tips_d[B_idx, B_dir]
+    tails_label, tails_d = tips_label[B_idx, 1 - B_dir], tips_d[B_idx, 1 - B_dir]
+
+    # Separate root lines
+    root_lines_mask = lines[:, 0] == -1
+    root_lines = lines[root_lines_mask][:, 2:]
+    lines = lines[~root_lines_mask]
+
+    # Remove not relevant root lines based on unknown branches and branches direction
+    valid_root_lines_mask = ~missing[root_lines[:, 0]] & (root_lines[:, 1] == 1 - B_dir[root_lines[:, 0]])
+    valid_root_lines = np.full((B,), -1, dtype=np.int_)
+    valid_root_lines[root_lines[valid_root_lines_mask, 0]] = np.arange(len(root_lines))[valid_root_lines_mask]
+
+    # Remove not relevant lines based on unknown branches
+    valid_lines = ~missing[lines[:, 0]] & ~missing[lines[:, 2]]
+    # Remove not relevant lines based on branches direction
+    valid_lines &= lines[:, 1] == B_dir[lines[:, 0]]  # Tail tip should be 0 if dir>0 else 1
+    valid_lines &= lines[:, 3] == 1 - B_dir[lines[:, 2]]  # Head tip should be 1 if dir>0 else 0
+
+    optimal_lines = np.zeros(lines.shape[0], dtype=np.bool_)
+    optimal_roots = np.zeros(root_lines.shape[0], dtype=np.bool_)
+    for b_id in np.where(~missing)[0]:
+        tail_label = TopologicalLabel(tails_label[b_id])
+        tail_d = tails_d[b_id]
+
+        concerned_lines = np.argwhere(valid_lines & (lines[:, 2] == b_id)).flatten()
+        lines_parent = lines[concerned_lines, 0]
+        lines_parent_label = heads_label[lines_parent]
+        lines_parent_d = heads_d[lines_parent]
+
+        possible_ancestors = tail_label.is_child_of(lines_parent_label, or_self=True)
+        possible_ancestors[lines_parent_d > tail_d] = False  # Parent must have a lower distance
+
+        if possible_ancestors.sum() == 0:
+            root_id = valid_root_lines[b_id]
+            if root_id >= 0:
+                optimal_roots[root_id] = True
+            continue
+        concerned_lines = concerned_lines[possible_ancestors]
+        optimal_ancestor = np.argmax(lines_parent_d[possible_ancestors])  # Prefer the nearest (i.e. highest) distance
+        optimal_lines[concerned_lines[optimal_ancestor]] = True
+
+    all_optimal_lines = np.zeros(lines.shape[0] + root_lines.shape[0], dtype=np.bool_)
+    all_optimal_lines[~root_lines_mask] = optimal_lines
+    all_optimal_lines[root_lines_mask] = optimal_roots
+
+    return all_optimal_lines, branch_dir, ~missing
 
 
 def evaluate_topology(
@@ -388,20 +468,7 @@ def count_disconnection(graph, topological_labels: npt.NDArray[np.uint64]) -> in
     int
         The number of disconnected branches.
     """
-    disconnected_count = 0
-    for branch in graph.branches():
-        branch_label = TopologicalLabel.encode(
-            subtree=branch.subtree_index(),
-            branching_pattern=branch.branching_pattern(),
-        )
-        curve = branch.curve()
-        rasterized_labels = topological_labels[
-            np.clip(curve[:, 0], 0, topological_labels.shape[0] - 1),
-            np.clip(curve[:, 1], 0, topological_labels.shape[1] - 1),
-        ]
-        if not np.any(rasterized_labels == branch_label):
-            disconnected_count += 1
-    return disconnected_count
+    ...
 
 
 def evaluate_branch_direction(tree: VTree, topological_map: npt.NDArray[np.float32], epsilon=1e-5) -> npt.NDArray:
@@ -466,7 +533,7 @@ class TopologicalLabel(np.uint64):
 
     SUBTREE_MASK = np.uint64(0xFFF0000000000000)
     RANK_MASK = np.uint64(0x00000000000000FF)
-    BRANCHING_PATTERN_MASK = np.uint64(0x0000FFFFFFFFFF00)
+    BRANCHING_PATTERN_MASK = np.uint64(0x000FFFFFFFFFFF00)
 
     @classmethod
     def encode(cls, subtree: int | np.int_, branching_pattern: Sequence[bool]) -> Self:
@@ -492,16 +559,16 @@ class TopologicalLabel(np.uint64):
 
     @classmethod
     @overload
-    def decode_subtree(cls, label: Self | np.uint64) -> np.uint64: ...
+    def decode_subtree(cls, label: Self | np.uint64) -> np.int32: ...
     @classmethod
     @overload
-    def decode_subtree(cls, label: npt.NDArray[np.uint64]) -> npt.NDArray[np.uint64]: ...
+    def decode_subtree(cls, label: npt.NDArray[np.uint64]) -> npt.NDArray[np.int32]: ...
     @classmethod
-    def decode_subtree(cls, label: Self | np.uint64 | npt.NDArray[np.uint64]) -> np.uint64 | npt.NDArray[np.uint64]:
+    def decode_subtree(cls, label: Self | np.uint64 | npt.NDArray[np.uint64]) -> np.int32 | npt.NDArray[np.int32]:
         """
         Decode the subtree indices from a topological label map.
         """
-        return np.uint64(label & cls.SUBTREE_MASK) >> np.uint64(52)
+        return (np.uint64(label & cls.SUBTREE_MASK) >> np.uint64(52)).astype(np.int32) - 1
 
     @classmethod
     @overload
@@ -518,6 +585,24 @@ class TopologicalLabel(np.uint64):
 
     @classmethod
     @overload
+    def subtree_branching_bit_mask(cls, max_rank: np.uint8 | int | None) -> np.uint64: ...
+    @classmethod
+    @overload
+    def subtree_branching_bit_mask(cls, max_rank: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint64]: ...
+    @classmethod
+    def subtree_branching_bit_mask(
+        cls, max_rank: np.uint8 | int | None | npt.NDArray[np.uint8]
+    ) -> np.uint64 | npt.NDArray[np.uint64]:
+        """
+        Create a mask to extract the branching pattern up to a given rank.
+        """
+        if max_rank is None:
+            return np.uint64(0xFFFFFFFFFFFFFF00)  # cls.SUBTREE_MASK | cls.BRANCHING_PATTERN_MASK
+        assert np.all(max_rank <= 44), "Max rank must be less than or equal to 44."
+        return ~(np.uint64(2) ** (np.uint64(52) - max_rank) - np.uint64(1))  # type: ignore
+
+    @classmethod
+    @overload
     def decode_branching_pattern(cls, label: Self | np.uint64, *, max_rank: Optional[int] = None) -> np.uint64: ...
     @classmethod
     @overload
@@ -531,11 +616,12 @@ class TopologicalLabel(np.uint64):
         """
         Decode the branching patterns from a topological label map.
         """
-        if max_rank is None:
-            max_rank = int(np.max(cls.decode_rank(label)))
-        assert max_rank <= 44, "Max rank must be less than or equal to 44."
-        pattern_mask = np.uint64(sum(np.uint64(1 << (43 - i)) for i in range(max_rank)))
-        return (label >> np.uint64(8)) & pattern_mask
+        pattern = (label & cls.BRANCHING_PATTERN_MASK) >> np.uint64(8)
+        if max_rank is not None:
+            assert np.all(max_rank <= 44), "Max rank must be less than or equal to 44."
+            mask = ~(np.uint64(2) ** (np.uint64(44) - max_rank) - np.uint(1)) & np.uint64(0x00000FFFFFFFFFFF)
+            pattern &= mask
+        return pattern
 
     @classmethod
     def map_to_rgb(cls, map: npt.NDArray[np.uint64], *, encode_pattern: bool = True) -> npt.NDArray[np.uint8]:
@@ -565,16 +651,21 @@ class TopologicalLabel(np.uint64):
 
     @property
     def subtree(self) -> int:
-        return int(self.decode_subtree(self) - 1)
+        return int(self.decode_subtree(self))
 
     @property
     def rank(self) -> int:
         return int(self.decode_rank(self))
 
     @property
+    def branching_pattern_bits(self) -> np.uint64:
+        return self.decode_branching_pattern(self)
+
+    @property
     def branching_pattern(self) -> npt.NDArray[np.bool_]:
+        pattern = self.decode_branching_pattern(self)
         return np.array(
-            [(self.decode_branching_pattern(self) & np.uint64(1 << (43 - i))) != 0 for i in range(self.rank)],
+            [(pattern & np.uint64(1 << (43 - i))) != 0 for i in range(self.rank)],
             dtype=np.bool_,
         )
 
@@ -595,50 +686,99 @@ class TopologicalLabel(np.uint64):
         return self.subtree == o.subtree
 
     @overload
-    def is_parent_of(self, other: Self | np.uint64) -> bool: ...
+    def is_parent_of(self, other: Self | np.uint64, or_self: bool = False) -> bool: ...
     @overload
-    def is_parent_of(self, other: npt.NDArray[np.uint64]) -> npt.NDArray[np.bool_]: ...
-    def is_parent_of(self, other: Self | np.uint64 | npt.NDArray[np.uint64]) -> bool | npt.NDArray[np.bool_]:
+    def is_parent_of(self, other: npt.NDArray[np.uint64], or_self: bool = False) -> npt.NDArray[np.bool_]: ...
+    def is_parent_of(
+        self, other: Self | np.uint64 | npt.NDArray[np.uint64], or_self: bool = False
+    ) -> bool | npt.NDArray[np.bool_]:
         """
         Check if this label is a parent of another label.
+
+        Parameters
+        ----------
+        other : Self | np.uint64 | npt.NDArray[np.uint64]
+            The other label(s) to compare with.
+        or_self : bool, optional
+            If True, consider the label as a parent of itself, by default False.
+
+        Examples
+        --------
+        >>> parent = TopologicalLabel.encode(subtree=1, branching_pattern=[True])
+        >>> child = TopologicalLabel.encode(subtree=1, branching_pattern=[True, False, True])
+        >>> parent.is_parent_of(child)
+        True
+
+        >>> parent.is_parent_of(parent)
+        False
+
+        >>> parent.is_parent_of(parent, or_self=True)
+        True
+
+        >>> other_child = TopologicalLabel.encode(subtree=1, branching_pattern=[True, True])
+        >>> other_child.is_parent_of(child)
+        False
+
+        >>> other_parent = TopologicalLabel.encode(subtree=0, branching_pattern=[True, True])
+        >>> parent.is_parent_of(np.array([parent, other_parent, child, other_child]))
+        array([False, False, True, True])
         """
+        self_rank_mask = self.subtree_branching_bit_mask(self.rank)
         if not isinstance(other, np.ndarray):
             o = TopologicalLabel(other)
-            return (
-                self.subtree == o.subtree
-                and self.rank < o.rank
-                and bool(np.all(self.branching_pattern == o.branching_pattern[: self.rank]))
-            )
+            if self & self_rank_mask != other & self_rank_mask:
+                return False
+            return self.rank <= o.rank if or_self else self.rank < o.rank
         else:
-            o_subtrees = (other & self.SUBTREE_MASK >> np.int32(52)) - np.int32(1)
-            o_ranks = (other & self.RANK_MASK) >> np.int32(44)
-            pattern_mask = np.uint64(2**self.rank) - np.uint64(1)
-            o_patterns = other & pattern_mask
-            self_pattern = self & pattern_mask
-            return (self.subtree == o_subtrees) & (self.rank < o_ranks) & (self_pattern == o_patterns)
+            is_higher_rank = self <= other if or_self else self < other
+            return is_higher_rank & (self & self_rank_mask == other & self_rank_mask)
 
     @overload
-    def is_child_of(self, other: Self | np.uint64) -> bool: ...
+    def is_child_of(self, other: Self | np.uint64, or_self: bool = False) -> bool: ...
     @overload
-    def is_child_of(self, other: npt.NDArray[np.uint64]) -> npt.NDArray[np.bool_]: ...
-    def is_child_of(self, other: Self | np.uint64 | npt.NDArray[np.uint64]) -> bool | npt.NDArray[np.bool_]:
+    def is_child_of(self, other: npt.NDArray[np.uint64], or_self: bool = False) -> npt.NDArray[np.bool_]: ...
+    def is_child_of(
+        self, other: Self | np.uint64 | npt.NDArray[np.uint64], or_self: bool = False
+    ) -> bool | npt.NDArray[np.bool_]:
         """
         Check if this label is a child of another label.
+
+        Parameters
+        ----------
+        other : Self | np.uint64 | npt.NDArray[np.uint64]
+            The other label(s) to compare with.
+        or_self : bool, optional
+            If True, consider the label as a child of itself, by default False.
+
+        Examples
+        --------
+        >>> parent = TopologicalLabel.encode(subtree=1, branching_pattern=[True])
+        >>> child = TopologicalLabel.encode(subtree=1, branching_pattern=[True, False, True])
+        >>> child.is_child_of(parent)
+        True
+
+        >>> child.is_child_of(child)
+        False
+
+        >>> child.is_child_of(child, or_self=True)
+        True
+
+        >>> other_parent = TopologicalLabel.encode(subtree=1, branching_pattern=[False])
+        >>> child.is_child_of(other_parent)
+        False
+
+        >>> child.is_child_of(np.array([parent, other_parent, child]))
+        array([ True, False, False])
         """
+        other_rank_masks = self.subtree_branching_bit_mask(self.decode_rank(other))
         if not isinstance(other, np.ndarray):
             o = TopologicalLabel(other)
-            return (
-                self.subtree == o.subtree
-                and self.rank > o.rank
-                and bool(np.all(o.branching_pattern == self.branching_pattern[: o.rank]))
-            )
+            if self & other_rank_masks != other & other_rank_masks:
+                return False
+            return self.rank >= o.rank if or_self else self.rank > o.rank
         else:
-            o_subtrees = self.decode_subtree(other)
-            o_ranks = self.decode_rank(other)
-            pattern_mask = np.uint64(2**o_ranks) - np.uint64(1)
-            o_patterns = other & pattern_mask
-            self_pattern = self & pattern_mask
-            return (self.subtree == o_subtrees) & (self.rank > o_ranks) & (self_pattern == o_patterns)
+            is_lower_rank = self >= other if or_self else self > other
+            return is_lower_rank & (self & other_rank_masks == other & other_rank_masks)
 
     def common_ancestor(self, other: Self | np.int32) -> Self | None:
         """
@@ -656,7 +796,7 @@ class TopologicalLabel(np.uint64):
         return TopologicalLabel.encode(self.subtree, common_rank, common_branching_pattern)  # type: ignore[arg-type]
 
     @classmethod
-    def hierarchical_count(cls, array: npt.NDArray[TopologicalLabel]) -> dict[TopologicalLabel, int]:
+    def descendance_count(cls, array: npt.NDArray[TopologicalLabel]) -> dict[TopologicalLabel, tuple[int, int]]:
         """Count the occurrence of each label in array similarly to np.unique(array, return_counts=True). However child label also increment their ancestor labels.
 
         Parameters
@@ -666,8 +806,20 @@ class TopologicalLabel(np.uint64):
 
         Returns
         -------
-        dict[TopologicalLabel, int]
-            A dictionary containing unique labels as keys and their respective number of occurrence as values.
+        dict[TopologicalLabel, tuple[int, int]]
+            A dictionary whose keys are unique labels and values are a tuple counting the occurrences without and with their descendants.
+
+        Example
+        -------
+        >>> parent = TopologicalLabel.encode(subtree=1, branching_pattern=[True])
+        >>> child_a1 = TopologicalLabel.encode(subtree=1, branching_pattern=[True, False])
+        >>> child_a2 = TopologicalLabel.encode(subtree=1, branching_pattern=[True, False, True])
+        >>> child_b = TopologicalLabel.encode(subtree=1, branching_pattern=[True, True])
+        >>> TopologicalLabel.descendance_count(np.array([parent, child_a1, child_a1, child_a2, child_b]))
+        {TopologicalLabel(subtree=1, rank=1, branching_pattern=[True]): (1, 5),
+         TopologicalLabel(subtree=1, rank=2, branching_pattern=[True, False]): (2, 3),
+         TopologicalLabel(subtree=1, rank=3, branching_pattern=[True, False, True]): (1, 1),
+         TopologicalLabel(subtree=1, rank=2, branching_pattern=[True, True]): (1, 1)}
         """  # noqa: E501
         labels, counts = np.unique(array, return_counts=True)
         hier_counts = {}
@@ -676,8 +828,8 @@ class TopologicalLabel(np.uint64):
             # Increment ancestor labels
             for anc in hier_counts.keys():
                 if label.is_child_of(anc):
-                    hier_counts[anc] += count
-            hier_counts[label] = count
+                    hier_counts[anc] = (hier_counts[anc][0], hier_counts[anc][1] + int(count))
+            hier_counts[label] = (int(count), int(count))
         return hier_counts
 
     @classmethod

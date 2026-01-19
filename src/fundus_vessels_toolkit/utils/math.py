@@ -317,3 +317,8 @@ def sigmoid(x, antisymmetric=False):
         if antisymmetric:
             return 2 / (1 + np.exp(-x)) - 1
         return 1 / (1 + np.exp(-x))
+
+
+def softmax(x, axis=None):
+    e_x = np.exp(x - np.max(x, axis=axis, keepdims=True))
+    return e_x / e_x.sum(axis=axis, keepdims=True)

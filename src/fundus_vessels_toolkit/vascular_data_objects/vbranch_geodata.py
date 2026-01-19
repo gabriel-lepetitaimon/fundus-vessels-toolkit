@@ -842,6 +842,26 @@ class VBranchGeoData:
         return branches_geo_data, branches_geo_descriptors
 
     @staticmethod
+    def isinstance_key(type_key: object) -> bool:
+        """Check if an object is a valid VBranchGeoDataKey.
+
+        Parameters
+        ----------
+        type_key : object
+            The object to check.
+
+        Returns
+        -------
+        bool
+            True if the object is a valid VBranchGeoDataKey, False otherwise.
+        """
+        return (
+            isinstance(type_key, VBranchGeoDescriptor)
+            or isinstance(type_key, str)
+            or (isinstance(type_key, type) and issubclass(type_key, VBranchGeoDataBase))
+        )
+
+    @staticmethod
     def save(data: VBranchGeoDict, filename: Optional[str | Path] = None) -> NumpyDict:
         """Save a dictionary of branches geometric data to a numpy dictionary.
 

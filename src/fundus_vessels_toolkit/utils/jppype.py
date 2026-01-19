@@ -28,7 +28,7 @@ AV_COLORS: Dict[AVLabel, str] = {
 def draw_tree(
     tree: VTree,
     view: View2D | View2dGroup,
-    artery: bool,
+    artery: Optional[bool] = None,
     name="tree",
     edge_labels=False,
     node_labels=False,
@@ -36,22 +36,22 @@ def draw_tree(
     branch_color: Literal["av", "rank", "subtree"] = "rank",
     bspline_dir: bool = False,
 ) -> LayerGraph:
+    bsplines = []
     layer = tree.jppype_layer(
-        edge_map=edge == "skeleton", bspline=edge == "bspline", edge_labels=edge_labels, node_labels=node_labels
+        edge_map=edge == "skeleton",
+        bspline=edge == "bspline",
+        edge_labels=edge_labels,
+        node_labels=node_labels,
+        bsplines_out=bsplines,
     )
 
     if bspline_dir and edge == "bspline":
         geodata = tree.geometric_data()
-        branches_bspline = geodata.branch_data(VBranchGeoData.Fields.BSPLINE)
         branch_dir = tree.branch_dirs()
         nodes_coord = geodata.node_coord()
         for i, path in enumerate(layer._edges_path):
             n1, n2 = [Point(*nodes_coord[_]) for _ in tree.branch_list[i]]
-            bspline = branches_bspline[i]
-            if isinstance(bspline, VBranchGeoData.BSpline):
-                bspline = bspline.data.extend_bspline(start=n1, end=n2, smoothing=0.5)
-            else:
-                bspline = BSpline([BezierCubic(n1, n1, n2, n2)])
+            bspline = bsplines[i].extend_bspline(start=n1, end=n2, smoothing=0.5)
 
             t = bspline.relative_pos_to_t(0.5)
             p = Point.from_array(bspline.evaluate(t))
@@ -64,19 +64,26 @@ def draw_tree(
             path = path + f" M {left.x:.2f} {left.y:.2f} L {p.x:.2f} {p.y:.2f} L {right.x:.2f} {right.y:.2f}"
             layer._edges_path[i] = path
 
-    if artery:
-        root_color = "#7a1a1a"
-        leaf_color = "#da7676"
-        label = AVLabel.ART
+    if artery is None:
+        if "av" in tree.node_attr:
+            layer.nodes_cmap = tree.node_attr["av"].fillna(0).map(AV_COLORS).to_dict()
+        else:
+            layer.nodes_cmap = AV_COLORS[AVLabel.UNK]
+        main_color = AV_COLORS[AVLabel.UNK]
     else:
-        root_color = "#1a1a7a"
-        leaf_color = "#7676da"
-        label = AVLabel.VEI
-    main_color = AV_COLORS[label]
-    nodes_color = pd.Series(main_color, index=tree.node_attr.index)
-    nodes_color[tree.root_nodes_ids()] = root_color
-    nodes_color[tree.leaf_nodes_ids()] = leaf_color
-    layer.nodes_cmap = nodes_color.to_dict()
+        if artery is True:
+            root_color = "#7a1a1a"
+            leaf_color = "#da7676"
+            label = AVLabel.ART
+        elif artery is False:
+            root_color = "#1a1a7a"
+            leaf_color = "#7676da"
+            label = AVLabel.VEI
+        main_color = AV_COLORS[label]
+        nodes_color = pd.Series(main_color, index=tree.node_attr.index)
+        nodes_color[tree.root_nodes_ids()] = root_color
+        nodes_color[tree.leaf_nodes_ids()] = leaf_color
+        layer.nodes_cmap = nodes_color.to_dict()
 
     if branch_color == "rank" and "rank" in tree.node_attr:
         MAX_RANK = 4

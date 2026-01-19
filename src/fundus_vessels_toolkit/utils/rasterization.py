@@ -1,6 +1,5 @@
-from typing import List, Tuple
-
 import numpy as np
+import numpy.typing as npt
 import torch
 
 from .cpp_extensions.fvt_cpp import rasterize_branch as rasterize_branch_cpp
@@ -13,13 +12,13 @@ def rasterize_topology(
     branch_list: torch.Tensor,
     branch_tree: torch.Tensor,
     branch_dirs: torch.Tensor,
-    curves: List[torch.Tensor],
-    boundaries: List[torch.Tensor],
+    curves: list[torch.Tensor],
+    boundaries: list[torch.Tensor],
     nodes_yx: torch.Tensor,
-    shape: Tuple[int, int],
+    shape: tuple[int, int],
     fill_junctions: bool = True,
     bezier_interpolate: bool | float = 0.5,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Rasterizes the topology of branches given their curves and boundaries.
 
@@ -34,19 +33,19 @@ def rasterize_topology(
     branch_dirs : torch.Tensor
         A tensor containing the direction of each branch.
 
-    curves : List[torch.Tensor]
+    curves : list[torch.Tensor]
         A list of tensors, each representing a curve of a branch.
         The tensors shape must be (N, 2) where is the length of the branch and each row contains the (y, x) coordinates of the branch centerline.
         The first point of each curve should be the root of the branch, the last should be the leaf.
 
-    boundaries : List[torch.Tensor]
+    boundaries : list[torch.Tensor]
         A list of tensors, each representing the boundaries of a branch.
         The tensors shape must be (N, 2, 2) where N is the length of the branch. The second dimensions stores the left and right boundaries of the branch at each point as (y, x) coordinates.
 
     nodes_yx : torch.Tensor
         A tensor containing the (y, x) coordinates of the nodes in the vascular tree.
 
-    shape : Tuple[int, int]
+    shape : tuple[int, int]
         The shape of the output topology map.
 
     bezier_interpolate: bool | float = 0.5, optional
@@ -85,7 +84,7 @@ def rasterize_topology(
 def rasterize_branch(
     curve: torch.Tensor,
     boundaries: torch.Tensor,
-    out: torch.Tensor | Tuple[int, int],
+    out: torch.Tensor | tuple[int, int],
     fill_value: int = 1,
     bridge_gap_smaller_than: float = 2,
 ) -> torch.Tensor:
@@ -129,3 +128,28 @@ def rasterize_branch(
     boundaries = boundaries.cpu().int()
 
     return rasterize_branch_cpp(curve, boundaries, outTensor, fill_value, bridge_gap_smaller_than)
+
+
+def rasterize_line(
+    p0: tuple[int, int],
+    p1: tuple[int, int],
+) -> npt.NDArray[np.int64]:
+    """
+    Rasterizes a line between two points.
+
+    Parameters
+    ----------
+    p0 : tuple[int, int]
+        The starting point of the line (y, x).
+
+    p1 : tuple[int, int]
+        The ending point of the line (y, x).
+
+    Returns
+    -------
+    torch.Tensor
+        A tensor containing the (y, x) coordinates of the rasterized line.
+    """
+    from .cpp_extensions.fvt_cpp import discretize_line as discretize_line_cpp
+
+    return discretize_line_cpp((p0[1], p0[0]), (p1[1], p1[0])).numpy(force=True)  # Flip to (y, x)

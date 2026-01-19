@@ -6,7 +6,7 @@ from typing import List, Literal, overload
 
 import numpy as np
 from fundus_data_toolkit.functional import open_image
-from ipywidgets import Button, GridBox, Label, Layout, Output
+from ipywidgets import HTML, Button, GridBox, Label, Layout
 from jppype import Mosaic, vscode_theme
 
 from fundus_odmac_toolkit.models.segmentation import segment
@@ -109,7 +109,8 @@ class ReviewTool:
         self.undo_btn.on_click(lambda btn: self.undo())
         self.save_btn = Button(description="Save", layout=btn_layout)
         self.save_btn.on_click(lambda btn: self.save_trees())
-        self.debug_output = Output()
+        self.debug_output = HTML()
+        self.displayed_points = []
 
         # Annotation State
         self.debug_info = {}
@@ -249,7 +250,8 @@ class ReviewTool:
     def load_trees_from_av(self, draw=True) -> tuple[VTree, VTree]:
         if self.trees_from_av is None:
             self.trees_from_av = (self.av2tree_pred if self._av_pred else self.av2tree)(self.fundus)
-        self.reset_annotation_states(self.trees_from_av)
+        a_tree, v_tree = self.trees_from_av
+        self.reset_annotation_states((a_tree.copy(), v_tree.copy()))
         if draw:
             self.draw_trees()
         return self.trees_from_av
@@ -322,12 +324,23 @@ class ReviewTool:
 
     def print_topo_info(self, event, art):
         y, x = int(event["y"]), int(event["x"])
-        if self.trees_topology[art] is None:
+        if event["modifiers"] == ["alt"]:
+            self.displayed_points = []
+        if self.trees_topology[art] is None or self.trees_topology[art].branch_map[y, x] == 0:
             return
-        topo = str(TopologicalLabel(self.trees_topology[art].branch_map[y, x])).ljust(10)
-        d = self.trees_topology[art].distance_map[y, x]
-        with self.debug_output:
-            print(f"({y}, {x}): {topo:}, d={d:.4f}")
+        self.displayed_points.append(
+            (
+                art,
+                y,
+                x,
+                TopologicalLabel(self.trees_topology[art].branch_map[y, x]),
+                self.trees_topology[art].distance_map[y, x],
+            )
+        )
+
+        self.debug_output.value = "<br>".join(
+            [f"({py}, {px}): {str(topo).ljust(10)}, d={d:.4f}" for _, py, px, topo, d in self.displayed_points]
+        )
 
     ##########################################################################
     # === STATES STACK HANDLERS ===

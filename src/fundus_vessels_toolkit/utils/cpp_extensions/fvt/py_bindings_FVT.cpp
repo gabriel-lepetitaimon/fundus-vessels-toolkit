@@ -347,6 +347,14 @@ std::tuple<torch::Tensor, torch::Tensor> discretize_bspline(const torch::Tensor&
     return {torch::cat(discreteCurve, 0), torch::cat(discreteU, 0)};
 }
 
+torch::Tensor discretize_line(const std::array<int, 2>& p0, const std::array<int, 2>& p1) {
+    auto line = Line(p0, p1);
+    std::vector<IntPoint> linePoints;
+    linePoints.reserve(line.length());
+    for (auto const& p : Line(p0, p1)) linePoints.push_back(p);
+    return vector_to_tensor(linePoints);
+}
+
 std::list<std::size_t> discontiguous_index(const torch::Tensor& curveYX) {
     const CurveYX& curve = tensor_to_curve(curveYX);
     auto const& contiguousCurvesStartEnd = split_contiguous_curves(curve);
@@ -535,6 +543,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fit_bezier_cubic", &fit_bezier_cubic, "Fit a cubic bezier curve to a set of points.");
     m.def("fit_bspline", &fit_bspline, "Fit a B-Spline curve to a set of points.");
     m.def("discretize_bspline", &discretize_bspline, "Discretize a B-Spline curve.");
+    m.def("discretize_line", &discretize_line, "Discretize a line.");
     m.def("discontiguous_index", &discontiguous_index, "Find the indices of discontiguous segments in a curve.");
     m.def("compute_intercepts", &compute_intercepts, "Compute the intercepts of a set of curves.");
     m.def("drawCone", &drawCone, "Draw a cone in a 2D image.");
