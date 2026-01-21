@@ -232,11 +232,16 @@ def read_branch_topology(
                 curve_rank = curve_rank[~ignore_mask]
 
         # → Extend previous label for points that are part of the transition at the end of the branch
-        if max_rank_tolerance > 0 and (max_rank := curve_rank.max()) % 1 < max_rank_tolerance and max_rank >= 1:
-            max_rank = np.floor(max_rank)  # Clip max_rank to nearest lower integer
+        if (
+            max_rank_tolerance > 0
+            and (valid_rank := curve_rank % 1 > max_rank_tolerance).any()
+            and (max_rank := curve_rank[valid_rank].max()) > 0
+        ):
+            max_rank = np.ceil(max_rank)  # Clip max_rank to nearest lower integer
             extend_mask = curve_rank >= max_rank
             if not np.all(extend_mask):
-                curve_label[extend_mask] = TopologicalLabel(curve_label[curve_rank.argmax()]).parent
+                max_label = curve_label[~extend_mask].max()
+                curve_label[extend_mask] = max_label
                 curve_rank[extend_mask] = max_rank
 
         # → Assign the most occurring label to the branch
@@ -599,7 +604,9 @@ class TopologicalLabel(np.uint64):
         assert rank <= 44, "Branching pattern must be less than 44 bits."
 
         branching_pattern_int = np.uint64(sum((1 << (43 - i)) for i, b in enumerate(branching_pattern) if b))
-        return cls((np.uint64(subtree + 1) << 52) | (branching_pattern_int << 8) | np.uint64(rank))
+        return cls(
+            (np.uint64(subtree + 1) << np.uint64(52)) | (branching_pattern_int << np.uint64(8)) | np.uint64(rank)
+        )
 
     @classmethod
     def decode(cls, map: npt.NDArray[np.uint64]) -> Tuple[npt.NDArray[np.uint32], List[Self]]:

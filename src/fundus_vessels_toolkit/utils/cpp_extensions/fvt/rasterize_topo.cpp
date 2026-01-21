@@ -222,9 +222,10 @@ void rasterize_branch_topo(const torch::Tensor& curve, const torch::Tensor& boun
     auto branchLabelsMapAcc = branchLabelsMap.accessor<int, 2>();
     auto topoMapAcc = topoMap.accessor<float, 2>();
     auto drawBranchTopo = [&](IntPoint pt, float u) {
-        branchLabelsMapAcc[pt.y][pt.x] = branchID;
         float topoValue = branchRank + 0.9 * u;
-        if (topoMapAcc[pt.y][pt.x] < topoValue) topoMapAcc[pt.y][pt.x] = topoValue;
+        if (topoMapAcc[pt.y][pt.x] >= topoValue) return;
+        branchLabelsMapAcc[pt.y][pt.x] = branchID;
+        topoMapAcc[pt.y][pt.x] = topoValue;
     };
 
     IntPoint maxShape = {(int)branchLabelsMap.size(0), (int)branchLabelsMap.size(1)};
