@@ -29,13 +29,16 @@ std::vector<std::set<int>> edges_to_adjacency_list(std::list<std::vector<int>> e
 /*****************************************************************************
  *                    === REDUCE CLUSTERS ===
  *****************************************************************************/
-std::list<std::vector<int>> solve_clusters(std::list<std::vector<int>> edges_list, bool drop_singletons = true) {
+std::list<std::vector<int>> solve_clusters(std::list<std::vector<int>> edges_list, bool drop_singletons = true,
+                                           int n_nodes = -1) {
     // Find number of nodes
-    int n_nodes = 0;
-    for (auto edge : edges_list) {
-        for (int v : edge) n_nodes = std::max(n_nodes, v);
+    if (n_nodes == -1) {
+        n_nodes = 0;
+        for (auto edge : edges_list) {
+            for (int v : edge) n_nodes = std::max(n_nodes, v);
+        }
+        n_nodes++;
     }
-    n_nodes++;
 
     // Create adjacency list from edges list
     std::vector<std::set<int>> adjacency_list(n_nodes);
@@ -79,14 +82,14 @@ std::list<std::vector<int>> solve_clusters(std::list<std::vector<int>> edges_lis
     return clusters;
 }
 
-std::list<std::vector<int>> iterative_reduce_clusters(const torch::Tensor &edgeList, const torch::Tensor &edgeWeight,
+std::list<std::vector<int>> iterative_reduce_clusters(const torch::Tensor& edgeList, const torch::Tensor& edgeWeight,
                                                       float maxWeight) {
     // Sort edges by weight
-    auto const &argsort = torch::argsort(edgeWeight, 0, false);
-    auto const &sortedWeights = edgeWeight.index_select(0, argsort);
+    auto const& argsort = torch::argsort(edgeWeight, 0, false);
+    auto const& sortedWeights = edgeWeight.index_select(0, argsort);
 
     // Remove any edge with weight > maxWeight
-    auto const &weight = sortedWeights.accessor<float, 1>();
+    auto const& weight = sortedWeights.accessor<float, 1>();
     int nEdges = weight.size(0);
     for (; nEdges > 0; nEdges--) {
         if (weight[nEdges - 1] <= maxWeight) break;
@@ -94,8 +97,8 @@ std::list<std::vector<int>> iterative_reduce_clusters(const torch::Tensor &edgeL
     if (nEdges == 0) return {};
 
     // Sort and select edges
-    auto const &sortedEdges = edgeList.index_select(0, argsort);
-    auto const &edges = sortedEdges.accessor<int, 2>();
+    auto const& sortedEdges = edgeList.index_select(0, argsort);
+    auto const& edges = sortedEdges.accessor<int, 2>();
     std::list<std::tuple<int, int, float, float>> sortedEdgesList;
     for (int i = 0; i < nEdges; i++) sortedEdgesList.push_back({edges[i][0], edges[i][1], weight[i], weight[i]});
 
@@ -238,12 +241,12 @@ std::list<std::vector<int>> iterative_reduce_clusters(const torch::Tensor &edgeL
         }
 
         // Sort edge list by total weight
-        sortedEdgesList.sort([](auto const &a, auto const &b) { return std::get<3>(a) < std::get<3>(b); });
+        sortedEdgesList.sort([](auto const& a, auto const& b) { return std::get<3>(a) < std::get<3>(b); });
     }
 
     // Remove empty clusters
     std::list<std::vector<int>> nonEmptyClusters;
-    for (auto const &cluster : clusters) {
+    for (auto const& cluster : clusters) {
         if (!cluster.empty()) nonEmptyClusters.push_back(std::vector<int>(cluster.begin(), cluster.end()));
     }
 
@@ -263,15 +266,20 @@ struct Cluster {
     Point pos;
 };
 
-float distance(const at::TensorAccessor<float, 1UL, at::DefaultPtrTraits, signed long> &p1,
-               const at::TensorAccessor<float, 1UL, at::DefaultPtrTraits, signed long> &p2) {
-    return sqrt(pow(p1[0] - p2[0], 2) + pow(p1[1] - p2[1], 2));
+float sqrDist(const at::TensorAccessor<float, 1UL, at::DefaultPtrTraits, signed long>& p1,
+              const at::TensorAccessor<float, 1UL, at::DefaultPtrTraits, signed long>& p2) {
+    const auto &dy = p1[0] - p2[0], dx = p1[1] - p2[1];
+    return dy * dy + dx * dx;
 }
-float distance(const Cluster &c1, const Cluster &c2) {
+float distance(const at::TensorAccessor<float, 1UL, at::DefaultPtrTraits, signed long>& p1,
+               const at::TensorAccessor<float, 1UL, at::DefaultPtrTraits, signed long>& p2) {
+    return sqrt(sqrDist(p1, p2));
+}
+float distance(const Cluster& c1, const Cluster& c2) {
     return sqrt(pow(c1.pos.x - c2.pos.x, 2) + pow(c1.pos.y - c2.pos.y, 2));
 }
 
-Cluster merge_clusters(const Cluster &c1, const Cluster &c2) {
+Cluster merge_clusters(const Cluster& c1, const Cluster& c2) {
     Cluster merged;
     int n1 = c1.nodes.size(), n2 = c2.nodes.size();
     merged.nodes = c1.nodes;
@@ -281,9 +289,38 @@ Cluster merge_clusters(const Cluster &c1, const Cluster &c2) {
     return merged;
 }
 
+std::list<std::vector<int>> cluster_by_distance(torch::Tensor pos, float max_distance, torch::Tensor edge_list_tensor) {
+    TORCH_CHECK_VALUE(pos.dim() == 2 && pos.size(1) == 2, "Input tensor must be of shape (N, 2).");
+    auto const& pos_acc = pos.accessor<float, 2>();
+    int N = (int)pos.size(0);
+
+    float max_dist_sqr = max_distance * max_distance;
+
+    TORCH_CHECK_VALUE(edge_list_tensor.dim() == 2 && edge_list_tensor.size(1) == 2,
+                      "Edge list must be of shape (E, 2).");
+    int E = (int)edge_list_tensor.size(0);
+    std::list<std::vector<int>> edge_list;
+
+    if (E == 0) {
+        for (int i = 0; i < N; i++) {
+            for (int j = i + 1; j < N; j++)
+                if (sqrDist(pos_acc[i], pos_acc[j]) <= max_dist_sqr) edge_list.push_back({i, j});
+        }
+    } else {
+        auto const& edgeAccessor = edge_list_tensor.accessor<int, 2>();
+        for (int i = 0; i < E; i++) {
+            int u = edgeAccessor[i][0], v = edgeAccessor[i][1];
+            if (u > v) std::swap(u, v);
+            if (sqrDist(pos_acc[u], pos_acc[v]) <= max_dist_sqr) edge_list.push_back({u, v});
+        }
+    }
+
+    return solve_clusters(edge_list, false, N);
+}
+
 std::list<std::set<int>> iterative_cluster_by_distance(torch::Tensor pos, float max_distance, torch::Tensor edge_list) {
     TORCH_CHECK_VALUE(pos.dim() == 2 && pos.size(1) == 2, "Input tensor must be of shape (N, 2).");
-    auto const &pos_acc = pos.accessor<float, 2>();
+    auto const& pos_acc = pos.accessor<float, 2>();
     int N = (int)pos.size(0);
 
     TORCH_CHECK_VALUE(edge_list.dim() == 2 && edge_list.size(1) == 2, "Edge list must be of shape (E, 2).");
@@ -297,7 +334,7 @@ std::list<std::set<int>> iterative_cluster_by_distance(torch::Tensor pos, float 
             }
         }
     } else {
-        auto const &edgeAccessor = edge_list.accessor<int, 2>();
+        auto const& edgeAccessor = edge_list.accessor<int, 2>();
         for (int i = 0; i < edge_list.size(0); i++) {
             int u = edgeAccessor[i][0], v = edgeAccessor[i][1];
             if (u > v) std::swap(u, v);
@@ -329,7 +366,7 @@ std::list<std::set<int>> iterative_cluster_by_distance(torch::Tensor pos, float 
     }
 
     std::list<std::set<int>> clustersList;
-    for (auto const &cluster : clusters) clustersList.push_back(cluster.nodes);
+    for (auto const& cluster : clusters) clustersList.push_back(cluster.nodes);
     return clustersList;
 }
 
@@ -357,16 +394,16 @@ std::array<std::vector<std::vector<int>>, 2> solve_1d_chains(std::vector<std::ve
 
     // === Add or merge chains one by one ===
     for (int chain_id = 0; chain_id < (int)chains.size(); chain_id++) {
-        const auto &chain = chains[chain_id];
-        const int &chain_first = chain.front();
-        const int &chain_last = chain.back();
+        const auto& chain = chains[chain_id];
+        const int& chain_first = chain.front();
+        const int& chain_last = chain.back();
         int chain_pending_tip;
         int solved_pending_tip = 0;  // 0: both, 1: back, -1: front
 
         // Try to append chain to existing solved chains
         auto solved_it = solved_chains_summaries.begin();
         for (; solved_it != solved_chains_summaries.end(); solved_it++) {
-            auto &[solved_ids, solved_first, solved_last] = *solved_it;
+            auto& [solved_ids, solved_first, solved_last] = *solved_it;
 
             if (solved_last == chain_first) {
                 solved_ids.push_back(chain_id + 1);
@@ -398,11 +435,11 @@ std::array<std::vector<std::vector<int>>, 2> solve_1d_chains(std::vector<std::ve
         else {
             // If a chain was found, ensure that, if the new extremity is a part of another chain, the chains are
             // merged
-            auto &[solved_ids, solved_first, solved_last] = *solved_it;
+            auto& [solved_ids, solved_first, solved_last] = *solved_it;
             auto other_it = solved_it;
             other_it++;
             for (; other_it != solved_chains_summaries.end(); other_it++) {
-                const auto &[other_ids, other_first, other_last] = *other_it;
+                const auto& [other_ids, other_first, other_last] = *other_it;
 
                 if (other_first == chain_pending_tip) {  // The cluster must be chained with the start of the other
                     if (solved_pending_tip == 1) {       // The pending tip is at the end of the cluster
@@ -432,9 +469,9 @@ std::array<std::vector<std::vector<int>>, 2> solve_1d_chains(std::vector<std::ve
     // === Expand summaries into proper chains ===
     std::array<std::vector<std::vector<int>>, 2> out;
 
-    for (const auto &[chain_ids, first, last] : solved_chains_summaries) {
+    for (const auto& [chain_ids, first, last] : solved_chains_summaries) {
         out[0].push_back({first});
-        auto &chain = out[0].back();
+        auto& chain = out[0].back();
         for (int chain_id : chain_ids) {
             if (chain_id > 0)
                 chain.insert(chain.end(), ++chains[chain_id - 1].begin(), chains[chain_id - 1].end());
@@ -448,7 +485,7 @@ std::array<std::vector<std::vector<int>>, 2> solve_1d_chains(std::vector<std::ve
     return out;
 }
 
-std::vector<torch::Tensor> remove_consecutive_duplicates(const torch::Tensor &tensor, bool return_index = false) {
+std::vector<torch::Tensor> remove_consecutive_duplicates(const torch::Tensor& tensor, bool return_index = false) {
     TORCH_CHECK_VALUE(tensor.dim() == 2 && tensor.size(0) > 0, "Input tensor must be 2D and non empty.");
     std::size_t K = (std::size_t)tensor.size(1);
     auto outTensor = torch::empty({tensor.size(0), tensor.size(1)}, tensor.options());
@@ -480,6 +517,7 @@ std::vector<torch::Tensor> remove_consecutive_duplicates(const torch::Tensor &te
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("solve_clusters", &solve_clusters, "Solve clusters from edges list");
     m.def("iterative_reduce_clusters", &iterative_reduce_clusters, "Iteratively reduce clusters from edge list");
+    m.def("cluster_by_distance", &cluster_by_distance, "Cluster by distance");
     m.def("iterative_cluster_by_distance", &iterative_cluster_by_distance, "Iteratively cluster by distance");
     m.def("solve_1d_chains", &solve_1d_chains, "Solve 1D chains clusters from chains list");
     m.def("remove_consecutive_duplicates", &remove_consecutive_duplicates, "Remove consecutive duplicates from tensor");

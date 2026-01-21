@@ -1,19 +1,16 @@
 import warnings
 from typing import Optional, Self
 
-from cli_ui import debug
 import numpy as np
 import numpy.typing as npt
-
-from fundus_vessels_toolkit.vascular_data_objects.fundus_data import AVLabel
 
 from ..utils.cluster import cluster_by_distance
 from ..utils.math import sigmoid, softmax
 from ..utils.numpy import np_group_by
 from ..utils.typing import Int2DArrayLike
 from ..vascular_data_objects import VGraph
+from ..vascular_data_objects.fundus_data import AVLabel
 from ..vascular_data_objects.vbranch_geodata import VBranchGeoData
-from ..vascular_data_objects.vgraph import BranchIndicesLike, NodeIndicesLike
 from ..vascular_data_objects.vtree import VTree
 from .geometry_parsing import derive_tips_geometry_from_curve_geometry
 from .graph_simplification import find_facing_tips
@@ -125,7 +122,7 @@ class VBranchDigraph(LineDigraph):
         return 1 - self.branch_av_p.sum(axis=1) >= self.branch_av_p.max(axis=1)
 
     @classmethod
-    def from_graph(cls, graph: VGraph, *, max_distance=100, max_angle=30, tan_max_angle=60, pos_tolerance=25) -> Self:
+    def from_graph(cls, graph: VGraph, *, max_distance=200, max_angle=30, tan_max_angle=110, pos_tolerance=25) -> Self:
         """Create a BranchDigraph from a VGraph.
 
         Parameters
@@ -153,7 +150,7 @@ class VBranchDigraph(LineDigraph):
             max_angle=max_angle,
             tan_max_angle=tan_max_angle,
             pos_tolerance=pos_tolerance,
-            as_mask=False,
+            as_mask=True,
         )
         for b0, tip0, n1 in candidates:
             node = graph.node(n1)
@@ -161,6 +158,8 @@ class VBranchDigraph(LineDigraph):
             tip1 = np.where(node.adjacent_branches_first_node, 0, 1)
             facing_tips[b0, tip0, b1, tip1] = True
             facing_tips[b1, tip1, b0, tip0] = True
+        graph.branch_tips_connectivity_matrix(facing_tips)
+
         line_list = np.argwhere(facing_tips)
 
         B = graph.branch_count
@@ -186,26 +185,34 @@ class VBranchDigraph(LineDigraph):
         """
         from .tree_topology import optimal_lines
 
-        art_lines, art_branch_dir, art_b = optimal_lines(self.graph, art_topology, self.line_list)
-        vei_lines, vei_branch_dir, vei_b = optimal_lines(self.graph, vei_topology, self.line_list)
+        art_lines, art_branch_dir, art_plausibility = optimal_lines(self.graph, art_topology, self.line_list)
+        vei_lines, vei_branch_dir, vei_plausibility = optimal_lines(self.graph, vei_topology, self.line_list)
 
         # === Mark branches as invalid if they are in both tree ===
-        invalid_branch = art_b & vei_b
+        art_b, vei_b = art_plausibility > 0, vei_plausibility > 0
+        both_branch = art_b & vei_b
+        art_invalid = both_branch & (vei_plausibility + 0.15 > art_plausibility)
+        vei_invalid = both_branch & (art_plausibility + 0.15 > vei_plausibility)
+        # art_invalid = vei_invalid = both_branch
+
+        art_b[art_invalid] = False
+        vei_b[vei_invalid] = False
         self.branch_av_p = np.stack([art_b, vei_b], axis=1).astype(float)
-        self.branch_av_p[invalid_branch, :] = 0
         # Transfer the line
         B = self.graph.branch_count
 
-        def transfer_line_p_to_parent(lines, line_opti, branch_dir):
+        def transfer_line_p_to_parent(lines, line_opti, invalid_branch, branch_dir):
             branch_parent = np.full(B, -1, dtype=np.int_)
             optimal_lines = lines[line_opti]
             branch_parent[optimal_lines[:, 2]] = optimal_lines[:, 0]
             for b in np.argwhere(invalid_branch).flatten():
                 branch_parent[branch_parent == b] = branch_parent[b]
 
-            invalid_lines = line_opti & invalid_branch[lines[:, 0]]
+            invalid_lines = line_opti & (invalid_branch[lines[:, 0]] | invalid_branch[lines[:, 2]])
 
             for b1, b1_dir in lines[invalid_lines, 2:]:
+                if invalid_branch[b1]:
+                    continue
                 new_b1_parent = int(branch_parent[b1])
                 redirected_line = LineDigraph.search_lines(
                     lines, [new_b1_parent, branch_dir[new_b1_parent] > 0, b1, b1_dir]
@@ -213,14 +220,15 @@ class VBranchDigraph(LineDigraph):
                 if redirected_line == -1:
                     redirected_line = LineDigraph.search_lines(lines, [-1, 0, b1, b1_dir])
                 line_opti[redirected_line] = True
-            # line_opti[invalid_lines] = False
+            line_opti[invalid_lines] = False
 
-        transfer_line_p_to_parent(self.line_list, art_lines, art_branch_dir)
-        transfer_line_p_to_parent(self.line_list, vei_lines, vei_branch_dir)
+        transfer_line_p_to_parent(self.line_list, art_lines, art_invalid, art_branch_dir)
+        transfer_line_p_to_parent(self.line_list, vei_lines, vei_invalid, vei_branch_dir)
 
         # === Convert optimal mask to probabilities ===
         self.line_p = (art_lines | vei_lines).astype(float)
-        self.branch_dir_p = sigmoid((art_branch_dir * art_b + vei_branch_dir * vei_b).astype(float) * 6)
+        branch_dir_p = art_branch_dir * art_plausibility + vei_branch_dir * vei_plausibility
+        self.branch_dir_p = sigmoid(branch_dir_p * 6)
 
     def optimize_tree(self, keep_invalid_branch: bool = False) -> VTree:
         """Resolve the directed graph into an arborescence (a directed tree).

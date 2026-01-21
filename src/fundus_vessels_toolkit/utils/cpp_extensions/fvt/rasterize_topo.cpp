@@ -149,6 +149,7 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
 
             // === DRAW THE BRANCH ===
             auto drawTopo = [&](IntPoint pt, float u, int branchID, float rank) {
+                if (!pt.is_inside(maxShape)) return;
                 branchLabelsMapAcc[pt.y][pt.x] = branchID + 1;
                 float topoValue = rank + u;
                 if (topoMapAcc[pt.y][pt.x] < topoValue) topoMapAcc[pt.y][pt.x] = topoValue;

@@ -800,7 +800,7 @@ class VGeometricData:
         """
         import torch
 
-        from ..utils.cpp_extensions.fvt_cpp import draw_branches_labels
+        from ..utils.cpp_extensions.fvt_cpp import draw_skeleton_labels
 
         domain_shape = self.domain.size
         top_left = np.array([self.domain.top, self.domain.left])
@@ -816,7 +816,7 @@ class VGeometricData:
             nodes_coord = torch.empty(0, 2, dtype=int)
             branch_list = torch.empty(0, 2, dtype=int)
         branch_label_map = torch.from_numpy(branch_label_map)
-        draw_branches_labels(curves, branch_label_map, nodes_coord, branch_list, interpolate)
+        draw_skeleton_labels(curves, branch_label_map, nodes_coord, branch_list, interpolate)
         branch_label_map = branch_label_map.numpy()
 
         if calibre_attr is not None:

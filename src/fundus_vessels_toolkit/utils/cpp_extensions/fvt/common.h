@@ -282,6 +282,8 @@ std::vector<T> medianFilter(const std::vector<T>& x, int halfSize = 1) {
 
 // === Math utilities ===
 inline int sign(int x) { return (x > 0) - (x < 0); }
+inline float deg2rad(float deg) { return deg * M_PI / 180.0f; }
+inline float rad2deg(float rad) { return rad * 180.0f / M_PI; }
 
 std::vector<int> linspace_int(int start, int end, u_int n, bool endpoint = true);
 inline int linspace_int(int i, int start, int end, int n, bool endpoint = true) {

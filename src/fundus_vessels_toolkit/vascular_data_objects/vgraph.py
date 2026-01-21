@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from traitlets import Bool
-
 __all__ = ["VGraph"]
 
 import itertools
@@ -1255,15 +1253,15 @@ class VGraph:
 
     @overload
     def adjacent_branches_per_node(
-        self, node_id: NodeIndicesLike, return_branch_direction: Literal[False] = False
+        self, node_id: Optional[NodeIndicesLike] = None, return_branch_direction: Literal[False] = False
     ) -> list[Indices]: ...
     @overload
     def adjacent_branches_per_node(
-        self, node_id: NodeIndicesLike, return_branch_direction: Literal[True]
+        self, node_id: Optional[NodeIndicesLike] = None, return_branch_direction: Literal[False] = False
     ) -> tuple[list[Indices], list[list[npt.NDArray[np.bool_]]]]: ...
     def adjacent_branches_per_node(
         self,
-        node_id: NodeIndicesLike,
+        node_id: Optional[NodeIndicesLike] = None,
         return_branch_direction: bool = False,
     ) -> list[Indices] | tuple[list[Indices], list[list[npt.NDArray[np.bool_]]]]:
         """Compute the indices of the branches incident to multiple nodes.
@@ -1271,7 +1269,7 @@ class VGraph:
 
         Parameters
         ----------
-        node_idx : int or Iterable[int]
+        node_idx : int or Iterable[int], optional
             The indices of the nodes to get the incident branches from.
             Valid indices are the same as for :meth:`VGraph.as_node_ids`.
 
@@ -1302,6 +1300,8 @@ class VGraph:
         ([array([0, 1, 3]), array([5])], [array([False, True, True]), array([False])])
 
         """  # noqa: E501
+        if node_id is None:
+            node_id = np.arange(self.node_count, dtype=int)
         return self._adjacent_branches(
             node_ids=node_id, return_branch_direction=return_branch_direction, individual_nodes=True
         )
@@ -1361,6 +1361,38 @@ class VGraph:
             return branch_ids, [self._branch_list[b][:, 0] == n for b, n in zip(branch_ids, node_ids, strict=True)]
         else:
             return branch_ids
+
+    def branch_tips_connectivity_matrix(self, out: Optional[npt.NDArray[np.bool_]] = None) -> npt.NDArray[np.bool_]:
+        """Compute the branch tips connectivity matrix from this graph branch list.
+
+        The branch tips connectivity matrix is a 2D boolean matrix of shape (B, 2, B, 2) where B is the number of branches. A true value at (b0, tip0, b1, tip1) indicates that the tip `tip0` of branch `b0` is connected to the tip `tip1` of branch `b1`. This matrix is symmetric.
+
+        Returns
+        -------
+        np.ndarray[np.bool_]
+            A 2D boolean array of shape (B, 2, B, 2) where B is the number of branches.
+
+        Examples
+        --------
+        >>> # Branch id:               0 1 2
+        >>> np.argwhere(VGraph.parse("0➔1➔2➔3").branch_tips_connectivity_matrix())
+        array([[0, 1, 1, 0],
+               [1, 0, 0, 1],
+               [1, 1, 2, 0],
+               [2, 0, 1, 1]])
+        """  # noqa: E501
+        import torch
+
+        from ..utils.cpp_extensions.fvt_cpp import (
+            branch_tips_connectivity_matrix as branch_tips_connectivity_matrix_cpp,
+        )
+
+        if out is None:
+            out = np.zeros((self.branch_count, 2, self.branch_count, 2), dtype=bool)
+        branch_list = torch.from_numpy(self._branch_list).int()
+        out_tensor = torch.from_numpy(out)
+        branch_tips_connectivity_matrix_cpp(branch_list, self.node_count, out_tensor)
+        return out
 
     def node_degree(
         self, node_id: Optional[NodeIndicesLike] = None, /, *, count_loop_branches_once: bool = False
@@ -3474,7 +3506,9 @@ class VGraph:
         layer = LayerGraph(
             self._branch_list,
             geodata.node_coord() - np.array(domain.top_left)[None, :],
-            geodata.skeleton_label_map(calibre_attr=boundaries, only_tip=boundaries_only_tip),
+            geodata.skeleton_label_map(
+                calibre_attr=boundaries, only_tip=boundaries_only_tip, connect_nodes=True, interpolate=True
+            ),
         )
         layer.set_options(
             {

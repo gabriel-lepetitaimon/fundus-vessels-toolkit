@@ -884,7 +884,7 @@ class VTree(VGraph):
             set_branches[subtree_branches] = True
 
         assert set_branches.all(), "Some branches were not assigned to a subtree."
-        return subtrees
+        return sorted(subtrees, key=lambda x: len(x), reverse=True)
 
     def subtrees_branch_labels(self) -> npt.NDArray[np.int_]:
         """Label each branch with a unique identifier of its subtree.

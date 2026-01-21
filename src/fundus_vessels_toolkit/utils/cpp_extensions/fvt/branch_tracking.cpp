@@ -289,7 +289,7 @@ std::list<SizePair> split_contiguous_curves(const CurveYX& curve) {
     return curvesBoundaries;
 }
 
-torch::Tensor draw_branches_labels(const std::vector<torch::Tensor>& branchCurves, const torch::Tensor& out,
+torch::Tensor draw_skeleton_labels(const std::vector<torch::Tensor>& branchCurves, const torch::Tensor& out,
                                    const torch::Tensor& nodeCoords, const torch::Tensor& branchList, bool interpolate) {
     const std::size_t B = branchCurves.size();
     auto branchesLabels = out.accessor<int, 2>();
@@ -332,12 +332,12 @@ torch::Tensor draw_branches_labels(const std::vector<torch::Tensor>& branchCurve
         const IntPoint end = {nodeCoords_acc[branchList_acc[b][1]][0], nodeCoords_acc[branchList_acc[b][1]][1]};
         const auto& curve = branchCurves[b].accessor<int, 2>();
         if (curve.size(0) == 0) {
-            draw_line(start, end, branchesLabels, b + 1);
+            draw_line(start, end, branchesLabels, b + 1, H, W);
         } else {
             const IntPoint p1 = {curve[0][0], curve[0][1]};
             const IntPoint p2 = {curve[curve.size(0) - 1][0], curve[curve.size(0) - 1][1]};
-            if (p1 != start) draw_line(start, p1, branchesLabels, b + 1);
-            if (p2 != end) draw_line(p2, end, branchesLabels, b + 1);
+            if (p1 != start) draw_line(start, p1, branchesLabels, b + 1, H, W);
+            if (p2 != end) draw_line(p2, end, branchesLabels, b + 1, H, W);
         }
     }
 

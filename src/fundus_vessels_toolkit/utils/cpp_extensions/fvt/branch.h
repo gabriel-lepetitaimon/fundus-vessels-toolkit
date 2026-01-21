@@ -108,7 +108,7 @@ std::list<SizePair> split_contiguous_curves(const CurveYX& curve);
  *
  * @return A tensor with the branches drawn.
  */
-torch::Tensor draw_branches_labels(const std::vector<torch::Tensor>& branchCurves, const torch::Tensor& out,
+torch::Tensor draw_skeleton_labels(const std::vector<torch::Tensor>& branchCurves, const torch::Tensor& out,
                                    const torch::Tensor& nodeCoords = torch::empty({0, 2}, torch::kInt),
                                    const torch::Tensor& branchList = torch::empty({0, 2}, torch::kInt),
                                    bool interpolate = false);

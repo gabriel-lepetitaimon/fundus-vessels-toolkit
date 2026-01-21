@@ -400,10 +400,6 @@ def intercept_cones_branches(
     assert cone_dirs_vu.dim() == 2 and cone_dirs_vu.shape[1] == 2, "cone_dirs must be a (M, 2) tensor"
     assert cone_tips_yx.shape[0] == cone_dirs_vu.shape[0], "cone_tips_yx and cone_dirs must have the same length"
 
-    startMaxAngle = np.deg2rad(startMaxAngle)
-    endMaxAngle = np.deg2rad(endMaxAngle)
-    maxSnapAngle = np.deg2rad(maxSnapAngle)
-
     intercepts = compute_intercepts_cpp(
         branch_curves,
         branch_list,

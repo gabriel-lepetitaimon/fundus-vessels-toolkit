@@ -4,6 +4,7 @@ import torch  # Required for cpp extension loading
 
 from fundus_toolkits.utils.geometric import Point
 
+from .cpp_extensions.clusters_cpp import cluster_by_distance as cluster_by_distance_cpp
 from .cpp_extensions.clusters_cpp import iterative_cluster_by_distance as iterative_cluster_by_distance_cpp
 from .cpp_extensions.clusters_cpp import iterative_reduce_clusters as iterative_reduce_clusters_cpp
 from .cpp_extensions.clusters_cpp import remove_consecutive_duplicates as remove_consecutive_duplicates_cpp
@@ -33,7 +34,7 @@ def reduce_clusters(clusters: Iterable[Iterable[int]], drop_singleton=True) -> L
         The reduced clusters.
     """  # noqa: E501
     clusters = [[int(_) for _ in c] for c in clusters]
-    return [c for c in solve_clusters_cpp(clusters, drop_singleton) if len(c) > 0]
+    return [c for c in solve_clusters_cpp(clusters, drop_singleton, -1) if len(c) > 0]
 
 
 def iterative_reduce_clusters(edge_list: TensorArray, edge_weight: TensorArray, max_weight: float) -> List[List[int]]:
@@ -151,20 +152,11 @@ def cluster_by_distance(
         assert edge_list_tensor.ndim == 2 and edge_list_tensor.shape[1] == 2, (
             "Edge list must be a 2D tensor of shape (n, 2)"
         )
+    else:
+        edge_list_tensor = torch.empty(0, 2, dtype=torch.int32)
 
     if iterative:
-        if edge_list_tensor is None:
-            edge_list_tensor = torch.empty(0, 2, dtype=torch.int32)
         clusters = iterative_cluster_by_distance_cpp(coords_tensor, max_distance, edge_list_tensor)
-        return [list(_) for _ in clusters if len(_) > 1]
     else:
-        if edge_list_tensor is None:
-            dist = torch.cdist(coords_tensor, coords_tensor)
-            edge_list_tensor = torch.nonzero(dist <= max_distance, as_tuple=False)
-            edge_list_tensor = edge_list_tensor[edge_list_tensor[:, 0] < edge_list_tensor[:, 1]]
-        else:
-            edge_list_tensor = edge_list_tensor[
-                torch.norm(coords_tensor[edge_list_tensor[:, 0]] - coords_tensor[edge_list_tensor[:, 1]], dim=1)
-                <= max_distance
-            ]
-        return reduce_clusters(edge_list_tensor, drop_singleton=False)  # type: ignore
+        clusters = cluster_by_distance_cpp(coords_tensor, max_distance, edge_list_tensor)
+    return [list(_) for _ in clusters if len(_) >= 1]

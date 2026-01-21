@@ -289,10 +289,7 @@ IntPoint RayIterator::extrapolate(int step) const {
     return p;
 }
 
-int RayIterator::stepsCountTo(const IntPoint& p) const {
-    if (_delta == 0) return 0;
-    return _incrementor->stepsBetween(_point, p);
-}
+int RayIterator::stepsCountTo(const IntPoint& p) const { return _incrementor->stepsBetween(_point, p); }
 
 RayIterator& RayIterator::skip(int step) {
     _error += step * _delta;

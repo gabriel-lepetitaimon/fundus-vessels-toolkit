@@ -152,4 +152,4 @@ def rasterize_line(
     """
     from .cpp_extensions.fvt_cpp import discretize_line as discretize_line_cpp
 
-    return discretize_line_cpp((p0[1], p0[0]), (p1[1], p1[0])).numpy(force=True)  # Flip to (y, x)
+    return discretize_line_cpp((p0[0], p0[1]), (p1[0], p1[1])).numpy(force=True)

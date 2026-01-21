@@ -305,12 +305,12 @@ class ReviewTool:
             subtree_map = TopologicalLabel.decode_subtree(tree_topo.branch_map)
             N_subtree = int(subtree_map.max()) + 1
             color_map = np.zeros(self.fundus.shape + (3,), dtype=np.float32)
-            alpha = np.zeros_like(tree_topo.distance_map)
+            alpha = np.zeros_like(tree_topo.rank_map)
 
-            for s in range(1, N_subtree):
+            for s in range(0, N_subtree):
                 mask = subtree_map == s
                 color_map[mask] = TopologicalLabel.subtree_color(s, format="rgb") / 255.0
-                subtree_topo = tree_topo.distance_map[mask]
+                subtree_topo = tree_topo.rank_map[mask]
                 if len(subtree_topo) == 0:
                     continue
 

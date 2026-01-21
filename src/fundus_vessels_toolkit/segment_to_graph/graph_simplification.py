@@ -11,6 +11,8 @@ __all__ = [
     "SimplifyTopology",
 ]
 
+from math import tan
+from turtle import pos
 import warnings
 from dataclasses import dataclass
 from typing import List, Literal, Optional, Tuple, TypeAlias, overload
@@ -784,7 +786,7 @@ def find_facing_tips(
     *,
     max_distance: float = 100,
     max_angle: float = 30,
-    tan_max_angle: float = 60,
+    tan_max_angle: float = 80,
     pos_tolerance: float = 25,
     tangent: VBranchGeoData.Key = VBranchGeoData.Fields.TIPS_TANGENT,
     as_mask: bool = False,
@@ -810,7 +812,24 @@ def find_facing_tips(
     facing_tips: npt.NDArray[np.int]
         An (E, 4) array where each row contains the indices of two tips as [b0, b0_tip, b1, b1_tip] where b0 and b1 are the branch indices and b0_tip and b1_tip are 0 for the first tip and 1 for the second tip of the branch.
     """  # noqa: E501
+    import torch
+
+    from ..utils.cpp_extensions.fvt_cpp import facing_tips as facing_tips_cpp
+
     B = graph.branch_count
+    out = np.zeros((B, 2, B, 2), dtype=bool)
+
+    geodata = graph.geometric_data()
+    tips_yx = torch.from_numpy(geodata.tip_coord()).double()
+    tips_tan = torch.from_numpy(geodata.tip_tangent(attr=tangent))
+    out_tensor = torch.from_numpy(out)
+
+    facing_tips_cpp(tips_yx, tips_tan, max_distance, max_angle, tan_max_angle, pos_tolerance, out_tensor)
+
+    return out if as_mask else np.argwhere(out)
+
+    tips_pos = geodata.tip_coord().astype(np.float64).reshape(-1, 2)  # [branch_id x (tip0, tip1), (y,x)]
+    tips_tan = geodata.tip_tangent(attr=tangent).reshape(-1, 2)  # [branch_id x (tip0, tip1), (y,x)]
 
     sqr_max_dist = max_distance * max_distance
     sqr_pos_tolerance = pos_tolerance * pos_tolerance
@@ -818,13 +837,9 @@ def find_facing_tips(
     min_cos = np.cos(np.deg2rad(max_angle))
     min_tan_cos = np.cos(np.deg2rad(tan_max_angle))
 
-    geodata = graph.geometric_data()
-    tips_pos = geodata.tip_coord().astype(np.float64).reshape(-1, 2)  # [branch_id x (tip0, tip1), (y,x)]
-    tips_tan = geodata.tip_tangent(attr=tangent).reshape(-1, 2)  # [branch_id x (tip0, tip1), (y,x)]
-
     tips_dtan = tips_pos[:, None, :] - tips_pos[None, :, :]  # (tip_origin, tip_destination, yx)
     tips_dsqr = np.square(tips_dtan).sum(axis=2)
-    tips_dtan /= np.sqrt(tips_dsqr)[..., None] + 1e-8
+    # tips_dtan /= np.sqrt(tips_dsqr)[..., None] + 1e-8
 
     # === VICINITY CHECK ===
     # Given a tip p0 with tangent t0 (oriented towards its curve)
@@ -842,9 +857,9 @@ def find_facing_tips(
 
     # === FACING CHECK ===
     # Given tips p0 and p1 with tangents t0 and t1 (oriented towards their curves)
-    # they are facing each other if u=(p1-p0)/||p1-p0|| is aligned with -t0 and t1
-    facing = (tips_dtan * -tips_tan).sum(axis=2) >= min_tan_cos
-    facing |= facing.T
+    # they are facing each other if t0 is aligned with -t1
+    facing = (tips_tan[:, None, :] * -tips_tan[None, :, :]).sum(axis=2) >= min_tan_cos
+    # facing |= facing.T
 
     facing_tips = vicinity & facing
     facing_tips = facing_tips.reshape(B, 2, B, 2)

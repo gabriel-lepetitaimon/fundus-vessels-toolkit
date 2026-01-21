@@ -255,7 +255,8 @@ class BezierCubic(NamedTuple):
         tangent = qprime(self.to_array(), t)
         if normalized:
             norm = np.linalg.norm(tangent, axis=1)
-            tangent[norm != 0, :] /= norm[norm != 0]
+            if np.any(norm != 0):
+                tangent[norm != 0, :] /= norm[norm != 0]
         return tangent
 
     def flip(self) -> BezierCubic:

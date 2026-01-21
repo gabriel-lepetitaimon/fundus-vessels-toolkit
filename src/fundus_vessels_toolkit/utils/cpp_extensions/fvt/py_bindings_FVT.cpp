@@ -380,9 +380,9 @@ std::vector<torch::Tensor> compute_intercepts(const std::vector<torch::Tensor>& 
     const std::vector<IntPoint>& starts = tensor_to_curve(startsTensor);
     const PointList& dirs = tensor_to_pointList(dirsTensor);
 
-    const auto& interceptPoints =
-        intercept_curves(branchCurves, branchList, graph, nodesYX, starts, dirs, maxDist * maxDist, cos(startMaxAngle),
-                         cos(endMaxAngle), maxSnapDist * maxSnapDist, cos(maxSnapAngle), interpolateCurves);
+    const auto& interceptPoints = intercept_curves(
+        branchCurves, branchList, graph, nodesYX, starts, dirs, maxDist * maxDist, cos(deg2rad(startMaxAngle)),
+        cos(deg2rad(endMaxAngle)), maxSnapDist * maxSnapDist, cos(deg2rad(maxSnapAngle)), interpolateCurves);
 
     std::vector<torch::Tensor> interceptTensors;
     interceptTensors.reserve(nodesYX.size());
@@ -524,6 +524,87 @@ void first_two_index_of(const torch::Tensor& tensor, const torch::Tensor& elemen
     for (auto e : elements_left) out_acc[e[0]][1] = -1;
 }
 
+void branch_tips_connectivity_matrix(const torch::Tensor& branch_list, int N_nodes, torch::Tensor& out) {
+    auto const& branch_list_acc = branch_list.accessor<int, 2>();
+    const int B = branch_list_acc.size(0);
+    auto out_acc = out.accessor<bool, 4>();
+
+    TORCH_CHECK_VALUE(out_acc.size(0) == B, "The output tensor shape must by (B, 2, B, 2).");
+    TORCH_CHECK_VALUE(out_acc.size(1) == 2, "The output tensor shape must by (B, 2, B, 2).");
+    TORCH_CHECK_VALUE(out_acc.size(2) == B, "The output tensor shape must by (B, 2, B, 2).");
+    TORCH_CHECK_VALUE(out_acc.size(3) == 2, "The output tensor shape must by (B, 2, B, 2).");
+
+    std::vector<std::list<IntPair>> node_to_branch_tip(N_nodes);
+    for (int b = 0; b < B; b++) {
+        node_to_branch_tip[branch_list_acc[b][0]].push_back({b, 0});
+        node_to_branch_tip[branch_list_acc[b][1]].push_back({b, 1});
+    }
+
+    for (const auto& node : node_to_branch_tip) {
+        for (auto it1 = node.cbegin(); it1 != node.cend(); ++it1) {
+            for (auto it2 = std::next(it1); it2 != node.cend(); ++it2) {
+                out_acc[it1->at(0)][it1->at(1)][it2->at(0)][it2->at(1)] = true;
+                out_acc[it2->at(0)][it2->at(1)][it1->at(0)][it1->at(1)] = true;
+            }
+        }
+    }
+}
+
+void facing_tips(const torch::Tensor& tips_yx, const torch::Tensor& tips_tan, float max_distance, float max_angle,
+                 float tan_max_angle, float pos_tolerance, const torch::Tensor& out) {
+    auto const& tips_yx_acc = tips_yx.accessor<double, 3>();
+    auto const& tips_tan_acc = tips_tan.accessor<double, 3>();
+    const int B = tips_yx_acc.size(0);
+    auto out_acc = out.accessor<bool, 4>();
+
+    TORCH_CHECK_VALUE(tips_yx_acc.size(1) == 2, "The tips_yx tensor must have shape (B, 2, 2).");
+    TORCH_CHECK_VALUE(tips_yx_acc.size(2) == 2, "The tips_yx tensor must have shape (B, 2, 2).");
+    TORCH_CHECK_VALUE(tips_tan_acc.size(0) == B, "The tips_tan tensor must have shape (B, 2, 2).");
+    TORCH_CHECK_VALUE(tips_tan_acc.size(1) == 2, "The tips_tan tensor must have shape (B, 2, 2).");
+    TORCH_CHECK_VALUE(tips_tan_acc.size(2) == 2, "The tips_tan tensor must have shape (B, 2, 2).");
+    TORCH_CHECK_VALUE(out_acc.size(0) == B, "The output tensor shape must by (B, 2, B, 2).");
+    TORCH_CHECK_VALUE(out_acc.size(1) == 2, "The output tensor shape must by (B, 2, B, 2).");
+    TORCH_CHECK_VALUE(out_acc.size(2) == B, "The output tensor shape must by (B, 2, B, 2).");
+    TORCH_CHECK_VALUE(out_acc.size(3) == 2, "The output tensor shape must by (B, 2, B, 2).");
+
+    float min_cos = cos(deg2rad(max_angle)), min_tan_cos = cos(deg2rad(tan_max_angle));
+    float sqr_max_dist = max_distance * max_distance, sqr_pos_tolerance = pos_tolerance * pos_tolerance;
+
+    for (int b0 = 0; b0 < B; b0++) {
+        for (int tip0 = 0; tip0 < 2; tip0++) {
+            Point p0(tips_yx_acc[b0][tip0][1], tips_yx_acc[b0][tip0][0]);
+            Point t0(tips_tan_acc[b0][tip0][1], tips_tan_acc[b0][tip0][0]);
+
+            for (int b1 = b0 + 1; b1 < B; b1++) {
+                for (int tip1 = 0; tip1 < 2; tip1++) {
+                    Point p1(tips_yx_acc[b1][tip1][1], tips_yx_acc[b1][tip1][0]);
+
+                    // Distance check
+                    float sqr_dist = (p1 - p0).squaredNorm();
+                    if (sqr_dist > sqr_max_dist) continue;
+
+                    // Facing tangent check
+                    Point t1(tips_tan_acc[b1][tip1][1], tips_tan_acc[b1][tip1][0]);
+                    if (t1.dot(-t0) < min_tan_cos) continue;
+
+                    // Proximity or ...
+                    if (sqr_dist > sqr_pos_tolerance) {
+                        // ... inside cone check
+                        auto inside_cone = [&](const Point& p, const Point& t, const Point& other_p) {
+                            const Point& apex = p + t * pos_tolerance;
+                            return (apex - other_p).normalize().dot(t) >= min_cos;
+                        };
+                        if (!inside_cone(p0, t0, p1) && !inside_cone(p1, t1, p0)) continue;
+                    }
+
+                    out_acc[b0][tip0][b1][tip1] = true;
+                    out_acc[b1][tip1][b0][tip0] = true;
+                }
+            }
+        }
+    }
+}
+
 /**************************************************************************************
  *             === PYBIND11 BINDINGS ===
  **************************************************************************************/
@@ -549,9 +630,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("drawCone", &drawCone, "Draw a cone in a 2D image.");
     m.def("drawLine", &drawLine, "Draw a line in a 2D image.");
     m.def("drawTriangle", &drawTriangle, "Draw a triangle in a 2D image.");
+
     m.def("first_two_index_of", &first_two_index_of,
           "Find the first and second index of a set of elements in a tensor.");
     m.def("first_index_of", &first_index_of, "Find the first index of a set of elements in a tensor.");
+    m.def("branch_tips_connectivity_matrix", &branch_tips_connectivity_matrix,
+          "Compute the branch tips connectivity matrix.");
+    m.def("facing_tips", &facing_tips, "Find facing branch tips.");
 
     // === Skeleton.h ===
     m.def("detect_skeleton_nodes", &detect_skeleton_nodes, "Detect junctions and endpoints in a skeleton.");
@@ -560,7 +645,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // === Branch.h ===
     m.def("find_branch_endpoints", &find_branch_endpoints, "Find the first and last endpoint of each branch.");
     m.def("find_closest_branches", &find_closest_branches, "Find the closest branches to a set of points.");
-    m.def("draw_branches_labels", &draw_branches_labels, "Draw the branches on a tensor.");
+    m.def("draw_skeleton_labels", &draw_skeleton_labels, "Draw the branches on a tensor.");
 
     // === EditDistance.h ===
     m.def("shortest_secondary_path", &shortest_secondary_path, "Compute the shortest path between two sets of nodes.");

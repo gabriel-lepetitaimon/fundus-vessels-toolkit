@@ -1,5 +1,5 @@
 import itertools
-from typing import Any, Dict, Literal, Tuple, overload
+from typing import Dict, Literal, Tuple, overload
 
 import numpy as np
 import numpy.typing as npt
