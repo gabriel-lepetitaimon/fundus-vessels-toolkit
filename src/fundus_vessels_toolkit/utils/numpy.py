@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Literal, Tuple
+from typing import Literal, Optional, Tuple
 
 import numpy as np
 import numpy.typing as npt
+from sqlalchemy import null
 
 from ..utils.typing import Bool2DArray
 
@@ -163,3 +164,65 @@ def as_1d_array(data: npt.ArrayLike, *, dtype=None) -> Tuple[npt.NDArray, bool]:
         return data, False
 
     raise ValueError(f"Impossible to convert {data} to a 1D vector.")
+
+
+class Sparse2DAccessor[K: np.uint, T: np.generic]:
+    def __init__(self, idxs: npt.NDArray[K], values: npt.NDArray[T]) -> None:
+        assert idxs.ndim == 2, "idxs must be a 2D array of indices."
+        self.idxs = idxs
+        self.data = values
+        self._key_gen = Sparse2DAccessor.KeyGen(self.idxs)
+
+    @property
+    def shape(self) -> Tuple[int, ...]:
+        return self.idxs.shape
+
+    def __getitem__(self, idx) -> npt.NDArray[T]:
+        keys = idx if isinstance(idx, Sparse2DAccKey) else Sparse2DAccKey(self.idxs[idx])  # type: ignore
+        if keys.has_null:
+            out = np.zeros(keys.idxs.shape, dtype=self.data.dtype)
+
+            out[keys.not_null_idxs] = self.data[keys.idxs[keys.not_null_idxs]]
+            return out
+        return self.data[keys.idxs]
+
+    @classmethod
+    def from_array[k: np.uint, t: np.generic](
+        cls, array: npt.NDArray[t], idxs: Optional[npt.NDArray[k]] = None, mask: Optional[npt.NDArray[np.bool_]] = None
+    ) -> Sparse2DAccessor[k, t]:
+        if idxs is None:
+            idxs_ = np.full(array.shape, np.uint32(-1), dtype=np.uint32)
+            mask_ = array != array.dtype.type(0)
+            idxs_[mask_] = np.arange(mask_.sum(), dtype=np.uint32)
+        else:
+            assert mask is not None, "If idxs is None, mask must be provided."
+            assert mask.shape == array.shape, "idxs must have the same shape as array."
+            assert idxs.shape == array.shape, "idxs must have the same shape as array."
+            idxs_ = idxs
+            mask_ = mask
+        return cls(idxs_, array[mask_])  # type: ignore[return-value]
+
+    class KeyGen[k: np.uint]:
+        def __init__(self, idxs: npt.NDArray[k]) -> None:
+            self.idxs = idxs
+
+        def __getitem__(self, idx) -> Sparse2DAccKey[k]:
+            return Sparse2DAccKey[k](self.idxs[idx])
+
+    @property
+    def keys(self) -> KeyGen:
+        return self._key_gen
+
+
+class Sparse2DAccKey[K: np.uint]:
+    def __init__(self, idxs: npt.NDArray[K], has_null: bool = True) -> None:
+        self.idxs = idxs
+        if has_null is True:
+            self.not_null_idxs = idxs != idxs.dtype.type(-1)
+            self.has_null = not np.all(self.not_null_idxs)
+        else:
+            self.not_null_idxs = np.ones(idxs.shape, dtype=bool)
+            self.has_null = False
+
+    def __getitem__(self, idx) -> Sparse2DAccKey[K]:
+        return Sparse2DAccKey[K](self.idxs[idx], has_null=self.has_null)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from typing import List, Literal, Optional, Self, Sequence, Tuple, overload
 
 import numpy as np
@@ -11,7 +12,7 @@ from fundus_vessels_toolkit.utils.cluster import reduce_clusters
 
 from ..utils.lookup_array import invert_complete_lookup
 from ..utils.math import gaussian_kernel2d
-from ..utils.numpy import binary_sparse_conv2d, bit_invert
+from ..utils.numpy import Sparse2DAccessor, binary_sparse_conv2d, bit_invert
 from ..utils.rasterization import rasterize_line, rasterize_topology
 from ..utils.typing import Bool1DArray, Float1DArray, Float2DArray, Int1DArray
 from ..vascular_data_objects.vbranch_geodata import VBranchGeoData
@@ -26,10 +27,12 @@ class TreeTopology:
     def __init__(
         self,
         branch_map: npt.NDArray[TopologicalLabel],
-        rank_map: npt.NDArray[np.float32],
-        fuzzy_skeleton_map: npt.NDArray[np.float32],
+        rank_map: npt.NDArray[np.float16],
+        fuzzy_skeleton_map: npt.NDArray[np.float16],
         tree: Optional[VTree] = None,
         branch_mapping: Optional[npt.NDArray[TopologicalLabel]] = None,
+        *,
+        sparse=False,
     ) -> None:
         """Store the tree topology information including the branch map and topological distance map.
 
@@ -44,13 +47,48 @@ class TreeTopology:
         branch_mapping : Optional[npt.NDArray[TopologicalLabel]], optional
             An array mapping rasterized branch labels to branch IDs in the tree, by default None
         """  # noqa: E501
-        self.branch_map = branch_map.astype(TopologicalLabel)
-        self.rank_map = rank_map
-        self.fuzzy_skeleton_map = fuzzy_skeleton_map
         assert branch_map.shape == rank_map.shape, "Branch map and topo distance map must have the same shape."
+        assert fuzzy_skeleton_map.shape == branch_map.shape, (
+            "Fuzzy skeleton map must have the same shape as branch map."
+        )
+        self.sparse = sparse
+
+        branch_map = branch_map.astype(TopologicalLabel)
+        rank_map = rank_map.astype(np.float16)
+        fuzzy_skeleton_map = fuzzy_skeleton_map.astype(np.float16)
+
+        if sparse:
+            mask = branch_map > 0
+            idxs = np.full(branch_map.shape, np.uint32(-1), dtype=np.uint32)
+            idxs[mask] = np.arange(mask.sum(), dtype=np.uint32)
+
+            self.branch_map = Sparse2DAccessor.from_array(branch_map, idxs=idxs, mask=mask)
+            self.rank_map = Sparse2DAccessor.from_array(rank_map, idxs=idxs, mask=mask)
+            self.fuzzy_skeleton_map = Sparse2DAccessor.from_array(fuzzy_skeleton_map, idxs=idxs, mask=mask)
+        else:
+            self.branch_map = branch_map
+            self.rank_map = rank_map
+            self.fuzzy_skeleton_map = fuzzy_skeleton_map
 
         self._tree = tree
         self._branch_mapping = branch_mapping
+
+    def __sizeof__(self) -> int:
+        size = super().__sizeof__()
+        if self._branch_mapping is not None:
+            size += sys.getsizeof(self._branch_mapping)
+        if self._tree is not None:
+            size += sys.getsizeof(self._tree)
+        if self.sparse:
+            size += sys.getsizeof(self.branch_map.idxs)  # type: ignore
+            size += sys.getsizeof(self.branch_map) + sys.getsizeof(self.branch_map.data)
+            size += sys.getsizeof(self.rank_map) + sys.getsizeof(self.rank_map.data)
+            size += sys.getsizeof(self.fuzzy_skeleton_map) + sys.getsizeof(self.fuzzy_skeleton_map.data)
+        else:
+            size += sys.getsizeof(self.branch_map)
+            size += sys.getsizeof(self.rank_map)
+            size += sys.getsizeof(self.fuzzy_skeleton_map)
+        return size
 
     @classmethod
     def from_tree(
@@ -61,6 +99,8 @@ class TreeTopology:
         bezier_interpolate: float = 0.5,
         fill_junctions: bool = True,
         boundaries_field: VBranchGeoData.Key = VBranchGeoData.Fields.BOUNDARIES,
+        sparse: bool = False,
+        discard_tree: bool = False,
     ) -> Self:
         """
         Rasterize the given vessel tree into a binary mask and a distance map.
@@ -106,11 +146,10 @@ class TreeTopology:
         fuzzy_skeleton_map = binary_sparse_conv2d(skeleton, gaussian_kernel) * (labels_map > 0)
 
         branch_mapping = branch_topological_mapping(tree)
-        labels_map = branch_mapping[labels_map]
+        labels_map = branch_mapping[labels_map].astype(TopologicalLabel)
+        tree_opt = dict(tree=tree, branch_mapping=branch_mapping) if not discard_tree else dict()
 
-        return cls(
-            labels_map.astype(TopologicalLabel), topo_map, fuzzy_skeleton_map, tree=tree, branch_mapping=branch_mapping
-        )
+        return cls(labels_map, topo_map, fuzzy_skeleton_map, sparse=sparse, **tree_opt)  # type: ignore
 
     def has_tree(self) -> bool:
         return self._tree is not None
@@ -200,7 +239,8 @@ def read_branch_topology(
         if len(curve) < 3:
             continue
 
-        curve_label = topology.branch_map[*curve.T]
+        curve = topology.branch_map.keys[*curve.T] if topology.sparse else tuple(curve.T)
+        curve_label = topology.branch_map[curve]
         # → Check that at least half the branch is inside the gt tree topology
         known_label = curve_label != 0
         if known_label.mean() < 0.5:
@@ -213,11 +253,11 @@ def read_branch_topology(
         # ... and check that sufficient points are kept
         if valid_label.sum() < 3 or valid_label[known_label].mean() < 0.75:
             continue
-        curve = curve[valid_label]
+        curve = curve[valid_label] if topology.sparse else (curve[0][valid_label], curve[1][valid_label])
         curve_label = curve_label[valid_label]
 
         # → Get the direction of the branch based on the topological distance map
-        curve_rank = topology.rank_map[*curve.T]
+        curve_rank = topology.rank_map[curve]
         curve_diff = np.diff(curve_rank)
         dir = np.mean(curve_diff > 0) - np.mean(curve_diff < 0)
         branch_dir[branch.id] = dir
@@ -227,7 +267,7 @@ def read_branch_topology(
             min_rank = np.floor(curve_rank.min())
             ignore_mask = curve_rank < min_rank + min_rank_threshold
             if ignore_mask.any() and (~ignore_mask).sum() > 3:
-                curve = curve[~ignore_mask]
+                curve = curve[~ignore_mask] if topology.sparse else (curve[0][~ignore_mask], curve[1][~ignore_mask])
                 curve_label = curve_label[~ignore_mask]
                 curve_rank = curve_rank[~ignore_mask]
 
@@ -237,7 +277,7 @@ def read_branch_topology(
             and (valid_rank := curve_rank % 1 > max_rank_tolerance).any()
             and (max_rank := curve_rank[valid_rank].max()) > 0
         ):
-            max_rank = np.ceil(max_rank)  # Clip max_rank to nearest lower integer
+            max_rank = np.ceil(max_rank)  # Clip max_rank to nearest higher integer
             extend_mask = curve_rank >= max_rank
             if not np.all(extend_mask):
                 max_label = curve_label[~extend_mask].max()
@@ -249,7 +289,7 @@ def read_branch_topology(
         branch_label[branch.id] = unique_labels[labels_count.argmax()]
 
         # → Get the plausibility of the branch based on the fuzzy_skeleton_map
-        branch_plausibility[branch.id] = topology.fuzzy_skeleton_map[*curve.T].mean()
+        branch_plausibility[branch.id] = topology.fuzzy_skeleton_map[curve].mean()
 
         # → Get the tip labels and distances
         tips_label[branch.id, 0] = curve_label[0]
@@ -654,12 +694,18 @@ class TopologicalLabel(np.uint64):
     ) -> np.uint64 | npt.NDArray[np.uint64]:
         """
         Create a mask to extract the branching pattern up to a given rank.
+
+        Examples
+        --------
+        >>> TL = TopologicalLabel
+        >>> hex(TL.subtree_branching_bit_mask(4))
+        '0xffff000000000000'
         """
         if max_rank is None:
             return np.uint64(0xFFFFFFFFFFFFFF00)  # cls.SUBTREE_MASK | cls.BRANCHING_PATTERN_MASK
         assert np.all(max_rank <= 44), "Max rank must be less than or equal to 44."
         max_rank_ = max_rank.astype(np.uint64) if isinstance(max_rank, np.ndarray) else np.uint64(max_rank)
-        return bit_invert(np.uint64(2) ** (np.uint64(52) - max_rank_) - np.uint64(1))  # type: ignore
+        return bit_invert((np.uint64(1) << (np.uint64(52) - max_rank_)) - np.uint64(1))  # type: ignore
 
     @classmethod
     @overload
@@ -738,7 +784,9 @@ class TopologicalLabel(np.uint64):
         ranks = cls.decode_rank(out)
         has_parents = ranks > 0
         out[has_parents] -= 1  # Decrease rank by 1
-        out[has_parents] &= cls.subtree_branching_bit_mask(ranks[has_parents] - 1) | cls.RANK_MASK  # Erase last bit
+        out[has_parents] &= (
+            cls.subtree_branching_bit_mask(ranks[has_parents] - np.uint8(1)) | cls.RANK_MASK
+        )  # Erase last bit
         if not return_self_if_no_parent:
             out[~has_parents] = 0
         return TopologicalLabel(out[0]) if is_single else out

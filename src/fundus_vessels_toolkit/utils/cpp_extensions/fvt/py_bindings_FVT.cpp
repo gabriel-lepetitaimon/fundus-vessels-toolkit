@@ -8,6 +8,7 @@
 #include "rasterize_topo.h"
 #include "ray_iterators.h"
 #include "skeleton.h"
+#include "tree_topology.h"
 
 /*********************************************************************************************
  *             === SKELETON PARSING ===
@@ -663,4 +664,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // === disjoint_set.h ===
     m.def("has_cycle", &has_cycle, "Find cycles in a list of parent.");
     m.def("find_cycles", &find_cycles, "Find all cycles in a list of parent.");
+
+    // === tree_topology.h ===
+    m.def("read_branches_topology", &read_branches_topology, "Read the topology of branches.");
 }

@@ -377,6 +377,31 @@ torch::Tensor vector_to_tensor(const IntPointPairs& vec, std::size_t first = 0, 
 torch::Tensor remove_rows(const torch::Tensor& tensor, std::vector<int> rows);
 
 template <typename T>
+torch::Tensor vector_to_tensor(const std::vector<T>& vec, c10::ScalarType dtype, std::size_t first = 0,
+                               std::size_t last = 0) {
+    if (last == 0) last = vec.size();
+    torch::Tensor tensor = torch::empty({(long)(last - first)}, dtype);
+    auto accessor = tensor.accessor<uint64_t, 1>();
+    for (auto i = first; i < last; i++) {
+        accessor[i - first] = vec[i];
+    }
+    return tensor;
+}
+
+template <typename T>
+torch::Tensor vector_to_tensor(const std::vector<std::array<T, 2>>& vec, c10::ScalarType dtype, std::size_t first = 0,
+                               std::size_t last = 0) {
+    if (last == 0) last = vec.size();
+    torch::Tensor tensor = torch::empty({(long)(last - first), 2}, dtype);
+    auto accessor = tensor.accessor<uint64_t, 2>();
+    for (auto i = first; i < last; i++) {
+        accessor[i - first][0] = vec[i][0];
+        accessor[i - first][1] = vec[i][1];
+    }
+    return tensor;
+}
+
+template <typename T>
 std::vector<torch::Tensor> vectors_to_tensors(const std::vector<std::vector<T>>& vec) {
     std::vector<torch::Tensor> tensors;
     tensors.reserve(vec.size());

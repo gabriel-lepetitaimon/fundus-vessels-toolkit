@@ -383,6 +383,9 @@ torch::Tensor vector_to_tensor(const std::vector<FloatPair>& vec, std::size_t fi
     }
     return tensor;
 }
+torch::Tensor vector_to_tensor(const std::vector<std::array<uint64_t, 2>>& vec, std::size_t first, std::size_t last) {
+    return vector_to_tensor(vec, torch::kUInt64, first, last);
+}
 
 torch::Tensor vector_to_tensor(const std::vector<std::array<IntPair, 2>>& vec, std::size_t first, std::size_t last) {
     if (last == 0) last = vec.size();
