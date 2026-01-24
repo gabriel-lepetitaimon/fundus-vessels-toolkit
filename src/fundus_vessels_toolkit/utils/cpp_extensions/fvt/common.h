@@ -381,22 +381,21 @@ torch::Tensor vector_to_tensor(const std::vector<T>& vec, c10::ScalarType dtype,
                                std::size_t last = 0) {
     if (last == 0) last = vec.size();
     torch::Tensor tensor = torch::empty({(long)(last - first)}, dtype);
-    auto accessor = tensor.accessor<uint64_t, 1>();
+    auto accessor = tensor.accessor<T, 1>();
     for (auto i = first; i < last; i++) {
         accessor[i - first] = vec[i];
     }
     return tensor;
 }
 
-template <typename T>
-torch::Tensor vector_to_tensor(const std::vector<std::array<T, 2>>& vec, c10::ScalarType dtype, std::size_t first = 0,
+template <typename T, std::size_t N>
+torch::Tensor vector_to_tensor(const std::vector<std::array<T, N>>& vec, c10::ScalarType dtype, std::size_t first = 0,
                                std::size_t last = 0) {
     if (last == 0) last = vec.size();
-    torch::Tensor tensor = torch::empty({(long)(last - first), 2}, dtype);
-    auto accessor = tensor.accessor<uint64_t, 2>();
+    torch::Tensor tensor = torch::empty({(long)(last - first), (long)N}, dtype);
+    auto accessor = tensor.accessor<T, 2>();
     for (auto i = first; i < last; i++) {
-        accessor[i - first][0] = vec[i][0];
-        accessor[i - first][1] = vec[i][1];
+        for (std::size_t j = 0; j < N; j++) accessor[i - first][j] = vec[i][j];
     }
     return tensor;
 }
@@ -469,6 +468,9 @@ std::tuple<Hierarchy, int> edge_list_to_hierarchy(const Tensor2DAcc<int>& edges,
 AdjList graph_adjlist_to_edge_adjlist(const GraphAdjList& adjlist, int N = -1);
 
 torch::Tensor edge_list_to_tensor(const EdgeList& vec);
+
+std::list<std::vector<std::size_t>> solve_clusters(const std::list<SizePair>& edges_list,
+                                                   std::size_t n_nodes = SIZE_MAX);
 
 /*******************************************************************************************************************
  *             === NEIGHBORS ===

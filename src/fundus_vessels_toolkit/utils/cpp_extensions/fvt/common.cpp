@@ -655,6 +655,53 @@ torch::Tensor edge_list_to_tensor(const EdgeList& edge_list) {
     return branches_list_tensor;
 }
 
+std::list<std::vector<std::size_t>> solve_clusters(const std::list<SizePair>& edges_list, std::size_t n_nodes) {
+    // Find number of nodes
+    if (n_nodes == SIZE_MAX) {
+        n_nodes = 0;
+        for (const auto& [u, v] : edges_list) n_nodes = std::max(n_nodes, std::max(u, v));
+        n_nodes++;
+    }
+
+    // Create adjacency list from edges list
+    std::vector<std::set<int>> adjacency_list(n_nodes);
+    for (const auto& [u, v] : edges_list) {
+        adjacency_list[u].insert(v);
+        adjacency_list[v].insert(u);
+    }
+
+    // DFS to find connected components
+    std::vector<bool> visited(n_nodes, false);
+    std::list<std::vector<std::size_t>> clusters;
+    for (std::size_t i = 0; i < n_nodes; i++) {
+        if (visited[i]) {
+            continue;
+        }
+
+        std::vector<std::size_t> cluster;
+        std::stack<std::size_t> stack;
+        stack.push(i);
+        visited[i] = true;
+
+        while (!stack.empty()) {
+            auto u = stack.top();
+            stack.pop();
+            cluster.push_back(u);
+
+            for (const auto& v : adjacency_list[u]) {
+                if (!visited[v]) {
+                    stack.push(v);
+                    visited[v] = true;
+                }
+            }
+        }
+
+        clusters.push_back(cluster);
+    }
+
+    return clusters;
+}
+
 /*******************************************************************************************************************
  *             === NEIGHBORS ===
  *******************************************************************************************************************/

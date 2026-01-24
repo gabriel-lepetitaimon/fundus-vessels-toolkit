@@ -4,7 +4,6 @@ from typing import Literal, Optional, Tuple
 
 import numpy as np
 import numpy.typing as npt
-from sqlalchemy import null
 
 from ..utils.typing import Bool2DArray
 
@@ -186,12 +185,18 @@ class Sparse2DAccessor[K: np.uint, T: np.generic]:
             return out
         return self.data[keys.idxs]
 
+    def to_dense(self) -> npt.NDArray[T]:
+        out = np.zeros(self.idxs.shape, dtype=self.data.dtype)
+        out[self.idxs != np.iinfo(self.idxs.dtype).max] = self.data
+        return out
+
     @classmethod
     def from_array[k: np.uint, t: np.generic](
         cls, array: npt.NDArray[t], idxs: Optional[npt.NDArray[k]] = None, mask: Optional[npt.NDArray[np.bool_]] = None
     ) -> Sparse2DAccessor[k, t]:
         if idxs is None:
-            idxs_ = np.full(array.shape, np.uint32(-1), dtype=np.uint32)
+            INVALID = np.iinfo(np.uint32).max
+            idxs_ = np.full(array.shape, INVALID, dtype=np.uint32)
             mask_ = array != array.dtype.type(0)
             idxs_[mask_] = np.arange(mask_.sum(), dtype=np.uint32)
         else:
@@ -218,7 +223,7 @@ class Sparse2DAccKey[K: np.uint]:
     def __init__(self, idxs: npt.NDArray[K], has_null: bool = True) -> None:
         self.idxs = idxs
         if has_null is True:
-            self.not_null_idxs = idxs != idxs.dtype.type(-1)
+            self.not_null_idxs = idxs != np.iinfo(idxs.dtype).max
             self.has_null = not np.all(self.not_null_idxs)
         else:
             self.not_null_idxs = np.ones(idxs.shape, dtype=bool)

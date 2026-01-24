@@ -15,13 +15,13 @@ bool is_between(const TopoLabel& label, const TopoLabel& start, const TopoLabel&
                 bool strict_rank = true);
 
 std::array<torch::Tensor, 5> read_branches_topology(const std::vector<torch::Tensor>& branch_curves,
-                                                    const torch::Tensor& topo_idxs, const torch::Tensor& topo_labels,
-                                                    const torch::Tensor& topo_ranks,
+                                                    const IntPair& domain, const torch::Tensor& topo_idxs,
+                                                    const torch::Tensor& topo_labels, const torch::Tensor& topo_ranks,
                                                     const torch::Tensor& fuzzy_skeleton, float min_rank_threshold,
                                                     float max_rank_tolerance);
 
 std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 2>> read_branch_topology(
-    const Tensor2DAcc<int32_t>& curve, const Tensor2DAcc<uint32_t>& topo_idxs,
+    const Tensor2DAcc<int32_t>& curve, const IntPair& domain, const Tensor2DAcc<uint32_t>& topo_idxs,
     const Tensor1DAcc<TopoLabel>& topo_labels, const Tensor1DAcc<at::Half>& topo_ranks,
     const Tensor1DAcc<at::Half>& fuzzy_skeleton, float min_rank_threshold, float max_rank_tolerance);
 

@@ -551,6 +551,54 @@ void branch_tips_connectivity_matrix(const torch::Tensor& branch_list, int N_nod
     }
 }
 
+torch::Tensor terminal_tips(const torch::Tensor& branch_list, std::size_t N_nodes,
+                            const torch::Tensor& branch_subgraph) {
+    TORCH_CHECK_VALUE(branch_list.ndimension() == 2, "The branch_list tensor must have shape (B, 2).");
+    TORCH_CHECK_VALUE(branch_list.size(1) == 2, "The branch_list tensor must have shape (B, 2).");
+    auto B = branch_list.size(0);
+
+    if (branch_subgraph.numel() == 0) {
+        // If no subgraph ids are provided, consider all branches belong to the same subgraph
+        const auto& tips = terminal_nodes(tensor_to_vectorIntPair(branch_list), N_nodes);
+        return vector_to_tensor(tips, torch::kInt);
+    }
+
+    TORCH_CHECK_VALUE(branch_subgraph.ndimension() == 2, "The branch_subgraph tensor must have shape (B).");
+    TORCH_CHECK_VALUE(branch_subgraph.size(0) == B, "The branch_subgraph tensor must have shape (B).");
+    TORCH_CHECK_VALUE(branch_subgraph.dtype() == torch::kBool, "The branch_subgraph tensor must be boolean.");
+    auto n_subgraphs = branch_subgraph.size(1);
+    auto const& branch_subgraph_acc = branch_subgraph.accessor<bool, 2>();
+    auto const& branch_list_acc = branch_list.accessor<int, 2>();
+
+    std::vector<std::vector<IntPair>> subgraph_branch_list(n_subgraphs);
+    std::vector<std::vector<std::size_t>> subgraph_branch_lookup(n_subgraphs);
+    for (auto& v : subgraph_branch_list) v.reserve(B);
+
+    for (int64_t b = 0; b < B; b++) {
+        for (int64_t s = 0; s < n_subgraphs; s++) {
+            if (branch_subgraph_acc[b][s]) {
+                subgraph_branch_list[s].emplace_back(std::array<int, 2>{branch_list_acc[b][0], branch_list_acc[b][1]});
+                subgraph_branch_lookup[s].emplace_back(b);
+            }
+        }
+    }
+    // Process each subgraph separately
+    std::vector<std::array<bool, 2>> tips_mask(B, {false, false});
+    for (int s = 0; s < (int)n_subgraphs; s++) {
+        for (const auto& tip : terminal_nodes(subgraph_branch_list[s], N_nodes))
+            tips_mask[subgraph_branch_lookup[s][tip[1]]][tip[2]] = true;
+    }
+    // Recompose tips tensor from the tips mask
+    std::vector<std::array<int, 3>> tips;
+    tips.reserve(B * 2);
+    for (int b = 0; b < (int)tips_mask.size(); b++) {
+        for (int tip = 0; tip < 2; tip++) {
+            if (tips_mask[b][tip]) tips.emplace_back(std::array<int, 3>{branch_list_acc[b][tip], b, tip});
+        }
+    }
+    return vector_to_tensor(tips, torch::kInt);
+}
+
 void facing_tips(const torch::Tensor& tips_yx, const torch::Tensor& tips_tan, float max_distance, float max_angle,
                  float tan_max_angle, float pos_tolerance, const torch::Tensor& out) {
     auto const& tips_yx_acc = tips_yx.accessor<double, 3>();
@@ -638,6 +686,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("branch_tips_connectivity_matrix", &branch_tips_connectivity_matrix,
           "Compute the branch tips connectivity matrix.");
     m.def("facing_tips", &facing_tips, "Find facing branch tips.");
+    m.def("terminal_tips", &terminal_tips, "Find terminal branch tips.");
 
     // === Skeleton.h ===
     m.def("detect_skeleton_nodes", &detect_skeleton_nodes, "Detect junctions and endpoints in a skeleton.");

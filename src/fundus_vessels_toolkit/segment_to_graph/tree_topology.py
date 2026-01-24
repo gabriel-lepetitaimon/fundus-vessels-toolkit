@@ -58,8 +58,9 @@ class TreeTopology:
         fuzzy_skeleton_map = fuzzy_skeleton_map.astype(np.float16)
 
         if sparse:
+            INVALID = np.iinfo(np.uint32).max
             mask = branch_map > 0
-            idxs = np.full(branch_map.shape, np.uint32(-1), dtype=np.uint32)
+            idxs = np.full(branch_map.shape, INVALID, dtype=np.uint32)
             idxs[mask] = np.arange(mask.sum(), dtype=np.uint32)
 
             self.branch_map = Sparse2DAccessor.from_array(branch_map, idxs=idxs, mask=mask)
@@ -220,8 +221,37 @@ def read_branch_topology(
     tips_rank: npt.NDArray[np.float32]
         A 2D array of size (B, 2) indicating, for each branch, the topological distances of its two tips (tail, head).
     """  # noqa: E501
-    domain = Rect.from_size(topology.shape).exclude_bottom_right_edges()  # type: ignore
 
+    if topology.sparse:
+        import torch
+
+        from ..utils.cpp_extensions.fvt_cpp import read_branches_topology
+
+        curves = graph.geometric_data().branch_curve()
+        curves_tensor: list[torch.Tensor] = []
+
+        for b in graph.branches():
+            curve = curves[b.id]
+            if curve is None or len(curve) < 3:
+                p0, p1 = b.tip_coord()
+                curve = rasterize_line(p0.to_int_pair(), p1.to_int_pair())
+            if curve.strides[0] < 0:
+                curve = curve.copy()
+            curves_tensor.append(torch.from_numpy(curve))
+        out = read_branches_topology(
+            curves_tensor,
+            topology.shape,
+            torch.from_numpy(topology.branch_map.idxs),  # type: ignore
+            torch.from_numpy(topology.branch_map.data),  # type: ignore
+            torch.from_numpy(topology.rank_map.data),  # type: ignore
+            torch.from_numpy(topology.fuzzy_skeleton_map.data),  # type: ignore
+            min_rank_threshold,
+            max_rank_tolerance,
+        )
+        branch_label, branch_dir, branch_plausibility, tips_label, tips_rank = [_.numpy() for _ in out]
+        return branch_label, branch_dir, branch_plausibility, tips_label, tips_rank
+
+    domain = Rect.from_size(topology.branch_map.shape).exclude_bottom_right_edges()  # type: ignore
     B = graph.branch_count
     branch_dir = np.zeros(B, dtype=float)
     branch_label = np.zeros(B, dtype=TopologicalLabel)
@@ -239,8 +269,7 @@ def read_branch_topology(
         if len(curve) < 3:
             continue
 
-        curve = topology.branch_map.keys[*curve.T] if topology.sparse else tuple(curve.T)
-        curve_label = topology.branch_map[curve]
+        curve_label = topology.branch_map[*curve.T]
         # → Check that at least half the branch is inside the gt tree topology
         known_label = curve_label != 0
         if known_label.mean() < 0.5:
@@ -253,11 +282,11 @@ def read_branch_topology(
         # ... and check that sufficient points are kept
         if valid_label.sum() < 3 or valid_label[known_label].mean() < 0.75:
             continue
-        curve = curve[valid_label] if topology.sparse else (curve[0][valid_label], curve[1][valid_label])
+        curve = curve[valid_label]
         curve_label = curve_label[valid_label]
 
         # → Get the direction of the branch based on the topological distance map
-        curve_rank = topology.rank_map[curve]
+        curve_rank = topology.rank_map[*curve.T]
         curve_diff = np.diff(curve_rank)
         dir = np.mean(curve_diff > 0) - np.mean(curve_diff < 0)
         branch_dir[branch.id] = dir
@@ -267,7 +296,7 @@ def read_branch_topology(
             min_rank = np.floor(curve_rank.min())
             ignore_mask = curve_rank < min_rank + min_rank_threshold
             if ignore_mask.any() and (~ignore_mask).sum() > 3:
-                curve = curve[~ignore_mask] if topology.sparse else (curve[0][~ignore_mask], curve[1][~ignore_mask])
+                curve = curve[~ignore_mask]
                 curve_label = curve_label[~ignore_mask]
                 curve_rank = curve_rank[~ignore_mask]
 
@@ -289,7 +318,7 @@ def read_branch_topology(
         branch_label[branch.id] = unique_labels[labels_count.argmax()]
 
         # → Get the plausibility of the branch based on the fuzzy_skeleton_map
-        branch_plausibility[branch.id] = topology.fuzzy_skeleton_map[curve].mean()
+        branch_plausibility[branch.id] = topology.fuzzy_skeleton_map[*curve.T].mean()
 
         # → Get the tip labels and distances
         tips_label[branch.id, 0] = curve_label[0]
@@ -305,8 +334,10 @@ def read_branch_topology(
     inters = dict(start=l0, end=l1, strict=False, start_d=d0, end_d=d1, strict_d=True)
     tip0_overlap = TopologicalLabel.is_between(l0, point_d=d0, **inters)  # type: ignore
     tip1_overlap = TopologicalLabel.is_between(l1, point_d=d1, **inters)  # type: ignore
+    print(np.argwhere(tip0_overlap | tip1_overlap))
 
     for cluster in reduce_clusters(np.argwhere(tip0_overlap | tip1_overlap)):
+        print(cluster)
         if len(cluster) <= 1:
             continue
         cluster = np.array(cluster)
@@ -667,6 +698,8 @@ class TopologicalLabel(np.uint64):
         """
         Decode the subtree indices from a topological label map.
         """
+        if isinstance(label, Sparse2DAccessor):
+            label = label.to_dense()
         return (np.uint64(label & cls.SUBTREE_MASK) >> np.uint64(52)).astype(np.int32) - 1
 
     @classmethod
@@ -680,6 +713,8 @@ class TopologicalLabel(np.uint64):
         """
         Decode the branching ranks from a topological label map.
         """
+        if isinstance(label, Sparse2DAccessor):
+            label = label.to_dense()
         return (label & cls.RANK_MASK).astype(np.uint8)
 
     @classmethod

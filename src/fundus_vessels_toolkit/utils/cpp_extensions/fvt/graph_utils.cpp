@@ -1,39 +1,53 @@
 #include "graph.h"
 
-EdgeList terminal_edges(const EdgeList &edgeList, bool directed) {
+EdgeList terminal_edges(const EdgeList& edgeList, bool directed) {
     EdgeList terminalEdges;
     terminalEdges.reserve(edgeList.size());
 
-    auto const &nodesRank = nodes_rank(edgeList, directed);
-    for (const auto &edge : edgeList) {
+    auto const& nodesRank = nodes_rank(edgeList, directed);
+    for (const auto& edge : edgeList) {
         if (nodesRank[edge.start] == 1 || nodesRank[edge.end] == 1) terminalEdges.push_back(edge);
     }
     return terminalEdges;
 }
 
-EdgeList terminal_edges(const GraphAdjList &adjacency) {
+EdgeList terminal_edges(const GraphAdjList& adjacency) {
     EdgeList terminalEdges;
     terminalEdges.reserve(adjacency.size());
 
-    auto const &nodesRank = nodes_rank(adjacency);
+    auto const& nodesRank = nodes_rank(adjacency);
     for (int nodeId = 0; nodeId < (int)adjacency.size(); nodeId++) {
         if (nodesRank[nodeId] == 1) terminalEdges.push_back(*(adjacency[nodeId].begin()));
     }
     return terminalEdges;
 }
 
-std::vector<int> nodes_rank(const GraphAdjList &adjacency) {
+std::vector<std::array<int, 3>> terminal_nodes(const std::vector<IntPair>& edgeList, std::size_t N_nodes) {
+    std::vector<std::array<int, 3>> terminalNodes;
+    terminalNodes.reserve(N_nodes);
+
+    std::vector<int> nodesRank(N_nodes, 0);
+    for (const auto& edge : edgeList) nodesRank[edge[0]]++, nodesRank[edge[1]]++;
+
+    for (std::size_t e = 0; e < edgeList.size(); e++) {
+        if (nodesRank[edgeList[e][0]] == 1) terminalNodes.emplace_back(std::array<int, 3>{edgeList[e][0], int(e), 0});
+        if (nodesRank[edgeList[e][1]] == 1) terminalNodes.emplace_back(std::array<int, 3>{edgeList[e][1], int(e), 1});
+    }
+    return terminalNodes;
+}
+
+std::vector<int> nodes_rank(const GraphAdjList& adjacency) {
     std::vector<int> nodesRank;
     nodesRank.reserve(adjacency.size());
-    for (const auto &nodes_adjacence : adjacency) nodesRank.push_back((int)nodes_adjacence.size());
+    for (const auto& nodes_adjacence : adjacency) nodesRank.push_back((int)nodes_adjacence.size());
     return nodesRank;
 }
 
-std::vector<int> nodes_rank(const EdgeList &edgeList, bool onlyIncoming) {
+std::vector<int> nodes_rank(const EdgeList& edgeList, bool onlyIncoming) {
     std::vector<int> nodesRank;
     nodesRank.reserve(edgeList.size());
 
-    for (const auto &edge : edgeList) {
+    for (const auto& edge : edgeList) {
         int maxEdgeID = std::max(edge.start, edge.end);
         if (maxEdgeID >= (int)nodesRank.size()) nodesRank.resize(maxEdgeID + 1, 0);
 
@@ -43,19 +57,19 @@ std::vector<int> nodes_rank(const EdgeList &edgeList, bool onlyIncoming) {
     return nodesRank;
 }
 
-std::size_t nodesCount(const EdgeList &edgeList) {
+std::size_t nodesCount(const EdgeList& edgeList) {
     std::size_t nodesCount = 0;
-    for (const auto &edge : edgeList)
+    for (const auto& edge : edgeList)
         nodesCount = std::max({nodesCount, (std::size_t)edge.start, (std::size_t)edge.end});
     return nodesCount + 1;
 }
 
-std::vector<std::list<int>> connected_components(const EdgeList &edgeList, int N) {
+std::vector<std::list<int>> connected_components(const EdgeList& edgeList, int N) {
     GraphAdjList adjList = edge_list_to_adjlist(edgeList, N);
     return connected_components(adjList);
 }
 
-std::vector<std::list<int>> connected_components(const GraphAdjList &adjList) {
+std::vector<std::list<int>> connected_components(const GraphAdjList& adjList) {
     std::vector<bool> node_assigned(adjList.size(), false);
     std::vector<std::list<int>> components;
 
@@ -63,7 +77,7 @@ std::vector<std::list<int>> connected_components(const GraphAdjList &adjList) {
         if (node_assigned[i]) continue;
 
         components.push_back({i});
-        auto &component = components.back();
+        auto& component = components.back();
 
         std::queue<int> nodesQueue;
         nodesQueue.push(i);
@@ -73,7 +87,7 @@ std::vector<std::list<int>> connected_components(const GraphAdjList &adjList) {
             int node = nodesQueue.front();
             nodesQueue.pop();
 
-            for (const auto &neighbor : adjList[node]) {
+            for (const auto& neighbor : adjList[node]) {
                 if (node_assigned[neighbor.end]) continue;
                 node_assigned[neighbor.end] = true;
                 component.push_back(neighbor.end);
@@ -88,15 +102,15 @@ std::vector<std::list<int>> connected_components(const GraphAdjList &adjList) {
 /***************************************************************************
  *             === Maximum Weighted Independent Set ===
  ***************************************************************************/
-std::pair<std::vector<int>, float> recursive_MWIS(const std::vector<std::set<int>> &adjList,
-                                                  const std::vector<float> &weights, std::list<int> subset) {
+std::pair<std::vector<int>, float> recursive_MWIS(const std::vector<std::set<int>>& adjList,
+                                                  const std::vector<float>& weights, std::list<int> subset) {
     if (subset.empty()) return {{}, 0};
     if (subset.size() == 1) return {{subset.front()}, weights[subset.front()]};
 
     int node = subset.front();
-    const float &nodeWeight = weights[node];
+    const float& nodeWeight = weights[node];
     subset.pop_front();
-    const auto &neighbors = adjList[node];
+    const auto& neighbors = adjList[node];
 
     // == Remove the node from the subset and compute the MWIS ===
     auto [set1, weight1] = recursive_MWIS(adjList, weights, subset);
@@ -121,12 +135,12 @@ std::pair<std::vector<int>, float> recursive_MWIS(const std::vector<std::set<int
 }
 
 std::vector<int> maximum_weighted_independent_set(std::vector<IntPair> edges_list, std::vector<float> weights) {
-    const auto &adjList = edge_list_to_adjlist(edges_list, weights.size(), false, false);
-    const auto &cc = connected_components(adjList);
+    const auto& adjList = edge_list_to_adjlist(edges_list, weights.size(), false, false);
+    const auto& cc = connected_components(adjList);
 
     std::vector<std::set<int>> simpleAdjList(adjList.size());
-    for (const auto &edges : adjList) {
-        for (const auto &edge : edges) simpleAdjList[edge.start].insert(edge.end);
+    for (const auto& edges : adjList) {
+        for (const auto& edge : edges) simpleAdjList[edge.start].insert(edge.end);
     }
 
     std::vector<int> mwis;

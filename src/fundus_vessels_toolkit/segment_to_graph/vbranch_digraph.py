@@ -193,7 +193,6 @@ class VBranchDigraph(LineDigraph):
         both_branch = art_b & vei_b
         art_invalid = both_branch & (vei_plausibility + 0.15 > art_plausibility)
         vei_invalid = both_branch & (art_plausibility + 0.15 > vei_plausibility)
-        # art_invalid = vei_invalid = both_branch
 
         art_b[art_invalid] = False
         vei_b[vei_invalid] = False
@@ -406,25 +405,26 @@ def prepare_graph_for_reconnections(
         - the tip id of the existing endpoint,
         - the id of the existing or new node to connect to
     """  # noqa: E501
+    import torch
+
+    from ..utils.cpp_extensions.fvt_cpp import terminal_tips
     from .graph_simplification import find_reconnection_candidates
 
     if not inplace:
         graph = graph.copy()
 
     if av_attr is not None and av_attr in graph.branch_attr.columns:
-        endpoints = []
-        for node in graph.nodes():
-            branch = np.array(node.adjacent_branch_ids)
-            tips = np.where(node.adjacent_branches_first_node, 0, 1)
-            branch_av = graph.branch_attr.loc[branch, av_attr].to_numpy()
-            a_branch = np.isin(branch_av, [AVLabel.ART, AVLabel.BOTH])
-            v_branch = np.isin(branch_av, [AVLabel.VEI, AVLabel.BOTH])
-            if np.sum(a_branch) == 1:
-                endpoints += [(branch[a_branch][0], tips[a_branch][0])]
-            if np.sum(v_branch) == 1:
-                endpoints += [(branch[v_branch][0], tips[v_branch][0])]
+        av = graph.branch_attr[av_attr].to_numpy()
+        a_branch_mask = np.isin(av, [AVLabel.ART, AVLabel.BOTH])
+        v_branch_mask = np.isin(av, [AVLabel.VEI, AVLabel.BOTH])
+        subgraph_mask = torch.from_numpy(np.stack([a_branch_mask, v_branch_mask], axis=1))
     else:
-        endpoints = None
+        subgraph_mask = torch.empty((0, 0), dtype=torch.bool)
+    endpoints = terminal_tips(
+        torch.from_numpy(graph.branch_list.astype(np.int32)),
+        graph.node_count,
+        subgraph_mask,
+    )
 
     candidates = find_reconnection_candidates(
         graph,
@@ -432,7 +432,7 @@ def prepare_graph_for_reconnections(
         max_angle=max_angle,
         snap_max_distance=snap_tip_max_distance,
         snap_max_angle=snap_tip_max_angle,
-        endpoint_ids=endpoints,
+        endpoint_ids=endpoints.numpy()[:, 1:].astype(np.int_),
     )
     # Candidates format:  0     1   2          3         4  5  6
     #                   (b0, tip0, n1, branch_id, curve_id, y, x)
@@ -624,7 +624,7 @@ def solve_line_digraph_approx(
             return solve_line_digraph_approx(line_list, line_p, branch_dir_p, True)
 
     # === Clean the MSA to prevent rebound ===
-    branch_tree = np.empty(B, dtype=np.int_)
+    branch_tree = -np.ones(B, dtype=np.int_)
     branch_dir = np.empty(B, dtype=np.bool_)
     incoming_tip = np.empty(B, dtype=np.int_)
 
