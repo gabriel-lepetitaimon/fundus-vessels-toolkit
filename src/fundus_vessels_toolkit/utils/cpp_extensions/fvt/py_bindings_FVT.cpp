@@ -525,7 +525,8 @@ void first_two_index_of(const torch::Tensor& tensor, const torch::Tensor& elemen
     for (auto e : elements_left) out_acc[e[0]][1] = -1;
 }
 
-void branch_tips_connectivity_matrix(const torch::Tensor& branch_list, int N_nodes, torch::Tensor& out) {
+void branch_tips_connectivity_matrix(const torch::Tensor& branch_list, int N_nodes, torch::Tensor& out,
+                                     bool erase_opposite_tips) {
     auto const& branch_list_acc = branch_list.accessor<int, 2>();
     const int B = branch_list_acc.size(0);
     auto out_acc = out.accessor<bool, 4>();
@@ -541,11 +542,48 @@ void branch_tips_connectivity_matrix(const torch::Tensor& branch_list, int N_nod
         node_to_branch_tip[branch_list_acc[b][1]].push_back({b, 1});
     }
 
+#pragma omp parallel for
     for (const auto& node : node_to_branch_tip) {
         for (auto it1 = node.cbegin(); it1 != node.cend(); ++it1) {
+            const auto& [b1, t1] = *it1;
             for (auto it2 = std::next(it1); it2 != node.cend(); ++it2) {
-                out_acc[it1->at(0)][it1->at(1)][it2->at(0)][it2->at(1)] = true;
-                out_acc[it2->at(0)][it2->at(1)][it1->at(0)][it1->at(1)] = true;
+                const auto& [b2, t2] = *it2;
+                out_acc[b1][t1][b2][t2] = true;
+                out_acc[b2][t2][b1][t1] = true;
+            }
+        }
+    }
+
+    if (!erase_opposite_tips) return;
+
+#pragma omp parallel for
+    for (auto& node : node_to_branch_tip) {
+        // Separate self loop branches
+        std::list<int> self_loops;
+        for (auto it = node.begin(); it != node.end();) {
+            if (std::next(it) != node.end() && it->at(0) == std::next(it)->at(0)) {
+                it = node.erase(it, std::next(it, 2));
+                self_loops.push_back(it->at(0));
+            } else
+                ++it;
+        }
+        // Erase opposite tips connections
+        for (auto it1 = node.begin(); it1 != node.end(); ++it1) {
+            const auto& [b1, t1] = *it1;
+            for (auto it2 = std::next(it1); it2 != node.cend(); ++it2) {
+                const auto& [b2, t2] = *it2;
+                out_acc[b1][t1][b2][1 - t2] = false;
+                out_acc[b2][1 - t2][b1][t1] = false;
+
+                out_acc[b1][1 - t1][b2][t2] = false;
+                out_acc[b2][t2][b1][1 - t1] = false;
+            }
+
+            for (const auto& b2 : self_loops) {
+                for (int t2 = 0; t2 < 2; t2++) {
+                    out_acc[b1][1 - t1][b2][t2] = false;
+                    out_acc[b2][t2][b1][1 - t1] = false;
+                }
             }
         }
     }

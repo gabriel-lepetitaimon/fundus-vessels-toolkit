@@ -1362,7 +1362,9 @@ class VGraph:
         else:
             return branch_ids
 
-    def branch_tips_connectivity_matrix(self, out: Optional[npt.NDArray[np.bool_]] = None) -> npt.NDArray[np.bool_]:
+    def branch_tips_connectivity_matrix(
+        self, out: Optional[npt.NDArray[np.bool_]] = None, *, erase_opposite_tips: bool = False
+    ) -> npt.NDArray[np.bool_]:
         """Compute the branch tips connectivity matrix from this graph branch list.
 
         The branch tips connectivity matrix is a 2D boolean matrix of shape (B, 2, B, 2) where B is the number of branches. A true value at (b0, tip0, b1, tip1) indicates that the tip `tip0` of branch `b0` is connected to the tip `tip1` of branch `b1`. This matrix is symmetric.
@@ -1391,7 +1393,7 @@ class VGraph:
             out = np.zeros((self.branch_count, 2, self.branch_count, 2), dtype=bool)
         branch_list = torch.from_numpy(self._branch_list).int()
         out_tensor = torch.from_numpy(out)
-        branch_tips_connectivity_matrix_cpp(branch_list, self.node_count, out_tensor)
+        branch_tips_connectivity_matrix_cpp(branch_list, self.node_count, out_tensor, erase_opposite_tips)
         return out
 
     def node_degree(

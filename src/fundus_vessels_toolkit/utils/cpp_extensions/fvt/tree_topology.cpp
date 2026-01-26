@@ -69,7 +69,7 @@ std::array<torch::Tensor, 5> read_branches_topology(const std::vector<torch::Ten
         auto curve_acc = curveTensor.accessor<int32_t, 2>();
         std::tie(branch_labels[b], branch_dir[b], branch_plausibility[b], tips_label[b], tips_rank[b]) =
             read_branch_topology(curve_acc, domain, topo_idxs_acc, topo_labels_acc, topo_ranks_acc, fuzzy_skeleton_acc,
-                                 min_rank_threshold, max_rank_tolerance);
+                                 min_rank_threshold, max_rank_tolerance, b);
     }
 
     // → Filter branches that overlap on gt to keep only the most plausible one
@@ -118,19 +118,23 @@ std::array<torch::Tensor, 5> read_branches_topology(const std::vector<torch::Ten
 std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 2>> read_branch_topology(
     const Tensor2DAcc<int32_t>& curve_acc, const IntPair& domain, const Tensor2DAcc<uint32_t>& topo_idxs,
     const Tensor1DAcc<TopoLabel>& topo_labels, const Tensor1DAcc<at::Half>& topo_ranks,
-    const Tensor1DAcc<at::Half>& fuzzy_skeleton, float min_rank_threshold, float max_rank_tolerance) {
-    std::size_t N = curve_acc.size(0);
+    const Tensor1DAcc<at::Half>& fuzzy_skeleton, float min_rank_threshold, float max_rank_tolerance, int b_id) {
+    std::size_t N = curve_acc.size(0), max_size = topo_labels.size(0);
 
     // → Check that at least half the branch is inside the gt tree topology
     std::vector<int32_t> curve;
     curve.reserve(N);
     for (std::size_t n = 0; n < N; ++n) {
         const auto &y = curve_acc[n][0], &x = curve_acc[n][1];
-        if (y < 0 || y > domain[0] || x < 0 || x > domain[1]) continue;
+        if (y < 0 || y > domain[0] || x < 0 || x > domain[1]) {
+            N--;
+            continue;
+        }
         const auto& topo_idx = topo_idxs[y][x];
-        if (topo_idx != UINT32_MAX) curve.push_back(topo_idx);
+        if (topo_idx < max_size) curve.push_back(topo_idx);
     }
-    if (curve.size() < N * 0.5) return {0, 0.0f, 0.0f, {0, 0}, {0.0f, 0.0f}};
+    float known_label_ratio = static_cast<float>(curve.size()) / static_cast<float>(N);
+    if (curve.size() < 3) return {0, 0.0f, 0.0f, {0, 0}, {0.0f, 0.0f}};
 
     // → Search points descendant of the main ancestor ...
     const auto& main_ancestor = most_present_ancestor(curve, topo_labels);
@@ -138,25 +142,31 @@ std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 
     curveTmp.reserve(curve.size());
     for (const auto& idx : curve)
         if (is_ancestor(main_ancestor, topo_labels[idx], false)) curveTmp.push_back(idx);
-    if (curveTmp.size() < 3 || curveTmp.size() < curve.size() * 0.5) return {0, 0.0f, 0.0f, {0, 0}, {0.0f, 0.0f}};
-
+    if (curveTmp.size() < 3) return {0, 0.0f, 0.0f, {0, 0}, {0.0f, 0.0f}};
+    float valid_ancestor_ratio = static_cast<float>(curveTmp.size()) / static_cast<float>(curve.size());
     curve = curveTmp;
+    curveTmp.clear();
 
     // → Get the direction of the branch based on the topological distance map
     float direction = 0.0f;
-    for (std::size_t i = 1; i < curve.size(); ++i) {
-        const auto &idx0 = curve[i - 1], &idx1 = curve[i];
-        const auto &r0 = topo_ranks[idx0], &r1 = topo_ranks[idx1];
-        direction += (r1 - r0) > 0 ? 1.0f : -1.0f;
+    for (std::size_t i = 2; i < curve.size(); ++i) {
+        const auto &idx0 = curve[i - 2], &idx1 = curve[i];
+        const auto& diff = topo_ranks[idx1] - topo_ranks[idx0];
+        if (diff > 0) direction += 1.0f;
+        if (diff < 0) direction -= 1.0f;
     }
-    direction /= curve.size() - 1;
+    direction /= curve.size() - 2;
+
+    // → Skip branch if not enough valid ancestor points or low directionality
+    if (known_label_ratio < 0.33f || valid_ancestor_ratio < 0.66f || abs(direction) < 0.66f)
+        return {0, direction, mean(fuzzy_skeleton, curve), {0, 0}, {0.0f, 0.0f}};
 
     // → Exclude starting curve points which are part of the transition between labels
-    auto min_rank = std::floor(minimum(topo_ranks, curve));
-    curveTmp.clear();
+    c10::Half min_rank = int(std::floor(minimum(topo_ranks, curve)));
+    min_rank += c10::Half(min_rank_threshold);
 
     for (const auto& idx : curve)
-        if (topo_ranks[idx] > min_rank + min_rank_threshold) curveTmp.push_back(idx);
+        if (topo_ranks[idx] >= min_rank) curveTmp.push_back(idx);
     if (curveTmp.size() >= 3 && curveTmp.size() != curve.size()) curve = curveTmp;
 
     // → Compute maximum valid rank considering rank tolerance
@@ -217,24 +227,15 @@ std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 
 }
 
 TopoLabel most_present_ancestor(const std::vector<int32_t>& curve, const Tensor1DAcc<TopoLabel>& topo_labels) {
-    std::vector<std::pair<TopoLabel, int>> ancestor_count;
-    for (const auto& idx : curve) {
-        const auto& label = topo_labels[idx];
-        bool found = false;
-        for (auto& [l, count] : ancestor_count) {
-            if (label == l) found = true;
-            if (is_ancestor(label, topo_labels[idx], true)) count += 1;
-        }
-        if (!found) ancestor_count.emplace_back(label, 1);
+    std::map<TopoLabel, int> label_count;
+    for (const auto& idx : curve) label_count[topo_labels[idx]] += 1;
+
+    for (auto it = label_count.begin(); it != label_count.end(); ++it) {
+        for (auto it2 = std::next(it); it2 != label_count.end(); ++it2)
+            if (is_ancestor(it->first, it2->first, false)) it->second += it2->second;
     }
 
-    TopoLabel most_present = 0;
-    int max_count = 0;
-    for (const auto& [l, count] : ancestor_count) {
-        if (count > max_count) {
-            max_count = count;
-            most_present = l;
-        }
-    }
-    return most_present;
+    const auto& maxIt = std::max_element(label_count.begin(), label_count.end(),
+                                         [](const auto& a, const auto& b) { return a.second < b.second; });
+    return maxIt->first;
 }

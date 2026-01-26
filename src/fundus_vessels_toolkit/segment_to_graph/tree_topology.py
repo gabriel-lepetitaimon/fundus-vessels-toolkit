@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from typing import List, Literal, Optional, Self, Sequence, Tuple, overload
+import warnings
 
 import numpy as np
 import numpy.typing as npt
@@ -237,7 +238,8 @@ def read_branch_topology(
                 curve = rasterize_line(p0.to_int_pair(), p1.to_int_pair())
             if curve.strides[0] < 0:
                 curve = curve.copy()
-            curves_tensor.append(torch.from_numpy(curve))
+            with warnings.catch_warnings(action="ignore"):
+                curves_tensor.append(torch.from_numpy(curve))
         out = read_branches_topology(
             curves_tensor,
             topology.shape,
@@ -272,29 +274,36 @@ def read_branch_topology(
         curve_label = topology.branch_map[*curve.T]
         # → Check that at least half the branch is inside the gt tree topology
         known_label = curve_label != 0
-        if known_label.mean() < 0.5:
+        if known_label.sum() < 3:
             continue
+        known_label_ratio = known_label.mean()
 
         # → Only consider points descendant of the main ancestor ...
         labels_occurence = TopologicalLabel.descendance_count(curve_label[known_label])
         main_ancestor: TopologicalLabel = max(labels_occurence, key=lambda x: labels_occurence[x][1])
         valid_label = main_ancestor.is_parent_of(curve_label, or_self=True)
         # ... and check that sufficient points are kept
-        if valid_label.sum() < 3 or valid_label[known_label].mean() < 0.75:
+        if valid_label.sum() < 3:
             continue
+        valid_label_ratio = valid_label[known_label].mean()
         curve = curve[valid_label]
         curve_label = curve_label[valid_label]
 
         # → Get the direction of the branch based on the topological distance map
         curve_rank = topology.rank_map[*curve.T]
-        curve_diff = np.diff(curve_rank)
+        curve_diff = curve_rank[2:] - curve_rank[:-2]
         dir = np.mean(curve_diff > 0) - np.mean(curve_diff < 0)
         branch_dir[branch.id] = dir
 
+        # → Skip branch if not enough valid ancestor points or low directionality
+        if known_label_ratio < 0.33 or valid_label_ratio < 0.66 or abs(dir) < 0.66:
+            branch_plausibility[branch.id] = topology.fuzzy_skeleton_map[*curve.T].astype(np.float32).mean()
+            continue
+
         # → Exclude starting curve points which are part of the transition between labels
         if min_rank_threshold > 0:
-            min_rank = np.floor(curve_rank.min())
-            ignore_mask = curve_rank < min_rank + min_rank_threshold
+            min_rank = int(np.floor(curve_rank.min()))
+            ignore_mask = curve_rank < np.float16(min_rank) + np.float16(min_rank_threshold)
             if ignore_mask.any() and (~ignore_mask).sum() > 3:
                 curve = curve[~ignore_mask]
                 curve_label = curve_label[~ignore_mask]
@@ -318,7 +327,7 @@ def read_branch_topology(
         branch_label[branch.id] = unique_labels[labels_count.argmax()]
 
         # → Get the plausibility of the branch based on the fuzzy_skeleton_map
-        branch_plausibility[branch.id] = topology.fuzzy_skeleton_map[*curve.T].mean()
+        branch_plausibility[branch.id] = topology.fuzzy_skeleton_map[*curve.T].astype(np.float32).mean()
 
         # → Get the tip labels and distances
         tips_label[branch.id, 0] = curve_label[0]
@@ -334,10 +343,8 @@ def read_branch_topology(
     inters = dict(start=l0, end=l1, strict=False, start_d=d0, end_d=d1, strict_d=True)
     tip0_overlap = TopologicalLabel.is_between(l0, point_d=d0, **inters)  # type: ignore
     tip1_overlap = TopologicalLabel.is_between(l1, point_d=d1, **inters)  # type: ignore
-    print(np.argwhere(tip0_overlap | tip1_overlap))
 
     for cluster in reduce_clusters(np.argwhere(tip0_overlap | tip1_overlap)):
-        print(cluster)
         if len(cluster) <= 1:
             continue
         cluster = np.array(cluster)
@@ -352,7 +359,7 @@ def read_branch_topology(
 
 def optimal_lines(
     graph: VGraph, topology: TreeTopology, lines: npt.NDArray[np.int_]
-) -> tuple[npt.NDArray[np.bool_], Float1DArray, Float1DArray]:
+) -> tuple[npt.NDArray[np.bool_], Float1DArray, Float1DArray, npt.NDArray[np.bool_]]:
     """
     Determine which lines between branch tips are valid based on the topological labels.
 
@@ -377,6 +384,9 @@ def optimal_lines(
         A 1D array of size (B,) indicating, for each branch, its direction. Positive value indicates to keep the branch original direction in ``graph`, negative value indicates to flip it. Zero indicates unknown direction.
 
     branch_plausibility: npt.NDArray[np.bool_]
+        A 1D boolean array of size (B,) indicating how near each branch is to the skeleton in the topology gt.
+
+    branch_found: npt.NDArray[np.bool_]
         A 1D boolean array of size (B,) indicating which branches were found (True) in the topology gt.
     """  # noqa: E501
     B = graph.branch_count
@@ -432,7 +442,7 @@ def optimal_lines(
     all_optimal_lines[~root_lines_mask] = optimal_lines
     all_optimal_lines[root_lines_mask] = optimal_roots
 
-    return all_optimal_lines, branch_dir, branch_plausibility
+    return all_optimal_lines, branch_dir, branch_plausibility, ~missing
 
 
 def optimal_branch_tree(graph: VGraph, topology: TreeTopology) -> tuple[Int1DArray, Float1DArray, Bool1DArray]:

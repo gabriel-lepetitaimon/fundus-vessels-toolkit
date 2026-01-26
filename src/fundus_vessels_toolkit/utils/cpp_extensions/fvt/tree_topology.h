@@ -23,7 +23,7 @@ std::array<torch::Tensor, 5> read_branches_topology(const std::vector<torch::Ten
 std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 2>> read_branch_topology(
     const Tensor2DAcc<int32_t>& curve, const IntPair& domain, const Tensor2DAcc<uint32_t>& topo_idxs,
     const Tensor1DAcc<TopoLabel>& topo_labels, const Tensor1DAcc<at::Half>& topo_ranks,
-    const Tensor1DAcc<at::Half>& fuzzy_skeleton, float min_rank_threshold, float max_rank_tolerance);
+    const Tensor1DAcc<at::Half>& fuzzy_skeleton, float min_rank_threshold, float max_rank_tolerancei, int b_id);
 
 TopoLabel most_present_ancestor(const std::vector<int32_t>& curve, const Tensor1DAcc<TopoLabel>& topo_labels);
 
@@ -50,11 +50,11 @@ T maximum(const Tensor1DAcc<T>& values, const std::vector<int32_t>& idxs) {
 }
 
 template <typename T>
-T mean(const Tensor1DAcc<T>& values, const std::vector<int32_t>& idxs) {
-    T mean_value = 0;
-    if (idxs.empty()) return mean_value;
+float mean(const Tensor1DAcc<T>& values, const std::vector<int32_t>& idxs) {
+    if (idxs.empty()) return 0.f;
+    float mean_value = 0;
     for (const auto& idx : idxs) mean_value += values[idx];
-    return mean_value / static_cast<T>(idxs.size());
+    return mean_value / static_cast<float>(idxs.size());
 }
 
 #endif  // TREE_TOPOLOGY_H
