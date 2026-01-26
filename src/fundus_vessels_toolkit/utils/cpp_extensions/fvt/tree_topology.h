@@ -57,4 +57,12 @@ float mean(const Tensor1DAcc<T>& values, const std::vector<int32_t>& idxs) {
     return mean_value / static_cast<float>(idxs.size());
 }
 
+template <typename T>
+float sum(const Tensor1DAcc<T>& values, const std::vector<int32_t>& idxs) {
+    if (idxs.empty()) return 0.f;
+    float sum_value = 0;
+    for (const auto& idx : idxs) sum_value += values[idx];
+    return sum_value;
+}
+
 #endif  // TREE_TOPOLOGY_H

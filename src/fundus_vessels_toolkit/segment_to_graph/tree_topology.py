@@ -268,7 +268,8 @@ def read_branch_topology(
             p0, p1 = branch.tip_coord()
             curve = rasterize_line(p0.to_int_pair(), p1.to_int_pair())
         curve = curve[domain.contains(curve)]
-        if len(curve) < 3:
+        N = len(curve)
+        if N < 3:
             continue
 
         curve_label = topology.branch_map[*curve.T]
@@ -297,7 +298,8 @@ def read_branch_topology(
 
         # → Skip branch if not enough valid ancestor points or low directionality
         if known_label_ratio < 0.33 or valid_label_ratio < 0.66 or abs(dir) < 0.66:
-            branch_plausibility[branch.id] = topology.fuzzy_skeleton_map[*curve.T].astype(np.float32).mean()
+            plausibility = topology.fuzzy_skeleton_map[*curve.T].astype(np.float32).sum() / np.float32(N)
+            branch_plausibility[branch.id] = plausibility
             continue
 
         # → Exclude starting curve points which are part of the transition between labels
@@ -327,7 +329,7 @@ def read_branch_topology(
         branch_label[branch.id] = unique_labels[labels_count.argmax()]
 
         # → Get the plausibility of the branch based on the fuzzy_skeleton_map
-        branch_plausibility[branch.id] = topology.fuzzy_skeleton_map[*curve.T].astype(np.float32).mean()
+        branch_plausibility[branch.id] = topology.fuzzy_skeleton_map[*curve.T].astype(np.float32).sum() / np.float32(N)
 
         # → Get the tip labels and distances
         tips_label[branch.id, 0] = curve_label[0]

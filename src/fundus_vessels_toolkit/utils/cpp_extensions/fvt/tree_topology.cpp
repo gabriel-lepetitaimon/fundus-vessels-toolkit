@@ -159,7 +159,7 @@ std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 
 
     // → Skip branch if not enough valid ancestor points or low directionality
     if (known_label_ratio < 0.33f || valid_ancestor_ratio < 0.66f || abs(direction) < 0.66f)
-        return {0, direction, mean(fuzzy_skeleton, curve), {0, 0}, {0.0f, 0.0f}};
+        return {0, direction, sum(fuzzy_skeleton, curve) / static_cast<float>(N), {0, 0}, {0.0f, 0.0f}};
 
     // → Exclude starting curve points which are part of the transition between labels
     c10::Half min_rank = int(std::floor(minimum(topo_ranks, curve)));
@@ -207,7 +207,7 @@ std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 
     }
 
     // → Average fuzzy skeleton value as plausibility score
-    float plausibility = mean(fuzzy_skeleton, curve);
+    float plausibility = sum(fuzzy_skeleton, curve) / static_cast<float>(N);
 
     // → Get tip labels and ranks
     std::array<TopoLabel, 2> tip_labels;

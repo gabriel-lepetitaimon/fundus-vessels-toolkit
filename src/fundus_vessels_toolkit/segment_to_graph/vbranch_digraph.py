@@ -209,8 +209,8 @@ class VBranchDigraph(LineDigraph):
 
             # === Redirect invalid lines (due to colliding av) ===
             branch_parent[optimal_lines[:, 2]] = optimal_lines[:, 0]
-            for shortcut_id in np.argwhere(invalid_av).flatten():
-                branch_parent[branch_parent == shortcut_id] = branch_parent[shortcut_id]
+            for invalid_branch in np.argwhere(invalid_av).flatten():
+                branch_parent[branch_parent == invalid_branch] = branch_parent[invalid_branch]
 
             invalid_lines = line_opti & (invalid_av[lines[:, 0]] | invalid_av[lines[:, 2]])
 
@@ -236,13 +236,17 @@ class VBranchDigraph(LineDigraph):
                 shortcut_ids = np.argwhere(
                     np.all(branch_list == [n0, n1], axis=1) | np.all(branch_list == [n1, n0], axis=1)
                 ).flatten()
-                if len(shortcut_ids) == 1 and not invalid_av[shortcut_ids[0]]:
+                if len(shortcut_ids) == 1 and not (vei_b if known_branch is art_b else art_b)[shortcut_ids[0]]:
                     shortcut_id = shortcut_ids[0]
                     shortcut_dir = branch_list[shortcut_id, 0] == n0
-                    if known_branch[shortcut_id] and (
-                        branch_dir[shortcut_id] == 0 or (branch_dir[shortcut_id] > 0) != shortcut_dir
-                    ):
+                    if branch_dir[shortcut_id] != 0 and (branch_dir[shortcut_id] > 0) != shortcut_dir:
                         continue
+                    if not art_b[shortcut_id] and not vei_b[shortcut_id]:
+                        # If the shortcut branch is in neither tree, only use it if its of higher plausibility
+                        art_is_higher = np.sign(art_plausibility[shortcut_id] - vei_plausibility[shortcut_id])
+                        if art_is_higher == (1 if known_branch is vei_b else -1):
+                            continue
+
                     branch_dir[shortcut_id] = 1 if shortcut_dir else -1
                     known_branch[shortcut_id] = True
 
