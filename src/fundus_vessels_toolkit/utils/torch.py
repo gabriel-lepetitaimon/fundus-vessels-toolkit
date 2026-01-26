@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import warnings
 from typing import Callable, TypeVar, Union, get_args, get_origin
 
 import numpy as np
@@ -35,12 +36,11 @@ def recursive_numpy2torch(x, device=None):
     if isinstance(x, torch.Tensor):
         return x.to(device) if device is not None else x
     if isinstance(x, np.ndarray):
-        if not x.flags.writeable:
-            x = x.copy()
-        try:
-            r = torch.from_numpy(x)
-        except ValueError:
-            r = torch.from_numpy(x.copy())
+        with warnings.catch_warnings(action="ignore"):
+            try:
+                r = torch.from_numpy(x)
+            except ValueError:
+                r = torch.from_numpy(x.copy())
         if device is not None:
             r = r.to(device)
         return r
