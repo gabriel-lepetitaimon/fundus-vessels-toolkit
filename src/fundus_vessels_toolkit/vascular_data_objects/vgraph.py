@@ -1552,6 +1552,61 @@ class VGraph:
         else:
             return endpoint_nodes, branch_index
 
+    def terminal_tips(self, subgraph_mask: npt.NDArray[np.bool_] | None = None) -> npt.NDArray[np.int_]:
+        """Return a mask indicating which branch tips are terminal in the given subgraph.
+
+        A terminal tip is defined as a branch tip that is connected to a node with degree 1 within the subgraph.
+
+        Parameters
+        ----------
+        subgraph_mask : npt.NDArray[np.bool_] | None
+            A boolean mask of shape (B,S) splitting the B branches of this graph into S subgraphs. Terminal tips are computed for each subgraph separately.
+            If None, the entire graph is considered as a single subgraph.
+
+
+        Returns
+        -------
+        npt.NDArray[np.int_]
+            A 2D array of shape (E, 2) where E is the number of terminal tips found in the subgraph(s), and each row is of the form [branch_index, tip_index], with tip_index being 0 for the first node of the branch and 1 for the second node.
+
+        Examples
+        --------
+        >>> # Branch id:           0 1 2     3
+        >>> graph = VGraph.parse("0➔1➔2➔3 ; 1➔4")
+        >>> graph.terminal_tips()
+        array([[0, 0],
+               [2, 1],
+               [3, 1]])
+
+        >>> subgraph_mask = np.zeros((graph.branch_count, 2), dtype=bool)
+        >>> subgraph_mask[0:2, 0] = True  # First subgraph: branches 0 and 1
+        >>> subgraph_mask[1:, 1] = True   # Second subgraph: branches 1 and 2 and 3
+        >>> graph.terminal_tips(subgraph_mask=subgraph_mask)
+        array([[0, 0],
+               [1, 1],
+               [2, 1],
+               [3, 1]])
+
+        """  # noqa: E501
+        import torch
+
+        from ..utils.cpp_extensions.fvt_cpp import terminal_tips
+
+        if subgraph_mask is not None:
+            assert subgraph_mask.ndim == 2 and subgraph_mask.shape[0] == self.branch_count, (
+                "Invalid subgraph mask: must be of shape (B,) where B is the number of branches."
+            )
+            subgraph_mask_ = torch.from_numpy(subgraph_mask.astype(np.bool_))  # type: ignore
+        else:
+            subgraph_mask_ = torch.ones((0, 1), dtype=torch.bool)
+
+        endpoints = terminal_tips(
+            torch.from_numpy(self._branch_list.astype(np.int32)),
+            self.node_count,
+            subgraph_mask_,
+        )
+        return endpoints.numpy()[:, 1:].astype(np.int_)
+
     @overload
     def junction_nodes(self, as_mask: Literal[False] = False) -> Indices: ...
     @overload

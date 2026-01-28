@@ -5,8 +5,9 @@
 
 using TopoLabel = uint64_t;
 
-uint8_t rank(const TopoLabel& label);
-int32_t subtree(const TopoLabel& label);
+inline uint8_t get_rank(const TopoLabel& label) { return static_cast<uint8_t>(label); }
+inline int32_t get_subtree(const TopoLabel& label) { return static_cast<int32_t>(label >> 52); }
+
 TopoLabel parent(const TopoLabel& label);
 uint64_t branching_bit_mask(const uint8_t& rank);
 bool is_ancestor(const TopoLabel& ancestor, const TopoLabel& descendant, const bool& strict = false);
@@ -22,8 +23,8 @@ std::array<torch::Tensor, 5> read_branches_topology(const std::vector<torch::Ten
 
 std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 2>> read_branch_topology(
     const Tensor2DAcc<int32_t>& curve, const IntPair& domain, const Tensor2DAcc<uint32_t>& topo_idxs,
-    const Tensor1DAcc<TopoLabel>& topo_labels, const Tensor1DAcc<at::Half>& topo_ranks,
-    const Tensor1DAcc<at::Half>& fuzzy_skeleton, float min_rank_threshold, float max_rank_tolerancei, int b_id);
+    const Tensor1DAcc<TopoLabel>& topo_labels, const Tensor1DAcc<float>& topo_ranks,
+    const Tensor1DAcc<at::Half>& fuzzy_skeleton, float min_rank_threshold, float max_rank_tolerance, int b_id);
 
 TopoLabel most_present_ancestor(const std::vector<int32_t>& curve, const Tensor1DAcc<TopoLabel>& topo_labels);
 
@@ -47,6 +48,20 @@ T maximum(const Tensor1DAcc<T>& values, const std::vector<int32_t>& idxs) {
         if (value > max_value) max_value = value;
     }
     return max_value;
+}
+template <typename T>
+std::tuple<int32_t, T> argmax(const Tensor1DAcc<T>& values, const std::vector<int32_t>& idxs) {
+    if (idxs.empty()) return {-1, T(0)};
+    T max_value = values[idxs[0]];
+    int32_t max_idx = idxs[0];
+    for (const auto& idx : idxs) {
+        const auto& value = values[idx];
+        if (value > max_value) {
+            max_value = value;
+            max_idx = idx;
+        }
+    }
+    return {max_idx, max_value};
 }
 
 template <typename T>

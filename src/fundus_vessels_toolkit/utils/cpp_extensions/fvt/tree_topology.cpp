@@ -1,9 +1,14 @@
 #include "tree_topology.h"
 
-uint8_t rank(const TopoLabel& label) { return static_cast<uint8_t>(label); }
-int32_t subtree(const TopoLabel& label) { return static_cast<int32_t>(label >> 52); }
+std::string label2str(const TopoLabel& label, const float& r = -1.0f) {
+    std::ostringstream oss;
+    oss << get_subtree(label) << ":";
+    for (int8_t r = 0; r < get_rank(label); ++r) oss << (((label >> (51 - r)) & 1) ? "1" : "0");
+    if (r >= 0.0f) oss << ":" << r;
+    return oss.str();
+}
 TopoLabel parent(const TopoLabel& label, bool self_if_no_parent) {
-    const auto& label_rank = rank(label);
+    const auto& label_rank = get_rank(label);
     if (label_rank == 0) return self_if_no_parent ? label : 0;
     return (label - 1) & branching_bit_mask(label_rank - 1);
 }
@@ -13,7 +18,7 @@ uint64_t branching_bit_mask(const uint8_t& rank) {
 bool is_ancestor(const TopoLabel& ancestor, const TopoLabel& descendant, const bool& strict) {
     if (ancestor == descendant) return strict ? false : true;
     if (ancestor > descendant) return false;
-    auto ancestor_rank_mask = branching_bit_mask(rank(ancestor));
+    auto ancestor_rank_mask = branching_bit_mask(get_rank(ancestor));
     return (ancestor & ancestor_rank_mask) == (descendant & ancestor_rank_mask);
 }
 bool is_between(const TopoLabel& label, const TopoLabel& start, const TopoLabel& end, const bool& strict,
@@ -21,10 +26,10 @@ bool is_between(const TopoLabel& label, const TopoLabel& start, const TopoLabel&
     if (strict && (label == start || label == end)) return false;
     if (label < start || label > end) return false;
 
-    const uint64_t& start_rank_mask = branching_bit_mask(static_cast<uint8_t>(start_rank));
+    const uint64_t& start_rank_mask = branching_bit_mask(get_rank(start));
     if ((label & start_rank_mask) != (start & start_rank_mask)) return false;
 
-    const uint64_t& rank_mask = branching_bit_mask(static_cast<uint8_t>(rank));
+    const uint64_t& rank_mask = branching_bit_mask(get_rank(label));
     if ((label & rank_mask) != (end & rank_mask)) return false;
 
     if (rank == -1) return true;
@@ -42,13 +47,13 @@ std::array<torch::Tensor, 5> read_branches_topology(const std::vector<torch::Ten
     TORCH_CHECK_VALUE(topo_labels.dim() == 1, "topo_labels must be a 1D tensor");
     TORCH_CHECK_VALUE(topo_labels.dtype() == torch::kUInt64, "topo_labels must be of dtype uint64");
     TORCH_CHECK_VALUE(topo_ranks.dim() == 1, "topo_ranks must be a 1D tensor");
-    TORCH_CHECK_VALUE(topo_ranks.dtype() == torch::kFloat16, "topo_ranks must be of dtype float16");
+    TORCH_CHECK_VALUE(topo_ranks.dtype() == torch::kFloat32, "topo_ranks must be of dtype float32");
     TORCH_CHECK_VALUE(fuzzy_skeleton.dim() == 1, "fuzzy_skeleton must be a 1D tensor");
     TORCH_CHECK_VALUE(fuzzy_skeleton.dtype() == torch::kFloat16, "fuzzy_skeleton must be of dtype float16");
 
     auto topo_idxs_acc = topo_idxs.accessor<uint32_t, 2>();
     auto topo_labels_acc = topo_labels.accessor<uint64_t, 1>();
-    auto topo_ranks_acc = topo_ranks.accessor<at::Half, 1>();
+    auto topo_ranks_acc = topo_ranks.accessor<float, 1>();
     auto fuzzy_skeleton_acc = fuzzy_skeleton.accessor<at::Half, 1>();
 
     std::size_t B = branch_curves.size();
@@ -92,21 +97,30 @@ std::array<torch::Tensor, 5> read_branches_topology(const std::vector<torch::Ten
         }
     }
     const auto& overlapping_branches = solve_clusters(overlapping_branch_pairs, B);
-    for (const auto& cluster : overlapping_branches) {
+    for (auto cluster : overlapping_branches) {
         if (cluster.size() <= 1) continue;
-        // Find the most plausible branch in the cluster
-
-        std::size_t best_branch = cluster[0];
-        float best_plausibility = branch_plausibility[cluster[0]];
-        for (const auto& b : cluster) {
-            if (branch_plausibility[b] > best_plausibility) best_plausibility = branch_plausibility[b], best_branch = b;
+        std::list<SizePair> cluster_pairs;
+        for (const auto& pair : overlapping_branch_pairs) {
+            for (const auto& b : cluster) {
+                if (pair[0] == b || pair[1] == b) {
+                    cluster_pairs.push_back(pair);
+                    break;
+                }
+            }
         }
 
-        // Invalidate all other branches in the cluster
-        for (const auto& b : cluster) {
-            if (b == best_branch) continue;
+        // Iteratively remove the least plausible branch until no overlap remains
+        std::sort(cluster.begin(), cluster.end(), [&branch_plausibility](std::size_t a, std::size_t b) {
+            return branch_plausibility[a] < branch_plausibility[b];
+        });
+
+        auto b_it = cluster.begin();
+        while (cluster_pairs.size() > 0 && b_it != cluster.end()) {
+            std::size_t b = *b_it++;
             branch_labels[b] = 0;
             branch_plausibility[b] = 0.0f;
+
+            cluster_pairs.remove_if([b](const SizePair& p) { return p[0] == b || p[1] == b; });
         }
     }
 
@@ -117,7 +131,7 @@ std::array<torch::Tensor, 5> read_branches_topology(const std::vector<torch::Ten
 
 std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 2>> read_branch_topology(
     const Tensor2DAcc<int32_t>& curve_acc, const IntPair& domain, const Tensor2DAcc<uint32_t>& topo_idxs,
-    const Tensor1DAcc<TopoLabel>& topo_labels, const Tensor1DAcc<at::Half>& topo_ranks,
+    const Tensor1DAcc<TopoLabel>& topo_labels, const Tensor1DAcc<float>& topo_ranks,
     const Tensor1DAcc<at::Half>& fuzzy_skeleton, float min_rank_threshold, float max_rank_tolerance, int b_id) {
     std::size_t N = curve_acc.size(0), max_size = topo_labels.size(0);
 
@@ -162,8 +176,8 @@ std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 
         return {0, direction, sum(fuzzy_skeleton, curve) / static_cast<float>(N), {0, 0}, {0.0f, 0.0f}};
 
     // → Exclude starting curve points which are part of the transition between labels
-    c10::Half min_rank = int(std::floor(minimum(topo_ranks, curve)));
-    min_rank += c10::Half(min_rank_threshold);
+    float min_rank = int(std::floor(minimum(topo_ranks, curve)));
+    min_rank += float(min_rank_threshold);
 
     for (const auto& idx : curve)
         if (topo_ranks[idx] >= min_rank) curveTmp.push_back(idx);
@@ -176,8 +190,9 @@ std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 
     float max_rank = 50;
     TopoLabel max_label = 0;
     if (curveTmp.size() > 0) {
-        max_rank = std::ceil(maximum(topo_ranks, curveTmp));
-        max_label = maximum(topo_labels, curveTmp);
+        const auto& [max_idx, max_value] = argmax(topo_ranks, curveTmp);
+        max_rank = std::ceil(max_value);
+        max_label = topo_labels[max_idx];
     }
     curveTmp.clear();
 

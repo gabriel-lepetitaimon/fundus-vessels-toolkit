@@ -419,6 +419,27 @@ torch::Tensor drawLine(std::array<int, 2> tip, std::array<float, 2> direction, i
     return scene;
 }
 
+void drawLines(const torch::Tensor& p0, const torch::Tensor& p1, torch::Tensor& out) {
+    TORCH_CHECK_VALUE(p0.size(0) == p1.size(0), "p0 and p1 must have the same number of rows.");
+    TORCH_CHECK_VALUE(p0.ndimension() == 2 && p0.size(1) == 2, "p0 and p1 must have 2 columns.");
+    auto const& p0_acc = p0.accessor<int, 2>();
+    auto const& p1_acc = p1.accessor<int, 2>();
+    const std::size_t N = p0.size(0);
+
+    TORCH_CHECK_VALUE(out.ndimension() == 2, "out must be a 2D tensor.");
+    TORCH_CHECK_VALUE(out.dtype() == torch::kBool, "out must be a boolean tensor.");
+    auto out_acc = out.accessor<bool, 2>();
+    const IntPoint max_shape (out.size(1), out.size(0));
+
+    #pragma omp parallel for
+    for (std::size_t i = 0; i < N; i++) {
+        for (const auto& p : Line({p0_acc[i][0], p0_acc[i][1]}, {p1_acc[i][0], p1_acc[i][1]})) {
+            if (p.is_inside(max_shape.x, max_shape.y)) out_acc[p.y][p.x] = true;
+        }
+    }
+
+}
+
 torch::Tensor drawCone(std::array<int, 2> tip, std::array<float, 2> direction, float angle, int length) {
     auto scene = torch::zeros({512, 512}, torch::kInt);
     auto sceneAcc = scene.accessor<int, 2>();
@@ -716,6 +737,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("compute_intercepts", &compute_intercepts, "Compute the intercepts of a set of curves.");
     m.def("drawCone", &drawCone, "Draw a cone in a 2D image.");
     m.def("drawLine", &drawLine, "Draw a line in a 2D image.");
+    m.def("drawLines", &drawLines, "Draw multiple lines in a 2D boolean image.");
     m.def("drawTriangle", &drawTriangle, "Draw a triangle in a 2D image.");
 
     m.def("first_two_index_of", &first_two_index_of,

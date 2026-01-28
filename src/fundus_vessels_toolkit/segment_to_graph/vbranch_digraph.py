@@ -7,14 +7,14 @@ import numpy.typing as npt
 from ..utils.cluster import cluster_by_distance
 from ..utils.math import sigmoid, softmax
 from ..utils.numpy import np_group_by
-from ..utils.typing import Int2DArrayLike
+from ..utils.typing import Bool1DArray, Float1DArray, Int2DArrayLike
 from ..vascular_data_objects import VGraph
 from ..vascular_data_objects.fundus_data import AVLabel
 from ..vascular_data_objects.vbranch_geodata import VBranchGeoData
 from ..vascular_data_objects.vtree import VTree
 from .geometry_parsing import derive_tips_geometry_from_curve_geometry
 from .graph_simplification import find_facing_tips
-from .tree_topology import TreeTopology
+from .tree_topology import TreeTopology, highest_topo_plausibility
 
 
 ########################################################################################################################
@@ -173,7 +173,9 @@ class VBranchDigraph(LineDigraph):
         digraph = cls(graph=graph, line_list=line_list)
         return digraph
 
-    def compute_p_from_gt(self, art_topology: TreeTopology, vei_topology: TreeTopology) -> npt.NDArray[np.bool_]:
+    def compute_p_from_gt(
+        self, art_topology: TreeTopology, vei_topology: TreeTopology, check=True
+    ) -> npt.NDArray[np.bool_]:
         """Compute the probabilities of each edge in the directed graph from a ground truth tree topology.
 
         Parameters
@@ -190,83 +192,42 @@ class VBranchDigraph(LineDigraph):
         """
         from .tree_topology import optimal_lines
 
-        art_lines, art_branch_dir, art_plausibility, art_b = optimal_lines(self.graph, art_topology, self.line_list)
-        vei_lines, vei_branch_dir, vei_plausibility, vei_b = optimal_lines(self.graph, vei_topology, self.line_list)
+        branch_topo_a = art_topology.read_branch_topo(self.graph)
+        branch_topo_v = vei_topology.read_branch_topo(self.graph)
+        branch_av = highest_topo_plausibility([branch_topo_a, branch_topo_v], mask_inplace=True)
+        b_is_art = branch_av == 0
+        b_is_vei = branch_av == 1
 
-        # === Mark branches as invalid if they are in both tree ===
-        both_branch = art_b & vei_b
-        art_invalid = both_branch & (vei_plausibility + 0.15 > art_plausibility)
-        vei_invalid = both_branch & (art_plausibility + 0.15 > vei_plausibility)
+        art_lines = optimal_lines(branch_topo_a, self.line_list)
+        vei_lines = optimal_lines(branch_topo_v, self.line_list)
 
-        art_b[art_invalid] = False
-        vei_b[vei_invalid] = False
-        # Transfer the line
-        B = self.graph.branch_count
+        valid_art_shortcut = ~b_is_vei & (branch_topo_a.plausibility > branch_topo_v.plausibility)
+        valid_vei_shortcut = ~b_is_art & (branch_topo_v.plausibility > branch_topo_a.plausibility)
 
-        def transfer_line_p_to_parent(lines, line_opti, known_branch, invalid_av, branch_dir):
-            branch_parent = np.full(B, -1, dtype=np.int_)
-            optimal_lines = lines[line_opti]
-
-            # === Redirect invalid lines (due to colliding av) ===
-            branch_parent[optimal_lines[:, 2]] = optimal_lines[:, 0]
-            for invalid_branch in np.argwhere(invalid_av).flatten():
-                branch_parent[branch_parent == invalid_branch] = branch_parent[invalid_branch]
-
-            invalid_lines = line_opti & (invalid_av[lines[:, 0]] | invalid_av[lines[:, 2]])
-
-            for b1, b1_dir in lines[invalid_lines, 2:]:
-                if invalid_av[b1]:
-                    continue
-                new_b1_parent = int(branch_parent[b1])
-                redirected_line = LineDigraph.search_lines(
-                    lines, [new_b1_parent, branch_dir[new_b1_parent] > 0, b1, b1_dir]
-                )
-                if redirected_line == -1:
-                    redirected_line = LineDigraph.search_lines(lines, [-1, 0, b1, b1_dir])
-                line_opti[redirected_line] = True
-            line_opti[invalid_lines] = False
-
-            # === Redirect distant connections through existing branches if any ===
-            optimal_lines = lines[line_opti]
-            branch_list = self.graph.branch_list
-            distant_lines = branch_list[*optimal_lines[:, :2].T] != branch_list[*optimal_lines[:, 2:].T]
-            for distant_line_id in np.argwhere(distant_lines).flatten():
-                b0, b0_tip, b1, b1_tip = optimal_lines[distant_line_id]
-                n0, n1 = branch_list[b0, b0_tip], branch_list[b1, b1_tip]
-                shortcut_ids = np.argwhere(
-                    np.all(branch_list == [n0, n1], axis=1) | np.all(branch_list == [n1, n0], axis=1)
-                ).flatten()
-                if len(shortcut_ids) == 1 and not (vei_b if known_branch is art_b else art_b)[shortcut_ids[0]]:
-                    shortcut_id = shortcut_ids[0]
-                    shortcut_dir = branch_list[shortcut_id, 0] == n0
-                    if branch_dir[shortcut_id] != 0 and (branch_dir[shortcut_id] > 0) != shortcut_dir:
-                        continue
-                    if not art_b[shortcut_id] and not vei_b[shortcut_id]:
-                        # If the shortcut branch is in neither tree, only use it if its of higher plausibility
-                        art_is_higher = np.sign(art_plausibility[shortcut_id] - vei_plausibility[shortcut_id])
-                        if art_is_higher == (1 if known_branch is vei_b else -1):
-                            continue
-
-                    branch_dir[shortcut_id] = 1 if shortcut_dir else -1
-                    known_branch[shortcut_id] = True
-
-                    s = shortcut_id
-                    s_tip0 = 0 if shortcut_dir else 1
-                    redirected_lines = LineDigraph.search_lines(
-                        lines, [[b0, b0_tip, s, s_tip0], [s, 1 - s_tip0, b1, b1_tip]]
-                    )
-                    line_opti[distant_line_id] = False
-                    line_opti[redirected_lines] = True
-
-        transfer_line_p_to_parent(self.line_list, art_lines, art_b, art_invalid, art_branch_dir)
-        transfer_line_p_to_parent(self.line_list, vei_lines, vei_b, vei_invalid, vei_branch_dir)
-        self.branch_av_p = np.stack([art_b, vei_b], axis=1).astype(float)
+        prioritize_existing_branch(self, art_lines, b_is_art, valid_art_shortcut, branch_topo_a.p_dirs)
+        prioritize_existing_branch(self, vei_lines, b_is_vei, valid_vei_shortcut, branch_topo_v.p_dirs)
 
         # === Convert optimal mask to probabilities ===
+        self.branch_av_p = np.stack([b_is_art, b_is_vei], axis=1).astype(float)
         line_p = art_lines | vei_lines
         self.line_p = line_p.astype(float)
-        branch_dir_p = art_branch_dir * art_plausibility + vei_branch_dir * vei_plausibility
+
+        if check:
+            # Check line_p all branches should have exactly one incoming node
+            B = np.arange(self.graph.branch_count)[~self.invalid_branch()]
+            if invalid_b := {b: n_parent for b in B if (n_parent := np.sum(line_p & (self.line_list[:, 2] == b))) != 1}:
+                msg = "Invalid line probabilities: "
+                no_parent = [b for b, n in invalid_b.items() if n == 0]
+                multiple_parent = [b for b, n in invalid_b.items() if n > 1]
+                if no_parent:
+                    msg += f"{', '.join(str(int(_)) for _ in no_parent)} has no parent; "
+                if multiple_parent:
+                    msg += f"{', '.join(str(int(_)) for _ in multiple_parent)} have multiple parents; "
+                warnings.warn(msg, stacklevel=2)
+
+        branch_dir_p = sum(b_topo.p_dirs * b_topo.plausibility for b_topo in [branch_topo_a, branch_topo_v])
         self.branch_dir_p = sigmoid(branch_dir_p * 6)
+
         return line_p
 
     def optimize_tree(self, keep_invalid_branch: bool = False) -> VTree:
@@ -550,6 +511,49 @@ def prepare_graph_for_reconnections(
     reconnections[last_tip_recon, 0] = branch_last_tip_lookup[reconnections[last_tip_recon, 0]]
 
     return graph, reconnections
+
+
+def prioritize_existing_branch(
+    digraph: VBranchDigraph,
+    line_opti: Bool1DArray,
+    active_branch: Bool1DArray,
+    valid_branch: Bool1DArray,
+    branch_dir: Float1DArray,
+):
+    # === Redirect distant connections through existing branches if any ===
+    lines_lookup = np.arange(digraph.line_list.shape[0])
+    optimal_lines = digraph.line_list[line_opti]
+    lines_lookup = lines_lookup[line_opti]
+
+    not_root_lines = optimal_lines[:, 0] != -1  # Ignore root lines
+    optimal_lines = optimal_lines[not_root_lines]
+    lines_lookup = lines_lookup[not_root_lines]
+
+    branch_list = digraph.graph.branch_list
+    distant_lines = branch_list[*optimal_lines[:, :2].T] != branch_list[*optimal_lines[:, 2:].T]
+
+    for distant_line_id in np.argwhere(distant_lines).flatten():
+        b0, b0_tip, b1, b1_tip = optimal_lines[distant_line_id]
+        n0, n1 = branch_list[b0, b0_tip], branch_list[b1, b1_tip]
+        shortcut_ids = np.argwhere(
+            np.all(branch_list == [n0, n1], axis=1) | np.all(branch_list == [n1, n0], axis=1)
+        ).flatten()
+        if len(shortcut_ids) == 1 and valid_branch[shortcut_ids[0]]:
+            shortcut_id = shortcut_ids[0]
+            shortcut_dir = branch_list[shortcut_id, 0] == n0
+            if branch_dir[shortcut_id] != 0 and (branch_dir[shortcut_id] > 0) != shortcut_dir:
+                continue
+
+            branch_dir[shortcut_id] = 1 if shortcut_dir else -1
+            active_branch[shortcut_id] = True
+
+            s = shortcut_id
+            s_tip0 = 0 if shortcut_dir else 1
+            redirected_lines = LineDigraph.search_lines(
+                digraph.line_list, [[b0, b0_tip, s, s_tip0], [s, 1 - s_tip0, b1, b1_tip]]
+            )
+            line_opti[lines_lookup[distant_line_id]] = False
+            line_opti[redirected_lines] = True
 
 
 ########################################################################################################################

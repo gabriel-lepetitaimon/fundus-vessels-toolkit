@@ -140,10 +140,9 @@ class AVSegToTree(AVSegToTreeBase):
             inplace=inplace,
         )
 
-    def simplify_av_graph(self, graph: VGraph, od_center: Optional[Point] = None, inplace: bool = False) -> VGraph:
+    def simplify_av_graph(self, graph: VGraph, *, inplace: bool = False) -> VGraph:
         from ..segment_to_graph.av_tree_parsing import simplify_av_graph
 
-        opts = {}
         return simplify_av_graph(
             graph,
             av_attr=self.av_attr,
@@ -198,7 +197,7 @@ class AVSegToTree(AVSegToTreeBase):
         simplify=True,
     ):
         fundus = self.prepare_data(fundus, av=av, od=od)
-        if self.mask_optic_disc and fundus.od is not None:
+        if self.mask_optic_disc and fundus.has_od:
             mask = ~binary_erosion(fundus.od, disk(fundus.od_diameter * 0.2, dtype=np.bool_))  # type: ignore
         else:
             mask = None
@@ -210,7 +209,7 @@ class AVSegToTree(AVSegToTreeBase):
         if label_av:
             self.assign_av_labels(graph, fundus.av, inplace=True)
             if simplify:
-                self.simplify_av_graph(graph, od_center=fundus.od_center, inplace=True)
+                self.simplify_av_graph(graph, inplace=True)
         return graph
 
 

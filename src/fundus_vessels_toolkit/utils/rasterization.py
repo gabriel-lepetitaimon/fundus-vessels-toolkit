@@ -153,3 +153,36 @@ def rasterize_line(
     from .cpp_extensions.fvt_cpp import discretize_line as discretize_line_cpp
 
     return discretize_line_cpp((p0[0], p0[1]), (p1[0], p1[1])).numpy(force=True)
+
+
+@autocast_torch
+def draw_lines(p0: torch.Tensor, p1: torch.Tensor, out: tuple[int, int] | torch.Tensor) -> torch.Tensor:
+    """
+    Draws lines between pairs of points on a raster grid.
+
+    Parameters
+    ----------
+    p0 : torch.Tensor
+        A tensor of shape (N, 2) containing the starting points of the lines (y, x).
+
+    p1 : torch.Tensor
+        A tensor of shape (N, 2) containing the ending points of the lines (y, x).
+
+    out : tuple[int, int] | torch.Tensor
+        The shape of the output tensor or an existing boolean tensor to draw on.
+
+    Returns
+    -------
+    torch.Tensor
+        A tensor of shape `shape` with lines drawn between the specified points.
+    """
+    from .cpp_extensions.fvt_cpp import drawLines as draw_lines_cpp
+
+    if isinstance(out, torch.Tensor):
+        assert out.dtype == torch.bool, "The output tensor must be of type torch.bool."
+        assert out.dim() == 2, "The output tensor must be 2-dimensional."
+        outTensor = out
+    else:
+        outTensor = torch.from_numpy(np.zeros(out, dtype=np.bool_))
+
+    return draw_lines_cpp(p0.cpu().int(), p1.cpu().int(), outTensor)
