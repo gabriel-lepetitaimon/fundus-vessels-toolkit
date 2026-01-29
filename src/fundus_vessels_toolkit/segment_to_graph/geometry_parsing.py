@@ -108,15 +108,13 @@ def populate_geometry(
             curv_roots[i] = None
             bsplines[i] = None
 
-    geo_data.set_branch_curve(curves, branch_id=valid_curves_id, graph_index=True)
-    geo_data.set_branch_data(VBranchGeoData.Fields.TANGENTS, tangents, branch_id=valid_curves_id, graph_index=True)
-    geo_data.set_branch_bspline(bsplines, branch_id=valid_curves_id, graph_index=True)
-    geo_data.set_branch_data(VBranchGeoData.Fields.CALIBRES, calibres, branch_id=valid_curves_id, graph_index=True)
-    geo_data.set_branch_data(VBranchGeoData.Fields.BOUNDARIES, boundaries, branch_id=valid_curves_id, graph_index=True)
-    geo_data.set_branch_data(VBranchGeoData.Fields.CURVATURES, curvatures, branch_id=valid_curves_id, graph_index=True)
-    geo_data.set_branch_data(
-        VBranchGeoData.Fields.CURVATURE_ROOTS, curv_roots, branch_id=valid_curves_id, graph_index=True
-    )
+    geo_data.set_branch_curve(curves, branch_id=valid_curves_id)
+    geo_data.set_branch_data(VBranchGeoData.Fields.TANGENTS, tangents, branch_id=valid_curves_id)
+    geo_data.set_branch_bspline(bsplines, branch_id=valid_curves_id)
+    geo_data.set_branch_data(VBranchGeoData.Fields.CALIBRES, calibres, branch_id=valid_curves_id)
+    geo_data.set_branch_data(VBranchGeoData.Fields.BOUNDARIES, boundaries, branch_id=valid_curves_id)
+    geo_data.set_branch_data(VBranchGeoData.Fields.CURVATURES, curvatures, branch_id=valid_curves_id)
+    geo_data.set_branch_data(VBranchGeoData.Fields.CURVATURE_ROOTS, curv_roots, branch_id=valid_curves_id)
 
     if split_on_gaps > 0:
         for i, curve, split in zip(valid_curves_id, curves, curve_splits, strict=True):

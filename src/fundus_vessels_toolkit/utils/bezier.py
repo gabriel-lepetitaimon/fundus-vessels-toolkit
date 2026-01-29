@@ -382,7 +382,7 @@ class BezierCubic(NamedTuple):
         return out_array
 
 
-class BSpline(tuple[BezierCubic]):
+class BSpline(tuple[BezierCubic, ...]):
     def __new__(cls, iterable: Iterable[BezierCubic] = ()) -> BSpline:
         assert all(isinstance(_, BezierCubic) for _ in iterable), "All elements of a BSpline must be BezierCubic"
         return super().__new__(cls, tuple(iterable))
@@ -394,13 +394,22 @@ class BSpline(tuple[BezierCubic]):
         descr = f"BSpline({len(self)} curves):\n\t"
         return descr + "\n\t".join(str(curve) for curve in self)
 
+    def __eq__(self, other: object) -> bool:
+        if other is self:
+            return True
+        if not isinstance(other, BSpline):
+            return False
+        if len(self) != len(other):
+            return False
+        return all(c1 == c2 for c1, c2 in zip(self, other, strict=True))
+
     def to_path(self, offset: Optional[Point] = None) -> str:
         return "\n".join(curve.to_path(offset) for curve in self)
 
-    def __add__(self, other: tuple[BezierCubic]) -> Self:
-        return self.__class__(super().__add__(other))
+    def __add__(self, other: Iterable[BezierCubic]) -> Self:
+        return self.__class__(super().__add__(tuple(other)))
 
-    def __radd__(self, other: tuple[BezierCubic]) -> BSpline:
+    def __radd__(self, other: Iterable[BezierCubic]) -> BSpline:
         if not isinstance(other, BSpline):
             other = BSpline(other)
         return other + self

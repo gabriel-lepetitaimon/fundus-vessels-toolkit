@@ -29,6 +29,50 @@ def np_isin_sorted(a, b, *, invert=False):
         return isin if not invert else not isin
 
 
+def array_list_is_equal(a: list[npt.NDArray | None], b: list[npt.NDArray | None]) -> bool:
+    """
+    Check if two lists of numpy arrays are equal in shape and content.
+    Parameters
+    ----------
+    a:
+        First list of arrays.
+    b:
+        Second list of arrays.
+    Returns
+    -------
+    bool:
+        True if the lists are equal, False otherwise.
+    """
+    if a is b:
+        return True
+    if len(a) != len(b):
+        return False
+    return all(array_is_equal(a_i, b_i) for a_i, b_i in zip(a, b, strict=True))
+
+
+def array_is_equal(a: npt.NDArray | None, b: npt.NDArray | None) -> bool:
+    """
+    Check if two numpy arrays are equal in shape and content.
+
+    Parameters
+    ----------
+    a:
+        First array.
+
+    b:
+        Second array.
+    Returns
+    -------
+    bool:
+        True if the arrays are equal, False otherwise.
+    """
+    if a is b:
+        return True
+    if a is None or b is None:
+        return False
+    return np.array_equal(a, b)
+
+
 def np_find_sorted(keys: npt.NDArray, array: npt.NDArray, assume_keys_sorted=False) -> npt.NDArray[np.int_]:
     """
     Find the index of keys in an array.

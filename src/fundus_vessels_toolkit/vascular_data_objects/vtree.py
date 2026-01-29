@@ -4,6 +4,7 @@ import itertools
 import re
 
 from fundus_vessels_toolkit.utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
+from fundus_vessels_toolkit.utils.numpy import array_is_equal
 
 __all__ = ["VTree"]
 
@@ -446,6 +447,14 @@ class VTree(VGraph):
     def check_integrity(self):
         super().check_integrity()
         self.check_tree_integrity()
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, VTree)
+            and np.array_equal(self._branch_tree, other._branch_tree)
+            and array_is_equal(self._branch_dir, other._branch_dir)
+            and super().__eq__(other)
+        )
 
     def copy(self) -> Self:
         """Return a copy of the tree."""
@@ -1488,8 +1497,9 @@ class VTree(VGraph):
             else:
                 root_pos = self.geometric_data().domain.center
             other = naive_infer_roots(other, root_pos=root_pos)
-
-        self._branch_tree = np.concatenate([self._branch_tree, other._branch_tree + N_branch])
+        other_branch_tree = other.branch_tree
+        other_branch_tree[other_branch_tree != -1] += N_branch
+        self._branch_tree = np.concatenate([self._branch_tree, other_branch_tree])
         if self._branch_dir is None and other._branch_dir is None:
             pass
         else:

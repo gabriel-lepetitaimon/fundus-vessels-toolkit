@@ -116,8 +116,9 @@ class ReviewTool:
         self.debug_info = {}
         self.trees_topology = [None, None]
         self.trees_from_av: None | tuple[VTree, VTree] = None
+        self.trees_from_av_pred: None | tuple[VTree, VTree] = None
         self._fundus: FundusData | None = None
-        self._av_pred: bool = False
+        self._has_av_gt: bool = False
         self.img_name: str = ""
 
         self._states: list[AnnotationState] = []
@@ -198,19 +199,23 @@ class ReviewTool:
         self.label.value = f"{img_name} ({index + 1}/{len(self.img_names)})"
 
         fundus = FundusData(image=self.raw_path / (img_name + self.raw_ext))
+        od_mac = segment(open_image(self.raw_path / (img_name + self.raw_ext))).numpy(force=True).argmax(axis=0)
+        fundus = fundus.update(od=od_mac == 1, macula=od_mac == 2, reshape_method="resize")
+
+        fundus_pred = fundus.copy()
+        segment_av(fundus_pred)
+        self.trees_from_av_pred = self.av2tree_pred(fundus_pred)
+
         try:
             fundus = fundus.update(av=FundusData.load_av(self.av_path / (img_name + self.av_ext), ensure_valid_av=True))
-            self._av_pred = False
-        except ValueError as e:
+            self._has_av_gt = True
+        except ValueError:
             vessels = FundusData.load_vessels(self.av_path / (img_name + self.av_ext))
             av = segment_av(fundus.image, ignore_segmentation=True)
             av *= vessels
             fundus = fundus.update(av=av)
-            self._av_pred = True
-
-        # segment_od_mac(fundus)
-        od_mac = segment(open_image(self.raw_path / (img_name + self.raw_ext))).numpy(force=True).argmax(axis=0)
-        fundus = fundus.update(od=od_mac == 1, macula=od_mac == 2, reshape_method="resize")
+            self._has_av_gt = False
+        self.trees_from_av = (self.av2tree_pred if self._has_av_gt else self.av2tree)(fundus)
         self._fundus = fundus
 
         # Draw fundus
@@ -228,7 +233,6 @@ class ReviewTool:
         self.mosaic[1, 0].add_label(fundus.av, "AV", opacity=0.5, colormap=COLORS)
 
         # Load or compute trees
-        self.trees_from_av = (self.av2tree_pred if self._av_pred else self.av2tree)(self.fundus)
         self.load_saved_trees(draw=False)
 
         self.draw_trees()
@@ -248,13 +252,12 @@ class ReviewTool:
         return trees
 
     def load_trees_from_av(self, draw=True) -> tuple[VTree, VTree]:
-        if self.trees_from_av is None:
-            self.trees_from_av = (self.av2tree_pred if self._av_pred else self.av2tree)(self.fundus)
+        assert self.trees_from_av is not None, "AV trees have not been computed yet."
         a_tree, v_tree = self.trees_from_av
         self.reset_annotation_states((a_tree.copy(), v_tree.copy()))
         if draw:
             self.draw_trees()
-        return self.trees_from_av
+        return (a_tree, v_tree)
 
     def save_trees(self, sanity_check=True):
         art_file = self.save_path / f"{self.img_name}_art.npz"
@@ -272,10 +275,9 @@ class ReviewTool:
                 loaded_vei = VTree.load(vei_file)
             except Exception as e:
                 raise ValueError("Saved tree files could not be loaded back.") from e
-            # TODO: Implement is_equal method in VTree
-            # if not self.trees[0].is_equal(loaded_art):
+            # if not self.trees[0] == loaded_art:
             #     raise ValueError("Saved artery tree does not match the original.")
-            # if not self.trees[1].is_equal(loaded_vei):
+            # if not self.trees[1] == loaded_vei:
             #     raise ValueError("Saved vein tree does not match the original.")
             art_file_tmp, vei_file_tmp = art_file, vei_file
             art_file = art_file.with_stem(art_file.stem.replace(".tmp", ""))
@@ -431,8 +433,8 @@ class ReviewTool:
             if event["button"] == 0 and event["modifiers"] == ["shift"]:  # Left click + Shift
                 if not self.add_node(tree, yx, ctx):
                     modified_tree = "none"
-            elif event["button"] == 0 and event["modifiers"] == ["ctrl"]:  # Left click + Ctrl
-                if not self.add_branch_from_av(tree, yx, ctx):
+            elif event["button"] == 0 and "ctrl" in event["modifiers"]:  # Left click + Ctrl
+                if not self.add_branch_from_av(tree, yx, pred_av="shift" in event["modifiers"], ctx=ctx):
                     modified_tree = "none"
             elif event["button"] == 2 and event["modifiers"] == []:  # Right click
                 if not self.simplify_nodes(tree, yx):
@@ -484,9 +486,11 @@ class ReviewTool:
         self.infer_roots(tree, ctx, inplace=True)
         return True
 
-    def add_branch_from_av(self, tree: VTree, yx: tuple[int, int], ctx: AnnotationContext) -> bool:
+    def add_branch_from_av(self, tree: VTree, yx: tuple[int, int], pred_av: bool, ctx: AnnotationContext) -> bool:
         art = 0 if tree == self.state.trees[0] else 1
-        av_tree = self.trees_from_av[art]
+        trees = self.trees_from_av_pred if pred_av else self.trees_from_av
+        assert trees is not None, "AV trees have not been computed yet."
+        av_tree = trees[art]
         branch_id, dist, _ = self._closest_branch(av_tree, yx)
         if dist > 20:
             return False

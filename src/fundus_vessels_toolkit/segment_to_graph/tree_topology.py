@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from re import L
 import sys
 import warnings
 from typing import List, Literal, Optional, Self, Sequence, Tuple, overload
@@ -10,7 +9,6 @@ import numpy.typing as npt
 from skimage.segmentation import expand_labels
 
 from fundus_toolkits.utils.geometric import Rect
-from traitlets import Bool
 from fundus_vessels_toolkit.utils.cluster import reduce_clusters
 
 from ..utils.lookup_array import invert_complete_lookup
@@ -185,7 +183,7 @@ class TreeTopology:
         return self.branch_map.shape  # type: ignore
 
     def read_branch_topo(
-        self, graph: VGraph, *, min_rank_threshold: float = 0.1, max_rank_tolerance: float = 0.25
+        self, graph: VGraph, *, min_rank_threshold: float = 0.1, max_rank_tolerance: float = 0.2
     ) -> BranchesTopo:
         return BranchesTopo(
             *read_branch_topology(
@@ -201,11 +199,30 @@ class BranchesTopo:
     def __init__(
         self,
         labels: npt.NDArray[TopologicalLabel],
-        p_dirs: Float1DArray,
-        plausibility: Float1DArray,
+        p_dirs: npt.NDArray[np.float32],
+        plausibility: npt.NDArray[np.float32],
         tips_label: npt.NDArray[TopologicalLabel],
-        tips_rank: Float2DArray,
+        tips_rank: npt.NDArray[np.float32],
     ) -> None:
+        """Store the topological information for each branch in a vessel graph.
+
+        Parameters
+        ----------
+        labels: npt.NDArray[TopologicalLabel]
+            A 1D array of size (B,) indicating, for each branch, its topological label. Zero indicates that the branch was not found in the topology ground truth.
+
+        p_dirs: npt.NDArray[np.float32]
+            A 1D array of size (B,) indicating, for each branch, its direction. Positive value indicates to keep the branch original direction in ``graph``, negative value indicates to flip it. Zero indicates unknown direction.
+
+        plausibility: npt.NDArray[np.float32]
+            A 1D array of size (B,) indicating, the mean of the fuzzy_skeleton_map values under each branch's skeleton.
+
+        tips_label: npt.NDArray[TopologicalLabel]
+            A 2D array of size (B, 2) indicating, for each branch, the topological labels of its two tips (tail, head).
+
+        tips_rank: npt.NDArray[np.float32]
+            A 2D array of size (B, 2) indicating, for each branch, the topological distances of its two tips (tail, head).
+        """  # noqa: E501
         assert labels.ndim == 1, "labels must be a 1D array."
         self.labels = labels
         B = len(labels)
@@ -242,16 +259,16 @@ class BranchesTopo:
         return self.tips_label[np.arange(self.branch_count), 1 - self.dirs.astype(np.int_)]
 
     @property
-    def head_ranks(self) -> Float1DArray:
+    def head_ranks(self) -> npt.NDArray[np.float32]:
         return self.tips_rank[np.arange(self.branch_count), self.dirs.astype(np.int_)]
 
     @property
-    def tail_ranks(self) -> Float1DArray:
+    def tail_ranks(self) -> npt.NDArray[np.float32]:
         return self.tips_rank[np.arange(self.branch_count), 1 - self.dirs.astype(np.int_)]
 
 
 def highest_topo_plausibility(
-    topologies: list[BranchesTopo], *, plausibility_threshold: float = 0.15, mask_inplace: bool = False
+    topologies: list[BranchesTopo], *, plausibility_threshold: float = 0.05, mask_inplace: bool = False
 ) -> npt.NDArray[np.int_]:
     """
     Affiliate each branch with the topology where it has the highest plausibility. If the difference in plausibility between the best and second best topology is below the given threshold, the branch is not assigned to any topology.
@@ -306,7 +323,7 @@ def read_branch_topology(
     topology: TreeTopology,
     *,
     min_rank_threshold: float = 0.1,
-    max_rank_tolerance: float = 0.25,
+    max_rank_tolerance: float = 0.2,
 ) -> tuple[
     npt.NDArray[TopologicalLabel],
     npt.NDArray[np.float32],
@@ -434,7 +451,7 @@ def read_branch_topology(
         if min_rank_threshold > 0:
             min_rank = int(np.floor(curve_rank.min()))
             ignore_mask = curve_rank < np.float32(min_rank) + np.float32(min_rank_threshold)
-            if ignore_mask.any() and (~ignore_mask).sum() > 3:
+            if ignore_mask.any() and (~ignore_mask).sum() >= 3:
                 curve = curve[~ignore_mask]
                 curve_label = curve_label[~ignore_mask]
                 curve_rank = curve_rank[~ignore_mask]

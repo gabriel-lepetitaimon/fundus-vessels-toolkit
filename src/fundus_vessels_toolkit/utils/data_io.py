@@ -7,7 +7,7 @@ import numpy as np
 import numpy.typing as npt
 from coloraide import Color
 
-NumpyDict: TypeAlias = Mapping[str, Union[npt.NDArray[Any], "NumpyDict"]] | List[npt.NDArray[Any]] | List["NumpyDict"]
+NumpyDict: TypeAlias = Mapping[str, npt.NDArray] | Mapping[str, "NumpyDict"] | list[npt.NDArray] | list["NumpyDict"]
 
 SEP = "/"
 
@@ -43,11 +43,12 @@ def load_numpy_dict(file_path: str | Path) -> NumpyDict:
     data_dict = {}
     for k, v in data.items():
         keys = k.split("/")
-        d = data_dict
+        d: NumpyDict = data_dict
         is_keys_list = [key[0] == "[" and key[-1] == "]" for key in keys]
         keys = [int(key[1:-1]) if is_list else key for key, is_list in zip(keys, is_keys_list, strict=True)]
         for key, is_list, next_is_list in zip(keys[:-1], is_keys_list[:-1], is_keys_list[1:], strict=True):
             if is_list:
+                assert isinstance(d, list)
                 while len(d) <= key:
                     d.append([] if next_is_list else {})
                 d = d[key]

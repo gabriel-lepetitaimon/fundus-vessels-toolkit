@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import itertools
 from abc import ABC, ABCMeta, abstractmethod
-from copy import copy
-from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Generic, List, NamedTuple, Optional, Self, Sequence, Tuple, Type, TypeAlias, TypeVar
 
@@ -13,7 +11,7 @@ import numpy.typing as npt
 
 from fundus_toolkits.utils.geometric import Point
 
-from ..utils.bezier import BSpline
+from ..utils.bezier import BSpline, BezierCubic
 from ..utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
 from ..utils.fundus_projections import FundusProjection, Translation
 from ..utils.lookup_array import invert_lookup
@@ -168,6 +166,22 @@ class VBranchGeoDataBase(ABC, metaclass=MetaVBranchGeoDataBase):
         """
         ...
 
+    @abstractmethod
+    def __eq__(self, other: object) -> bool:
+        """Check if two parametric data are equal.
+
+        Parameters
+        ----------
+        other : object
+            The parametric data to compare.
+
+        Returns
+        -------
+        bool
+            True if the parametric data are equal, False otherwise.
+        """
+        ...
+
     def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
         """Transform the parametric data using a projection.
 
@@ -228,6 +242,9 @@ class VBranchCurveData(VBranchGeoDataBase):
         data = self.data[index]
         return self.__class__(data)
 
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, VBranchCurveData) and np.array_equal(self.data, other.data)
+
 
 ####################################################################################################
 class LeftRightCurveData(VBranchCurveData):
@@ -245,6 +262,9 @@ class LeftRightCurveData(VBranchCurveData):
         data = np.flip(self.data, axis=(0, 1))
         return self.__class__(data)
 
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, LeftRightCurveData) and np.array_equal(self.data, other.data)
+
 
 ####################################################################################################
 class BoundariesData(LeftRightCurveData):
@@ -261,6 +281,9 @@ class BoundariesData(LeftRightCurveData):
     def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
         data = projection.transform(self.data.reshape((-1, 2))).reshape(self.data.shape)
         return self.__class__(data.astype(self.data.dtype))
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, BoundariesData) and np.array_equal(self.data, other.data)
 
 
 ####################################################################################################
@@ -333,6 +356,9 @@ class VBranchCurveIndex(VBranchGeoDataBase):
         data = data[np.argmax(data > 0, axis=0) :]
         return self.__class__(data)
 
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, VBranchCurveIndex) and np.array_equal(self.data, other.data)
+
 
 ####################################################################################################
 class VBranchTangents(VBranchGeoDataBase):
@@ -382,6 +408,9 @@ class VBranchTangents(VBranchGeoDataBase):
     def resample(self, index: npt.NDArray[np.int32], ctx: BranchGeoDataEditContext) -> Self:
         data = self.data[index]
         return self.__class__(data)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, VBranchTangents) and np.array_equal(self.data, other.data)
 
 
 ####################################################################################################
@@ -449,6 +478,9 @@ class VBranchTipsData(VBranchGeoDataBase):
     def resample(self, index: npt.NDArray[np.int32], ctx: BranchGeoDataEditContext) -> Self:
         return self
 
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, VBranchTipsData) and np.array_equal(self.data, other.data)
+
 
 ####################################################################################################
 class VBranchTipsScalarData(VBranchTipsData):
@@ -465,6 +497,9 @@ class VBranchTipsScalarData(VBranchTipsData):
     def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
         return self
 
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, VBranchTipsScalarData) and np.array_equal(self.data, other.data)
+
 
 ####################################################################################################
 class VBranchTipsDoublePointsData(VBranchTipsData):
@@ -479,6 +514,9 @@ class VBranchTipsDoublePointsData(VBranchTipsData):
             return self
         data = projection.transform(self.data.reshape(-1, 2)).reshape(self.data.shape)
         return self.__class__(data.astype(self.data.dtype))
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, VBranchTipsDoublePointsData) and np.array_equal(self.data, other.data)
 
 
 ####################################################################################################
@@ -507,6 +545,9 @@ class VBranchTipsTangents(VBranchTipsData):
         p1 = p0 + self.data
         p0, p1 = projection.transform(p0), projection.transform(p1)
         return self.__class__(p1 - p0)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, VBranchTipsTangents) and np.array_equal(self.data, other.data)
 
 
 ####################################################################################################
@@ -546,9 +587,28 @@ class VBranchBSpline(VBranchGeoDataBase):
     @classmethod
     def merge(cls, others: List[Self], ctx: BranchGeoDataEditContext) -> Self:  # type: ignore
         bspline = BSpline()
-        for other in others:
-            if other is not None:
+        for o, other in enumerate(others):
+            if other is not None and len(other.data) != 0:
                 bspline += other.data
+            else:
+                curve = ctx.info["curves"][o]
+                if curve.shape[0] == 1:
+                    p = Point(*curve[0])
+                    if o == 0:
+                        if len(others) > 1 and others[1] is not None and len(others[1].data) != 0:
+                            p1 = others[1].data[0].p0
+                            c1 = others[1].data[0].c1_sym(relative=False)
+                            bspline += [BezierCubic(p, p, c1, p1)]
+                        else:
+                            bspline += [BezierCubic(p, p, p, p)]
+                    elif o == len(others) - 1:
+                        if len(bspline) > 0:
+                            p0 = bspline[-1].p1
+                            c0 = bspline[-1].c0_sym(relative=False)
+                            bspline += [BezierCubic(p0, c0, p, p)]
+                        else:
+                            bspline += [BezierCubic(p, p, p, p)]
+
         return cls(bspline)
 
     def flip(self, ctx: BranchGeoDataEditContext) -> VBranchBSpline:
@@ -567,6 +627,9 @@ class VBranchBSpline(VBranchGeoDataBase):
 
     def resample(self, index: npt.NDArray[np.int32], ctx: BranchGeoDataEditContext) -> Self:
         return self
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, VBranchBSpline) and self.data == other.data
 
 
 ####################################################################################################
@@ -723,7 +786,7 @@ class VBranchGeoFields:
 
 
 #: The type of curated dictionary of geometric data for branches.
-VBranchGeoDict: TypeAlias = Dict[str, List[T_VBranchGeoData | None]]
+VBranchGeoDict: TypeAlias = Dict[str, List[T_VBranchGeoData]]
 
 #: All the types which may be converted to a VBranchGeoData object.
 VBranchGeoDataLike: TypeAlias = np.ndarray | BSpline | VBranchGeoDataBase

@@ -596,6 +596,16 @@ class VGraph:
         if len(self._branch_attr.index) != B:
             self._branch_attr.reindex(np.arange(B))
 
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, VGraph)
+            and np.array_equal(self._branch_list, other._branch_list)
+            and len(self._geometric_data) == len(other._geometric_data)
+            and all(geo1 == geo2 for geo1, geo2 in zip(self._geometric_data, other._geometric_data, strict=True))
+            and self._node_attr.equals(other._node_attr)
+            and self._branch_attr.equals(other._branch_attr)
+        )
+
     def copy(self) -> Self:
         """Create a copy of the current Graph object."""
         return type(self)(
