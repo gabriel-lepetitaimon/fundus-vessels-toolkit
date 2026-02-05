@@ -3,15 +3,14 @@ from __future__ import annotations
 import itertools
 from abc import ABC, ABCMeta, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, Generic, List, NamedTuple, Optional, Self, Sequence, Tuple, Type, TypeAlias, TypeVar
+from typing import Any, Dict, List, NamedTuple, Optional, Self, Sequence, Tuple, Type, TypeAlias, TypeVar
 
-import attr
 import numpy as np
 import numpy.typing as npt
 
 from fundus_toolkits.utils.geometric import Point
 
-from ..utils.bezier import BSpline, BezierCubic
+from ..utils.bezier import BezierCubic, BSpline
 from ..utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
 from ..utils.fundus_projections import FundusProjection, Translation
 from ..utils.lookup_array import invert_lookup
@@ -151,12 +150,12 @@ class VBranchGeoDataBase(ABC, metaclass=MetaVBranchGeoDataBase):
         ...
 
     @abstractmethod
-    def resample(self, index: npt.NDArray[np.int32], ctx: BranchGeoDataEditContext) -> Self:
+    def resample(self, index: npt.NDArray[np.int_], ctx: BranchGeoDataEditContext) -> Self:
         """Resample the parametric data at the given indices.
 
         Parameters
         ----------
-        index : npt.NDArray[np.int32]
+        index : npt.NDArray[np.int_]
             The indices at which to resample the parametric data.
 
         Returns
@@ -238,7 +237,7 @@ class VBranchCurveData(VBranchGeoDataBase):
     def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
         return self
 
-    def resample(self, index: npt.NDArray[np.int32], ctx: BranchGeoDataEditContext) -> Self:
+    def resample(self, index: npt.NDArray[np.int_], ctx: BranchGeoDataEditContext) -> Self:
         data = self.data[index]
         return self.__class__(data)
 
@@ -345,15 +344,16 @@ class VBranchCurveIndex(VBranchGeoDataBase):
     def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
         return self
 
-    def resample(self, index: npt.NDArray[np.int32], ctx: BranchGeoDataEditContext) -> Self:
+    def resample(self, index: npt.NDArray[np.int_], ctx: BranchGeoDataEditContext) -> Self:
         if self.is_empty():
             return self
         if (inverted := ctx.info.get("inverted_resample_index")) is None:
             inverted = invert_lookup(index, max_index=ctx.curve.shape[0] - 1)
             ctx.info["inverted_resample_index"] = inverted
         data = inverted[self.data]
-        data = np.sort(data)
-        data = data[np.argmax(data > 0, axis=0) :]
+        data = np.unique(data)
+        if data.size > 0 and data[0] == -1:
+            data = data[1:]
         return self.__class__(data)
 
     def __eq__(self, other: object) -> bool:
@@ -405,7 +405,7 @@ class VBranchTangents(VBranchGeoDataBase):
         p0, p1 = projection.transform(p0), projection.transform(p1)
         return self.__class__(p1 - p0)
 
-    def resample(self, index: npt.NDArray[np.int32], ctx: BranchGeoDataEditContext) -> Self:
+    def resample(self, index: npt.NDArray[np.int_], ctx: BranchGeoDataEditContext) -> Self:
         data = self.data[index]
         return self.__class__(data)
 
@@ -475,7 +475,7 @@ class VBranchTipsData(VBranchGeoDataBase):
             + [cls(np.array([nan, self.data[1]]))]
         )
 
-    def resample(self, index: npt.NDArray[np.int32], ctx: BranchGeoDataEditContext) -> Self:
+    def resample(self, index: npt.NDArray[np.int_], ctx: BranchGeoDataEditContext) -> Self:
         return self
 
     def __eq__(self, other: object) -> bool:
@@ -541,7 +541,7 @@ class VBranchTipsTangents(VBranchTipsData):
     def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
         if self.is_empty() or isinstance(projection, Translation):
             return self
-        p0 = np.stack(ctx.curve[0], ctx.curve[-1])
+        p0 = np.stack([ctx.curve[0], ctx.curve[-1]])
         p1 = p0 + self.data
         p0, p1 = projection.transform(p0), projection.transform(p1)
         return self.__class__(p1 - p0)
@@ -623,9 +623,9 @@ class VBranchBSpline(VBranchGeoDataBase):
     def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
         if self.is_empty():
             return self
-        return self.__class__(self.data.transform(projection))
+        return self.__class__(self.data.transform(projection, round_p=True))
 
-    def resample(self, index: npt.NDArray[np.int32], ctx: BranchGeoDataEditContext) -> Self:
+    def resample(self, index: npt.NDArray[np.int_], ctx: BranchGeoDataEditContext) -> Self:
         return self
 
     def __eq__(self, other: object) -> bool:
@@ -633,11 +633,14 @@ class VBranchBSpline(VBranchGeoDataBase):
 
 
 ####################################################################################################
-class VBranchGeoDescriptor(str, Generic[T_VBranchGeoData]):
+class VBranchGeoDescriptor[T_VBranchGeoData](str):
     """``VBranchGeoDescriptor`` is a class that describes a branch geometrical attribute."""
 
     def __new__(cls, name: str, geo_type: Type[T_VBranchGeoData], empty: T_VBranchGeoData) -> Self:
-        return str.__new__(cls, name)
+        return super().__new__(cls, name)
+
+    def __getnewargs__(self) -> Tuple[str, Type[T_VBranchGeoData], T_VBranchGeoData]:  # type: ignore
+        return (self.name, self.geo_type, self._empty)
 
     def __init__(self, name: str, geo_type: Type[T_VBranchGeoData], empty: T_VBranchGeoData) -> None:
         self.geo_type = geo_type
@@ -977,7 +980,11 @@ class VBranchGeoData:
                 f"Unknown type: {type_name}. Make sure corresponding type was imported."
             )
             geodata_type = _registered_vbranch_geo_data_types[type_name]
-            data[k] = [VBranchGeoData.from_data(_, geodata_type) if _ is not None else None for _ in v]
+            if VBranchGeoFields.has_name(k) and (geo_fields := VBranchGeoFields.by_name(k)).geo_type is geodata_type:
+                geo_data = [geo_fields.empty if _ is None else VBranchGeoData.from_data(_, geodata_type) for _ in v]
+            else:
+                geo_data = [VBranchGeoData.from_data(_, geodata_type) if _ is not None else None for _ in v]
+            data[k] = geo_data
 
         return data
 

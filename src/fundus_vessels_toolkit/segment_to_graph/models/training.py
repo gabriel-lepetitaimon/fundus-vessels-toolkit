@@ -5,7 +5,7 @@ import torch_geometric as pyg
 
 
 class GNNBranchTrainer(L.LightningModule):
-    def __init__(self, model: pyg.nn.models.GNN, learning_rate: float = 1e-3):
+    def __init__(self, model: torch.nn.Module, learning_rate: float = 1e-3):
         super().__init__()
         self.model = model
         self.learning_rate = learning_rate

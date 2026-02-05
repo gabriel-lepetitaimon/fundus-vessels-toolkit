@@ -1,12 +1,16 @@
 import warnings
-from typing import Optional, Self
+from typing import Literal, Optional, Self, overload
 
+from cv2 import line
 import numpy as np
 import numpy.typing as npt
 
-from ..utils.cluster import cluster_by_distance
+from fundus_vessels_toolkit.utils.lookup_array import create_removal_lookup
+
+from ..utils.cluster import cluster_by_distance, reduce_clusters
 from ..utils.math import sigmoid, softmax
 from ..utils.numpy import np_group_by
+from ..utils.tree import accessible_from_root, find_cycles, has_cycle
 from ..utils.typing import Bool1DArray, Float1DArray, Int2DArrayLike
 from ..vascular_data_objects import VGraph
 from ..vascular_data_objects.fundus_data import AVLabel
@@ -81,7 +85,7 @@ class VBranchDigraph(LineDigraph):
         graph : VGraph
             The vascular graph.
         line_list : npt.NDArray[np.int_]
-            An array of shape (N, 4) representing the directed edges connecting the branch b0 to the branch b1. Each row is in the format ``(b0, b1, b0_tip, b1_tip)``, where ``b0_tip`` and ``b1_tip`` are in {0, 1} indicates if the branches are connected through their first (0) or second (1) node.
+            An array of shape (N, 4) representing the directed edges connecting the branch b0 to the branch b1. Each row is in the format ``(b0, b0_tip, b1, b1_tip)``, where ``b0_tip`` and ``b1_tip`` are in {0, 1} indicates if the branches are connected through their first (0) or second (1) node.
             (Namely: ``graph.branch_list[b0,b0_tip]`` and ``graph.branch_list[b1,b1_tip]``).
         line_p : Optional[npt.NDArray[np.float_]], optional
             An array of shape (N,) representing the probabilities of each edge, by default None.
@@ -109,7 +113,7 @@ class VBranchDigraph(LineDigraph):
         av_p = np.hstack([1 - self.branch_av_p.sum(axis=1, keepdims=True), self.branch_av_p])
         return np.argmax(av_p, axis=1).astype(np.int_)
 
-    def invalid_branch(self) -> npt.NDArray[np.bool_]:
+    def missing_branch(self) -> npt.NDArray[np.bool_]:
         """Get a mask of invalid branches.
 
         Returns
@@ -122,7 +126,9 @@ class VBranchDigraph(LineDigraph):
         return 1 - self.branch_av_p.sum(axis=1) >= self.branch_av_p.max(axis=1)
 
     @classmethod
-    def from_graph(cls, graph: VGraph, *, max_distance=200, max_angle=30, tan_max_angle=110, pos_tolerance=25) -> Self:
+    def from_graph(
+        cls, graph: VGraph, *, max_distance=200, max_angle=30, tan_max_angle=110, pos_tolerance=25, check: bool = True
+    ) -> Self:
         """Create a BranchDigraph from a VGraph.
 
         Parameters
@@ -160,9 +166,13 @@ class VBranchDigraph(LineDigraph):
             facing_tips[b1, tip1, b0, tip0] = True
         graph.branch_tips_connectivity_matrix(facing_tips, erase_opposite_tips=True)
 
+        B = graph.branch_count
+        Bidx = np.arange(B)
+        facing_tips[Bidx, 0, Bidx, 0] = False
+        facing_tips[Bidx, 1, Bidx, 1] = False
+
         line_list = np.argwhere(facing_tips)
 
-        B = graph.branch_count
         line_list = [
             line_list,
             np.stack([np.full(B, -1), np.zeros(B), np.arange(B), np.zeros(B)], axis=-1).astype(np.int_),
@@ -171,7 +181,42 @@ class VBranchDigraph(LineDigraph):
         line_list = np.vstack(line_list)
 
         digraph = cls(graph=graph, line_list=line_list)
+        if check:
+            digraph.check_lines(on_invalid="warn")
         return digraph
+
+    @overload
+    def check_lines(self, on_invalid: Literal["raise", "warn", "ignore"] = "ignore") -> bool: ...
+    @overload
+    def check_lines(self, on_invalid: Literal["report"]) -> str: ...
+    def check_lines(self, on_invalid: Literal["raise", "warn", "ignore", "report"] = "ignore") -> str | bool:
+        msg = "Invalid lines: \n"
+        B = self.graph.branch_count
+        b0, b0_tip, b1, b1_tip = self.line_list.T
+
+        # === Check that no line connects a branch tip to itself ===
+        if len(invalid_l := np.argwhere((b0 == b1) & (b0_tip == b1_tip)).flatten()):
+            invalid_l = ", ".join(str(int(_)) for _ in invalid_l)
+            msg += f" - lines {invalid_l} are self-loop lines;\n"
+
+        # === Check that all branches have at least one ingoing line ===
+        incoming_b = np.unique(b1)
+        if len(no_parent := np.setdiff1d(np.arange(B), incoming_b)):
+            msg += f" - branches {', '.join(str(int(_)) for _ in no_parent)} have no ingoing line;\n"
+
+        # === Check that all branches are accessible from the root ===
+        accessible_b = accessible_from_root(np.stack([b0, b1], axis=1), B, root=-1)
+        if len(inaccessible_b := np.argwhere(~accessible_b).flatten()) > 1:
+            msg += f" - branches {', '.join(str(int(_)) for _ in inaccessible_b)} are not accessible from the root;\n"
+
+        # === Report results ===
+        if len(msg.splitlines()) > 1:
+            if on_invalid == "raise":
+                raise ValueError(msg)
+            elif on_invalid == "warn":
+                warnings.warn(msg, stacklevel=3)
+            return msg if on_invalid == "report" else False
+        return "" if on_invalid == "report" else True
 
     def compute_p_from_gt(
         self, art_topology: TreeTopology, vei_topology: TreeTopology, check=True
@@ -192,45 +237,107 @@ class VBranchDigraph(LineDigraph):
         """
         from .tree_topology import optimal_lines
 
+        # === Read branch topologies ===
         branch_topo_a = art_topology.read_branch_topo(self.graph)
         branch_topo_v = vei_topology.read_branch_topo(self.graph)
+
+        # === Select most plausible topology between artery and vein for each branch ===
         branch_av = highest_topo_plausibility([branch_topo_a, branch_topo_v], mask_inplace=True)
         b_is_art = branch_av == 0
         b_is_vei = branch_av == 1
 
+        # === Compute optimal lines according to branch topologies ===
         art_lines = optimal_lines(branch_topo_a, self.line_list)
         vei_lines = optimal_lines(branch_topo_v, self.line_list)
 
+        # === Post fix erroneous branch skips ===
         valid_art_shortcut = ~b_is_vei & (branch_topo_a.plausibility > branch_topo_v.plausibility)
         valid_vei_shortcut = ~b_is_art & (branch_topo_v.plausibility > branch_topo_a.plausibility)
-
         prioritize_existing_branch(self, art_lines, b_is_art, valid_art_shortcut, branch_topo_a.p_dirs)
         prioritize_existing_branch(self, vei_lines, b_is_vei, valid_vei_shortcut, branch_topo_v.p_dirs)
 
-        # === Convert optimal mask to probabilities ===
+        # === Compute AV and dir probabilities ===
         self.branch_av_p = np.stack([b_is_art, b_is_vei], axis=1).astype(float)
+
+        branch_dir_p = branch_topo_a.p_dirs * branch_topo_a.plausibility * (~b_is_vei)
+        branch_dir_p += branch_topo_v.p_dirs * branch_topo_v.plausibility * (~b_is_art)
+        self.branch_dir_p = sigmoid(branch_dir_p * 6)
+
+        # === Compute lines probabilities ===
         line_p = art_lines | vei_lines
+
+        # Ensure missing branches only have not-null probability for root lines
+        b0, _, b1, b1_tip = self.line_list.T
+        missing_branches_lines = self.missing_branch()[b1]
+        root_lines = (b0 == -1) & (b1_tip == (branch_dir_p[b1] <= 0))
+        line_p[missing_branches_lines & ~root_lines] = False
+        line_p[missing_branches_lines & root_lines] = True
+
         self.line_p = line_p.astype(float)
 
         if check:
-            # Check line_p all branches should have exactly one incoming node
-            B = np.arange(self.graph.branch_count)[~self.invalid_branch()]
-            if invalid_b := {b: n_parent for b in B if (n_parent := np.sum(line_p & (self.line_list[:, 2] == b))) != 1}:
-                msg = "Invalid line probabilities: "
-                no_parent = [b for b, n in invalid_b.items() if n == 0]
-                multiple_parent = [b for b, n in invalid_b.items() if n > 1]
-                if no_parent:
-                    msg += f"{', '.join(str(int(_)) for _ in no_parent)} has no parent; "
-                if multiple_parent:
-                    msg += f"{', '.join(str(int(_)) for _ in multiple_parent)} have multiple parents; "
-                warnings.warn(msg, stacklevel=2)
-
-        branch_dir_p = sum(b_topo.p_dirs * b_topo.plausibility for b_topo in [branch_topo_a, branch_topo_v])
-        self.branch_dir_p = sigmoid(branch_dir_p * 6)
+            self.check_line_p(on_invalid="warn")
 
         return line_p
 
-    def optimize_tree(self, keep_invalid_branch: bool = False) -> VTree:
+    @overload
+    def check_line_p(self, on_invalid: Literal["raise", "warn", "ignore"] = "ignore") -> bool: ...
+    @overload
+    def check_line_p(self, on_invalid: Literal["report"]) -> str: ...
+    def check_line_p(self, on_invalid: Literal["raise", "warn", "ignore", "report"] = "ignore") -> bool | str:
+        line_p = self.line_p
+        msg = "Invalid line probabilities: \n"
+        optimal_lines = self.line_list[line_p == 1]
+
+        # === Check that missing branches have no outgoing lines ===
+        missing_b = self.missing_branch()
+        outgoing_b = np.unique(optimal_lines[:, 0])
+        if len(outgoing_b) > 0 and outgoing_b[0] == -1:
+            outgoing_b = outgoing_b[1:]
+        if len(invalid_outgoing_b := outgoing_b[missing_b[outgoing_b]]):
+            msg += f" - missing branches {', '.join(str(int(_)) for _ in invalid_outgoing_b)} have outgoing lines;\n"
+
+        # === Check that missing branches have only a root ingoing line ===
+        not_root_b = np.unique(optimal_lines[optimal_lines[:, 0] != -1, 2])
+        if len(invalid_ingoing_b := not_root_b[missing_b[not_root_b]]):
+            msg += f" - missing branches {', '.join(str(int(_)) for _ in invalid_ingoing_b)} have ingoing lines;\n"
+
+        # === Check all branches have exactly one parent ===
+        incoming_b, incoming_b_count = np.unique(optimal_lines[:, 2], return_counts=True)
+        if len(too_much_parent := incoming_b[incoming_b_count > 1]):
+            msg += f" - branches {', '.join(str(int(_)) for _ in too_much_parent)} have more than one parent;\n"
+        if len(no_parent := np.setdiff1d(np.arange(self.graph.branch_count), incoming_b)):
+            msg += f" - branches {', '.join(str(int(_)) for _ in no_parent)} have no parent;\n"
+
+        # === Check no cycles in optimal lines ===
+        optimal_parents = np.full((self.graph.branch_count,), -1, dtype=np.int_)
+        optimal_parents[optimal_lines[:, 2]] = optimal_lines[:, 0]
+        if has_cycle(optimal_parents):
+            cycles = ", ".join("{" + ", ".join(str(_) for _ in c) + "}" for c in find_cycles(optimal_parents))
+            msg += f" - optimal parents form cycles: {cycles};\n"
+
+        # === Check line_p and branch_dir_p consistency ===
+        if (b_dir_p := self.branch_dir_p) is not None:
+            b0, b0_tip, b1, b1_tip = optimal_lines.T
+            valid_lines = (b0 == -1) | (b_dir_p[b0] == 0.5) | (b0_tip.astype(bool) == (b_dir_p[b0] > 0.5))
+            if len(invalid_b := optimal_lines[~valid_lines, 0]) > 0:
+                invalid_b = ", ".join(str(int(_)) for _ in invalid_b)
+                msg += f" - outgoing branches {invalid_b} have inconsistent direction probabilities;\n"
+            valid_lines = (b_dir_p[b1] == 0.5) | (b1_tip.astype(bool) == (b_dir_p[b1] < 0.5))
+            if len(invalid_b := optimal_lines[~valid_lines, 2]) > 0:
+                invalid_b = ", ".join(str(int(_)) for _ in invalid_b)
+                msg += f" - ingoing branches {invalid_b} have inconsistent direction probabilities;\n"
+
+        # === Report results ===
+        if len(msg.splitlines()) > 1:
+            if on_invalid == "raise":
+                raise ValueError(msg)
+            elif on_invalid == "warn":
+                warnings.warn(msg, stacklevel=3)
+            return msg if on_invalid == "report" else False
+        return "" if on_invalid == "report" else True
+
+    def optimize_tree(self, keep_missing_branch: bool = False) -> VTree:
         """Resolve the directed graph into an arborescence (a directed tree).
 
         Returns
@@ -242,34 +349,37 @@ class VBranchDigraph(LineDigraph):
             "Impossible to resolve the tree: the probabilities of link between branches (line_p) is missing."
         )
 
-        # === Ignore invalid branches ===
-        invalid_branch = self.invalid_branch()
-        B_inv = int(np.sum(invalid_branch))
+        # === Ignore missing branches ===
+        missing_branch = self.missing_branch()
 
         # Filter out lines connected to invalid branches
-        invalid_lines = invalid_branch[self.line_list[:, 0]] | invalid_branch[self.line_list[:, 2]]
-        line_list = self.line_list[np.invert(invalid_lines)]
-        line_p = self.line_p[np.invert(invalid_lines)]
+        if missing_branch.any():
+            removal_lookup, branch_lookup = create_removal_lookup(
+                missing_branch, add_empty="no increment", replace_value=-1, return_inverse=True
+            )
+            b0, _, b1, _ = self.line_list.T
+            valid_lines = np.invert((missing_branch[b0] & (b0 != -1)) | missing_branch[b1])
+            line_list = self.line_list[valid_lines].copy()
+            line_list[:, 0] = removal_lookup[line_list[:, 0] + 1]
+            line_list[:, 2] = removal_lookup[line_list[:, 2] + 1]
+            line_p = self.line_p[valid_lines]
+            dir_p = self.branch_dir_p[~missing_branch] if self.branch_dir_p is not None else None
 
-        # Add dummy lines from root to invalid branch
-        if self.branch_dir_p is not None:
-            dummy_lines = [
-                np.repeat([[-1, 0]], B_inv, axis=0),
-                np.argwhere(invalid_branch),
-                self.branch_dir_p[invalid_branch, None] < 0.5,
-            ]
-            line_list = np.vstack([line_list, np.hstack(dummy_lines)])
-            line_p = np.concatenate([line_p, np.ones(B_inv)])
-            dir_p = np.concatenate([self.branch_dir_p[~invalid_branch], self.branch_dir_p[invalid_branch]])
+            # test_digraph = VBranchDigraph(
+            #     graph=self.graph.delete_branch(missing_branch),
+            #     line_list=line_list,
+            #     line_p=line_p,
+            #     branch_dir_p=dir_p,
+            #     branch_av_p=self.branch_av_p[~missing_branch] if self.branch_av_p is not None else None,
+            # )
+            # test_digraph.check_lines(on_invalid="raise")
+            # test_digraph.check_line_p(on_invalid="raise")
         else:
-            dir_p = None
-            dummy_lines = [
-                np.repeat([[-1, 0]], B_inv, axis=0),
-                np.argwhere(invalid_branch),
-                np.ones(B_inv),
-            ]
-            line_list = np.vstack([line_list, np.hstack(dummy_lines)])
-            line_p = np.concatenate([line_p, np.ones(B_inv)])
+            line_list = self.line_list
+            line_p = self.line_p
+            dir_p = self.branch_dir_p
+            removal_lookup = branch_lookup = None
+            missing_branch = np.empty((0,), dtype=np.int_)
 
         # === Solve the directed graph into an arborescence ===
         branch_parents, branch_dir = solve_line_digraph_approx(
@@ -279,9 +389,26 @@ class VBranchDigraph(LineDigraph):
             ignore_branch_dir_in_MSA=dir_p is None,
         )
 
+        # === Update graph according to optimal arborescence ===
         vgraph = self.graph.copy()
 
-        # === Insert branches on connections of not-adjacent branches ===
+        if branch_lookup is None:
+            ...  # No missing branches
+        elif keep_missing_branch:
+            branch_parents_ = np.full((vgraph.branch_count,), -1, dtype=np.int_)
+            branch_parents_[~missing_branch] = branch_lookup[branch_parents + 1]
+            branch_parents = branch_parents_
+
+            branch_dir_ = np.ones((vgraph.branch_count,), dtype=np.bool_)
+            branch_dir_[~missing_branch] = branch_dir
+            if self.branch_dir_p is not None:
+                branch_dir_[missing_branch] = self.branch_dir_p[missing_branch] > 0.5
+            branch_dir = branch_dir_
+        else:
+            # - Remove missing branches from the graph
+            vgraph.delete_branch(missing_branch, inplace=True)
+
+        # - Insert branches on connections of not-adjacent branches
         added_branch_parents = []
         for b1, b0 in enumerate(branch_parents):
             if b0 == -1:
@@ -303,10 +430,6 @@ class VBranchDigraph(LineDigraph):
         branch_parents = np.hstack([branch_parents, np.array(added_branch_parents, dtype=np.int_)])
         branch_dir = np.hstack([branch_dir, np.ones(len(added_branch_parents), dtype=np.bool_)])
         tree = VTree.from_graph(vgraph, branch_parents, branch_dir, copy=False)
-
-        # === Optionally remove invalid branches from the tree ===
-        if not keep_invalid_branch and B_inv > 0:
-            tree.delete_branch(np.where(invalid_branch)[0], inplace=True)
 
         return tree
 
@@ -518,7 +641,7 @@ def prioritize_existing_branch(
     line_opti: Bool1DArray,
     active_branch: Bool1DArray,
     valid_branch: Bool1DArray,
-    branch_dir: Float1DArray,
+    branch_dir: npt.NDArray[np.float32],
 ):
     # === Redirect distant connections through existing branches if any ===
     lines_lookup = np.arange(digraph.line_list.shape[0])

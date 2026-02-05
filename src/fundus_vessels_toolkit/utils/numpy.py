@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional, Tuple
 
+from matplotlib.image import GAUSSIAN
 import numpy as np
 import numpy.typing as npt
 
@@ -183,6 +184,32 @@ def binary_sparse_conv2d[T: np.generic](
         return out[kH - 1 : H, kW - 1 : W]
 
 
+def interp_bilinear(im, y, x):
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    x0 = np.floor(x).astype(int)
+    x1 = x0 + 1
+    y0 = np.floor(y).astype(int)
+    y1 = y0 + 1
+
+    x0 = np.clip(x0, 0, im.shape[1] - 1)
+    x1 = np.clip(x1, 0, im.shape[1] - 1)
+    y0 = np.clip(y0, 0, im.shape[0] - 1)
+    y1 = np.clip(y1, 0, im.shape[0] - 1)
+    Ia = im[y0, x0]
+    Ib = im[y1, x0]
+    Ic = im[y0, x1]
+    Id = im[y1, x1]
+
+    wa = (x1 - x) * (y1 - y)
+    wb = (x1 - x) * (y - y0)
+    wc = (x - x0) * (y1 - y)
+    wd = (x - x0) * (y - y0)
+
+    return wa * Ia + wb * Ib + wc * Ic + wd * Id
+
+
 def as_1d_array(data: npt.ArrayLike, *, dtype=None) -> Tuple[npt.NDArray, bool]:
     """Convert the data to a numpy array.
 
@@ -209,7 +236,7 @@ def as_1d_array(data: npt.ArrayLike, *, dtype=None) -> Tuple[npt.NDArray, bool]:
     raise ValueError(f"Impossible to convert {data} to a 1D vector.")
 
 
-class Sparse2DAccessor[K: np.uint, T: np.generic]:
+class Sparse2DAccessor[T: np.generic, K: np.generic]:
     def __init__(self, idxs: npt.NDArray[K], values: npt.NDArray[T]) -> None:
         assert idxs.ndim == 2, "idxs must be a 2D array of indices."
         self.idxs = idxs
@@ -237,7 +264,7 @@ class Sparse2DAccessor[K: np.uint, T: np.generic]:
     @classmethod
     def from_array[k: np.uint, t: np.generic](
         cls, array: npt.NDArray[t], idxs: Optional[npt.NDArray[k]] = None, mask: Optional[npt.NDArray[np.bool_]] = None
-    ) -> Sparse2DAccessor[k, t]:
+    ) -> Sparse2DAccessor[t, k]:
         if idxs is None:
             INVALID = np.iinfo(np.uint32).max
             idxs_ = np.full(array.shape, INVALID, dtype=np.uint32)
@@ -275,3 +302,12 @@ class Sparse2DAccKey[K: np.uint]:
 
     def __getitem__(self, idx) -> Sparse2DAccKey[K]:
         return Sparse2DAccKey[K](self.idxs[idx], has_null=self.has_null)
+
+
+GAUSSIAN_KERNEL_3x3: npt.NDArray[np.float32] = np.array([[1, 2, 1], [2, 4, 2], [1, 2, 1]], dtype=np.float32) / 16.0
+GAUSSIAN_KERNEL_5x5: npt.NDArray[np.float32] = (
+    np.array(
+        [[1, 4, 6, 4, 1], [4, 16, 24, 16, 4], [6, 24, 36, 24, 6], [4, 16, 24, 16, 4], [1, 4, 6, 4, 1]], dtype=np.float32
+    )
+    / 256.0
+)

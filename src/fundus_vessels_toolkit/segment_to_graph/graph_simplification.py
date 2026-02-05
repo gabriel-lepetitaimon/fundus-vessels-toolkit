@@ -11,8 +11,6 @@ __all__ = [
     "SimplifyTopology",
 ]
 
-from math import tan
-from turtle import pos
 import warnings
 from dataclasses import dataclass
 from typing import List, Literal, Optional, Tuple, TypeAlias, overload
@@ -29,7 +27,7 @@ from ..utils import if_none
 from ..utils.cluster import cluster_by_distance, iterative_reduce_clusters, reduce_clusters
 from ..utils.dataclass import UpdateableDataclass
 from ..utils.lookup_array import create_removal_lookup
-from ..vascular_data_objects import VBranchGeoData, VGraph, VTree
+from ..vascular_data_objects import VBranchGeoData, VGraph
 from .geometry_parsing import derive_tips_geometry_from_curve_geometry
 
 
@@ -490,7 +488,7 @@ def simplify_passing_nodes[T: VGraph](
         min_angle:
             Under this minimum angle (in degrees) between the two branches connected to a passing node, the node is considered as a junction and is not removed.
 
-            (Require the terminaison tangents field to be field in `VGeometricData`)
+            (Require the terminaison tangents field in `VBranchGeoData`)
 
         with_same_label:
             If not None, the nodes are merged only if they have the same label.
@@ -531,7 +529,7 @@ def simplify_passing_nodes[T: VGraph](
 
         geo_data = graph.geometric_data()
         t = np.stack([geo_data.tip_tangent(b, d) for b, d in zip(incident_branches, idirs, strict=True)])
-        cos = np.sum(t[:, 1, :] * t[:, 0, :], axis=1)  # Dot product between the two tangents
+        cos = np.sum(t[:, 1, :] * -t[:, 0, :], axis=1)  # Dot product between the two tangents
         fuseable_nodes = cos <= np.cos(np.deg2rad(min_angle))
 
         unknown_t = np.isin(incident_branches, geo_data.branch_with_unknown_curve())

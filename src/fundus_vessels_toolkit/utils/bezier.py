@@ -714,9 +714,16 @@ class BSpline(tuple[BezierCubic, ...]):
                 bezier_cubics.extend(bezier.split(0.5))
         return BSpline(bezier_cubics)
 
-    def transform(self, projection: FundusProjection) -> Self:
+    def transform(self, projection: FundusProjection, *, round_p: bool = False) -> Self:
         bspline_data = self.to_array().reshape(-1, 2)
         bspline_data = projection.transform(bspline_data).reshape(-1, 4, 2)
+        if round_p:
+            t0 = bspline_data[:, 1, :] - bspline_data[:, 0, :]
+            t1 = bspline_data[:, 2, :] - bspline_data[:, 3, :]
+            bspline_data[:, 0, :] = np.round(bspline_data[:, 0, :])
+            bspline_data[:, 3, :] = np.round(bspline_data[:, 3, :])
+            bspline_data[:, 1, :] = bspline_data[:, 0, :] + t0
+            bspline_data[:, 2, :] = bspline_data[:, 3, :] + t1
         return self.from_array(bspline_data)
 
     @overload

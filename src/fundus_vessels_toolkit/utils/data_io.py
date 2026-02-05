@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TypeAlias, Union
+from typing import Literal, Mapping, Optional, Sequence, TypeAlias
 
 import numpy as np
 import numpy.typing as npt
@@ -12,9 +13,22 @@ NumpyDict: TypeAlias = Mapping[str, npt.NDArray] | Mapping[str, "NumpyDict"] | l
 SEP = "/"
 
 
-def save_numpy_dict(data_dict: NumpyDict, file_path: str | Path, compress=False):
+def save_numpy_dict(
+    data_dict: NumpyDict,
+    file_path: str | Path,
+    compress=False,
+    on_exists: Literal["raise", "warn", "skip", "overwrite"] = "warn",
+):
     file_path = Path(file_path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if file_path.exists():
+        if on_exists == "raise":
+            raise FileExistsError(f"File {file_path} already exists.")
+        elif on_exists == "warn":
+            warnings.warn(f"File {file_path} already exists and will be overwritten.", stacklevel=2)
+        elif on_exists == "skip":
+            return
 
     def recursive_flatten_dict(d, parent_key=""):
         items = []
@@ -131,7 +145,7 @@ def load_image(
     return img
 
 
-ColorSpec: TypeAlias = Union[str, Tuple[int, int, int], Tuple[float, float, float]]
+ColorSpec: TypeAlias = str | tuple[int, int, int] | tuple[float, float, float]
 
 
 def parse_color(color: ColorSpec) -> npt.NDArray[np.uint8]:
@@ -178,7 +192,7 @@ def load_label_image(
     return labels_mapping[np.linalg.norm(img - colors[:, :, None, None], axis=1).argmin(axis=0)]
 
 
-def save_label_image(label_img: npt.NDArray[np.uint8], path: str | Path, colors: Dict[int, ColorSpec]):
+def save_label_image(label_img: npt.NDArray[np.uint8], path: str | Path, colors: dict[int, ColorSpec]):
     from .safe_import import import_cv2
 
     cv2 = import_cv2()
@@ -190,3 +204,13 @@ def save_label_image(label_img: npt.NDArray[np.uint8], path: str | Path, colors:
 
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(path), img)
+
+
+def most_common_image_ext(directory: Path) -> str:
+    from collections import Counter
+
+    exts_count = Counter(path.suffix for path in directory.glob("*"))
+    for ext, _ in exts_count.most_common():
+        if ext[1:].lower() in ["jpg", "jpeg", "png", "tif", "tiff", "bmp"]:
+            return ext
+    raise ValueError(f"No image extension found in directory {directory}")

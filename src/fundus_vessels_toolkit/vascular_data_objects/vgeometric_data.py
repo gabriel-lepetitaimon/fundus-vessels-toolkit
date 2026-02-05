@@ -96,6 +96,7 @@ class VGeometricData:
             If the length of the curves attributes is not the same as the length of the branch curve.
         """  # noqa: E501
         # Define domain
+        self._parent_graph: Optional[ref[VGraph]] = None
         self.parent_graph = parent_graph
         self.fundus_data = fundus_data.to_immutable() if fundus_data is not None else None
         self._domain: Rect = Rect.from_tuple(domain)
@@ -118,9 +119,7 @@ class VGeometricData:
         # Check and define branches curves and index
         if not all(isinstance(c, np.ndarray) and c.ndim == 2 and c.shape[1] == 2 for c in branches_curve):
             raise ValueError("The branch curves should be a list of 2D arrays with shape (n_points, 2).")
-        self._branch_curve: List[npt.NDArray[np.int_] | None] = [
-            readonly(c) if c is not None else None for c in branches_curve
-        ]
+        self._branch_curve: List[npt.NDArray[np.int_]] = [readonly(c) for c in branches_curve]
 
         if branches_id is not None:
             branches_id = np.asarray(branches_id, dtype=np.uint32)
@@ -142,6 +141,9 @@ class VGeometricData:
         # Ensure that the nodes and branches are sorted by their index in the graph
         self._sort_internal_node_ids()
         self._sort_internal_branch_ids()
+
+        if INTEGRITY_CHECK:
+            self._check_integrity()
 
     @classmethod
     def from_dict(
@@ -314,13 +316,14 @@ class VGeometricData:
 
     def __getstate__(self) -> Dict[str, Any]:
         # Swap the weakref to a regular reference for serialization
-        state = super().__getstate__()
-        state["_parent_graph"] = self._parent_graph() if self._parent_graph is not None else None
+        state = self.__dict__.copy()
+        parent_graph = state.pop("_parent_graph", None)
+        state["parent_graph"] = parent_graph() if parent_graph is not None else None
         return state
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
         # Swap the regular reference to a weakref after deserialization
-        parent_graph = state.pop("_parent_graph", None)
+        parent_graph = state.pop("parent_graph", None)
         state["_parent_graph"] = ref(parent_graph) if parent_graph is not None else None
         self.__dict__.update(state)
 
@@ -835,18 +838,15 @@ class VGeometricData:
 
         domain_shape = self.domain.size
         top_left = np.array([self.domain.top, self.domain.left])
-        curves = [
-            torch.empty(0, 2, dtype=int) if c is None else torch.from_numpy(c - top_left).int()
-            for c in self.branch_curve()
-        ]
+        curves = [torch.from_numpy(c - top_left).int() for c in self.branch_curve()]
         branch_label_map = np.zeros(domain_shape, dtype=np.int32)
         if connect_nodes:
             nodes_coord = torch.from_numpy(self.node_coord(graph_index=False) - top_left).int()
             branch_list = torch.from_numpy(self.parent_graph.branch_list).int()
         else:
-            nodes_coord = torch.empty(0, 2, dtype=int)
-            branch_list = torch.empty(0, 2, dtype=int)
-        branch_label_map = torch.from_numpy(branch_label_map)
+            nodes_coord = torch.empty(0, 2, dtype=torch.int)
+            branch_list = torch.empty(0, 2, dtype=torch.int)
+        branch_label_map = torch.from_numpy(branch_label_map).int()
         draw_skeleton_labels(curves, branch_label_map, nodes_coord, branch_list, interpolate)
         branch_label_map = branch_label_map.numpy()
 
@@ -1550,6 +1550,7 @@ class VGeometricData:
         # === Set Attribute ===
         attr = self._fetch_branch_data(attr_name, attr_type, emplace=True)
         for i, data in zip(branch_id, attr_data, strict=True):
+            assert data is not None, "Unexpected None attribute data."
             if issubclass(attr_type, VBranchGeoData.TipsData) and data is None:
                 data = attr_type.create_empty()
             attr[i] = data
@@ -2104,6 +2105,44 @@ class VGeometricData:
 
         check_parent = not ignore_parent_data and self._parent_graph is not None
 
+        # === NODES CHECK ===
+        if check_parent and self._nodes_coord.shape[0] != self.parent_graph.node_count:
+            msg = (
+                f"Geometric data integrity check failed:\n"
+                f" - Invalid number of nodes: {self._nodes_coord.shape[0]} (expected: {self.parent_graph.node_count})\n"
+            )
+            if INTEGRITY_CHECK == "raise":
+                raise RuntimeError(msg)
+            else:
+                warnings.warn(msg, stacklevel=2)
+            return False
+
+        # === BRANCHES CURVES CHECK ===
+        invalid = []
+        for i, c in enumerate(self._branch_curve):
+            if not c.ndim == 2 or c.shape[1] != 2:
+                invalid.append(f" - Invalid curve shape for branch {i}: {c.shape} (expected: (n, 2))")
+
+        if len(invalid):
+            msg = "Geometric data integrity check failed:\n" + "\n".join(invalid)
+            if INTEGRITY_CHECK == "raise":
+                raise RuntimeError(msg)
+            else:
+                warnings.warn(msg, stacklevel=2)
+            return False
+
+        if check_parent and len(self._branch_curve) != self.parent_graph.branch_count:
+            msg = (
+                "Geometric data integrity check failed:\n"
+                f" - Invalid number of branches curves: {len(self._branch_curve)} "
+                f"(expected: {self.parent_graph.branch_count})\n"
+            )
+            if INTEGRITY_CHECK == "raise":
+                raise RuntimeError(msg)
+            else:
+                warnings.warn(msg, stacklevel=2)
+            return False
+
         # === BRANCH GEOMETRIC DATA CHECK ===
         invalid = {}
         for attr_name, attr in self._branches_attrs_descriptors.items():
@@ -2140,61 +2179,23 @@ class VGeometricData:
                 warnings.warn(msg, stacklevel=2)
             return False
 
-        # === NODES COORDINATES CHECK ===
-        if not self.domain.contains(self._nodes_coord).all():
-            msg = (
-                f"Geometric data integrity check failed:\n"
-                f" - Some node coordinates are outside the domain: {self.domain}\n"
-            )
-            if INTEGRITY_CHECK == "raise":
-                raise RuntimeError(msg)
-            else:
-                warnings.warn(msg, stacklevel=2)
-            return False
-
-        # === NODES CHECK ===
-        if check_parent and self._nodes_coord.shape[0] != self.parent_graph.node_count:
-            msg = (
-                f"Geometric data integrity check failed:\n"
-                f" - Invalid number of nodes: {self._nodes_coord.shape[0]} (expected: {self.parent_graph.node_count})\n"
-            )
-            if INTEGRITY_CHECK == "raise":
-                raise RuntimeError(msg)
-            else:
-                warnings.warn(msg, stacklevel=2)
-            return False
-
-        # === BRANCHES CURVES CHECK ===
-        if check_parent and len(self._branch_curve) != self.parent_graph.branch_count:
-            msg = (
-                f"Geometric data integrity check failed:\n"
-                f" - Invalid number of branches curves: {len(self._branch_curve)} "
-                f"(expected: {self.parent_graph.branch_count})\n"
-            )
-            if INTEGRITY_CHECK == "raise":
-                raise RuntimeError(msg)
-            else:
-                warnings.warn(msg, stacklevel=2)
-            return False
-
         return True
 
-    def clear_branch_gdata(self, branch_id: int | Iterable[int]) -> None:
+    def clear_branch_gdata(self, branch_id: Int1DArrayLike) -> None:
         """Clear the geometric data of a branch.
 
         Parameters
         ----------
-        branch_id : int | np.ndarray
+        branch_id : Int1DArrayLike
             The index of the branch(es) to clear.
 
         """
-
         ids, _ = as_1d_array(branch_id)
-        internal_ids = self._graph_to_internal_branch_ids(ids)
-        self._branch_curve = [EMPTY_CURVE if i in internal_ids else c for i, c in enumerate(self._branch_curve)]
+        for i in ids:
+            self._branch_curve[i] = EMPTY_CURVE
         for attr_name, attr in self._branches_attrs_descriptors.items():
             attr_data = self._branch_data_dict[attr_name]
-            for i in internal_ids:
+            for i in ids:
                 attr_data[i] = attr.empty
 
     def clear_attribute(
@@ -2238,14 +2239,14 @@ class VGeometricData:
         if not inplace:
             self = self.copy()
 
-        self._nodes_coord = projection.transform(self._nodes_coord)
+        self._nodes_coord = projection.transform(self._nodes_coord).astype(np.float64)
         for branch_id, curve in enumerate(self._branch_curve):
             if curve is None or len(curve) == 0:
                 continue
-            curve = np.round(projection.transform(curve.astype(float))).astype(np.int32)
+            curve = np.round(projection.transform(curve.astype(float))).astype(np.int_)
             if not isinstance(projection, Translation):
                 cleaned_curve, new_id = remove_consecutive_duplicates(curve, return_index=True)
-                if new_id == np.arange(len(new_id)):
+                if np.all(new_id == np.arange(len(new_id))):
                     cleaned_curve, new_id = curve, None
             else:
                 cleaned_curve, new_id = curve, None
@@ -2256,7 +2257,7 @@ class VGeometricData:
                     ctx_attr = ctx._replace(attr_name=attr_name)
                     attr = attr.transform(projection, ctx_attr)
                     if new_id is not None:
-                        attr = attr.resample(new_id, ctx_attr)
+                        attr = attr.resample(new_id.astype(np.int_), ctx_attr)
                     self._branch_data_dict[attr_name][branch_id] = attr
                 except NotImplementedError:
                     self._remove_branch_data(attr_name)

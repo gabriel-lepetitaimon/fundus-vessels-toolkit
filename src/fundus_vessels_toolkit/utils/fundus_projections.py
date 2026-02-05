@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import abc
-from typing import Dict, List, Mapping, Optional, Self, Tuple, Type
+from typing import Dict, List, Literal, Mapping, Optional, Self, Tuple, Type
 
 import numpy as np
 import numpy.typing as npt
 
-from fundus_toolkits.utils.geometric import Rect
+from fundus_toolkits.utils.geometric import Point, Rect
+
+from ..utils import if_none
+from ..utils.numpy import GAUSSIAN_KERNEL_5x5, interp_bilinear
+from ..utils.safe_import import import_cv2
+from ..utils.typing import Float2DArray, Float3DArray
 
 
 def _np_short_str(arr: npt.NDArray[np.floating]) -> str:
@@ -97,18 +102,18 @@ class FundusProjection(abc.ABC):
 
         raise ValueError("projection must be a projection model or a dictionary of projection models")
 
-    def compose(self, T1: Self) -> FundusProjection:
+    def compose(self, T1: FundusProjection) -> FundusProjection:
         """
         Composes this projection model with another one.
 
         Parameters
         ----------
-        T1 : Self
+        T1 : FundusProjection
             The other projection model to compose with.
 
         Returns
         -------
-        T : Self
+        T : FundusProjection
             The composed projection model: T = self @ T1.
         """
         return ProjectionComposition.simplify_composition(self, T1)
@@ -194,6 +199,23 @@ class FundusProjection(abc.ABC):
         corners = self.transform(np.array(moving_domain.corners()))
         return Rect.from_points(tuple(np.amin(corners, axis=0)), tuple(np.amax(corners, axis=0))).to_int()
 
+    def inverse_transform_domain(self, fixed_domain: Rect) -> Rect:
+        """
+        Transforms a domain with the inverse of this projection model.
+
+        Parameters
+        ----------
+        dst_domain : Rect
+            The destination domain to transform
+
+        Returns
+        -------
+        Rect
+            The transformed domain.
+        """
+        corners = self.transform_inverse(np.array(fixed_domain.corners()))
+        return Rect.from_points(tuple(np.amin(corners, axis=0)), tuple(np.amax(corners, axis=0))).to_int()
+
     def quadratic_error(
         self, src: npt.NDArray[np.floating], dst: npt.NDArray[np.floating], mean: bool = False
     ) -> npt.NDArray[np.floating] | float:
@@ -221,10 +243,10 @@ class FundusProjection(abc.ABC):
 
     def warp(
         self,
-        src_img: npt.NDArray[np.uint8] | npt.NDArray[np.float32],
-        src_domain: Optional[Rect] = None,
-        warped_domain: Optional[Rect] = None,
-    ) -> Tuple[npt.NDArray[np.uint8] | npt.NDArray[np.float32], Rect]:
+        src_img: npt.NDArray[np.uint8 | np.float32],
+        src_top_left: Point | tuple[int, int] = (0, 0),
+        warped_domain: Rect | Literal["full", "same"] = "full",
+    ) -> Tuple[npt.NDArray[np.uint8 | np.float32], Rect]:
         """
         Warps an image using this projection model.
 
@@ -233,11 +255,14 @@ class FundusProjection(abc.ABC):
         src_img : npt.NDArray[np.uint8] | npt.NDArray[np.float32]
             The source image to warp. The image must be cv2 compatible: shape=(H x W [x C]) and dtype=np.uint8|np.float32.
 
-        src_domain : Rect
-            The domain of the source image. If None, the domain is inferred from the image shape.
+        src_top_left : Point | tuple[int, int]
+            The top-left corner of the source image domain. The ``src_domain`` is defined as a Rect with this top-left corner and the size of the source image.
 
-        warped_domain : Optional[Rect], optional
-            The domain of the destination image. If None, the destination domain is computed by transforming ``src_domain``.
+        warped_domain : Rect | Literal["full", "same"], optional
+            The domain of the destination image.
+            - "full": the destination domain is computed by transforming ``src_domain``;
+            - "same": the destination domain is the same as ``src_domain``;
+            - or any Rect manually defining the requested destination domain.
 
         Returns
         -------
@@ -247,18 +272,13 @@ class FundusProjection(abc.ABC):
         warped_domain : Rect
             The domain of the warped image.
         """  # noqa: E501
-        from ..utils.safe_import import import_cv2
-
         cv2 = import_cv2()
 
-        if src_domain is None:
-            src_domain = Rect.from_size(src_img.shape[:2])
-        if warped_domain is None:
-            warped_domain = self.transform_domain(src_domain)
+        warped_domain = self.warped_domain(src_img, src_top_left, warped_domain)
 
         yy, xx = np.mgrid[warped_domain.slice()]
         dst_yx = np.column_stack((yy.ravel(), xx.ravel()))
-        dst_yx -= src_domain.top_left.numpy()[None, :]
+        dst_yx -= Point(*src_top_left).numpy()[None, :]  # TODO: why is this not after transform_inverse?
         src_map = self.transform_inverse(dst_yx).reshape(warped_domain.shape + (2,))
         src_map = src_map.astype(np.float32)[..., ::-1]
 
@@ -267,9 +287,78 @@ class FundusProjection(abc.ABC):
 
         return warp(src_img) if isinstance(src_img, np.ndarray) else [warp(_) for _ in src_img], warped_domain
 
+    def warped_domain(
+        self,
+        src_img: npt.NDArray,
+        src_top_left: Point | tuple[int, int] = (0, 0),
+        warped_domain: Rect | Literal["full", "same"] = "full",
+    ) -> Rect:
+        """
+        Computes the domain of the warped image using this projection model.
+
+        Parameters
+        ----------
+        src_img : npt.NDArray
+            The source image to warp. Only the shape of the image is used.
+
+        src_top_left : Point | tuple[int, int]
+            The top-left corner of the source image domain. The ``src_domain`` is defined as a Rect with this top-left corner and the size of the source image.
+
+        warped_domain : Rect | Literal["full", "same"], optional
+            The domain of the destination image.
+            - "full": the destination domain is computed by transforming ``src_domain``;
+            - "same": the destination domain is the same as ``src_domain``;
+            - or any Rect manually defining the requested destination domain.
+
+        Returns
+        -------
+        warped_domain : Rect
+            The domain of the warped image.
+        """  # noqa: E501
+        src_domain = Rect.from_size((src_img.shape[0], src_img.shape[1])).translate(*src_top_left)
+        if warped_domain == "full":
+            warped_domain = self.transform_domain(src_domain)
+        elif warped_domain == "same":
+            warped_domain = src_domain
+        return warped_domain
+
+    def select_warped_region(
+        self,
+        src_img: npt.NDArray[np.uint8 | np.float32],
+        src_top_left: Point | tuple[int, int],
+        warped_domain: Rect | Literal["full", "same"],
+    ) -> tuple[npt.NDArray[np.uint8 | np.float32], Rect]:
+        """
+        Selects a region to warp from an image using this projection model.
+
+        Parameters
+        ----------
+        src_img : npt.NDArray[np.uint8] | npt.NDArray[np.float32]
+            The source image to select the region from. The image must be cv2 compatible: shape=(H x W [x C]) and dtype=np.uint8|np.float32.
+
+        src_top_left : Point | tuple[int, int]
+            The position of the top-left corner of the source image.
+
+        warped_domain : Rect | Literal["full", "same"]
+            The domain of the region to select.
+
+        Returns
+        -------
+        src_img_to_warp : npt.NDArray[np.uint8] | npt.NDArray[np.float32]
+            The selected region from the source image to warp.
+        """
+        src_domain = Rect.from_size((src_img.shape[0], src_img.shape[1])).translate(*src_top_left)
+        if warped_domain == "full":
+            warped_domain = self.transform_domain(src_domain)
+        elif warped_domain == "same":
+            warped_domain = src_domain
+
+        inv_warped_domain = self.inverse_transform_domain(warped_domain).translate(-src_top_left[0], -src_top_left[1])
+        return inv_warped_domain.crop_pad_image(src_img, channel_last=True), warped_domain
+
 
 class ProjectionComposition(FundusProjection):
-    def __init__(self, *Ts: Tuple[FundusProjection]) -> None:
+    def __init__(self, *Ts: FundusProjection) -> None:
         self.Ts = Ts
         super().__init__()
 
@@ -281,39 +370,39 @@ class ProjectionComposition(FundusProjection):
 
     @staticmethod
     def simplify_composition(*Ts: FundusProjection) -> FundusProjection:
-        expanded_transforms = []
+        expanded_transforms: list[FundusProjection] = []
         for T in Ts:
             if isinstance(T, ProjectionComposition):
                 expanded_transforms.extend(T.Ts)
             elif not isinstance(T, IdentityProjection):
                 expanded_transforms.append(T)
-        Ts = expanded_transforms
+        Ts_ = list(expanded_transforms)
 
         simplified = True
         while simplified:
             simplified = False
             i = 0
-            while i < len(Ts) - 1:
-                T1, T2 = Ts[i], Ts[i + 1]
+            while i < len(Ts_) - 1:
+                T1, T2 = Ts_[i], Ts_[i + 1]
                 if (isinstance(T1, ProjectionInverse) and T1.T is T2) or (
                     isinstance(T2, ProjectionInverse) and T2.T is T1
                 ):
                     simplified = True
-                    del Ts[i + 1]
-                    del Ts[i]
+                    del Ts_[i + 1]
+                    del Ts_[i]
                 else:
                     i += 1
 
-        if not Ts:
+        if not Ts_:
             return IdentityProjection()
-        if len(Ts) == 1:
-            return Ts[0]
-        return ProjectionComposition(*Ts)
+        if len(Ts_) == 1:
+            return Ts_[0]
+        return ProjectionComposition(*Ts_)
 
-    def compose(self, T1: FundusProjection) -> Self:
+    def compose(self, T1: FundusProjection) -> FundusProjection:
         if isinstance(T1, ProjectionComposition):
-            return ProjectionComposition.simplify_composition(*self.T, *T1.Ts)
-        return ProjectionComposition.simplify_composition(*self.T, T1)
+            return ProjectionComposition.simplify_composition(*self.Ts, *T1.Ts)
+        return ProjectionComposition.simplify_composition(*self.Ts, T1)
 
     @property
     def is_exact(self) -> bool:
@@ -324,7 +413,7 @@ class ProjectionComposition(FundusProjection):
         return all(T.is_inverse_exact for T in self.Ts)
 
     def invert(self) -> Self:
-        return ProjectionComposition(*(T.invert() for T in reversed(self.Ts)))
+        return type(self)(*(T.invert() for T in reversed(self.Ts)))
 
     def transform(self, src: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         for T in self.Ts:
@@ -348,7 +437,7 @@ class ProjectionInverse(FundusProjection):
     def __str__(self) -> str:
         return f"Inv[{self.T}]"
 
-    def invert(self) -> Self:
+    def invert(self) -> FundusProjection:
         return self.T
 
     @property
@@ -379,7 +468,7 @@ class IdentityProjection(FundusProjection):
     def invert(self) -> Self:
         return type(self)()
 
-    def compose(self, T1: Self) -> Self:
+    def compose(self, T1: FundusProjection) -> FundusProjection:
         return T1
 
     def transform(self, src: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
@@ -388,10 +477,56 @@ class IdentityProjection(FundusProjection):
     def transform_inverse(self, dst: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         return dst
 
+    def warp(
+        self,
+        src_img: npt.NDArray[np.uint8 | np.float32],
+        src_top_left: Point | tuple[int, int] = (0, 0),
+        warped_domain: Rect | Literal["full", "same"] = "full",
+    ) -> Tuple[npt.NDArray[np.uint8 | np.float32], Rect]:
+        return self.select_warped_region(src_img, src_top_left, warped_domain)
+
 
 class Translation(FundusProjection):
-    def __init__(self, t: npt.NDArray[np.floating]) -> None:
-        self.t = t
+    """A projection model that translates points by a given vector.
+
+    Example
+    -------
+    >>> T = Translation((2, 1))
+    >>> src = np.array([[0, 0], [-2, -1]])
+    >>> dst = T.transform(src)
+    >>> dst
+    array([[2,  1],
+           [0,  0]])
+
+    >>> img = np.zeros((5, 5), dtype=np.uint8)
+    >>> img[0,0] = 255
+    >>> warped_img, warped_domain = T.warp(img)
+    >>> np.all(warped_img == img)
+    np.True_
+    >>> warped_domain
+    Rect(y=2, x=1, h=5, w=5)
+
+    >>> warped_img, warped_domain = T.warp(img, src_top_left=(1,1), warped_domain="same")
+    >>> np.argwhere(warped_img==255)
+    array([[2, 1]])
+    >>> warped_domain
+    Rect(y=1, x=1, h=5, w=5)
+
+    >>> warped_img, warped_domain = T.warp(img, warped_domain=Rect(y=1, x=1, h=2, w=2))
+    >>> warped_img
+    array([[  0,   0],
+           [255, 0]], dtype=uint8)
+    >>> warped_domain
+    Rect(y=1, x=1, h=2, w=2)
+
+    >>> np.all(T.transform_inverse(dst) == src) and np.all(T.invert().transform(dst) == src)
+    np.True_
+
+    """
+
+    def __init__(self, t: npt.NDArray[np.floating] | tuple[float, float]) -> None:
+        self.t = np.asarray(t)
+        assert self.t.shape == (2,), "t must be a 2D vector"
         super().__init__()
 
     def __repr__(self) -> str:
@@ -421,6 +556,140 @@ class Translation(FundusProjection):
         t = np.mean(dst - src, axis=0)
         return cls(t), np.mean(np.sum((dst - (src + t)) ** 2, axis=1))
 
+    def warp(
+        self,
+        src_img: npt.NDArray[np.uint8 | np.float32],
+        src_top_left: Point | tuple[int, int] = (0, 0),
+        warped_domain: Rect | Literal["full", "same"] = "full",
+    ) -> Tuple[npt.NDArray[np.uint8 | np.float32], Rect]:
+        return self.select_warped_region(src_img, src_top_left, warped_domain)
+
+
+class FlipProjection(FundusProjection):
+    def __init__(self, center: tuple[int, int], horizontal: bool = True, vertical: bool = False) -> None:
+        """
+        A projection model that flips points horizontally and/or vertically around a center point.
+
+        Parameters
+        ----------
+        center : tuple[int, int]
+            The center point (y, x) around which to flip the points.
+        horizontal : bool, optional
+            Whether to flip points horizontally. Default is True.
+        vertical : bool, optional
+            Whether to flip points vertically. Default is False.
+        """
+        self.horizontal = horizontal
+        self.vertical = vertical
+        self.center = center
+        super().__init__()
+
+    def __repr__(self) -> str:
+        return f"FlipProjection(center={self.center}, horizontal={self.horizontal}, vertical={self.vertical})"
+
+    def __str__(self) -> str:
+        flips = []
+        if self.horizontal:
+            flips.append("H")
+        if self.vertical:
+            flips.append("V")
+        return "Flip(" + ",".join(flips) + ")"
+
+    def invert(self) -> Self:
+        return self.__class__(self.center, self.horizontal, self.vertical)
+
+    def transform(self, src: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+        src = np.asarray(src)
+        dst = src.copy()
+        if self.horizontal:
+            dst[:, 1] = 2 * self.center[1] - dst[:, 1]
+        if self.vertical:
+            dst[:, 0] = 2 * self.center[0] - dst[:, 0]
+        return dst
+
+    def transform_inverse(self, dst: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+        return self.transform(dst)
+
+    def warp(
+        self,
+        src_img: npt.NDArray[np.uint8 | np.float32],
+        src_top_left: Point | tuple[int, int] = (0, 0),
+        warped_domain: Rect | Literal["full", "same"] = "full",
+    ) -> Tuple[npt.NDArray[np.uint8 | np.float32], Rect]:
+        dst_img, warped_domain = self.select_warped_region(src_img, src_top_left, warped_domain)
+
+        if self.horizontal:
+            dst_img = np.fliplr(dst_img)
+        if self.vertical:
+            dst_img = np.flipud(dst_img)
+        return dst_img, warped_domain
+
+
+class ResizeTranslateProjection(FundusProjection):
+    def __init__(self, r: float, t: Optional[npt.NDArray[np.floating]] = None) -> None:
+        assert r > 0, "r must be positive"
+        assert t is None or t.shape == (2,), "t must be a 2D vector"
+        self.r = r
+        self.t = if_none(t, np.zeros(2))
+        super().__init__()
+
+    @classmethod
+    def translate_resize(self, t: npt.NDArray[np.floating], r: float) -> Self:
+        return self(r, t * r)
+
+    @classmethod
+    def fit(cls, src: npt.NDArray[np.floating], dst: npt.NDArray[np.floating]) -> Tuple[Self, float]:
+        src, dst = np.asarray(src), np.asarray(dst)
+        assert src.ndim == 2 and src.shape[1] == 2, "src must be a 2D array of 2D coordinates"
+        assert src.shape == dst.shape, "src and dst must have the same shape"
+        N = src.shape[0]
+        A = np.zeros((2 * N, 3))
+        b = np.zeros((2 * N,))
+        A[0::2, 0] = src[:, 0]
+        A[0::2, 1] = 1
+        A[1::2, 0] = src[:, 1]
+        A[1::2, 2] = 1
+        b[0::2] = dst[:, 0]
+        b[1::2] = dst[:, 1]
+        x, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+        r = x[0]
+        t = x[1:3]
+        error = np.sum((dst - (r * src + t)) ** 2, axis=1)
+        return cls(r, t), np.mean(error)
+
+    def __repr__(self) -> str:
+        return f"ResizeTranslateProjection(r={self.r}, t={self.t})"
+
+    def __str__(self) -> str:
+        return f"ResizeTranslateProjection(r={self.r}, t={_np_short_str(self.t)})"
+
+    def invert(self) -> Self:
+        return self.__class__(1 / self.r, -self.t / self.r)
+
+    def compose(self, T1: FundusProjection) -> FundusProjection:
+        if isinstance(T1, ResizeTranslateProjection):
+            r = self.r * T1.r
+            t = self.r * T1.t + self.t
+            return self.__class__(r, t)
+        return super().compose(T1)
+
+    def transform(self, src: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+        return self.r * src + self.t
+
+    def transform_inverse(self, dst: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+        return (dst - self.t) / self.r
+
+    def warp(
+        self,
+        src_img: npt.NDArray[np.uint8 | np.float32],
+        src_top_left: Point | tuple[int, int] = (0, 0),
+        warped_domain: Rect | Literal["full", "same"] = "full",
+    ) -> Tuple[npt.NDArray[np.uint8 | np.float32], Rect]:
+        cv2 = import_cv2()
+
+        warped_region, warped_domain = self.select_warped_region(src_img, src_top_left, warped_domain)
+        return cv2.resize(warped_region, dsize=warped_domain.shape, fx=self.r, fy=self.r), warped_domain  # type: ignore
+
 
 class AffineProjection(FundusProjection):
     def __init__(self, R: npt.NDArray[np.floating], t: npt.NDArray[np.floating]) -> None:
@@ -436,14 +705,14 @@ class AffineProjection(FundusProjection):
         return f"Affine(R={_np_short_str(self.R)}, t={_np_short_str(self.t)})"
 
     @classmethod
-    def rotate(cls, theta: float, center: npt.NDArray[np.floating] = (0, 0)) -> Self:
+    def rotate(cls, theta: float, center: npt.NDArray[np.floating] | tuple[float, float] = (0, 0)) -> Self:
         """Create an affine transformation that rotates by theta and translates by t.
 
         Parameters
         ----------
         theta : float
             Rotation angle in degrees. Positive values rotate clockwise.
-        center : npt.NDArray[np.floating]
+        center : npt.NDArray[np.floating] | tuple[float, float]
             Center of rotation.
 
         Returns
@@ -453,7 +722,7 @@ class AffineProjection(FundusProjection):
         """
         theta = np.deg2rad(theta)
         R = np.array([[np.cos(theta), np.sin(theta)], [-np.sin(theta), np.cos(theta)]])
-        center = np.asarray(center)
+        center = np.asarray(center, dtype=np.float64)
         t = center - R @ center
         return cls(R, t)
 
@@ -490,22 +759,17 @@ class AffineProjection(FundusProjection):
         | npt.NDArray[np.float32]
         | List[npt.NDArray[np.uint8]]
         | List[npt.NDArray[np.float32]],
-        src_domain: Optional[Rect] = None,
-        warped_domain: Optional[Rect] = None,
+        src_top_left: Point | tuple[int, int] = (0, 0),
+        warped_domain: Rect | Literal["full", "same"] = "full",
     ) -> Tuple[
         npt.NDArray[np.uint8] | npt.NDArray[np.float32] | List[npt.NDArray[np.uint8]] | List[npt.NDArray[np.float32]],
         Rect,
     ]:
-        from ..utils.safe_import import import_cv2
-
         cv2 = import_cv2()
 
-        if src_domain is None:
-            src_domain = Rect.from_size(src_img.shape[:2])
-        if warped_domain is None:
-            warped_domain = self.transform_domain(src_domain)
-
-        t = self.t - warped_domain.top_left + src_domain.top_left
+        warped_domain = self.warped_domain(src_img, src_top_left, warped_domain)
+        src_top_left = Point(*src_top_left)
+        t = self.t - warped_domain.top_left + src_top_left
         M = np.concatenate((self.R[::-1, ::-1], t[::-1, None]), axis=1)
 
         def warp(img):
@@ -531,7 +795,7 @@ class QuadraticProjection(FundusProjection):
         self.Q = Q
         self.R = R
         self.t = t
-        self._inverse_transform: bool | None | QuadraticProjection = False
+        self._inverse_transform: Literal[False] | None | QuadraticProjection = False
         super().__init__()
 
     def __repr__(self) -> str:
@@ -569,7 +833,7 @@ class QuadraticProjection(FundusProjection):
         src = np.asarray(src)
         return self.R[None, :, :] + (self.Q[None, :, 2, None] + 2 * self.Q[None, :, :2]) * src[:, None, :]
 
-    def _eval_inverse_transform(self) -> Self | None:
+    def _eval_inverse_transform(self) -> QuadraticProjection | None:
         # Sample points to estimate the inverse transformation
         src = np.mgrid[0:1000:100, 0:1000:100].reshape(2, -1).T
         dst = self.transform(src)
@@ -605,6 +869,110 @@ class QuadraticProjection(FundusProjection):
         if self._inverse_transform is None:
             return self.transform_inverse_newton(dst)
         return self._inverse_transform.transform(dst)
+
+
+class ElasticProjection(FundusProjection):
+    def __init__(self, displacement: Float3DArray, reversed: bool = False) -> None:
+        assert displacement.ndim == 3 and displacement.shape[2] == 2, "displacement must be a 2D map of 2D vectors"
+        self.displacement = np.asarray(displacement)
+
+        self.reversed = reversed
+        super().__init__()
+
+    def __repr__(self) -> str:
+        return f"ElasticProjection(displacement: {self.displacement.shape})"
+
+    def __str__(self) -> str:
+        return "Elastic"
+
+    @classmethod
+    def random(
+        cls,
+        shape: Tuple[int, int],
+        displacement_std: float = 10,
+        smoothing_size: Optional[float] = 2,
+        *,
+        rng: Optional[np.random.Generator] = None,
+        reversed: bool = True,
+    ) -> Self:
+        if rng is None:
+            rng = np.random.default_rng()
+        if smoothing_size is not None and smoothing_size <= 0:
+            smoothing_size = None
+        subsampling = smoothing_size // 2 if smoothing_size is not None else 1
+        disp_map = rng.normal(0, displacement_std, size=(int(shape[0] // subsampling), int(shape[1] // subsampling), 2))
+        if smoothing_size is not None:
+            cv2 = import_cv2()
+
+            kernel = GAUSSIAN_KERNEL_5x5
+            disp_map_ = np.empty(shape + (2,), dtype=disp_map.dtype)
+            for i in range(2):
+                smooth_disp = cv2.filter2D(disp_map[..., i], -1, kernel, borderType=cv2.BORDER_REPLICATE)
+                disp_map_[..., i] = cv2.resize(smooth_disp, dsize=shape[::-1], interpolation=cv2.INTER_LINEAR)
+            disp_map = disp_map_
+
+        return cls(disp_map, reversed=reversed)
+
+    @classmethod
+    def fit(cls, src: npt.NDArray[np.floating], dst: npt.NDArray[np.floating]) -> Tuple[Self, float]:
+        raise NotImplementedError("ElasticProjection does not implement the 'fit' method")
+
+    def invert(self) -> Self:
+        return type(self)(self.displacement, reversed=not self.reversed)
+
+    def transform(self, src: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+        return self._transform(self.displacement, src, reversed=self.reversed)
+
+    def transform_inverse(self, dst: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+        return self._transform(self.displacement, dst, reversed=not self.reversed)
+
+    @classmethod
+    def _transform(
+        cls, displacement: npt.NDArray[np.floating], src: Optional[npt.NDArray] = None, reversed: bool = False
+    ) -> npt.NDArray[np.floating]:
+        def interp_displacement(pos: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+            d = np.empty(pos.shape, dtype=displacement.dtype)
+            d[..., 0] = interp_bilinear(displacement[..., 0], pos[..., 0], pos[..., 1])
+            d[..., 1] = interp_bilinear(displacement[..., 1], pos[..., 0], pos[..., 1])
+            return d
+
+        if not reversed:
+            if src is None:
+                return np.indices(displacement.shape[:2]).transpose(1, 2, 0) + displacement
+            else:
+                return src + interp_displacement(src)
+
+        if src is None:
+            src = np.indices(displacement.shape[:2]).transpose(1, 2, 0)
+
+        # Inverse displacement field through fixed-point iteration
+        MAX_ITERS = 50
+        SQR_TOL = 0.5
+        inv_d = -interp_displacement(src)
+        ids = np.ones(src.shape[:-1], dtype=bool)
+        for _ in range(MAX_ITERS):
+            inv_d_ids = inv_d[ids]
+            d = interp_displacement(src[ids] + inv_d_ids)
+            ids_ = np.square(d + inv_d_ids).sum(axis=-1) > SQR_TOL
+            if not np.any(ids_):
+                break
+            ids[ids] = ids_
+            inv_d[ids] = -d[ids_]
+        return src + inv_d
+
+    def warp(
+        self,
+        src_img: npt.NDArray[np.uint8 | np.float32],
+        src_top_left: Point | tuple[int, int] = (0, 0),
+        warped_domain: Rect | Literal["full", "same"] = "full",
+    ) -> Tuple[npt.NDArray[np.uint8 | np.float32], Rect]:
+        cv2 = import_cv2()
+
+        warped_region, warped_domain = self.select_warped_region(src_img, src_top_left, warped_domain)
+        top_left = Point(*src_top_left).numpy()
+        src_remap = self._transform(self.displacement, reversed=not self.reversed).astype(np.float32)
+        # src_remap += top_left[None, None, :]
+        return cv2.remap(warped_region, src_remap[..., ::-1], None, cv2.INTER_LINEAR), warped_domain  # type: ignore
 
 
 def ransac_fit_projection(

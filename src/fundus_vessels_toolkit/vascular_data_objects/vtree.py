@@ -514,7 +514,12 @@ class VTree(VGraph):
             tree.check_tree_integrity()
         return tree
 
-    def save(self, filename: Optional[str | Path] = None) -> NumpyDict:
+    def save(
+        self,
+        filename: Optional[str | Path] = None,
+        *,
+        on_exists: Literal["raise", "warn", "skip", "overwrite"] = "warn",
+    ) -> NumpyDict:
         """Save the tree data to a file.
 
         The tree is saved as a dictionary with the following keys:
@@ -541,9 +546,7 @@ class VTree(VGraph):
         data["branch_dirs"] = self.branch_dirs()  # type: ignore
 
         if filename is not None:
-            filename = Path(filename)
-            filename.parent.mkdir(parents=True, exist_ok=True)
-            save_numpy_dict(data, filename)
+            save_numpy_dict(data, filename, on_exists=on_exists)
         return data
 
     @classmethod

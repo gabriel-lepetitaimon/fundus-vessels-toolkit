@@ -1,5 +1,5 @@
 import warnings
-from typing import Dict, Mapping, Optional, Tuple, TypeVar
+from typing import Dict, Literal, Mapping, Optional, Tuple, TypeVar, overload
 
 import numpy as np
 import numpy.typing as npt
@@ -157,14 +157,35 @@ def complete_lookup(lookup: Int1DArray, max_index: int, assume_valid=False) -> n
     return lookup
 
 
+@overload
 def create_removal_lookup(
     removed_mask: npt.ArrayLike,
     *,
     length: Optional[int] = None,
     replace_value: Optional[int] = None,
-    add_empty: bool = False,
+    add_empty: Literal["increment", "no increment", True, False] = False,
     invert: bool = False,
-) -> npt.NDArray[np.int_]:
+    return_inverse: Literal[False] = False,
+) -> npt.NDArray[np.int_]: ...
+@overload
+def create_removal_lookup(
+    removed_mask: npt.ArrayLike,
+    *,
+    length: Optional[int] = None,
+    replace_value: Optional[int] = None,
+    add_empty: Literal["increment", "no increment", True, False] = False,
+    invert: bool = False,
+    return_inverse: Literal[True],
+) -> tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]: ...
+def create_removal_lookup(
+    removed_mask: npt.ArrayLike,
+    *,
+    length: Optional[int] = None,
+    replace_value: Optional[int] = None,
+    add_empty: Literal["increment", "no increment", True, False] = False,
+    invert: bool = False,
+    return_inverse: bool = False,
+) -> npt.NDArray[np.int_] | tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]:
     """Create a lookup table to reorder index after having removed elements from an array.
 
     Parameters
@@ -176,6 +197,20 @@ def create_removal_lookup(
         The value to replace the removed elements.
 
         If None, the removed elements are replaced by the previous non-deleted index.
+
+    length : Optional[int], optional
+        The length of the original array before removal. If None, the length is inferred from the removed_mask.
+
+    add_empty : Literal["increment", "no increment", True, False], optional
+        If not False, an empty entry is added at the beginning of the lookup table.
+        If "increment", all other indices are incremented by 1.
+        If "no increment" or True, the other indices are not incremented and the empty entry is set to the replace_value.
+
+    invert : bool, optional
+        If True, the mask is inverted before creating the lookup table.
+
+    return_inverse : bool, optional
+        If True, also return the inverse lookup table.
 
     Returns
     -------
@@ -204,20 +239,33 @@ def create_removal_lookup(
             removed_mask = removed_mask[:length]
     elif removed_mask.dtype != bool:
         raise ValueError("If length is not provided, removed_mask must be a boolean mask.")
+    length = removed_mask.shape[0]
 
     if invert:
         removed_mask = ~removed_mask
 
     if add_empty:
-        lookup = np.concatenate(([0 if replace_value is None else replace_value], np.cumsum(~removed_mask)))
+        lookup = np.cumsum(~removed_mask)
+        if add_empty in ["no increment", True]:
+            lookup = np.concatenate(([0 if replace_value is None else replace_value], lookup - 1))
+        else:  # "increment"
+            lookup = np.concatenate(([0], lookup))
         if replace_value is not None:
             lookup[1:][removed_mask] = replace_value
+
+        if return_inverse:
+            inverse = np.arange(length)[~removed_mask]
+            if add_empty in ["no increment", True]:
+                inverse = np.concatenate(([-1], inverse))
+            else:
+                inverse = np.concatenate(([0], inverse + 1))
+            return lookup, inverse
         return lookup
     else:
         lookup = np.cumsum(~removed_mask) - 1
         if replace_value is not None:
             lookup[removed_mask] = replace_value
-        return lookup
+        return (lookup, np.arange(length)[~removed_mask]) if return_inverse else lookup
 
 
 def invert_lookup(lookup: npt.NDArray[np.int_], max_index: Optional[int] = None) -> npt.NDArray[np.int_]:

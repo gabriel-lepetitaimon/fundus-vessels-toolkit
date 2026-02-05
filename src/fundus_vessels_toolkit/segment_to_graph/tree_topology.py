@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import warnings
+from copy import deepcopy
 from typing import List, Literal, Optional, Self, Sequence, Tuple, overload
 
 import numpy as np
@@ -15,7 +16,7 @@ from ..utils.lookup_array import invert_complete_lookup
 from ..utils.math import gaussian_kernel2d
 from ..utils.numpy import Sparse2DAccessor, binary_sparse_conv2d, bit_invert
 from ..utils.rasterization import draw_lines, rasterize_line, rasterize_topology
-from ..utils.typing import Bool1DArray, Float1DArray, Float2DArray, Int1DArray
+from ..utils.typing import Bool1DArray, Float1DArray, Int1DArray
 from ..vascular_data_objects.vbranch_geodata import VBranchGeoData
 from ..vascular_data_objects.vgraph import VGraph
 from ..vascular_data_objects.vtree import VTree, VTreeBranch
@@ -64,16 +65,28 @@ class TreeTopology:
             idxs = np.full(branch_map.shape, INVALID, dtype=np.uint32)
             idxs[mask] = np.arange(mask.sum(), dtype=np.uint32)
 
-            self.branch_map = Sparse2DAccessor.from_array(branch_map, idxs=idxs, mask=mask)
-            self.rank_map = Sparse2DAccessor.from_array(rank_map, idxs=idxs, mask=mask)
-            self.fuzzy_skeleton_map = Sparse2DAccessor.from_array(fuzzy_skeleton_map, idxs=idxs, mask=mask)
+            self._branch_map = Sparse2DAccessor.from_array(branch_map, idxs=idxs, mask=mask)
+            self._rank_map = Sparse2DAccessor.from_array(rank_map, idxs=idxs, mask=mask)
+            self._fuzzy_skeleton_map = Sparse2DAccessor.from_array(fuzzy_skeleton_map, idxs=idxs, mask=mask)
         else:
-            self.branch_map = branch_map
-            self.rank_map = rank_map
-            self.fuzzy_skeleton_map = fuzzy_skeleton_map
+            self._branch_map = branch_map
+            self._rank_map = rank_map
+            self._fuzzy_skeleton_map = fuzzy_skeleton_map
 
         self._tree = tree
         self._branch_mapping = branch_mapping
+
+    @property
+    def branch_map(self) -> npt.NDArray[TopologicalLabel] | Sparse2DAccessor[TopologicalLabel, np.uint32]:
+        return self._branch_map  # type: ignore
+
+    @property
+    def rank_map(self) -> npt.NDArray[np.float32] | Sparse2DAccessor[np.float32, np.uint32]:
+        return self._rank_map  # type: ignore
+
+    @property
+    def fuzzy_skeleton_map(self) -> npt.NDArray[np.float16] | Sparse2DAccessor[np.float16, np.uint32]:
+        return self._fuzzy_skeleton_map  # type: ignore
 
     def __sizeof__(self) -> int:
         size = super().__sizeof__()
@@ -137,7 +150,6 @@ class TreeTopology:
             bezier_interpolate=bezier_interpolate,
             fill_junctions=fill_junctions,
         )
-
         if expand_labels_by > 0:
             labels_map = expand_labels(labels_map, distance=expand_labels_by)
             topo_map = expand_labels(topo_map, distance=expand_labels_by)
@@ -193,6 +205,92 @@ class TreeTopology:
                 max_rank_tolerance=max_rank_tolerance,
             )
         )
+
+    def as_dense(self) -> DenseTreeTopology:
+        """Return a dense version of the TreeTopology."""
+        if not self.sparse:
+            return deepcopy(self)  # type: ignore
+        return DenseTreeTopology(
+            branch_map=self.branch_map.to_dense(),  # type: ignore
+            rank_map=self.rank_map.to_dense(),  # type: ignore
+            fuzzy_skeleton_map=self.fuzzy_skeleton_map.to_dense(),  # type: ignore
+            tree=self._tree,
+            branch_mapping=self._branch_mapping,
+        )
+
+    def as_sparse(self) -> SparseTreeTopology:
+        """Return a dense version of the TreeTopology."""
+        if self.sparse:
+            return deepcopy(self)  # type: ignore
+        return SparseTreeTopology(
+            branch_map=self.branch_map,  # type: ignore
+            rank_map=self.rank_map,  # type: ignore
+            fuzzy_skeleton_map=self.fuzzy_skeleton_map,  # type: ignore
+            tree=self._tree,
+            branch_mapping=self._branch_mapping,
+        )
+
+
+class DenseTreeTopology(TreeTopology):
+    def __init__(
+        self,
+        branch_map: npt.NDArray[TopologicalLabel],
+        rank_map: npt.NDArray[np.float32],
+        fuzzy_skeleton_map: npt.NDArray[np.float16],
+        tree: Optional[VTree] = None,
+        branch_mapping: Optional[npt.NDArray[TopologicalLabel]] = None,
+    ) -> None:
+        super().__init__(
+            branch_map=branch_map,
+            rank_map=rank_map,
+            fuzzy_skeleton_map=fuzzy_skeleton_map,
+            tree=tree,
+            branch_mapping=branch_mapping,
+            sparse=False,
+        )
+
+    @property
+    def branch_map(self) -> npt.NDArray[TopologicalLabel]:
+        return self._branch_map  # type: ignore
+
+    @property
+    def rank_map(self) -> npt.NDArray[np.float32]:
+        return self._rank_map  # type: ignore
+
+    @property
+    def fuzzy_skeleton_map(self) -> npt.NDArray[np.float16]:
+        return self._fuzzy_skeleton_map  # type: ignore
+
+
+class SparseTreeTopology(TreeTopology):
+    def __init__(
+        self,
+        branch_map: npt.NDArray[TopologicalLabel],
+        rank_map: npt.NDArray[np.float32],
+        fuzzy_skeleton_map: npt.NDArray[np.float16],
+        tree: Optional[VTree] = None,
+        branch_mapping: Optional[npt.NDArray[TopologicalLabel]] = None,
+    ) -> None:
+        super().__init__(
+            branch_map=branch_map,
+            rank_map=rank_map,
+            fuzzy_skeleton_map=fuzzy_skeleton_map,
+            tree=tree,
+            branch_mapping=branch_mapping,
+            sparse=True,
+        )
+
+    @property
+    def branch_map(self) -> Sparse2DAccessor[TopologicalLabel, np.uint32]:
+        return self._branch_map  # type: ignore
+
+    @property
+    def rank_map(self) -> Sparse2DAccessor[np.float32, np.uint32]:
+        return self._rank_map  # type: ignore
+
+    @property
+    def fuzzy_skeleton_map(self) -> Sparse2DAccessor[np.float16, np.uint32]:
+        return self._fuzzy_skeleton_map  # type: ignore
 
 
 class BranchesTopo:
@@ -384,7 +482,7 @@ def read_branch_topology(
             if curve.strides[0] < 0:
                 curve = curve.copy()
             with warnings.catch_warnings(action="ignore"):
-                curves_tensor.append(torch.from_numpy(curve))
+                curves_tensor.append(torch.from_numpy(curve).int())
         out = read_branches_topology(
             curves_tensor,
             topology.shape,
@@ -582,7 +680,9 @@ def optimal_lines(branches_topology: BranchesTopo, lines: npt.NDArray[np.int_]) 
     return all_optimal_lines
 
 
-def optimal_branch_tree(graph: VGraph, topology: TreeTopology) -> tuple[Int1DArray, Float1DArray, Bool1DArray]:
+def optimal_branch_tree(
+    graph: VGraph, topology: TreeTopology
+) -> tuple[Int1DArray, npt.NDArray[np.float32], Bool1DArray]:
     """
     Compute the optimal arborescence of branches for the given graph based on the topological labels.
 
@@ -907,8 +1007,8 @@ class TopologicalLabel(np.uint64):
         pattern = (label & cls.BRANCHING_PATTERN_MASK) >> np.uint64(8)
         if max_rank is not None:
             assert np.all(max_rank <= 44), "Max rank must be less than or equal to 44."
-            mask = bit_invert(np.uint64(2) ** (np.uint64(44) - max_rank) - np.uint(1)) & np.uint64(0x00000FFFFFFFFFFF)
-            pattern &= mask
+            mask = bit_invert((np.uint64(1) << (np.uint64(44) - max_rank)) - np.uint64(1))  # type: ignore
+            pattern &= mask & np.uint64(0x00000FFFFFFFFFFF)
         return pattern
 
     @classmethod

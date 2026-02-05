@@ -2,9 +2,16 @@ from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
+import numpy.typing as npt
+import torch
 
+from fundus_toolkits.utils.geometric import Rect
+
+from ...utils.fundus_projections import AffineProjection, ElasticProjection, FlipProjection
 from ...utils.math import sigmoid
 from ...vascular_data_objects import VBranchGeoData, VGraph, VTree
+from ..graph_simplification import simplify_passing_nodes
+from ..vbranch_digraph import VBranchDigraph
 
 
 @dataclass
@@ -26,15 +33,15 @@ def deteriorate_trees(trees: tuple[VTree, VTree], opts: Optional[DeteriorationOp
     # === AV SWAP ===
 
     # === DISCONNECTIONS ===
-    return deteriorate_tree(trees[0], opts), deteriorate_tree(trees[1], opts)
+    return deteriorate_graph(trees[0], opts), deteriorate_graph(trees[1], opts)
 
 
-def deteriorate_tree(tree: VTree, opts: Optional[DeteriorationOpts] = None) -> VTree:
+def deteriorate_graph[T: VGraph](graph: T, opts: Optional[DeteriorationOpts] = None) -> T:
     if opts is None:
         opts = DeteriorationOpts()
-    tree = tree.copy()
+    graph = graph.copy()
 
-    for b in tree.branches(dynamic_iterator=True):
+    for b in graph.branches(dynamic_iterator=True):
         curve = b.curve()
         calibres = b.geodata(VBranchGeoData.Fields.CALIBRES)
         if b.curve is not None and len(curve) > opts.drop_segment_avg_length and calibres is not None:
@@ -69,9 +76,9 @@ def deteriorate_tree(tree: VTree, opts: Optional[DeteriorationOpts] = None) -> V
                 continue
             if drop_mask.all():
                 # print(f"Dropped entire branch {b.id}")
-                tree.delete_branch(b.id, inplace=True)
+                graph.delete_branch(b.id, inplace=True)
                 continue
-            splits = np.where(np.diff(drop_mask.astype(np.uint8)) != 0)[0].astype(np.int32)
+            splits = np.where(np.diff(drop_mask.astype(np.uint8)) != 0)[0].astype(np.int_)
             if splits[0] == 0:
                 splits = splits[1:]
                 if not len(splits):
@@ -80,8 +87,45 @@ def deteriorate_tree(tree: VTree, opts: Optional[DeteriorationOpts] = None) -> V
                 splits = splits[:-1]
                 if not len(splits):
                     continue
-            _, new_branches = tree.split_branch(b.id, splits, return_branch_ids=True, inplace=True)
-            tree.delete_branch(new_branches[::2] if not drop_mask[0] else new_branches[1::2], inplace=True)
+            _, new_branches = graph.split_branch(b.id, splits, return_branch_ids=True, inplace=True)
+            graph.delete_branch(new_branches[::2] if not drop_mask[0] else new_branches[1::2], inplace=True)
             # print(f"Dropped {len(new_branches) // 2} segments of size {drop_mask.sum()} from branch {b.id}")
+    simplify_passing_nodes(graph, min_angle=90, inplace=True)
+    return graph
 
-    return tree
+
+def geometric_augment(
+    sample: tuple[VBranchDigraph, npt.NDArray],
+    *,
+    max_rotation: float = 30.0,
+    min_rotation: float = 5.0,
+    horizontal_flip: bool = True,
+    rnd: Optional[np.random.Generator] = None,
+) -> tuple[VBranchDigraph, npt.NDArray]:
+    digraph, fundus_img = sample
+    if rnd is None:
+        rnd = np.random.default_rng()
+    center = fundus_img.shape[1] // 2, fundus_img.shape[2] // 2
+
+    # === Rotation ===
+    # angle = rnd.uniform(-max_rotation, max_rotation)
+    # if abs(angle) > min_rotation:
+    #     rotate = AffineProjection.rotate(angle, center)
+    #     digraph.graph.transform(rotate, inplace=True)
+    #     fundus_img = rotate.warp(fundus_img.transpose(1, 2, 0), warped_domain="same")[0].transpose(2, 0, 1)
+
+    # === Elastic ===
+    elastic = ElasticProjection.random(fundus_img.shape[-2:], displacement_std=120, smoothing_size=200)
+    digraph.graph.transform(elastic, inplace=True)
+    fundus_img = elastic.warp(fundus_img.transpose(1, 2, 0), warped_domain="same")[0].transpose(2, 0, 1)
+
+    # === Horizontal flip ===
+    # if horizontal_flip and rnd.random() < 0.5:
+    #     flip = FlipProjection(center, horizontal=True)
+    #     digraph.graph.transform(flip, inplace=True)
+    #     fundus_img = flip.warp(fundus_img.transpose(1, 2, 0), warped_domain="same")[0].transpose(2, 0, 1)
+
+    # Reset domain after augmentation
+    digraph.graph.geometric_data()._domain = Rect.from_size((fundus_img.shape[1], fundus_img.shape[2]))
+
+    return digraph, fundus_img

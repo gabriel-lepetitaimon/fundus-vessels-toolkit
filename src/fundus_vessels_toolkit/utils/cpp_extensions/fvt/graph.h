@@ -17,6 +17,8 @@ std::vector<std::list<int>> connected_components(const EdgeList& edgeList, int N
 std::vector<std::list<int>> connected_components(const GraphAdjList& adjList);
 std::vector<int> maximum_weighted_independent_set(std::vector<IntPair> edges, std::vector<float> weights);
 
+torch::Tensor node_accessible_from_root(const torch::Tensor& edge_index, int N, uint32_t root = 0);
+
 /**************************************************************************************
  *              === GRAPH_FIXING.CPP ===
  **************************************************************************************/

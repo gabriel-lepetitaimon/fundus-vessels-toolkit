@@ -153,3 +153,31 @@ std::vector<int> maximum_weighted_independent_set(std::vector<IntPair> edges_lis
 
     return mwis;
 }
+
+/***************************************************************************
+ *             === Tree utils ===
+ ***************************************************************************/
+torch::Tensor node_accessible_from_root(const torch::Tensor& edge_index, int N, uint32_t root) {
+    TORCH_CHECK(edge_index.dim() == 2 && edge_index.size(1) == 2, "edge_index must be of shape [num_edges, 2]");
+    TORCH_CHECK(edge_index.dtype() == torch::kUInt32, "edge_index must be of dtype uint32");
+    auto edge_acc = edge_index.accessor<uint32_t, 2>();
+
+    std::vector<std::list<int>> adjacency(N);
+    for (int e = 0; e < edge_index.size(0); e++) adjacency[edge_acc[e][0]].push_back(edge_acc[e][1]);
+
+    std::queue<int> nodesQueue;
+    nodesQueue.push(root);
+
+    torch::Tensor out = torch::zeros({N}, torch::dtype(torch::kBool));
+    auto out_acc = out.accessor<bool, 1>();
+
+    while (!nodesQueue.empty()) {
+        uint32_t node = nodesQueue.front();
+        out_acc[node] = true;
+        nodesQueue.pop();
+
+        for (const auto& neighbor : adjacency[node])
+            if (!out_acc[neighbor]) nodesQueue.push(neighbor);
+    }
+    return out;
+}

@@ -210,7 +210,7 @@ class VGraphNode:
 
 NodeIndices: TypeAlias = Indices | pd.Series
 NodeIndex: TypeAlias = int
-NodeIndicesLike: TypeAlias = Sequence[VGraphNode] | VGraphNode | NodeIndices | NodeIndex
+NodeIndicesLike: TypeAlias = Sequence[VGraphNode] | VGraphNode | NodeIndices | NodeIndex | Bool1DArray
 
 
 class VGraphBranch:
@@ -432,9 +432,9 @@ class VGraphBranch:
         return (out, bbox) if return_bbox else out
 
 
-BranchIndices: TypeAlias = Sequence[VGraphBranch] | Indices | pd.Series
+BranchIndices: TypeAlias = Indices | pd.Series
 BranchIndex: TypeAlias = VGraphBranch | int
-BranchIndicesLike: TypeAlias = BranchIndices | BranchIndex | IndicesLike
+BranchIndicesLike: TypeAlias = BranchIndices | BranchIndex | IndicesLike | Sequence[VGraphBranch] | Bool1DArray
 
 
 ########################################################################################################################
@@ -617,7 +617,12 @@ class VGraph:
             check_integrity=False,
         )
 
-    def save(self, filename: Optional[str | Path] = None) -> NumpyDict:
+    def save(
+        self,
+        filename: Optional[str | Path] = None,
+        *,
+        on_exists: Literal["raise", "warn", "skip", "overwrite"] = "warn",
+    ) -> NumpyDict:
         """Save the graph data to a file.
 
         The graph is saved as a dictionary with the following keys:
@@ -636,17 +641,15 @@ class VGraph:
         NUMPY_DICT
             The graph as a dictionary of numpy arrays.
         """  # noqa: E501
-        data = dict(
+        data: NumpyDict = dict(
             branch_list=self._branch_list,
             geometric_data=[gdata.save() for gdata in self._geometric_data],
             nodes_attr=pandas_to_numpy_dict(self._node_attr),
             branches_attr=pandas_to_numpy_dict(self._branch_attr),
-        )
+        )  # type: ignore
 
         if filename is not None:
-            filename = Path(filename)
-            filename.parent.mkdir(parents=True, exist_ok=True)
-            save_numpy_dict(data, filename)
+            save_numpy_dict(data, filename, on_exists=on_exists)
         return data
 
     @classmethod
@@ -2512,7 +2515,7 @@ class VGraph:
         return_branch_ids: Literal[True],
         return_node_ids: Literal[False] = False,
         inplace=False,
-    ) -> tuple[Self, npt.NDArray[np.int32]]: ...
+    ) -> tuple[Self, npt.NDArray[np.int_]]: ...
     @overload
     def split_branch(
         self,
@@ -2523,7 +2526,7 @@ class VGraph:
         return_branch_ids: Literal[False] = False,
         return_node_ids: Literal[True],
         inplace=False,
-    ) -> tuple[Self, npt.NDArray[np.int32]]: ...
+    ) -> tuple[Self, npt.NDArray[np.int_]]: ...
     @overload
     def split_branch(
         self,
@@ -2534,7 +2537,7 @@ class VGraph:
         return_branch_ids: Literal[True],
         return_node_ids: Literal[True],
         inplace=False,
-    ) -> tuple[Self, npt.NDArray[np.int32], npt.NDArray[np.int32]]: ...
+    ) -> tuple[Self, npt.NDArray[np.int_], npt.NDArray[np.int_]]: ...
     def split_branch(
         self,
         branch_id: int,
@@ -2544,7 +2547,7 @@ class VGraph:
         return_branch_ids=False,
         return_node_ids=False,
         inplace=False,
-    ) -> Self | tuple[Self, npt.NDArray[np.int32]] | tuple[Self, npt.NDArray[np.int32], npt.NDArray[np.int32]]:
+    ) -> Self | tuple[Self, npt.NDArray[np.int_]] | tuple[Self, npt.NDArray[np.int_], npt.NDArray[np.int_]]:
         """Split a branch into two branches by adding a new node near the given coordinates.
 
         The new node is added to the nodes coordinates and the two new branches are added to the branch list.
@@ -2573,7 +2576,7 @@ class VGraph:
         branch_ids : np.ndarray
             An array of shape (N+1,) with the indices of the modified branches: the splitted branch and the new branches.
 
-            Only returned if ``return_branch_id`` is True.
+            Only returned if ``return_branch_ids`` is True.
 
         new_node_ids : np.ndarray
             An array of shape (N,) with the indices of the new nodes. Only returned if ``return_node_ids`` is True.

@@ -429,15 +429,14 @@ void drawLines(const torch::Tensor& p0, const torch::Tensor& p1, torch::Tensor& 
     TORCH_CHECK_VALUE(out.ndimension() == 2, "out must be a 2D tensor.");
     TORCH_CHECK_VALUE(out.dtype() == torch::kBool, "out must be a boolean tensor.");
     auto out_acc = out.accessor<bool, 2>();
-    const IntPoint max_shape (out.size(1), out.size(0));
+    const IntPoint max_shape(out.size(1), out.size(0));
 
-    #pragma omp parallel for
+#pragma omp parallel for
     for (std::size_t i = 0; i < N; i++) {
         for (const auto& p : Line({p0_acc[i][0], p0_acc[i][1]}, {p1_acc[i][0], p1_acc[i][1]})) {
             if (p.is_inside(max_shape.x, max_shape.y)) out_acc[p.y][p.x] = true;
         }
     }
-
 }
 
 torch::Tensor drawCone(std::array<int, 2> tip, std::array<float, 2> direction, float angle, int length) {
@@ -764,6 +763,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // === graph.h ===
     m.def("maximum_weighted_independent_set", &maximum_weighted_independent_set,
           "Compute the maximum weighted independent set.");
+    m.def("node_accessible_from_root", &node_accessible_from_root, "Compute the nodes accessible from a root node.");
 
     // === rasterize_topo.h ===
     m.def("rasterize_topology", &rasterize_topology, "Rasterize the topology of a set of branches.");

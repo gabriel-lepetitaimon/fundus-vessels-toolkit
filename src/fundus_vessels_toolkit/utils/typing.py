@@ -28,6 +28,7 @@ Float2DArrayLike: TypeAlias = npt.NDArray[np.float64] | List[float] | List[List[
 Float3DArrayLike: TypeAlias = npt.NDArray[np.float64] | List[List[float]] | List[List[List[float]]]
 Float1DArray: TypeAlias = npt.NDArray[np.float64]
 Float2DArray: TypeAlias = npt.NDArray[np.float64]
+Float3DArray: TypeAlias = npt.NDArray[np.float64]
 
 PointLike: TypeAlias = Tuple[int, int] | List[int] | npt.NDArray[np.int_]
 PointArrayLike: TypeAlias = npt.NDArray[np.int_] | List[int] | List[List[int]] | Tuple[int, int] | List[Tuple[int, int]]

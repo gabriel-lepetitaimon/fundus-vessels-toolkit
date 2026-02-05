@@ -4,7 +4,8 @@ import torch  # Required for cpp extension loading
 
 from .cpp_extensions.fvt_cpp import find_cycles as find_cycles_cpp
 from .cpp_extensions.fvt_cpp import has_cycle as has_cycle_cpp
-from .torch import TensorArray
+from .cpp_extensions.fvt_cpp import node_accessible_from_root as node_accessible_from_root_cpp
+from .torch import TensorArray, autocast_torch
 
 
 def has_cycle(parents: TensorArray) -> bool:
@@ -41,3 +42,33 @@ def find_cycles(parents: TensorArray) -> List[List[int]]:
     """
     parents_tensor = torch.as_tensor(parents, device="cpu", dtype=torch.int)
     return find_cycles_cpp(parents_tensor)
+
+
+@autocast_torch
+def accessible_from_root(edge_index: torch.Tensor, N: int, root: int = 0) -> torch.Tensor:
+    """
+    Find the nodes accessible from the root in a graph.
+
+    Parameters
+    ----------
+    edge_index : torch.Tensor
+        A tensor of shape (2, E) containing the edges of the graph.
+    N : int
+        The number of nodes in the graph.
+    root : int
+        The root node.
+
+    Returns
+    -------
+    torch.Tensor
+        A boolean tensor of shape (N,) indicating whether each node is accessible from the root.
+    """
+    edge_index_tensor = torch.as_tensor(edge_index, device="cpu")
+    if root_is_minus_one := root == -1:
+        edge_index_tensor = edge_index_tensor + 1
+        N += 1
+        root = 0
+    accessible_tensor = node_accessible_from_root_cpp(edge_index_tensor.to(torch.uint32), N, root)
+    if root_is_minus_one:
+        accessible_tensor = accessible_tensor[1:]
+    return accessible_tensor

@@ -10,11 +10,6 @@ from fundus_toolkits import AVLabel
 from fundus_toolkits.utils.geometric import Point
 
 from ..vascular_data_objects import VGraph, VTree
-from ..vascular_data_objects.vbranch_geodata import VBranchGeoData
-from .bezier import BSpline, BezierCubic
-
-vscode_theme()
-
 
 AV_COLORS: Dict[AVLabel, str] = {
     AVLabel.BKG: "grey",

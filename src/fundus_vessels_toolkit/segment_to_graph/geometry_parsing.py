@@ -1,3 +1,4 @@
+from types import EllipsisType
 from typing import Literal, Optional
 
 import numpy as np
@@ -165,33 +166,36 @@ def bsplines_from_curves(vgraph: VGraph, bspline_target_error: float = 2) -> lis
 def derive_tips_geometry_from_curve_geometry(
     vgraph: VGraph,
     *,
-    calibre: None | bool | int = None,
-    tangent: Literal["bspline"] | bool | int | None = None,
-    boundaries: bool | None = None,
+    calibre: EllipsisType | Literal["auto"] | bool | int = ...,
+    tangent: EllipsisType | Literal["auto", "bspline"] | bool | int | None = ...,
+    boundaries: EllipsisType | bool | Literal["auto"] = ...,
     tangent_from_nodes: bool | int = True,
     inplace: bool = False,
     override: bool = True,
 ) -> VGraph:
     """Derive the geometry of tips from the curve geometry of the branches.
 
+    If no parameter is provided, all the tip geometrical data available from the curve geometry will be derived.
+    If one parameter is specified only that tip geometrical data will be derived.
+    Setting a parameter to auto will derive the corresponding tip geometrical data only if the required curve geometrical data is available.
+
     Parameters
     ----------
     vgraph : VGraph
         The graph to derive the tips geometry from.
 
-
-    calibre : bool | int, optional
-        If neither False nor null, derive ``TIP_CALIBRE`` from ``CALIBRE``.
+    calibre : bool | int | Literal["auto"], optional
+        If neither False nor 0, derive ``TIP_CALIBRE`` from ``CALIBRE``.
         If True, average the calibre of the 10 points closest to the tips.
         If a int, average the calibre of the n points closest to the tips.
 
-    tangent : Literal["bspline"] | bool | int | None, optional
-        If neither False nor null, derive ``TIP_TANGENT`` from ``TANGENT``.
+    tangent : Literal["bspline", "auto"] | bool | int, optional
+        If neither False nor 0, derive ``TIP_TANGENT`` from ``TANGENT``.
         If True, average the tangent of the 10 points closest to the tips.
         If a int, average the tangent of the n points closest to the tips.
 
-    boundaries : bool | None, optional
-        If neither False nor null, derive ``TIP_BOUNDARIES`` from ``BOUNDARIES``.
+    boundaries : bool | Literal["auto"], optional
+        If not False, derive ``TIP_BOUNDARIES`` from ``BOUNDARIES``.
 
     tangent_from_nodes : bool | int, optional
         If not False, when the tangent is not available, derive it from the nodes coordinates if the distance between the nodes is less than the value (30 px if True).
@@ -213,8 +217,18 @@ def derive_tips_geometry_from_curve_geometry(
 
     gdata = vgraph.geometric_data()
 
+    if all(param is ... for param in (calibre, tangent, boundaries)):
+        calibre = tangent = boundaries = "auto"
+    else:
+        if calibre is ...:
+            calibre = False
+        if tangent is ...:
+            tangent = False
+        if boundaries is ...:
+            boundaries = False
+
     # === Calibre ===
-    if calibre is None and gdata.has_branch_data(VBranchGeoData.Fields.CALIBRES):
+    if calibre == "auto" and gdata.has_branch_data(VBranchGeoData.Fields.CALIBRES):
         calibre = True
     if calibre:
         if isinstance(calibre, bool):
@@ -222,7 +236,7 @@ def derive_tips_geometry_from_curve_geometry(
 
         tips_calibre = []
         # Fetch the branch calibres
-        branches_calibres = gdata.branch_data(VBranchGeoData.Fields.CALIBRES, graph_index=False)
+        branches_calibres = gdata.branch_data(VBranchGeoData.Fields.CALIBRES)
         # Compute the mean of the branch calibre at the tips
         for branch_calibres in branches_calibres:
             if branch_calibres:
@@ -231,7 +245,7 @@ def derive_tips_geometry_from_curve_geometry(
             else:
                 tips_calibre.append(None)
         # Store the tips calibre back as TERMINATION_CALIBRE
-        gdata.set_branch_data(VBranchGeoData.Fields.TIPS_CALIBRE, tips_calibre, graph_index=False, no_check=True)
+        gdata.set_branch_data(VBranchGeoData.Fields.TIPS_CALIBRE, tips_calibre, no_check=True)
 
     if tangent_from_nodes is True:
         tangent_from_nodes = 30
@@ -239,7 +253,7 @@ def derive_tips_geometry_from_curve_geometry(
         tangent_from_nodes = 0
 
     # === Tangents ===
-    if tangent is None:
+    if tangent == "auto":
         if gdata.has_branch_data(VBranchGeoData.Fields.BSPLINE):
             tangent = "bspline"
         elif gdata.has_branch_data(VBranchGeoData.Fields.TANGENTS):
@@ -285,7 +299,7 @@ def derive_tips_geometry_from_curve_geometry(
         gdata.set_branch_data(VBranchGeoData.Fields.TIPS_TANGENT, tips_tangents, graph_index=False, no_check=True)
 
     # === Boundaries ===
-    if boundaries is None and gdata.has_branch_data(VBranchGeoData.Fields.BOUNDARIES):
+    if boundaries == "auto" and gdata.has_branch_data(VBranchGeoData.Fields.BOUNDARIES):
         boundaries = True
     if boundaries:
         tips_bounds = []
