@@ -462,6 +462,24 @@ def remove_orphan_branches(graph: VGraph, min_length: float = 0, inplace=False) 
     return graph.delete_branch(orphan_branches, inplace=inplace)
 
 
+def remove_orphan_nodes(graph: VGraph, inplace=False) -> VGraph:
+    """
+    Remove orphan nodes (nodes connected to no branch).
+
+    Parameters
+    ----------
+    graph :
+        The graph of the vasculature extracted from the vessel
+
+    inplace : bool, optional
+        If True, modify the graph in place, by default False.
+
+    Returns
+        The modified graph with the orphan nodes removed.
+    """
+    return graph.delete_node(graph.orphan_nodes(), inplace=inplace)
+
+
 def simplify_passing_nodes[T: VGraph](
     graph: T,
     *,

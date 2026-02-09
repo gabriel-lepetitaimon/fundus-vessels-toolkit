@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Literal, Optional, Tuple
 
-from matplotlib.image import GAUSSIAN
 import numpy as np
 import numpy.typing as npt
+from matplotlib.image import GAUSSIAN
 
 from ..utils.typing import Bool2DArray
 
@@ -72,6 +72,28 @@ def array_is_equal(a: npt.NDArray | None, b: npt.NDArray | None) -> bool:
     if a is None or b is None:
         return False
     return np.array_equal(a, b)
+
+
+def np_first_true(arr: npt.NDArray[np.bool_]) -> Optional[np.intp]:
+    """
+    Return the index of the first true element in a boolean array, or None if there are no true elements.
+
+    Parameters
+    ----------
+    arr:
+        The input array.
+    Returns
+    -------
+    Optional[np.intp]:
+        The index of the first true element, or None if there are no true elements.
+    """
+    arr = arr.flatten()
+    if len(arr) == 0:
+        return None
+    if arr[0]:
+        return np.intp(0)
+    idx = np.argmax(arr)
+    return idx if idx > 0 else None
 
 
 def np_find_sorted(keys: npt.NDArray, array: npt.NDArray, assume_keys_sorted=False) -> npt.NDArray[np.int_]:
@@ -184,7 +206,7 @@ def binary_sparse_conv2d[T: np.generic](
         return out[kH - 1 : H, kW - 1 : W]
 
 
-def interp_bilinear(im, y, x):
+def np_interp_bilinear(im, y, x):
     x = np.asarray(x)
     y = np.asarray(y)
 

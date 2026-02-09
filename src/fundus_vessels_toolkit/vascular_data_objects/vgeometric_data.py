@@ -2268,6 +2268,38 @@ class VGeometricData:
         self._domain = projection.transform_domain(self._domain)
         return self
 
+    def resample_branch_curve(self, branch_id: int, idx: npt.NDArray[np.int_]) -> None:
+        """Resample a branch curve to only keep the points at the given indices.
+
+        Parameters
+        ----------
+        branch_id : int
+            The id of the branch to resample.
+
+        idx : npt.NDArray[np.int_]
+            The indices of the points to keep.
+        """
+        curve = self._branch_curve[branch_id][idx, :]
+        ctx = self._geodata_edit_ctx(branch_id)
+        for attr_name, attr in ctx.geodata_attrs.items():
+            ctx_attr = ctx._replace(attr_name=attr_name)
+            self._branch_data_dict[attr_name][branch_id] = attr.resample(idx, ctx_attr)
+        self._branch_curve[branch_id] = curve
+
+    def sample_branch_curves(self, n_points: int) -> None:
+        """Resample all branch curves to have a fixed number of points.
+
+        Parameters
+        ----------
+        n_points : int
+            The number of points to sample each branch curve to.
+        """
+        for branch_id, curve in enumerate(self._branch_curve):
+            if (N := len(curve)) <= n_points:
+                continue
+            ids = np.linspace(0, N - 1, n_points, endpoint=True, dtype=np.int_)
+            self.resample_branch_curve(branch_id, ids)
+
     ####################################################################################################################
     #  === VISUALISATION TOOLS ===
     ####################################################################################################################

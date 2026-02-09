@@ -7,11 +7,13 @@ import numpy as np
 import numpy.typing as npt
 
 from fundus_toolkits.utils.geometric import Point, Rect
+import torch
 
 from ..utils import if_none
-from ..utils.numpy import GAUSSIAN_KERNEL_5x5, interp_bilinear
+from ..utils.numpy import GAUSSIAN_KERNEL_5x5, np_interp_bilinear
 from ..utils.safe_import import import_cv2
 from ..utils.typing import Float2DArray, Float3DArray
+from ..utils.cpp_extensions.fvt_cpp import inverse_displacement, vec_bilinear_interpolate
 
 
 def _np_short_str(arr: npt.NDArray[np.floating]) -> str:
@@ -322,19 +324,19 @@ class FundusProjection(abc.ABC):
             warped_domain = src_domain
         return warped_domain
 
-    def select_warped_region(
+    def select_warped_region[T: np.generic](
         self,
-        src_img: npt.NDArray[np.uint8 | np.float32],
+        src_img: npt.NDArray[T],
         src_top_left: Point | tuple[int, int],
         warped_domain: Rect | Literal["full", "same"],
-    ) -> tuple[npt.NDArray[np.uint8 | np.float32], Rect]:
+    ) -> tuple[npt.NDArray[T], Rect]:
         """
         Selects a region to warp from an image using this projection model.
 
         Parameters
         ----------
-        src_img : npt.NDArray[np.uint8] | npt.NDArray[np.float32]
-            The source image to select the region from. The image must be cv2 compatible: shape=(H x W [x C]) and dtype=np.uint8|np.float32.
+        src_img : npt.NDArray[T]
+            The source image to select the region from of shape (H, W[, C]).
 
         src_top_left : Point | tuple[int, int]
             The position of the top-left corner of the source image.
@@ -344,7 +346,7 @@ class FundusProjection(abc.ABC):
 
         Returns
         -------
-        src_img_to_warp : npt.NDArray[np.uint8] | npt.NDArray[np.float32]
+        src_img_to_warp : npt.NDArray[T]
             The selected region from the source image to warp.
         """
         src_domain = Rect.from_size((src_img.shape[0], src_img.shape[1])).translate(*src_top_left)
@@ -599,8 +601,7 @@ class FlipProjection(FundusProjection):
         return self.__class__(self.center, self.horizontal, self.vertical)
 
     def transform(self, src: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
-        src = np.asarray(src)
-        dst = src.copy()
+        dst = np.asarray(src, copy=True)
         if self.horizontal:
             dst[:, 1] = 2 * self.center[1] - dst[:, 1]
         if self.vertical:
@@ -872,9 +873,9 @@ class QuadraticProjection(FundusProjection):
 
 
 class ElasticProjection(FundusProjection):
-    def __init__(self, displacement: Float3DArray, reversed: bool = False) -> None:
+    def __init__(self, displacement: npt.NDArray[np.float32], reversed: bool = False) -> None:
         assert displacement.ndim == 3 and displacement.shape[2] == 2, "displacement must be a 2D map of 2D vectors"
-        self.displacement = np.asarray(displacement)
+        self.displacement = np.asarray(displacement, dtype=np.float32)
 
         self.reversed = reversed
         super().__init__()
@@ -901,6 +902,7 @@ class ElasticProjection(FundusProjection):
             smoothing_size = None
         subsampling = smoothing_size // 2 if smoothing_size is not None else 1
         disp_map = rng.normal(0, displacement_std, size=(int(shape[0] // subsampling), int(shape[1] // subsampling), 2))
+        disp_map = disp_map.astype(np.float32)
         if smoothing_size is not None:
             cv2 = import_cv2()
 
@@ -928,37 +930,34 @@ class ElasticProjection(FundusProjection):
 
     @classmethod
     def _transform(
-        cls, displacement: npt.NDArray[np.floating], src: Optional[npt.NDArray] = None, reversed: bool = False
+        cls, displacement: npt.NDArray[np.floating], src: npt.NDArray | None = None, reversed: bool = False
     ) -> npt.NDArray[np.floating]:
-        def interp_displacement(pos: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
-            d = np.empty(pos.shape, dtype=displacement.dtype)
-            d[..., 0] = interp_bilinear(displacement[..., 0], pos[..., 0], pos[..., 1])
-            d[..., 1] = interp_bilinear(displacement[..., 1], pos[..., 0], pos[..., 1])
-            return d
+        disp_t = torch.from_numpy(displacement)
 
         if not reversed:
+
+            def interp_displacement(pos: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+                pos_t = torch.from_numpy(pos).reshape(-1, 2)
+                return vec_bilinear_interpolate(disp_t, pos_t).numpy().reshape(pos.shape)
+
             if src is None:
                 return np.indices(displacement.shape[:2]).transpose(1, 2, 0) + displacement
+            elif np.issubdtype(src.dtype, np.integer):
+                src[..., 0] = np.clip(src[..., 0], 0, displacement.shape[0] - 1)
+                src[..., 1] = np.clip(src[..., 1], 0, displacement.shape[1] - 1)
+                return src + displacement[src[..., 0], src[..., 1]]
             else:
-                return src + interp_displacement(src)
+                return src + interp_displacement(src.astype(np.float32))
 
         if src is None:
             src = np.indices(displacement.shape[:2]).transpose(1, 2, 0)
 
+        src_t = torch.from_numpy(src.astype(np.float32)).reshape(-1, 2)
+
         # Inverse displacement field through fixed-point iteration
-        MAX_ITERS = 50
-        SQR_TOL = 0.5
-        inv_d = -interp_displacement(src)
-        ids = np.ones(src.shape[:-1], dtype=bool)
-        for _ in range(MAX_ITERS):
-            inv_d_ids = inv_d[ids]
-            d = interp_displacement(src[ids] + inv_d_ids)
-            ids_ = np.square(d + inv_d_ids).sum(axis=-1) > SQR_TOL
-            if not np.any(ids_):
-                break
-            ids[ids] = ids_
-            inv_d[ids] = -d[ids_]
-        return src + inv_d
+        inv_d = inverse_displacement(disp_t, src_t, 50, 0.5).numpy()
+
+        return src + inv_d.reshape(src.shape)
 
     def warp(
         self,
@@ -968,11 +967,11 @@ class ElasticProjection(FundusProjection):
     ) -> Tuple[npt.NDArray[np.uint8 | np.float32], Rect]:
         cv2 = import_cv2()
 
-        warped_region, warped_domain = self.select_warped_region(src_img, src_top_left, warped_domain)
-        top_left = Point(*src_top_left).numpy()
-        src_remap = self._transform(self.displacement, reversed=not self.reversed).astype(np.float32)
-        # src_remap += top_left[None, None, :]
-        return cv2.remap(warped_region, src_remap[..., ::-1], None, cv2.INTER_LINEAR), warped_domain  # type: ignore
+        warped_domain = self.warped_domain(src_img, src_top_left, warped_domain)
+        src_remap = self._transform(
+            self.displacement, src=warped_domain.grid_indices(), reversed=not self.reversed
+        ).astype(np.float32)
+        return cv2.remap(src_img, src_remap[..., ::-1], None, cv2.INTER_LINEAR), warped_domain  # type: ignore
 
 
 def ransac_fit_projection(

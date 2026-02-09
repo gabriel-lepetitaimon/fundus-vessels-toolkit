@@ -3,12 +3,57 @@ from __future__ import annotations
 import functools
 import inspect
 import warnings
-from typing import Callable, TypeVar, Union, get_args, get_origin
+from typing import Callable, Optional, TypeVar, Union, get_args, get_origin
 
 import numpy as np
 import torch
 
 TensorArray = TypeVar("TensorArray", bound=torch.Tensor | np.ndarray)
+
+
+def torch_interp_bilinear(
+    imgs: torch.Tensor, y: torch.Tensor, x: torch.Tensor, batch_idx: Optional[torch.Tensor] = None
+) -> torch.Tensor:
+    """2D bilinear interpolation for a batch of images.
+
+    Parameters
+    ----------
+    imgs : torch.Tensor
+        A batch of images with shape (C, H, W) if batch_idx is None, or (B, C, H, W) otherwise.
+    y : torch.Tensor
+        A vector of y coordinates with shape (N1, N2, ...).
+    x : torch.Tensor
+        A vector of x coordinates with shape (N1, N2, ...).
+    batch_idx : Optional[torch.Tensor], optional
+        A vector of batch indices with shape (N1, N2, ...), by default None. If None, ``imgs`` is expected to have no batch dimension, and all coordinates in ``coord`` are assumed to belong to the same image.
+
+    Returns
+    -------
+    torch.Tensor
+        A batch of interpolated values with shape (N1, N2, ..., C).
+    """  # noqa: E501
+    y0 = torch.clamp(torch.floor(y).long(), 0, imgs.shape[-2] - 2)
+    x0 = torch.clamp(torch.floor(x).long(), 0, imgs.shape[-1] - 2)
+
+    y1, x1 = y0 + 1, x0 + 1
+
+    dy0 = (y1 - y)[..., None]
+    dy1 = (y - y0)[..., None]
+    dx0 = (x1 - x)[..., None]
+    dx1 = (x - x0)[..., None]
+    if batch_idx is None:
+        img_y0x0 = imgs[:, y0, x0].view(*y0.shape, -1)
+        img_y1x0 = imgs[:, y1, x0].view(*y0.shape, -1)
+        img_y0x1 = imgs[:, y0, x1].view(*y0.shape, -1)
+        img_y1x1 = imgs[:, y1, x1].view(*y0.shape, -1)
+    else:
+        b = batch_idx.long()
+        img_y0x0 = imgs[b, :, y0, x0].view(*y0.shape, -1)
+        img_y1x0 = imgs[b, :, y1, x0].view(*y0.shape, -1)
+        img_y0x1 = imgs[b, :, y0, x1].view(*y0.shape, -1)
+        img_y1x1 = imgs[b, :, y1, x1].view(*y0.shape, -1)
+
+    return img_y0x0 * (dy0 * dx0) + img_y1x0 * (dy1 * dx0) + img_y0x1 * (dy0 * dx1) + img_y1x1 * (dy1 * dx1)
 
 
 def img_to_torch(x, device="cuda"):

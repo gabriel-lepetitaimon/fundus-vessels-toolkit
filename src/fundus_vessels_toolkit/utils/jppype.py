@@ -1,5 +1,6 @@
-from typing import Dict, Literal, Optional, Tuple
+from typing import Dict, Literal, Optional, Sequence, Tuple
 
+import matplotlib
 import numpy as np
 import pandas as pd
 from coloraide import Color
@@ -7,6 +8,7 @@ from jppype import Mosaic, View2D, View2dGroup, imshow, vscode_theme
 from jppype.layers import Layer, LayerGraph, LayerImage, LayerQuiver
 
 from fundus_toolkits import AVLabel
+from fundus_toolkits.utils.color import ColorSpec, parse_color
 from fundus_toolkits.utils.geometric import Point
 
 from ..vascular_data_objects import VGraph, VTree
@@ -18,6 +20,34 @@ AV_COLORS: Dict[AVLabel, str] = {
     AVLabel.BOTH: "purple",
     AVLabel.UNK: "green",
 }
+
+
+def subgraph_colormap(x):
+    cmap = [
+        "red",
+        "blue",
+        "purple",
+        "green",
+        "orange",
+        "cyan",
+        "pink",
+        "yellow",
+        "teal",
+        "lime",
+        "magenta",
+        "brown",
+        "navy",
+        "olive",
+        "maroon",
+        "aqua",
+        "fuchsia",
+        "silver",
+        "gold",
+        "coral",
+        "indigo",
+        "violet",
+    ]
+    return cmap[x % len(cmap)]
 
 
 def draw_tree(
@@ -92,36 +122,7 @@ def draw_tree(
         layer.edges_cmap = [edge_gradient[x] for x in edges_rank]
 
     elif branch_color == "subtree":
-
-        def colormap(x):
-            cmap = [
-                "red",
-                "blue",
-                "purple",
-                "green",
-                "orange",
-                "cyan",
-                "pink",
-                "yellow",
-                "teal",
-                "lime",
-                "magenta",
-                "brown",
-                "navy",
-                "olive",
-                "maroon",
-                "aqua",
-                "fuchsia",
-                "silver",
-                "gold",
-                "coral",
-                "indigo",
-                "violet",
-            ]
-            return cmap[x % len(cmap)]
-
-        layer.edges_cmap = pd.Series(tree.subtrees_branch_labels()).map(colormap).to_dict()
-
+        layer.edges_cmap = pd.Series(tree.subtrees_branch_labels()).map(subgraph_colormap).to_dict()
     else:
         layer.edges_cmap = main_color
 
@@ -173,7 +174,14 @@ def draw_trees(
 
 
 def draw_graph(
-    graph: VGraph, view: View2D, av_attr: Optional[str] = None, edge_labels: bool = False, node_labels: bool = False
+    graph: VGraph,
+    view: View2D,
+    edge: Literal["bspline", "line", "skeleton", "skeleton-dot"] = "bspline",
+    branch_color: Literal["av", "subtree", "branch"] | Dict[int, float | str] | Sequence[float | str] = "av",
+    branch_color_scale: Optional[str] = None,
+    av_attr: Optional[str] = None,
+    edge_labels: bool = False,
+    node_labels: bool = False,
 ) -> None:
     """
     Draw a vessel graph on a given view.
@@ -187,12 +195,39 @@ def draw_graph(
     av_attr : str | None
         The attribute to use for coloring the vessels.
     """
-    layer = graph.jppype_layer(edge_labels=edge_labels, node_labels=node_labels, bspline=True)
-    if av_attr is None:
-        av_attr = "av"
-    if av_attr:
+    layer = graph.jppype_layer(
+        edge_labels=edge_labels,
+        node_labels=node_labels,
+        edge_map=edge.startswith("skeleton"),
+        interpolate=edge == "skeleton",
+        bspline=edge == "bspline",
+    )
+    if isinstance(branch_color, str) and branch_color == "av":
+        if av_attr is None:
+            av_attr = "av"
         if av_attr in graph.node_attr:
             layer.nodes_cmap = graph.node_attr[av_attr].fillna(0).map(AV_COLORS).to_dict()
         if av_attr in graph.branch_attr:
             layer.edges_cmap = graph.branch_attr[av_attr].fillna(0).map(AV_COLORS).to_dict()
+    if isinstance(branch_color, str) and branch_color == "subtree":
+        layer.edges_cmap = pd.Series(graph.subgraph_branch_labels()).map(subgraph_colormap).to_dict()
+
+    if isinstance(branch_color, (Sequence, np.ndarray, pd.Series)) and not isinstance(branch_color, str):
+        branch_color = {i: c for i, c in enumerate(branch_color) if c is not None and i < graph.branch_count}
+    if isinstance(branch_color, dict):
+        if branch_color_scale is None:
+            branch_color_scale = "viridis"
+
+        cmap = matplotlib.colormaps.get_cmap(branch_color_scale)
+
+        def parse_color(c):
+            if isinstance(c, str):
+                return Color(c).convert("srgb").to_string(hex=True)
+            else:
+                return Color("srgb", cmap(np.clip(c, 0, 1))[:3]).to_string(hex=True)
+
+        branch_color = {k: parse_color(c) for k, c in branch_color.items()}
+        branch_color[None] = "grey"
+        layer.edges_cmap = branch_color
+
     view["vessel_graph"] = layer

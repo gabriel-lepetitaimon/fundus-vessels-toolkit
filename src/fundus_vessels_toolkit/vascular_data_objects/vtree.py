@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import itertools
-import re
-
-from fundus_vessels_toolkit.utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
-from fundus_vessels_toolkit.utils.numpy import array_is_equal
-
 __all__ = ["VTree"]
 
+import itertools
+import re
+import warnings
 from pathlib import Path
 from typing import (
     Any,
@@ -29,18 +26,14 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from ..utils.lookup_array import (
-    add_empty_to_lookup,
-    complete_lookup,
-    create_removal_lookup,
-    invert_complete_lookup,
-    invert_lookup,
-    lookup_from_mapping,
-)
+from ..utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
+from ..utils.lookup_array import add_empty_to_lookup, complete_lookup, invert_complete_lookup, lookup_from_mapping
+from ..utils.numpy import array_is_equal
 from ..utils.tree import find_cycles, has_cycle
 from ..utils.typing import (
     Bool1DArrayLike,
     Float1DArrayLike,
+    Indices,
     Int1DArray,
     Int1DArrayLike,
     IntPairArrayLike,
@@ -369,8 +362,8 @@ class VTree(VGraph):
         branch_tree: Int1DArrayLike,
         branch_dirs: Bool1DArrayLike | None = None,
         geometric_data: VGeometricData | Iterable[VGeometricData] = (),
-        nodes_attr: Optional[pd.DataFrame] = None,
-        branches_attr: Optional[pd.DataFrame] = None,
+        node_attr: Optional[pd.DataFrame] = None,
+        branch_attr: Optional[pd.DataFrame] = None,
         node_count: Optional[int] = None,
         check_integrity: bool = True,
     ):
@@ -420,13 +413,19 @@ class VTree(VGraph):
         super().__init__(
             branch_list,
             geometric_data,
-            node_attr=nodes_attr,
-            branch_attr=branches_attr,
+            node_attr=node_attr,
+            branch_attr=branch_attr,
             node_count=node_count,
             check_integrity=check_integrity,
         )
 
-    def check_tree_integrity(self):
+    @overload
+    def check_tree_integrity(self, on_error: Literal["warn", "skip"] = "skip") -> bool: ...
+    @overload
+    def check_tree_integrity(self, on_error: Literal["raise"]) -> Literal[True]: ...
+    @overload
+    def check_tree_integrity(self, on_error: Literal["report"]) -> str: ...
+    def check_tree_integrity(self, on_error: Literal["raise", "warn", "skip", "report"] = "skip") -> bool | str:
         """Check the integrity of the tree.
 
         Raises
@@ -436,17 +435,42 @@ class VTree(VGraph):
         """
         B = self.branch_count
         if B == 0:
-            return
-        assert self.branch_tree.min() >= -1, "Invalid tree: the provided branch parents contains invalid indices."
-        assert self.branch_tree.max() < B, "Invalid tree: the provided branch parents contains invalid indices."
-        assert np.all(self.branch_tree != np.arange(B)), "Invalid tree: some branches are their own parent."
-        assert not has_cycle(self.branch_tree), "Invalid tree: it contains the cycles " + "; ".join(
-            "{" + ", ".join(str(_) for _ in cycle) + "}" for cycle in find_cycles(self.branch_tree)
-        )
+            return "" if on_error == "report" else True
+        errors = []
+        if self.branch_tree.min() >= -1:
+            errors.append("the provided branch parents contains invalid indices")
+        if self.branch_tree.max() < B:
+            errors.append("the provided branch parents contains invalid indices")
+        if np.all(self.branch_tree != np.arange(B)):
+            errors.append("some branches are their own parent")
+        if not has_cycle(self.branch_tree):
+            errors.append(
+                "it contains the cycles "
+                + "; ".join("{" + ", ".join(str(_) for _ in cycle) + "}" for cycle in find_cycles(self.branch_tree))
+            )
+        if len(errors) > 0:
+            msg = "Invalid tree:" + "\n - ".join(errors)
+            if on_error == "raise":
+                raise ValueError(msg)
+            elif on_error == "warn":
+                warnings.warn(msg, stacklevel=2)
+            elif on_error == "report":
+                return msg
+            return False
+        return "" if on_error == "report" else True
 
-    def check_integrity(self):
-        super().check_integrity()
-        self.check_tree_integrity()
+    @overload
+    def check_integrity(self, on_error: Literal["warn", "skip"] = "skip") -> bool: ...
+    @overload
+    def check_integrity(self, on_error: Literal["raise"]) -> Literal[True]: ...
+    @overload
+    def check_integrity(self, on_error: Literal["report"]) -> str: ...
+    def check_integrity(self, on_error: Literal["raise", "warn", "skip", "report"] = "skip") -> bool | str:
+        graph_out = super().check_integrity(on_error=on_error)
+        tree_out = self.check_tree_integrity(on_error=on_error)
+        if on_error == "report":
+            return graph_out + "\n" + tree_out if graph_out and tree_out else graph_out + tree_out
+        return graph_out and tree_out
 
     def __eq__(self, other: object) -> bool:
         return (
@@ -463,8 +487,8 @@ class VTree(VGraph):
             self._branch_tree.copy(),
             self._branch_dir.copy() if self._branch_dir is not None else None,
             [gdata.copy(None) for gdata in self._geometric_data],
-            nodes_attr=self._node_attr.copy() if self.node_attr is not None else None,
-            branches_attr=self._branch_attr.copy() if self._branch_attr is not None else None,
+            node_attr=self._node_attr.copy() if self._node_attr is not None else None,
+            branch_attr=self._branch_attr.copy() if self._branch_attr is not None else None,
             node_count=self._node_count,
             check_integrity=False,
         )
@@ -476,7 +500,7 @@ class VTree(VGraph):
         branch_tree: npt.NDArray[np.int_],
         branch_dirs: npt.NDArray[np.bool_] | None,
         copy=True,
-        check=True,
+        check_integrity=True,
     ) -> Self:
         """Create a tree from a graph.
 
@@ -490,7 +514,7 @@ class VTree(VGraph):
             The direction of the branches. Each element correspond to a branch, if True the branch is directed from its first node to its second.
         copy : bool, optional
             If True, the graph is copied before conversion. By default: True.
-        check : bool, optional
+        check_integrity : bool, optional
             If True, the integrity of the tree is checked after the conversion. By default: True.
 
         Returns
@@ -505,12 +529,12 @@ class VTree(VGraph):
             branch_tree=branch_tree,
             branch_dirs=branch_dirs,
             geometric_data=graph._geometric_data,
-            nodes_attr=graph._node_attr,
-            branches_attr=graph._branch_attr,
+            node_attr=graph._node_attr,
+            branch_attr=graph._branch_attr,
             node_count=graph.node_count,
             check_integrity=False,
         )
-        if check:
+        if check_integrity:
             tree.check_tree_integrity()
         return tree
 
@@ -525,8 +549,8 @@ class VTree(VGraph):
         The tree is saved as a dictionary with the following keys:
             - ``branch_list``: The list of branches in the graph as a 2D array of shape (B, 2) where B is the number of branches. Each row contains the indices of the nodes connected by each branch.
             - ``geometric_data``: The geometric data associated with the graph as a list of dictionaries.
-            - ``nodes_attr``: The attributes of the nodes in the graph as a dictionary.
-            - ``branches_attr``: The attributes of the branches in the graph as a dictionary.
+            - ``node_attr``: The attributes of the nodes in the graph as a dictionary.
+            - ``branch_attr``: The attributes of the branches in the graph as a dictionary.
             - ``branch_tree``: The tree structure of the branches as a 1D array.
             - ``branch_dirs``: The direction of the branches as a 1D array.
 
@@ -537,7 +561,7 @@ class VTree(VGraph):
 
         Returns
         -------
-        NUMPY_DICT
+        NumpyDict
             The graph as a dictionary of numpy arrays.
         """  # noqa: E501
 
@@ -550,7 +574,7 @@ class VTree(VGraph):
         return data
 
     @classmethod
-    def load(cls, filename: str | Path | NumpyDict) -> Self:
+    def load(cls, filename: str | Path | NumpyDict, *, check_integrity: bool = True) -> Self:
         """Load a Graph object from a file.
 
         Parameters
@@ -560,8 +584,8 @@ class VTree(VGraph):
 
         Returns
         -------
-        VGraph
-            The Graph object loaded from the file.
+        VTree
+            The Tree object loaded from the file.
         """
         if isinstance(filename, (str, Path)):
             data = load_numpy_dict(filename)
@@ -569,11 +593,11 @@ class VTree(VGraph):
             data = filename
 
         return cls.from_graph(
-            VGraph.load(data),  # type: ignore
+            VGraph.load(data, check_integrity=False),  # type: ignore
             data["branch_tree"],  # type: ignore
             data["branch_dirs"] if not np.all(data["branch_dirs"]) else None,  # type: ignore
             copy=False,
-            check=True,
+            check_integrity=check_integrity,
         )
 
     @classmethod
@@ -612,7 +636,7 @@ class VTree(VGraph):
         branch_tree = b_lookup_with_empty[self._branch_tree[branch_mask] + 1] - 1
         branch_dirs = None if self._branch_dir is None else self._branch_dir[branch_mask]
 
-        return VTree.from_graph(subgraph, branch_tree, branch_dirs, copy=False, check=check)
+        return VTree.from_graph(subgraph, branch_tree, branch_dirs, copy=False, check_integrity=check)
 
     @classmethod
     def parse(cls, branch_list: str) -> Self:
@@ -651,26 +675,82 @@ class VTree(VGraph):
         branch_list = re.sub(r"\s+", "", branch_list)
 
         # TODO: Add support for node labelling (e.g. "A➔B➔C")
+        node_type: Optional[Literal["label", "index"]] = None
+        node_count = 0
+        node_labelling: Dict[str, int] = {}
 
-        for branch in re.split(r";", branch_list):
-            nodes = re.split(r"->|➔", branch)
-            for n1, n2 in itertools.pairwise(nodes):
+        def node_idx(node_str: str, branch_str: str) -> int:
+            nonlocal node_type, node_count
+            assert node_str != "", f"Invalid branch definition '{branch_str}': empty node index."
+            if node_str[0].isalpha():
+                if node_type == "index":
+                    raise ValueError("Cannot mix labelled nodes and indexed nodes in the same branch list.")
+                node_type = "label"
+                return node_labelling.setdefault(node_str, len(node_labelling))
+            else:
+                if node_type == "label":
+                    raise ValueError("Cannot mix labelled nodes and indexed nodes in the same branch list.")
+                node_type = "index"
                 try:
-                    branches.append([int(n1), int(n2)])
-                    parents = [i for i, (_, n) in enumerate(branches) if n == int(n1)]
-                    if len(parents) == 0:
-                        branch_parents.append(-1)
-                    elif len(parents) == 1:
-                        branch_parents.append(parents[0])
-                    else:
-                        raise ValueError(
-                            f"Invalid branch definition: {branch}: node {n1} has multiple incoming branches."
-                        )
+                    node = int(node_str)
                 except ValueError:
                     raise ValueError(
-                        f"Invalid branch definition: {branch}: {n1} or {n2} is not a valid node index."
+                        f"Invalid branch definition '{branch_str}': {node_str} is not a valid node index."
                     ) from None
-        return cls(branches, branch_parents)
+                node_count = max(node_count, node + 1)
+                return node
+
+        for branch in re.split(r";", branch_list):
+            consecutive_nodes = re.split(r"->|➔", branch)
+            if len(consecutive_nodes) == 0:
+                continue
+            if len(consecutive_nodes) == 1:
+                node_idx(consecutive_nodes[0], branch)
+                continue
+
+            for n1, n2 in itertools.pairwise(consecutive_nodes):
+                n1_idx = node_idx(n1, branch)
+                branches.append([n1_idx, node_idx(n2, branch)])
+                parents = [i for i, (_, n) in enumerate(branches) if n == n1_idx]
+                if len(parents) == 0:
+                    branch_parents.append(-1)
+                else:
+                    branch_parents.append(parents[-1])
+
+        if node_type == "label":
+            node_count = len(node_labelling)
+            node_attr = pd.DataFrame(
+                index=list(node_labelling.values()), data={"_parsed_node_labels": list(node_labelling.keys())}
+            )
+        else:
+            node_attr = None
+        return cls(branches, branch_parents, node_attr=node_attr)
+
+    def print_tree(self) -> str:
+        """Print the tree structure in a human-readable format. Unlike print_graph() this displays the connection between branches instead of nodes.
+        Each branch is represented as "b{branch_id}" and the parent-child relationship between branches is represented as "b{parent_id}➔b{child_id}". Root branches are represented as "|b{branch_id}".
+
+        Example
+        -------
+        >>> # branch ids:        0   1 2
+        >>> tree = VTree.parse("0➔1;3➔2➔1")
+        >>> tree.print_tree()
+        '|b0 |b1➔b2'
+        """  # noqa: E501
+        tree_str = ""
+        previous_b = None
+        for b in self.walk_branch_ids(traversal="dfs"):
+            parent = self.branch_tree[b]
+            if parent == -1:
+                if tree_str != "":
+                    tree_str += " "
+                tree_str += f"|b{b}"
+            elif previous_b != parent:
+                tree_str += f" b{parent}➔b{b}"
+            else:
+                tree_str += f"➔b{b}"
+            previous_b = b
+        return tree_str
 
     ####################################################################################################################
     #  === TREE BRANCHES PROPERTIES ===
@@ -724,6 +804,13 @@ class VTree(VGraph):
         -------
         np.ndarray
             The indices of the root branches.
+
+        Example
+        -------
+        >>> # branch ids:        0   1 2
+        >>> tree = VTree.parse("0➔1;3➔2➔1")
+        >>> tree.root_branch_ids()
+        array([0, 1])
         """
         if as_mask:
             return self._branch_tree == -1
@@ -1019,6 +1106,8 @@ class VTree(VGraph):
         stack = stack.tolist()
 
         depth_first = traversal == "dfs"
+        if depth_first:
+            stack.reverse()
 
         while stack:
             branch_id = stack.pop() if depth_first else stack.pop(0)
@@ -1811,7 +1900,7 @@ class VTree(VGraph):
         quietly_ignore_invalid_pairs: Optional[bool] = False,
         inplace=False,
     ) -> VTree:
-        """Merge consecutive branches in the graph.
+        """Merge consecutive branches in the tree.
 
         Parameters
         ----------
@@ -1819,10 +1908,10 @@ class VTree(VGraph):
             The pairs of consecutive branches to merge.
 
         junction_nodes :
-            The indices of the junction nodes connecting each pair of branches. If None, the junction nodes are inferred from the branches graph.
+            The indices of the junction nodes connecting each pair of branches. If None, the junction nodes are inferred from the branches tree.
 
         remove_orphan_nodes : bool, optional
-            If True, the nodes that are not connected to any branch after the deletion are removed from the graph.
+            If True, the nodes that are not connected to any branch after the deletion are removed from the tree.
 
         quietly_ignore_invalid_pairs : bool, optional
             If True, ignore any branch pairs not consecutive.
@@ -1830,12 +1919,12 @@ class VTree(VGraph):
             If None, assumes that the provided branch pairs are valid and sorted as [parent, child].
 
         inplace : bool, optional
-            If True, the graph is modified in place. Otherwise, a new graph is returned.
+            If True, the tree is modified in place. Otherwise, a new tree is returned.
 
         Returns
         -------
-        VGraph
-            The modified graph.
+        VTree
+            The modified tree.
         """  # noqa: E501
         tree = self.copy() if not inplace else self
         branch_pairs = np.asarray(branch_pairs, dtype=int).reshape(-1, 2)
@@ -1904,6 +1993,7 @@ class VTree(VGraph):
         tree._branch_tree = np.delete(merge_lookup[branch_tree + 1], del_branch)
         return tree
 
+    @overload
     def merge_nodes(
         self,
         clusters: Iterable[Iterable[int]],
@@ -1911,7 +2001,27 @@ class VTree(VGraph):
         nodes_weight: Optional[npt.NDArray[np.float32]] = None,
         inplace=False,
         assume_reduced=False,
-    ) -> Self:
+        return_branch_reindex_lookup: Literal[False] = False,
+    ) -> Self: ...
+    @overload
+    def merge_nodes(
+        self,
+        clusters: Iterable[Iterable[int]],
+        *,
+        nodes_weight: Optional[npt.NDArray[np.float32]] = None,
+        inplace=False,
+        assume_reduced=False,
+        return_branch_reindex_lookup: Literal[True],
+    ) -> tuple[Self, Indices]: ...
+    def merge_nodes(
+        self,
+        clusters: Iterable[Iterable[int]],
+        *,
+        nodes_weight: Optional[npt.NDArray[np.float32]] = None,
+        inplace=False,
+        assume_reduced=False,
+        return_branch_reindex_lookup: bool = False,
+    ) -> Self | tuple[Self, Indices]:
         """Merge a cluster of nodes into a single node.
 
         The node with the smallest index is kept and the others are removed from the graph. The branches inside the clusters are removed, the branches incident to the cluster are connected to the kept node.
@@ -1934,12 +2044,50 @@ class VTree(VGraph):
         assume_reduced : bool, optional
             If True, the clusters are assumed to be reduced (i.e. each node appears in only one cluster).
 
+        return_branch_reindex_lookup : bool, optional
+            If True, also return the lookup table to reindex the branches after the node merging. Default is False.
+
         Returns
         -------
         VTree
             The modified tree.
+
+        branch_reindex_lookup : np.ndarray
+            The lookup table to reindex the branches after the node merging. Only returned if ``return_branch_reindex_lookup`` is True.
+
+        Examples
+        --------
+        >>> # branch ids:        0 1    2 3    4 5
+        >>> tree = VTree.parse("0➔1➔6;2➔1➔3;4➔6➔5")
+        >>> tree.branch_tree.tolist()
+        [-1, 0, -1, 2, -1, 4]
+        >>> tree.merge_nodes([{1, 6}], inplace=True).branch_list.tolist()
+        [[0, 1], [2, 1], [1, 3], [4, 1], [1, 5]]
+        >>> tree.branch_tree.tolist()
+        [-1, -1, 1, -1, 3]
+        >>>
         """  # noqa: E501
-        raise NotImplementedError("The merge_nodes method is not implemented yet.")
+        old_branch_tree = self._branch_tree.copy()
+        tree, branch_reindex_lookup = super(VTree, self).merge_nodes(
+            clusters,
+            nodes_weight=nodes_weight,
+            assume_reduced=assume_reduced,
+            return_branch_reindex_lookup=True,
+            inplace=inplace,
+        )
+
+        # === Redirect branch outgoing from the cluster to the ones incoming to it ===
+        removed_branch_mask = branch_reindex_lookup == -1
+        removed_branch_ids = np.where(removed_branch_mask)[0]
+        redirection = removed_branch_ids.copy()
+        while np.any(np.isin(redirection, removed_branch_ids)):
+            redirection = old_branch_tree[redirection]
+        branch_reindex_lookup[removed_branch_ids] = redirection
+        branch_reindex_lookup = add_empty_to_lookup(branch_reindex_lookup, increment_index=False)
+
+        tree._branch_tree = branch_reindex_lookup[old_branch_tree[~removed_branch_mask] + 1]
+
+        return (tree, branch_reindex_lookup) if return_branch_reindex_lookup else tree
 
     @overload
     def split_branch(

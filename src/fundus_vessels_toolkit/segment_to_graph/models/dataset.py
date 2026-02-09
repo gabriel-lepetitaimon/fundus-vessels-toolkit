@@ -20,6 +20,7 @@ from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.color import color_jitter
 from fundus_toolkits.utils.geometric import Rect
 from fundus_toolkits.utils.image import read_image
+from fundus_vessels_toolkit.segment_to_graph.graph_simplification import merge_nodes_by_distance
 
 from ...pipelines.avseg_to_tree import GNNAVSegToTree
 from ...utils.data_io import most_common_image_ext
@@ -36,7 +37,7 @@ class VBranchDigraphData(PygData):
         self,
         edge_index: torch.Tensor,
         edge_first_tip: torch.Tensor,
-        fundus_img: torch.Tensor,
+        img: torch.Tensor,
         branch_curves: list[torch.Tensor],
         edge_p: torch.Tensor,
         branch_av_p: torch.Tensor,
@@ -50,7 +51,7 @@ class VBranchDigraphData(PygData):
             Edges list as a 2xE tensor, storing the indices of the source and target branches.
         edge_first_tip : torch.Tensor
             A 2xE boolean tensor storing whether the edges connect the first or second tip of the source and target branches.
-        fundus_img : torch.Tensor
+        img : torch.Tensor
             The fundus image tensor as a 3xHxW tensor.
         branch_curves : list[torch.Tensor]
             List of branch curves, each as a Nx2 tensor of (x, y) coordinates.
@@ -70,9 +71,7 @@ class VBranchDigraphData(PygData):
                 f"edge_first_tip must be of shape (E, 2) but got {edge_first_tip.shape}"
             )
             assert edge_first_tip.dtype == torch.bool, "edge_first_tip must be a boolean tensor"
-            assert fundus_img.ndim == 3 and fundus_img.shape[0] == 3, (
-                f"fundus_img must be of shape (3, H, W) but got {fundus_img.shape}"
-            )
+            assert img.ndim == 3 and img.shape[0] == 3, f"fundus_img must be of shape (3, H, W) but got {img.shape}"
             B = len(branch_curves)
             assert branch_av_p.shape == (B, 2), f"branch_av_p must be of shape (B, 2) but got {branch_av_p.shape}"
             assert branch_dir.shape == (B,), f"branch_dir must be of shape (B,) but got {branch_dir.shape}"
@@ -99,7 +98,7 @@ class VBranchDigraphData(PygData):
         super().__init__(
             edge_index=edge_index,
             edge_first_tip=edge_first_tip,
-            fundus_img=fundus_img,
+            img=img,
             branch_curves=curves_,
             edge_p=edge_p,
             branch_av_p=branch_av_p,
@@ -130,7 +129,7 @@ class VBranchDigraphData(PygData):
         return cls(
             edge_index=edge_index,
             edge_first_tip=edge_first_tip,
-            fundus_img=fundus_img,
+            img=fundus_img.half(),
             branch_curves=branch_curves,
             edge_p=edge_p,
             branch_av_p=branch_av_p,
@@ -197,11 +196,13 @@ class VBranchDigraphDataset(PygDataset):
             or art_out.stat().st_mtime < topo_in[0].stat().st_mtime
             or vei_out.stat().st_mtime < topo_in[1].stat().st_mtime
         ]
+        if len(to_process) == 0:
+            return
 
         with multiprocessing.Pool(processes=os.cpu_count()) as pool:
             for _ in tqdm.tqdm(
                 pool.imap_unordered(VBranchDigraphDataset.process_single, to_process),
-                # (VBranchDigraphDataset.process_single(arg) for arg in args),
+                # (VBranchDigraphDataset.process_single(arg) for arg in to_process),
                 total=len(to_process),
                 desc="Processing dataset",
                 disable=not self.verbose,
@@ -239,14 +240,16 @@ class VBranchDigraphDataset(PygDataset):
             fundus = fundus.update(av=graph, crop_pad=roi, reshape_method="resize")
             graph = av2tree.to_vgraph(fundus)
         graph.geometric_data().clear_attribute(all_except=GEO_ATTRS)
+        merge_nodes_by_distance(graph, max_distance=0.5, inplace=True)
 
         # === Load and preprocess GT topology ===
         trees = []
         for tree in topo:
-            tree = VTree.load(tree)
+            tree = VTree.load(tree, check_integrity=True)
             if transform is not None and resize_to is not None:
                 tree.transform(transform, inplace=True)
                 tree.geometric_data()._domain = Rect.from_size((resize_to, resize_to))
+            merge_nodes_by_distance(tree, max_distance=0.5, inplace=True)
             trees.append(tree)
 
         # === Save processed data ===
@@ -266,8 +269,8 @@ class VBranchDigraphDataset(PygDataset):
         with multiprocessing.Pool(processes=os.cpu_count()) as pool:
             for i, raw_path, target_topology, graph in tqdm.tqdm(
                 pool.imap_unordered(VBranchDigraphDataset.preload_single, opts),
+                # (VBranchDigraphDataset.preload_single(opt) for opt in opts),
                 total=N,
-                # (VBranchDigraphDataset.process_single(arg) for arg in args),
                 desc="Preloading dataset",
                 disable=not self.verbose,
             ):
@@ -281,10 +284,10 @@ class VBranchDigraphDataset(PygDataset):
     def preload_single(opt: tuple[int, str, str]) -> tuple[int, Path, tuple[TreeTopology, TreeTopology], VGraph]:
         idx, processed_dir, fundus_name = opt
         raw_path = Path(processed_dir) / "raw" / (fundus_name + ".jpg")
-        graph = VGraph.load(Path(processed_dir) / "graphs" / (fundus_name + ".npz"))
-        tree = VTree.load(Path(processed_dir) / "target-topo" / (fundus_name + "_vei.npz"))
+        graph = VGraph.load(Path(processed_dir) / "graphs" / (fundus_name + ".npz"), check_integrity=False)
+        tree = VTree.load(Path(processed_dir) / "target-topo" / (fundus_name + "_vei.npz"), check_integrity=False)
         vei_topo = TreeTopology.from_tree(tree, sparse=True, discard_tree=True, expand_labels_by=5)
-        tree = VTree.load(Path(processed_dir) / "target-topo" / (fundus_name + "_art.npz"))
+        tree = VTree.load(Path(processed_dir) / "target-topo" / (fundus_name + "_art.npz"), check_integrity=False)
         art_topo = TreeTopology.from_tree(tree, sparse=True, discard_tree=True, expand_labels_by=5)
         return idx, raw_path, (art_topo, vei_topo), graph
 
@@ -302,13 +305,14 @@ class VBranchDigraphDataset(PygDataset):
         # === Deteriorate graph ===
         assert self.graphs is not None, "Graphs not loaded"
         graph = self.graphs[idx]
-        # if augment:
-        #     graph = deteriorate_graph(graph)
+        if augment:
+            graph = deteriorate_graph(graph)
 
         # === Compute BranchDigraph ===
         assert self.target_topologies is not None, "Target topologies not loaded"
         branch_digraph = VBranchDigraph.from_graph(graph, check=False)
         branch_digraph.compute_p_from_gt(*self.target_topologies[idx], check=False)
+        # branch_digraph.graph.geometric_data().sample_branch_curves(n_points=20)
 
         # === Test ===
         if test:
@@ -354,12 +358,13 @@ class VBranchDigraphDataset(PygDataset):
         draw_graph(
             digraph.graph,
             view=m[0],
-            edge_labels=True,
-            node_labels=True,
+            edge="bspline",
+            # edge_labels=True,
+            # node_labels=True,
         )
         try:
             solved_tree = digraph.optimize_tree(keep_missing_branch=False)
-            draw_tree(solved_tree, view=m[1], branch_color="subtree", bspline_dir=True, edge="skeleton")
+            draw_tree(solved_tree, view=m[1], branch_color="subtree", bspline_dir=True)
         except Exception:
             warnings.warn(f"Could not optimize tree for sample {name}. Drawing unoptimized tree instead.")
 

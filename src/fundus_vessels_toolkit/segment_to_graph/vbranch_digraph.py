@@ -1,15 +1,14 @@
 import warnings
 from typing import Literal, Optional, Self, overload
 
-from cv2 import line
 import numpy as np
 import numpy.typing as npt
 
 from fundus_vessels_toolkit.utils.lookup_array import create_removal_lookup
 
-from ..utils.cluster import cluster_by_distance, reduce_clusters
+from ..utils.cluster import cluster_by_distance
 from ..utils.math import sigmoid, softmax
-from ..utils.numpy import np_group_by
+from ..utils.numpy import np_first_true, np_group_by
 from ..utils.tree import accessible_from_root, find_cycles, has_cycle
 from ..utils.typing import Bool1DArray, Float1DArray, Int2DArrayLike
 from ..vascular_data_objects import VGraph
@@ -409,7 +408,7 @@ class VBranchDigraph(LineDigraph):
             vgraph.delete_branch(missing_branch, inplace=True)
 
         # - Insert branches on connections of not-adjacent branches
-        added_branch_parents = []
+        added_branch_parents = np.array([], dtype=np.int_)
         for b1, b0 in enumerate(branch_parents):
             if b0 == -1:
                 continue
@@ -418,13 +417,20 @@ class VBranchDigraph(LineDigraph):
             b0_head = vgraph.branch_list[b0, 1 if branch_dir[b0] else 0]
             b1_tail = vgraph.branch_list[b1, 0 if branch_dir[b1] else 1]
             if b0_head != b1_tail:
-                # ... insert a branch in the graph
-                new_b = vgraph.add_branch([b0_head, b1_tail], return_branch_id=True, inplace=True)[1][0]
-                assert new_b == len(branch_parents) + len(added_branch_parents), "Unexpected branch id"
+                # ... check if a branch was already added
+                new_b = None
+                added_branches_b0 = np.argwhere(added_branch_parents == b0).flatten()
+                if len(added_branches_b0):
+                    n0, n1 = vgraph.branch_list[added_branches_b0].T
+                    new_b = np_first_true((n0 == b0_head) & (n1 == b1_tail))
 
-                # ... update parent of b1 and new_b so that b0 -> new_b --> b1
+                if new_b is None:
+                    # ... or insert a branch in the graph
+                    new_b = vgraph.add_branch([b0_head, b1_tail], return_branch_id=True, inplace=True)[1][0]
+                    added_branch_parents = np.append(added_branch_parents, b0)
+
+                # ... update parent of b1 new_b --> b1
                 branch_parents[b1] = new_b
-                added_branch_parents.append(b0)
 
         # === Build the final VTree ===
         branch_parents = np.hstack([branch_parents, np.array(added_branch_parents, dtype=np.int_)])
