@@ -9,6 +9,7 @@
 #include "ray_iterators.h"
 #include "skeleton.h"
 #include "tree_topology.h"
+#include "vector_fields.h"
 
 /*********************************************************************************************
  *             === SKELETON PARSING ===
@@ -776,4 +777,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // === tree_topology.h ===
     m.def("read_branches_topology", &read_branches_topology, "Read the topology of branches.");
+
+    // === vector_fields.h ===
+    m.def("vec_bilinear_interpolate", &vec_bilinear_interpolate, "Bilinear interpolation of a vector field.");
+    m.def("inverse_displacement", &inverse_displacement, "Inverse vector displacement at given sample coordinates.");
 }
