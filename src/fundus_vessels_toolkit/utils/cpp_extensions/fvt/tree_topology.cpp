@@ -64,7 +64,7 @@ std::array<torch::Tensor, 5> read_branches_topology(const std::vector<torch::Ten
     std::vector<std::array<float, 2>> tips_rank(B);
 
     // → Read topology for each branch
-#pragma omp parallel for
+    // #pragma omp parallel for
     for (std::size_t b = 0; b < B; ++b) {
         const auto& curveTensor = branch_curves[b];
         TORCH_CHECK_VALUE(curveTensor.dim() == 2, "Each branch curve must be a 2D tensor");
