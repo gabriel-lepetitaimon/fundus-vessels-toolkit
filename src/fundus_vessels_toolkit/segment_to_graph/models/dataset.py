@@ -1,7 +1,7 @@
+from __future__ import annotations
+
 import hashlib
 import math
-import multiprocessing
-import os
 import tempfile
 import warnings
 from pathlib import Path
@@ -9,24 +9,29 @@ from typing import Optional, Self, Sequence
 
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 import torch
-import torch_geometric as pyg
 import tqdm
+from fundus_data_toolkit.functional import open_image
+from joblib import Parallel, delayed
 from jppype import Mosaic
 from torch_geometric.data import Data as PygData
 from torch_geometric.data import Dataset as PygDataset
 
+from fundus_odmac_toolkit.models.segmentation import segment
 from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.color import color_jitter
-from fundus_toolkits.utils.geometric import Rect
+from fundus_toolkits.utils.geometric import Point, Rect
 from fundus_toolkits.utils.image import read_image
-from fundus_vessels_toolkit.segment_to_graph.graph_simplification import merge_nodes_by_distance
 
 from ...pipelines.avseg_to_tree import GNNAVSegToTree
+from ...utils import if_none
 from ...utils.data_io import most_common_image_ext
 from ...utils.fundus_projections import ResizeTranslateProjection
 from ...utils.jppype import AV_COLORS, draw_graph, draw_tree, draw_trees
+from ...utils.numpy import np_group_by
 from ...vascular_data_objects import VBranchGeoData, VTree
+from ..graph_simplification import merge_nodes_by_distance
 from ..tree_topology import TopologicalLabel
 from ..vbranch_digraph import TreeTopology, VBranchDigraph, VGraph
 from .data_augmentation import deteriorate_graph, geometric_augment
@@ -40,8 +45,13 @@ class VBranchDigraphData(PygData):
         img: torch.Tensor,
         branch_curves: list[torch.Tensor],
         edge_p: torch.Tensor,
+        branch_root_candidates: torch.Tensor,
+        branch_root_p: torch.Tensor,
         branch_av_p: torch.Tensor,
         branch_dir: torch.Tensor,
+        od_yx: torch.Tensor,
+        mac_yx: torch.Tensor,
+        name: str,
     ):
         """Store branch digraph data in PyG format.
 
@@ -57,6 +67,10 @@ class VBranchDigraphData(PygData):
             List of branch curves, each as a Nx2 tensor of (x, y) coordinates.
         edge_p : torch.Tensor
             Probability of each edge being correct as a tensor of shape (E,).
+        branch_root_candidates: torch.Tensor
+            A boolean tensor of shape (B, 2) indicating whether each branch tip is a valid vascular root.
+        branch_root_p : torch.Tensor
+            Probability of each branch tip being a vascular root as a tensor of shape (B,2).
         branch_av_p : torch.Tensor
             Probability of each branch being an artery or a vein (or neither) as a tensor of shape (B, 2).
         branch_dir : torch.Tensor
@@ -99,41 +113,60 @@ class VBranchDigraphData(PygData):
             edge_index=edge_index,
             edge_first_tip=edge_first_tip,
             img=img,
+            od_yx=od_yx,
+            mac_yx=mac_yx,
             branch_curves=curves_,
             edge_p=edge_p,
+            branch_root_candidates=branch_root_candidates,
+            branch_root_p=branch_root_p,
             branch_av_p=branch_av_p,
             branch_dir=branch_dir,
             pos=pos,  # Use mid-point as node
+            name=name,
         )
         self.num_nodes = B
 
     def is_node_attr(self, key: str) -> bool:
-        return super().is_node_attr(key) or key in {"branch_curves", "branch_av_p", "branch_dir"}
+        return super().is_node_attr(key) or key in {"branch_curves", "branch_av_p", "branch_dir", "branch_root_p"}
 
     def is_edge_attr(self, key: str) -> bool:
         return super().is_edge_attr(key) or key in {"edge_first_tip", "edge_p"}
 
     @classmethod
-    def from_branch_digraph(cls, branch_digraph: VBranchDigraph, fundus_img: torch.Tensor) -> Self:
-        # === Extract branch digraph data ===
-        line_list = branch_digraph.line_list
-        edge_index = torch.stack([torch.from_numpy(line_list[:, 0]), torch.from_numpy(line_list[:, 2])], dim=0)
-        edge_first_tip = torch.stack([torch.from_numpy(line_list[:, 1]), torch.from_numpy(line_list[:, 3])], dim=1) == 0
+    def from_branch_digraph(
+        cls,
+        digraph: VBranchDigraph,
+        fundus_img: torch.Tensor,
+        od_yx: npt.NDArray,
+        mac_yx: npt.NDArray,
+        name: str,
+    ) -> Self:
+        assert digraph.line_p is not None, "branch_digraph must have line_p computed"
+        assert digraph.branch_av_p is not None, "branch_digraph must have branch_av_p computed"
+        assert digraph.branch_dir_p is not None, "branch_digraph must have branch_dir_p computed"
 
-        geodata = branch_digraph.graph.geometric_data()
+        not_root = ~digraph.root_mask
+        geodata = digraph.graph.geometric_data()
         branch_curves = [torch.from_numpy(curve).float() for curve in geodata.branch_curve(fill_with_nodes=True)]
-        edge_p = torch.from_numpy(branch_digraph.line_p).float()
-        branch_av_p = torch.from_numpy(branch_digraph.branch_av_p).float()
-        branch_dir = torch.from_numpy(branch_digraph.branch_dir_p).float()
+
+        valid_root_tips = np.zeros((digraph.graph.branch_count, 2), dtype=np.bool_)
+        valid_root_tips[digraph.b1[digraph.root_mask], digraph.b1_tip[digraph.root_mask]] = True
+        root_p = np.zeros((digraph.graph.branch_count, 2), dtype=np.float32)
+        root_p[digraph.b1[digraph.root_mask], digraph.b1_tip[digraph.root_mask]] = digraph.line_p[digraph.root_mask]
 
         return cls(
-            edge_index=edge_index,
-            edge_first_tip=edge_first_tip,
+            edge_index=torch.from_numpy(digraph.b0b1[not_root]).T,
+            edge_first_tip=torch.from_numpy(digraph.b0tip_b1tip[not_root]) == 0,
             img=fundus_img.half(),
             branch_curves=branch_curves,
-            edge_p=edge_p,
-            branch_av_p=branch_av_p,
-            branch_dir=branch_dir,
+            edge_p=torch.from_numpy(digraph.line_p[not_root]).float(),
+            branch_av_p=torch.from_numpy(digraph.branch_av_p).float(),
+            branch_dir=torch.from_numpy(digraph.branch_dir_p).float(),
+            branch_root_candidates=torch.from_numpy(valid_root_tips),
+            branch_root_p=torch.from_numpy(root_p),
+            od_yx=torch.from_numpy(od_yx).float(),
+            mac_yx=torch.from_numpy(mac_yx).float(),
+            name=name,
         )
 
 
@@ -142,41 +175,63 @@ class VBranchDigraphDataset(PygDataset):
         self,
         root: str | Path,
         fundus_paths: list[Path],
-        graphs: list[Path],
-        target_topologies: list[tuple[Path, Path]],
+        graphs_path: list[Path],
+        target_topologies_path: list[tuple[Path, Path]],
         *,
+        augment: bool = False,
         verbose: bool = True,
         resize_to: Optional[int] = None,
         transform=None,
         overwrite: Optional[bool] = None,
+        graphs: Optional[list[VGraph]] = None,
+        target_topologies: Optional[list[tuple[TreeTopology, TreeTopology]]] = None,
+        processed_fundus_paths: Optional[list[Path]] = None,
+        od_yx: Optional[npt.NDArray] = None,
+        mac_yx: Optional[npt.NDArray] = None,
     ):
-        assert len(fundus_paths) == len(graphs) == len(target_topologies), "All input lists must have the same length"
-        self._fundus_paths = fundus_paths
+        assert len(fundus_paths) == len(graphs_path) == len(target_topologies_path), (
+            "All input lists must have the same length"
+        )
+        self._raw_fundus_paths = fundus_paths
         self.resize_to = resize_to
         self.verbose = verbose
+        self.augment = augment
 
-        self._graphs = graphs
-        self._target_topologies = target_topologies
+        self._graphs_path = graphs_path
+        self._target_topologies_path = target_topologies_path
         self.overwrite = overwrite
 
         super().__init__(root=str(root), transform=transform, force_reload=overwrite is not False)
-        self.fundus_paths, self.target_topologies, self.graphs = self.preload_from_disk()
+        if (
+            graphs is None
+            or target_topologies is None
+            or processed_fundus_paths is None
+            or od_yx is None
+            or mac_yx is None
+        ):
+            self.fundus_paths, self.target_topologies, self.graphs, self.od_yx, self.mac_yx = self.preload_from_disk()
+        else:
+            self.fundus_paths = processed_fundus_paths
+            self.graphs = graphs
+            self.target_topologies = target_topologies
+            self.od_yx = od_yx
+            self.mac_yx = mac_yx
 
     @property
     def processed_file_names(self):
-        return [str(Path("raw") / (raw_file.stem + ".jpg")) for raw_file in self._fundus_paths]
+        return [str(Path("raw") / (raw_file.stem + ".jpg")) for raw_file in self._raw_fundus_paths]
 
     def raw_processed_file(self, idx: int) -> Path:
-        return Path(self.processed_dir) / "raw" / (self._fundus_paths[idx].stem + ".jpg")
+        return Path(self.processed_dir) / "raw" / (self._raw_fundus_paths[idx].stem + ".jpg")
 
     def graph_processed_file(self, idx: int) -> Path:
-        return Path(self.processed_dir) / "graphs" / (self._fundus_paths[idx].stem + ".npz")
+        return Path(self.processed_dir) / "graphs" / (self._raw_fundus_paths[idx].stem + ".npz")
 
     def art_topo_processed_file(self, idx: int) -> Path:
-        return Path(self.processed_dir) / "target-topo" / (self._fundus_paths[idx].stem + "_art.npz")
+        return Path(self.processed_dir) / "target-topo" / (self._raw_fundus_paths[idx].stem + "_art.npz")
 
     def vei_topo_processed_file(self, idx: int) -> Path:
-        return Path(self.processed_dir) / "target-topo" / (self._fundus_paths[idx].stem + "_vei.npz")
+        return Path(self.processed_dir) / "target-topo" / (self._raw_fundus_paths[idx].stem + "_vei.npz")
 
     def process(self):
         av2tree = GNNAVSegToTree()
@@ -184,7 +239,7 @@ class VBranchDigraphDataset(PygDataset):
         to_process = [
             (graph_in, topo_in, raw_in, av2tree, self.processed_dir, self.resize_to)
             for i, (graph_in, topo_in, raw_in) in enumerate(
-                zip(self._graphs, self._target_topologies, self._fundus_paths, strict=True)
+                zip(self._graphs_path, self._target_topologies_path, self._raw_fundus_paths, strict=True)
             )
             if self.overwrite is True
             or not (raw_out := self.raw_processed_file(i)).exists()
@@ -199,21 +254,31 @@ class VBranchDigraphDataset(PygDataset):
         if len(to_process) == 0:
             return
 
-        with multiprocessing.Pool(processes=os.cpu_count()) as pool:
-            for _ in tqdm.tqdm(
-                pool.imap_unordered(VBranchDigraphDataset.process_single, to_process),
-                # (VBranchDigraphDataset.process_single(arg) for arg in to_process),
-                total=len(to_process),
-                desc="Processing dataset",
-                disable=not self.verbose,
-            ):
-                pass
+        if (od_mac_file := Path(self.processed_dir) / "od_mac.csv").exists():
+            od_mac_df = pd.read_csv(od_mac_file, index_col="name")
+        else:
+            od_mac_df = pd.DataFrame(
+                index=[path.stem for path in self._raw_fundus_paths], columns=["od_y", "od_x", "mac_y", "mac_x"]
+            )
+
+        run_parallel = Parallel(n_jobs=-2, return_as="generator_unordered")
+        for name, od_yx, mac_yx in tqdm.tqdm(  # type: ignore
+            run_parallel(delayed(VBranchDigraphDataset.process_single)(arg) for arg in to_process),
+            # (VBranchDigraphDataset.process_single(arg) for arg in to_process),
+            total=len(to_process),
+            desc="Processing dataset",
+            disable=not self.verbose,
+        ):
+            od_mac_df.loc[name] = [od_yx[0], od_yx[1], mac_yx[0], mac_yx[1]]
+
+        od_mac_df.to_csv(Path(self.processed_dir) / "od_mac.csv")
 
     @staticmethod
     def process_single(
         opts: tuple[Path, tuple[Path, Path], Path, GNNAVSegToTree, str, Optional[int]],
-    ) -> None:
+    ) -> tuple[str, Point | None, Point | None]:
         graph, topo, fundus_path, av2tree, directory, resize_to = opts
+        name = fundus_path.stem
 
         # === Load and crop fundus image ===
         fundus = FundusData(fundus_path)
@@ -227,6 +292,12 @@ class VBranchDigraphDataset(PygDataset):
         transform: Optional[ResizeTranslateProjection] = None
         if roi is not None and r is not None:
             transform = ResizeTranslateProjection(r, -roi.top_left.numpy() * r)
+
+        fundus.write_image(image=Path(directory) / "raw" / (name + ".jpg"), on_exists="overwrite")
+
+        # === Find Optic Disc and Macula ===
+        od_mac = segment(open_image(Path(directory) / "raw" / (name + ".jpg"))).numpy(force=True).argmax(axis=0)
+        fundus = fundus.update(od=od_mac == 1, macula=od_mac == 2, reshape_method="resize")
 
         # === Load and preprocess graph ===
         GEO_ATTRS = [VBranchGeoData.Fields.TANGENTS, VBranchGeoData.Fields.TIPS_TANGENT, VBranchGeoData.Fields.CALIBRES]
@@ -253,32 +324,39 @@ class VBranchDigraphDataset(PygDataset):
             trees.append(tree)
 
         # === Save processed data ===
-        name = fundus_path.stem
-        fundus.write_image(image=Path(directory) / "raw" / (name + ".jpg"), on_exists="overwrite")
         graph.save(Path(directory) / "graphs" / (name + ".npz"), on_exists="overwrite")
         trees[0].save(Path(directory) / "target-topo" / (name + "_art.npz"), on_exists="overwrite")
         trees[1].save(Path(directory) / "target-topo" / (name + "_vei.npz"), on_exists="overwrite")
 
-    def preload_from_disk(self) -> tuple[list[Path], list[tuple[TreeTopology, TreeTopology]], list[VGraph]]:
-        N = len(self._fundus_paths)
+        return name, fundus.od_center, fundus.macula_center
+
+    def preload_from_disk(
+        self,
+    ) -> tuple[list[Path], list[tuple[TreeTopology, TreeTopology]], list[VGraph], npt.NDArray, npt.NDArray]:
+        N = len(self._raw_fundus_paths)
         raw_paths: list[Path] = [None] * N
         target_topologies: list[tuple[TreeTopology, TreeTopology]] = [None] * N
         graphs: list[VGraph] = [None] * N
 
-        opts = [(i, self.processed_dir, path.stem) for i, path in enumerate(self._fundus_paths)]
-        with multiprocessing.Pool(processes=os.cpu_count()) as pool:
-            for i, raw_path, target_topology, graph in tqdm.tqdm(
-                pool.imap_unordered(VBranchDigraphDataset.preload_single, opts),
-                # (VBranchDigraphDataset.preload_single(opt) for opt in opts),
-                total=N,
-                desc="Preloading dataset",
-                disable=not self.verbose,
-            ):
-                raw_paths[i] = raw_path
-                graphs[i] = graph
-                target_topologies[i] = target_topology
+        opts = [(i, self.processed_dir, path.stem) for i, path in enumerate(self._raw_fundus_paths)]
+        run_parallel = Parallel(n_jobs=-2, return_as="generator_unordered")
+        for i, raw_path, target_topology, graph in tqdm.tqdm(  # type: ignore
+            run_parallel(delayed(VBranchDigraphDataset.preload_single)(arg) for arg in opts),
+            # (VBranchDigraphDataset.preload_single(opt) for opt in opts),
+            total=N,
+            desc="Preloading dataset",
+            disable=not self.verbose,
+        ):
+            raw_paths[i] = raw_path
+            graphs[i] = graph
+            target_topologies[i] = target_topology
 
-        return raw_paths, target_topologies, graphs
+        df = pd.read_csv(Path(self.processed_dir) / "od_mac.csv", index_col="name")
+        df = df.loc[[path.stem for path in raw_paths]]
+        od_yx = df[["od_y", "od_x"]].values.astype(np.float32)
+        mac_yx = df[["mac_y", "mac_x"]].values.astype(np.float32)
+
+        return raw_paths, target_topologies, graphs, od_yx, mac_yx
 
     @staticmethod
     def preload_single(opt: tuple[int, str, str]) -> tuple[int, Path, tuple[TreeTopology, TreeTopology], VGraph]:
@@ -295,12 +373,17 @@ class VBranchDigraphDataset(PygDataset):
         return len(self.fundus_paths)
 
     def get(self, idx) -> VBranchDigraphData:
-        digraph, fundus_img = self.get_sample(idx, augment=False, test=True)
-        return VBranchDigraphData.from_branch_digraph(digraph, torch.from_numpy(fundus_img))
+        digraph, fundus_img, od_yx, mac_yx = self.get_sample(idx, augment=self.augment, test=False)
+        name = self._raw_fundus_paths[idx].stem
+        return VBranchDigraphData.from_branch_digraph(digraph, torch.from_numpy(fundus_img), od_yx, mac_yx, name)
 
-    def get_sample(self, idx: int, *, augment: bool = False, test: bool = False) -> tuple[VBranchDigraph, npt.NDArray]:
+    def get_sample(
+        self, idx: int, *, augment: bool = False, test: bool = False
+    ) -> tuple[VBranchDigraph, npt.NDArray, npt.NDArray, npt.NDArray]:
         fundus_path = self.fundus_paths[idx]
         fundus_image = read_image(fundus_path, cast_to_float=True)
+        od_yx = self.od_yx[idx]
+        mac_yx = self.mac_yx[idx]
 
         # === Deteriorate graph ===
         assert self.graphs is not None, "Graphs not loaded"
@@ -332,15 +415,16 @@ class VBranchDigraphDataset(PygDataset):
                 warnings.warn(f"No optimal tree from sample {idx} ({fundus_path.stem}): {e}", stacklevel=1)
 
         # === Geometric and color augmentation ===
+        sample = branch_digraph, fundus_image, od_yx, mac_yx
         if augment:
-            branch_digraph, fundus_image = geometric_augment((branch_digraph, fundus_image))
+            sample = geometric_augment(sample)
 
-        return branch_digraph, fundus_image
+        return sample
 
     def draw_jppype(
         self, idx: int, *, test: bool = False, augment: bool = False
     ) -> tuple[Mosaic, VBranchDigraph, npt.NDArray]:
-        name = self._fundus_paths[idx].stem
+        name = self._raw_fundus_paths[idx].stem
         fundus = FundusData(self.fundus_paths[idx])
         art_tree = VTree.load(Path(self.processed_dir) / "target-topo" / (name + "_art.npz"))
         vei_tree = VTree.load(Path(self.processed_dir) / "target-topo" / (name + "_vei.npz"))
@@ -393,6 +477,54 @@ class VBranchDigraphDataset(PygDataset):
         m[2].add_image(topo_map, name="background")
         draw_trees(trees_gt, view=m[2], bspline_dir=True)
         return m, digraph, fundus_img
+
+    def split(self, indices: Sequence[int], augment: Optional[bool] = None) -> VBranchDigraphDataset:
+        """Create a new dataset with only the samples at the specified indices."""
+        return VBranchDigraphDataset(
+            root=self.root,
+            fundus_paths=[self.fundus_paths[i] for i in indices],
+            graphs_path=[self._graphs_path[i] for i in indices],
+            target_topologies_path=[self._target_topologies_path[i] for i in indices],
+            od_yx=self.od_yx[indices],
+            mac_yx=self.mac_yx[indices],
+            verbose=self.verbose,
+            resize_to=self.resize_to,
+            transform=self.transform,
+            overwrite=self.overwrite,
+            graphs=[self.graphs[i] for i in indices],
+            target_topologies=[self.target_topologies[i] for i in indices],
+            processed_fundus_paths=[self.fundus_paths[i] for i in indices],
+            augment=self.augment if augment is None else augment,
+        )
+
+    def split_loaders(
+        self,
+        train_ratio: float = 0.8,
+        val_ratio: float = 0.1,
+    ) -> tuple[VBranchDigraphDataset, VBranchDigraphDataset, VBranchDigraphDataset]:
+        """Split the dataset into train, validation and test sets and return corresponding DataLoaders."""
+        assert train_ratio + val_ratio < 1.0, "train_ratio and val_ratio must sum to less than 1.0"
+
+        subset_paths = {}
+        samples_subset = [subset_paths.setdefault(path.parent, len(subset_paths)) for path in self._raw_fundus_paths]
+
+        train_indices = []
+        val_indices = []
+        test_indices = []
+        for _, samples in np_group_by(np.arange(len(self)), np.array(samples_subset)):
+            np.random.shuffle(samples)
+            num_samples = len(samples)
+            train_end = int(train_ratio * num_samples)
+            val_end = int((train_ratio + val_ratio) * num_samples)
+            train_indices.extend(samples[:train_end])
+            val_indices.extend(samples[train_end:val_end])
+            test_indices.extend(samples[val_end:])
+
+        train_dataset = self.split(train_indices, augment=True)
+        val_dataset = self.split(val_indices, augment=False)
+        test_dataset = self.split(test_indices, augment=False)
+
+        return train_dataset, val_dataset, test_dataset
 
     @classmethod
     def load_from_dirs(

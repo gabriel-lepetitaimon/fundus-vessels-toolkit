@@ -209,14 +209,14 @@ def deteriorate_graph[T: VGraph](
 
 
 def geometric_augment(
-    sample: tuple[VBranchDigraph, npt.NDArray],
+    sample: tuple[VBranchDigraph, npt.NDArray, npt.NDArray, npt.NDArray],
     *,
     max_rotation: float = 30.0,
     min_rotation: float = 5.0,
     horizontal_flip: bool = True,
     rnd: Optional[np.random.Generator] = None,
-) -> tuple[VBranchDigraph, npt.NDArray]:
-    digraph, fundus_img = sample
+) -> tuple[VBranchDigraph, npt.NDArray, npt.NDArray, npt.NDArray]:
+    digraph, fundus_img, od_yx, mac_yx = sample
     fundus_img = fundus_img.transpose(1, 2, 0)  # C,H,W -> H,W,C
     if rnd is None:
         rnd = np.random.default_rng()
@@ -234,15 +234,17 @@ def geometric_augment(
     if horizontal_flip:  # and rnd.random() < 0.5:
         flip = FlipProjection(center, horizontal=True)
         digraph.graph.transform(flip, inplace=True)
+        od_yx, mac_yx = flip.transform(np.array([od_yx, mac_yx]))
         fundus_img = flip.warp(fundus_img, warped_domain="same")[0]
 
     # === Elastic ===
     elastic = ElasticProjection.random(shape, displacement_std=80, smoothing_size=200)
     digraph.graph.transform(elastic, inplace=True)
+    od_yx, mac_yx = elastic.transform(np.array([od_yx, mac_yx]))
     fundus_img = elastic.warp(fundus_img, warped_domain="same")[0]
 
     # Reset domain after augmentation
     digraph.graph.geometric_data()._domain = Rect.from_size(shape)
     fundus_img = fundus_img.transpose(2, 0, 1)  # H,W,C -> C,H,W
 
-    return digraph, fundus_img
+    return digraph, fundus_img, od_yx, mac_yx

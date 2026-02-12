@@ -1,12 +1,12 @@
 import warnings
+from functools import cached_property
 from typing import Literal, Optional, Self, overload
 
 import numpy as np
 import numpy.typing as npt
 
-from fundus_vessels_toolkit.utils.lookup_array import create_removal_lookup
-
 from ..utils.cluster import cluster_by_distance
+from ..utils.lookup_array import create_removal_lookup
 from ..utils.math import sigmoid, softmax
 from ..utils.numpy import np_first_true, np_group_by
 from ..utils.tree import accessible_from_root, find_cycles, has_cycle
@@ -38,6 +38,34 @@ class LineDigraph:
         """  # noqa: E501
         assert line_list.ndim == 2 and line_list.shape[1] == 4, "line_list must be of shape (N, 4)"
         self.line_list = line_list
+
+    @property
+    def b0(self) -> npt.NDArray[np.int_]:
+        return self.line_list[:, 0]
+
+    @property
+    def b0_tip(self) -> npt.NDArray[np.int_]:
+        return self.line_list[:, 1]
+
+    @property
+    def b1(self) -> npt.NDArray[np.int_]:
+        return self.line_list[:, 2]
+
+    @property
+    def b1_tip(self) -> npt.NDArray[np.int_]:
+        return self.line_list[:, 3]
+
+    @property
+    def b0b1(self) -> npt.NDArray[np.int_]:
+        return self.line_list[:, [0, 2]]
+
+    @property
+    def b0tip_b1tip(self) -> npt.NDArray[np.int_]:
+        return self.line_list[:, [1, 3]]
+
+    @cached_property
+    def root_mask(self) -> npt.NDArray[np.bool_]:
+        return self.line_list[:, 0] == -1
 
     @classmethod
     def search_lines(cls, lines: npt.NDArray[np.int_], searched_lines: Int2DArrayLike) -> npt.NDArray[np.int_]:

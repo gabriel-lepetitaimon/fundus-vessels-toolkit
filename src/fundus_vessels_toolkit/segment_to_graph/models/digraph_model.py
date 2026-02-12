@@ -1,36 +1,38 @@
-from copy import copy
-from functools import partial
-from typing import Optional, TypedDict
+from __future__ import annotations
+
+from typing import Optional
 
 import torch
 import torch.nn.functional as F
 from torch import nn
 from torch_geometric.nn.conv import GATv2Conv, MessagePassing
 from torch_geometric.nn.dense.linear import Linear
-from torch_geometric.utils import softmax
-from torchvision.models.efficientnet import FusedMBConv, efficientnet_v2_s
+from torch_geometric.utils import group_argsort, softmax
+from torchvision.models import EfficientNet_V2_S_Weights
+from torchvision.models.efficientnet import efficientnet_v2_s
+from torchvision.transforms.functional import normalize
 
 from fundus_vessels_toolkit.utils.torch import torch_interp_bilinear
 
-from .convbn import ConvBN, NormSpec, PaddingSpec
-
 
 class BranchFeaturesEfficientNetV2S(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, pretrained: bool = True):
         super().__init__()
-        net = efficientnet_v2_s()
+        net = efficientnet_v2_s(weights=EfficientNet_V2_S_Weights.DEFAULT if pretrained else None).features
+        self.efficient_net = net
         self._features_cache = [None] * 4
 
-        def hook(module, input, output, idx):
-            self._features_cache[idx] = output
-
-        self.net = nn.Sequential(*net.features[:-1])  # type: ignore
-        for i, f_idx in enumerate([1, 2, 3, 6]):
-            self.net[f_idx].register_forward_hook(partial(hook, idx=i))
+        self.net = nn.Sequential(*[nn.Sequential(*[net[_] for _ in idxs]) for idxs in [(0, 1), (2,), (3,), (4, 5, 6)]])
 
     def forward(self, x):
-        self.net(x)
-        return copy(self._features_cache)
+        # Normalize x to ImageNet stats
+        x = normalize(x, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
+        features = []
+        for f in self.net:
+            x = f(x)
+            features.append(x)
+        return features
 
 
 class Gatv2GCN(torch.nn.Module):
@@ -39,20 +41,28 @@ class Gatv2GCN(torch.nn.Module):
         self.n_in = n_in
         self.n_out = n_out
 
+        self.bn0 = nn.BatchNorm1d(n_in)
         self.gat0 = GATv2Conv(n_in, 64, heads=8, dropout=0.1)
+        self.bn1 = nn.BatchNorm1d(64 * 8)
         self.gat1a = GATv2Conv(64 * 8, 128, heads=8, dropout=0.1)
         self.gat1b = GATv2Conv(128 * 8, 256, heads=4, dropout=0.1)
+        self.bn2 = nn.BatchNorm1d(256 * 4)
         self.gat2a = GATv2Conv(256 * 4, 128, heads=8, dropout=0.1)
         self.gat2b = GATv2Conv(128 * 8, 256, heads=4, dropout=0.1)
+        self.bn3 = nn.BatchNorm1d(256 * 4)
         self.gat3a = GATv2Conv(256 * 4, 512, heads=2, dropout=0.1)
         self.gat3b = GATv2Conv(512 * 2, n_out, heads=1, dropout=0.1)
 
     def forward(self, x, edge_index):
+        x = self.bn0(x)
         x = self.gat0(x, edge_index).relu()
+        x = self.bn1(x)
         x = self.gat1a(x, edge_index).relu()
         x = self.gat1b(x, edge_index).relu()
+        x = self.bn2(x)
         x = self.gat2a(x, edge_index).relu()
         x = self.gat2b(x, edge_index).relu()
+        x = self.bn3(x)
         x = self.gat3a(x, edge_index).relu()
         x = self.gat3b(x, edge_index)
 
@@ -73,7 +83,7 @@ class BranchDigraphModel(torch.nn.Module):
         # === Classification layers ===
         self.lin_av = Linear(gnn_out_channels, 3, weight_initializer="glorot")
         self.lin_dir = Linear(gnn_out_channels, 1, weight_initializer="glorot")
-        self.lin_parent = Linear(gnn_out_channels, 128, weight_initializer="glorot")
+        self.lin_affinity = Linear(gnn_out_channels, 128, weight_initializer="glorot")
         self.lin_root = Linear(gnn_out_channels, 1, weight_initializer="glorot")
 
     def sample_features(
@@ -105,7 +115,6 @@ class BranchDigraphModel(torch.nn.Module):
         batch_idx = batch_idx[:, None]
 
         if isinstance(features_map, list):
-            features_map = sorted(features_map, key=lambda x: x.shape[-1], reverse=True)
             b_features0, b_features1 = [], []
 
             for fmap in features_map:
@@ -133,33 +142,134 @@ class BranchDigraphModel(torch.nn.Module):
             return torch.cat([b_features0, b_features1], dim=-1)  # (B, 512)
 
     def forward(self, data):
+        device = data.edge_index.device
+
+        # === Extract branch features ===
         img = data.img.reshape(data.batch_size, 3, *data.img.shape[1:]).half()
         img_features = self.img_feature_extractor(img)
         branch_features = self.sample_features(img_features, data.branch_curves, data.batch, img.shape[-2:])
 
-        edge_index = data.edge_index[:, ~root_lines_mask(data)]
-        x = self.gnn(branch_features, edge_index)
+        # === Refine branch representation with the GNN ===
+        lines = Lines(data.edge_index, data.edge_first_tip)
+        x = self.gnn(branch_features, lines.edge_index)
 
+        # === Predict branch AV class, direction, affinity and root probability ===
         branch_av_p = self.lin_av(x)
-        branch_dir = torch.sigmoid(self.lin_dir(x).squeeze(-1))
-        branch_parent_v = self.lin_parent(x)
-        branch_root_p = self.lin_root(x).squeeze(-1)
+        branch_dir = self.lin_dir(x).squeeze(-1)
+        branch_affinity_v = self.lin_affinity(x)
+        branch_root_score = self.lin_root(x).squeeze(-1)
 
-        dir = (data.branch_dir if self.training else branch_dir) > 0.5
-        incident_edges_mask = incident_mask(data, dir)
-        incident_edges = data.edge_index[:, incident_edges_mask]
-        edge_scores = torch.zeros(data.edge_index.shape[1], device=edge_index.device)
-        if incident_edges.numel() > 0:
-            branch_out = branch_parent_v[incident_edges[0]]
-            branch_in = branch_parent_v[incident_edges[1]]
-            edge_scores[incident_edges_mask] = F.cosine_similarity(branch_out, branch_in, dim=-1)
-            root_mask, root_target_branches = root_lines_index(data, dir)
-            assert (incident_edges_mask & root_mask).sum() == 0, "Root edges should not be incident edges"
-            if root_mask.any():
-                edge_scores[root_mask] = branch_root_p[root_target_branches]
-            edge_scores = softmax(edge_scores, groupby_incident_edges(data, dir))
+        # === Based on the branch direction, predict the optimal incident parent ===
+        # Select only lines whose direction is consistent with the predicted branch direction
+        dir = (data.branch_dir if self.training else branch_dir) > 0
+        valid_lines = lines.select_valid_b1_dir(dir)
 
-        return branch_av_p, branch_dir, edge_scores
+        # Compute affinity between connected branches
+        b0_v = branch_affinity_v[valid_lines.b0]
+        b1_v = branch_affinity_v[valid_lines.b1]
+        edge_scores = F.cosine_similarity(b0_v, b1_v, dim=-1)
+
+        # Add root affinity
+        valid_root_mask = data.branch_root_candidates.clone()
+        valid_root_mask[torch.arange(data.num_nodes, device=device), torch.where(dir, 1, 0)] = False
+        valid_root_b1 = torch.where(valid_root_mask.any(dim=1))[0]
+
+        edge_scores = torch.cat([edge_scores, branch_root_score[valid_root_b1]], dim=0)
+        group_by = torch.cat([valid_lines.b1, valid_root_b1], dim=0)
+        edge_scores = softmax(edge_scores, group_by, num_nodes=data.num_nodes)
+
+        return branch_av_p, branch_dir, edge_scores, valid_lines.whole_mask, valid_root_mask
+
+    def __call__(self, data) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+
+        Arguments
+        ---------
+        Data: VBranchDigraphData
+
+        Returns
+        -------
+        branch_av_p: torch.Tensor (N_branch, 3)
+            probabilities of invalid, artery, vein for each branch
+
+        branch_dir: torch.Tensor (N_branch,)
+            direction score for each branch (positive: branch is oriented from tip0 to tip1, negative: branch is oriented from tip1 to tip0)
+
+        edge_scores: torch.Tensor (N_valid_edges + N_valid_roots,)
+            affinity scores for each valid incident edge (from parent to child branch) and for each valid root assignment (from root to child branch)
+
+        valid_lines_mask: torch.Tensor (N_edges,)
+            boolean mask indicating which lines are valid for incident edge prediction (i.e., have consistent direction with the predicted branch direction)
+
+        valid_root_mask: torch.Tensor (N_branch, 2)
+            boolean mask indicating which branches are valid for root assignment according to the predicted branch direction (i.e., have at least one valid root direction)
+
+        """  # noqa: E501
+        return super().__call__(data)
+
+
+class Lines:
+    def __init__(
+        self,
+        edge_index: torch.Tensor,
+        edge_first_tip: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+        whole_mask: Optional[torch.Tensor] = None,
+    ):
+        self.edge_index = edge_index
+        self.edge_first_tip = edge_first_tip
+        self.mask = mask
+        self.whole_mask = whole_mask
+
+    def __bool__(self):
+        return self.edge_index.shape[1] > 0
+
+    @property
+    def n_lines(self):
+        return self.edge_index.shape[1]
+
+    @property
+    def b0(self):
+        return self.edge_index[0]
+
+    @property
+    def b1(self):
+        return self.edge_index[1]
+
+    @property
+    def tip0(self):
+        return self.edge_first_tip[:, 0]
+
+    @property
+    def tip1(self):
+        return self.edge_first_tip[:, 1]
+
+    def select(self, mask):
+        if self.whole_mask is None:
+            whole_mask = mask
+        else:
+            whole_mask = self.whole_mask.clone()
+            whole_mask[self.whole_mask] = mask
+        return Lines(self.edge_index[:, mask], self.edge_first_tip[mask], mask=mask, whole_mask=whole_mask)
+
+    def select_valid_b1_dir(self, b_dir) -> Lines:
+        return self.select(self.b1_dir_mask(b_dir))
+
+    def b1_dir_mask(self, b_dir):
+        return self.tip1 == b_dir[self.b1]
+
+    def groupby_incident_edges(self, select_b1_dir=None):
+        if select_b1_dir is None:
+            return self.b1
+        else:
+            b1 = self.b1
+            return (b1 + 1) * (self.tip1 == select_b1_dir[b1])
+
+    def sort_b1(self) -> torch.Tensor:
+        sort_idx = torch.argsort(self.b1)
+        self.edge_index = self.edge_index[:, sort_idx]
+        self.edge_first_tip = self.edge_first_tip[sort_idx]
+        return sort_idx
 
 
 def root_lines_mask(data):
@@ -268,3 +378,49 @@ class BranchDigraphGATv2Conv(MessagePassing):
 ###########################
 # === Utils functions === #
 ###########################
+def pred_max_parent(edge_score: torch.Tensor, valid_lines: Lines, valid_root_mask: torch.Tensor):
+    """Compute the maximum parent edge score for each branch, considering both valid incident edges and valid root assignments.
+
+    Parameters
+    ----------
+
+    edge_score: torch.Tensor (N_valid_edges + N_valid_roots,)
+        tensor of edge scores for valid incident edges and valid root assignments
+
+    valid_lines: Lines
+        Lines object containing the valid incident edges
+
+    valid_root_mask: torch.Tensor (N_branch, 2)
+        boolean mask indicating which branches are valid for root assignment according to the predicted branch direction (i.e., have at least one valid root direction)
+    """  # noqa: E501
+    b1_root = torch.where(valid_root_mask.any(dim=1))[0]
+    edge_index = torch.cat([valid_lines.edge_index, torch.stack([-torch.ones_like(b1_root), b1_root])], dim=1)
+
+    b1_sort_idx = torch.argsort(edge_index[1])
+    edge_score = edge_score[b1_sort_idx]
+    edge_index = edge_index[:, b1_sort_idx]
+
+    score_sort_idx = group_argsort(edge_score, edge_index[1], descending=True, return_consecutive=True)
+    b1, first_idx = torch.unique_consecutive(edge_index[1], return_counts=True)
+    first_idx = torch.cumsum(F.pad(first_idx[:-1], (1, 0), value=0), dim=0)
+    b0 = edge_index[0, score_sort_idx[first_idx]]
+
+    parent = torch.full((valid_root_mask.shape[0],), -1, device=edge_score.device)
+    parent[b1] = b0
+
+    return parent
+
+
+def gt_parent_from_batch(batch):
+    device = batch.edge_index.device
+
+    lines = Lines(batch.edge_index, batch.edge_first_tip)
+    dir = batch.branch_dir > 0.5
+    valid_lines = lines.select_valid_b1_dir(dir)
+
+    valid_root_mask = batch.branch_root_candidates.clone()
+    valid_root_mask[torch.arange(batch.num_nodes, device=device), torch.where(dir, 1, 0)] = False
+
+    edge_score = torch.cat([batch.edge_p[valid_lines.whole_mask], batch.branch_root_p[valid_root_mask]], dim=0)
+
+    return pred_max_parent(edge_score, valid_lines, valid_root_mask)

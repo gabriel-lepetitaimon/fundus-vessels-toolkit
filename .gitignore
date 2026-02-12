@@ -21,3 +21,5 @@
 
 # Local files
 local_experiments/
+wandb/
+lightning_logs/
