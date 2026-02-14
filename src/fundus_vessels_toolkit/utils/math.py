@@ -12,6 +12,13 @@ def ensure_superior_multiple(x, m=32):
     return m - (x - 1) % m + x - 1
 
 
+def lerp(a, b, t):
+    """
+    Linear interpolation between a and b with factor t.
+    """
+    return a + (b - a) * t
+
+
 def gaussian(x, sigma):
     return np.exp(-(x**2) / (2 * sigma**2)) / (sigma * np.sqrt(2 * np.pi))
 

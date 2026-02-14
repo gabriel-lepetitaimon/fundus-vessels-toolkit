@@ -3,7 +3,7 @@ from __future__ import annotations
 import functools
 import inspect
 import warnings
-from typing import Callable, Optional, TypeVar, Union, get_args, get_origin
+from typing import Callable, Literal, Optional, TypeVar, Union, get_args, get_origin
 
 import numpy as np
 import torch
@@ -54,6 +54,92 @@ def torch_interp_bilinear(
         img_y1x1 = imgs[b, :, y1, x1].view(*y0.shape, -1)
 
     return img_y0x0 * (dy0 * dx0) + img_y1x0 * (dy1 * dx0) + img_y0x1 * (dy0 * dx1) + img_y1x1 * (dy1 * dx1)
+
+
+def groupby_mean(x: torch.Tensor, group_idx: torch.Tensor) -> torch.Tensor:
+    """Compute the mean of values in `x` grouped by `group_idx`.
+
+    Parameters
+    ----------
+    x : torch.Tensor
+        A tensor of shape (N,) containing the values to be averaged.
+    group_idx : torch.Tensor
+        A tensor of shape (N,) containing the group indices for each value in `x`. The values in `group_idx` should be non-negative integers.
+
+    Returns
+    -------
+    torch.Tensor
+        A tensor of shape (G,) containing the mean values for each group, where G is the maximum group index + 1.
+    """  # noqa: E501
+    group_idx = group_idx.long()
+    num_idx = int(group_idx.max().item()) + 1
+    group_sum = torch.zeros(num_idx, device=x.device).scatter_add_(0, group_idx, x)
+    count = torch.bincount(group_idx, minlength=num_idx)
+    not_null_mask = count != 0
+    group_sum[not_null_mask] /= count[not_null_mask].float()
+    return group_sum
+
+
+class GroupByCrossEntropyLoss(torch.nn.Module):
+    def __init__(self, reduction: Literal["none", "mean", "sum"] = "mean", label_smoothing: float = 0.0):
+        super().__init__()
+        self.reduction = reduction
+        self.label_smoothing = label_smoothing
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        target: torch.Tensor,
+        group_idx: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute the cross-entropy loss which enforce the selection of one sample per group, given sample-wise logits and group indices.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            A tensor of shape (N,) containing the predicted logits for each sample.
+
+        target : torch.Tensor
+            A tensor of shape (N,) containing whether each sample is the elected one in its group. The sum of target values for each group should be 1.
+
+        group_idx : torch.Tensor
+            A tensor of shape (N,) containing the group affiliation for each sample. The values in `group_idx` should be non-negative integers, and samples with the same group index belong to the same group.
+
+        Returns
+        -------
+        torch.Tensor
+            A scalar tensor containing the mean cross-entropy loss over all groups.
+        """  # noqa: E501
+        group_idx = group_idx.long()
+        num_group = int(group_idx.max().item()) + 1
+        group_size = torch.bincount(group_idx, minlength=num_group)
+        assert torch.all(group_size > 0), "All groups must have at least one sample."
+
+        # Compute the max logit for each group
+        group_max = torch.zeros(num_group, device=x.device).scatter_reduce_(0, group_idx, x, "amax", include_self=False)
+
+        # Compute the log-sum-exp
+        x_exp = (x - group_max[group_idx]).exp()
+        group_sum_exp = torch.zeros(num_group, device=x.device).scatter_add_(0, group_idx, x_exp)
+        group_log_sum_exp = (group_sum_exp + 1e-16).log() + group_max
+
+        # Compute the log-softmax
+        log_softmax = x - group_log_sum_exp[group_idx]
+
+        # Compute the loss
+        if self.label_smoothing > 0:
+            log_softmax = log_softmax * (1 - self.label_smoothing) + self.label_smoothing / group_size[group_idx]
+        loss = -log_softmax * target
+
+        # Sum over samples in the same group
+        group_loss = torch.zeros(num_group, device=x.device).scatter_add_(0, group_idx, loss)
+
+        # Reduce the loss according to the specified reduction method
+        if self.reduction == "mean":
+            group_loss = group_loss.sum() / num_group
+        elif self.reduction == "sum":
+            group_loss = group_loss.sum()
+        return group_loss
 
 
 def img_to_torch(x, device="cuda"):

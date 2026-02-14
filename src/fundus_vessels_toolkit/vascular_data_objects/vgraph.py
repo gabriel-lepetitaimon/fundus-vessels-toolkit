@@ -526,7 +526,7 @@ class VGraph:
         self._geometric_data: list[VGeometricData] = list(geometric_data)
 
         if check_integrity or node_count is None:
-            self.check_integrity("warn" if check_integrity else "skip")
+            self.check_integrity("warn" if check_integrity else "skip", stack_level=2)
 
         self._node_refs: WeakSet[VGraphNode] = WeakSet()
         self._branch_refs: WeakSet[VGraphBranch] = WeakSet()
@@ -538,12 +538,14 @@ class VGraph:
         return d
 
     @overload
-    def check_integrity(self, on_error: Literal["warn", "skip"] = "skip") -> bool: ...
+    def check_integrity(self, on_error: Literal["warn", "skip"] = "skip", *, stack_level=1) -> bool: ...
     @overload
-    def check_integrity(self, on_error: Literal["raise"]) -> Literal[True]: ...
+    def check_integrity(self, on_error: Literal["raise"], *, stack_level=1) -> Literal[True]: ...
     @overload
-    def check_integrity(self, on_error: Literal["report"]) -> str: ...
-    def check_integrity(self, on_error: Literal["raise", "warn", "skip", "report"] = "skip") -> bool | str:
+    def check_integrity(self, on_error: Literal["report"], *, stack_level=1) -> str: ...
+    def check_integrity(
+        self, on_error: Literal["raise", "warn", "skip", "report"] = "skip", *, stack_level=1
+    ) -> bool | str:
         """Check the integrity of the graph data.
 
         This method checks that all branches and nodes index are consistent.
@@ -566,7 +568,7 @@ class VGraph:
         for gdata in self._geometric_data:
             # Check that each node has a distinct position
             if (np.diff(gdata._nodes_coord[np.lexsort(gdata._nodes_coord.T)], axis=0) == 0).all(axis=1).any():
-                warnings.warn("The geometric data contains duplicated nodes coordinates.", stacklevel=2)
+                warnings.warn("The geometric data contains duplicated nodes coordinates.", stacklevel=stack_level + 1)
 
             branches_idx.update(gdata.branch_ids)
             nodes_idx.update(gdata.node_ids)
@@ -608,7 +610,7 @@ class VGraph:
             if on_error == "raise":
                 raise ValueError(msg)
             elif on_error == "warn":
-                warnings.warn(msg, stacklevel=2)
+                warnings.warn(msg, stacklevel=stack_level + 1)
             elif on_error == "report":
                 return msg
         return "" if on_error == "report" else True
@@ -2013,7 +2015,7 @@ class VGraph:
         Examples
         --------
         >>> # Branch id:           0 1 2     3     4 5
-        >>> graph = VGraph.parse("0➔1➔2➔3 ; 1➔2 ; 2➔3➔2")
+        >>> graph = VGraph.parse("A➔B➔C➔D ; B➔C ; C➔D➔C")
 
         >>> graph.twin_branches()
         [array([1, 3]), array([2, 4, 5])]
@@ -2022,6 +2024,26 @@ class VGraph:
         branch_list = np.sort(self._branch_list, axis=1)
         _, inv, counts = np.unique(branch_list, return_inverse=True, return_counts=True, axis=0)
         return [np.argwhere(inv == twin_id).flatten() for twin_id in np.argwhere(counts > 1).flatten()]
+
+    def branch_duplicates(self) -> list[Indices]:
+        """Compute the indices of the branches that are duplicates in the graph, i.e. twin branches that have exactly the same curves
+
+        Returns
+        -------
+        list[Indices]
+            A list of arrays containing the indices of the duplicate branches.
+
+        """  # noqa: E501
+        duplicates = []
+        geodata = self.geometric_data()
+        for twin_branches in self.twin_branches():
+            curves = geodata.branch_curve(twin_branches)
+            for c0 in range(len(twin_branches)):
+                for c1 in range(c0 + 1, len(twin_branches)):
+                    if np.array_equal(curves[c0], curves[c1]):
+                        duplicates.append(twin_branches[[c0, c1]])
+
+        return [np.array(_, dtype=np.int_) for _ in reduce_clusters(duplicates)]
 
     def node_connected_components(self, node: NodeIndicesLike | None = None) -> list[Indices]:
         """Compute the connected components of the graph and return, for each of them, its nodes indices.

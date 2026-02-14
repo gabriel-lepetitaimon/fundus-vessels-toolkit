@@ -1589,7 +1589,7 @@ class VTree(VGraph):
             else:
                 root_pos = self.geometric_data().domain.center
             other = naive_infer_roots(other, root_pos=root_pos)
-        other_branch_tree = other.branch_tree
+        other_branch_tree = other.branch_tree.copy()
         other_branch_tree[other_branch_tree != -1] += N_branch
         self._branch_tree = np.concatenate([self._branch_tree, other_branch_tree])
         if self._branch_dir is None and other._branch_dir is None:

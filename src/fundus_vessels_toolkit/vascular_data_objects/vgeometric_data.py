@@ -488,10 +488,10 @@ class VGeometricData:
     def branch_curve(self, ids: int, *, fill_with_nodes=False) -> npt.NDArray[np.int_]: ...
     @overload
     def branch_curve(
-        self, ids: Optional[npt.NDArray[np.int32]] = None, *, fill_with_nodes=False
+        self, ids: Optional[npt.NDArray[np.int_]] = None, *, fill_with_nodes=False
     ) -> list[npt.NDArray[np.int_]]: ...
     def branch_curve(
-        self, ids: Optional[int | npt.NDArray[np.int32]] = None, *, fill_with_nodes=False
+        self, ids: Optional[int | npt.NDArray[np.int_]] = None, *, fill_with_nodes=False
     ) -> npt.NDArray[np.int_] | list[npt.NDArray[np.int_]]:
         """Return the coordinates of the pixels that compose the branches of the graph.
 
