@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import math
 import tempfile
@@ -15,6 +16,7 @@ import tqdm
 from fundus_data_toolkit.functional import open_image
 from joblib import Parallel, delayed
 from jppype import Mosaic
+from numpy.random import MT19937, RandomState, SeedSequence
 from torch_geometric.data import Data as PygData
 from torch_geometric.data import Dataset as PygDataset
 
@@ -25,6 +27,7 @@ from fundus_toolkits.utils.geometric import Point, Rect
 from fundus_toolkits.utils.image import read_image
 
 from ...pipelines.avseg_to_tree import GNNAVSegToTree
+from ...utils import if_none
 from ...utils.data_io import most_common_image_ext
 from ...utils.fundus_projections import ResizeTranslateProjection
 from ...utils.jppype import AV_COLORS, draw_graph, draw_tree, draw_trees
@@ -32,24 +35,58 @@ from ...utils.numpy import np_group_by
 from ...vascular_data_objects import VBranchGeoData, VTree
 from ..graph_simplification import merge_nodes_by_distance
 from ..tree_topology import TopologicalLabel
-from ..vbranch_digraph import TreeTopology, VBranchDigraph, VGraph
+from ..vbranch_digraph import EdgeAttrExtractor, TreeTopology, VBranchDigraph, VGraph
 from .data_augmentation import deteriorate_graph, geometric_augment
 
 
 class VBranchDigraphData(PygData):
     edge_index: torch.Tensor  # type: ignore[assignment]
 
+    edge_first_tip: torch.Tensor
+    """Boolean tensor of shape (E, 2) indicating whether the edge connects the first (true) or second (false) tip of the source and target branches."""  # noqa: E501
+
+    edge_p: torch.Tensor
+    """Tensor of shape (E,) containing the probability of each edge being correct."""  # noqa: E501
+
+    branch_curves: torch.Tensor
+    """Tensor of shape (B, 20, 2) containing the (x, y) coordinates of 20 points sampled along each branch curve."""  # noqa: E501
+
+    branch_root_candidates: torch.Tensor
+    """Boolean tensor of shape (B, 2) indicating whether each branch tip is a valid vascular root."""  # noqa: E501
+
+    branch_root_p: torch.Tensor
+    """Tensor of shape (B, 2) containing the probability of each branch tip being a vascular root."""  # noqa: E501
+
+    branch_av_p: torch.Tensor
+    """Tensor of shape (B, 2) containing the probability of each branch being an artery (first column) or a vein (second column). If the sum of both is higher than their maximum, the branch is considered to be a false positive from the segmentation"""  # noqa: E501
+
+    branch_dir_p: torch.Tensor
+    """Tensor of shape (B,) containing for each branch the probability of being oriented from their first tip to their second tip (>=0.5) or the contrary (<0.5)."""  # noqa: E501
+
+    img: torch.Tensor
+    """Tensor of shape (3, H, W) containing the fundus image."""
+
+    od_yx: torch.Tensor
+    """Tensor of shape (2,) containing the (y, x) coordinates of the optic disc center."""
+
+    mac_yx: torch.Tensor
+    """Tensor of shape (2,) containing the (y, x) coordinates of the macula center."""
+
+    name: str
+    """Name of the sample, usually the original fundus image file name without extension. (For debug and logging purposes)."""  # noqa: E501
+
     def __init__(
         self,
         edge_index: torch.Tensor = None,  # type: ignore
         edge_first_tip: torch.Tensor = None,  # type: ignore
-        img: torch.Tensor = None,  # type: ignore
-        branch_curves: list[torch.Tensor] = None,  # type: ignore
         edge_p: torch.Tensor = None,  # type: ignore
+        edge_attr: Optional[torch.Tensor] = None,  # type: ignore
+        branch_curves: list[torch.Tensor] = None,  # type: ignore
         branch_root_candidates: torch.Tensor = None,  # type: ignore
         branch_root_p: torch.Tensor = None,  # type: ignore
         branch_av_p: torch.Tensor = None,  # type: ignore
-        branch_dir: torch.Tensor = None,  # type: ignore
+        branch_dir_p: torch.Tensor = None,  # type: ignore
+        img: torch.Tensor = None,  # type: ignore
         od_yx: torch.Tensor = None,  # type: ignore
         mac_yx: torch.Tensor = None,  # type: ignore
         name: str = "",
@@ -59,11 +96,11 @@ class VBranchDigraphData(PygData):
         Parameters
         ----------
         edge_index : torch.Tensor
-            Edges list as a 2xE tensor, storing the indices of the source and target branches.
+            Edges list as a (2, E) tensor, storing the indices of the source and target branches.
         edge_first_tip : torch.Tensor
-            A 2xE boolean tensor storing whether the edges connect the first or second tip of the source and target branches.
-        img : torch.Tensor
-            The fundus image tensor as a 3xHxW tensor.
+            A (E, 2) boolean tensor storing whether the edges connect the first (true) or second (false) tip of the source and target branches.
+        edge_attr : torch.Tensor
+            Edge attributes as a tensor of shape (E, F_e).
         branch_curves : list[torch.Tensor]
             List of branch curves, each as a Nx2 tensor of (x, y) coordinates.
         edge_p : torch.Tensor
@@ -76,6 +113,8 @@ class VBranchDigraphData(PygData):
             Probability of each branch being an artery or a vein (or neither) as a tensor of shape (B, 2).
         branch_dir : torch.Tensor
             Direction of each branch as a tensor of shape (B, 2).
+        img : torch.Tensor
+            The fundus image tensor as a 3xHxW tensor.
         """  # noqa: E501
         if edge_index is not None:
             assert edge_index.ndim == 2 and edge_index.shape[0] == 2, (
@@ -89,7 +128,7 @@ class VBranchDigraphData(PygData):
             assert img.ndim == 3 and img.shape[0] == 3, f"fundus_img must be of shape (3, H, W) but got {img.shape}"
             B = len(branch_curves)
             assert branch_av_p.shape == (B, 2), f"branch_av_p must be of shape (B, 2) but got {branch_av_p.shape}"
-            assert branch_dir.shape == (B,), f"branch_dir must be of shape (B,) but got {branch_dir.shape}"
+            assert branch_dir_p.shape == (B,), f"branch_dir must be of shape (B,) but got {branch_dir_p.shape}"
             curves_ = torch.full((B, 20, 2), -1.0)
             pos = []
             for i, curve in enumerate(branch_curves):
@@ -113,22 +152,23 @@ class VBranchDigraphData(PygData):
         super().__init__(
             edge_index=edge_index,
             edge_first_tip=edge_first_tip,
-            img=img,
-            od_yx=od_yx,
-            mac_yx=mac_yx,
+            edge_attr=edge_attr,
             branch_curves=curves_,
             edge_p=edge_p,
             branch_root_candidates=branch_root_candidates,
             branch_root_p=branch_root_p,
             branch_av_p=branch_av_p,
-            branch_dir=branch_dir,
+            branch_dir_p=branch_dir_p,
             pos=pos,  # Use mid-point as node
+            img=img,
+            od_yx=od_yx,
+            mac_yx=mac_yx,
             name=name,
         )
         self.num_nodes = B
 
     def is_node_attr(self, key: str) -> bool:
-        return super().is_node_attr(key) or key in {"branch_curves", "branch_av_p", "branch_dir", "branch_root_p"}
+        return super().is_node_attr(key) or key in {"branch_curves", "branch_av_p", "branch_dir_p", "branch_root_p"}
 
     def is_edge_attr(self, key: str) -> bool:
         return super().is_edge_attr(key) or key in {"edge_first_tip", "edge_p"}
@@ -141,6 +181,7 @@ class VBranchDigraphData(PygData):
         od_yx: npt.NDArray,
         mac_yx: npt.NDArray,
         name: str,
+        edge_attr_fn: Optional[EdgeAttrExtractor] = None,
     ) -> Self:
         assert digraph.line_p is not None, "branch_digraph must have line_p computed"
         assert digraph.branch_av_p is not None, "branch_digraph must have branch_av_p computed"
@@ -158,11 +199,12 @@ class VBranchDigraphData(PygData):
         return cls(
             edge_index=torch.from_numpy(digraph.b0b1[not_root]).T,
             edge_first_tip=torch.from_numpy(digraph.b0tip_b1tip[not_root]) == 0,
+            edge_attr=torch.from_numpy(edge_attr_fn(digraph)) if edge_attr_fn is not None else None,
             img=fundus_img.half(),
             branch_curves=branch_curves,
             edge_p=torch.from_numpy(digraph.line_p[not_root]).float(),
             branch_av_p=torch.from_numpy(digraph.branch_av_p).float(),
-            branch_dir=torch.from_numpy(digraph.branch_dir_p).float(),
+            branch_dir_p=torch.from_numpy(digraph.branch_dir_p).float(),
             branch_root_candidates=torch.from_numpy(valid_root_tips),
             branch_root_p=torch.from_numpy(root_p),
             od_yx=torch.from_numpy(od_yx).float(),
@@ -171,7 +213,10 @@ class VBranchDigraphData(PygData):
         )
 
 
-class VBranchDigraphBatch(VBranchDigraphData): ...
+class VBranchDigraphBatch(VBranchDigraphData):
+    batch: torch.Tensor  # type: ignore[assignment]
+    """Tensor of shape (B,) containing for each branch the index of its graph in the batch."""  # noqa: E501
+    batch_size: int
 
 
 class VBranchDigraphDataset(PygDataset):
@@ -192,6 +237,7 @@ class VBranchDigraphDataset(PygDataset):
         processed_fundus_paths: Optional[list[Path]] = None,
         od_yx: Optional[npt.NDArray] = None,
         mac_yx: Optional[npt.NDArray] = None,
+        line_p_smoothing: float = 0.0,
     ):
         assert len(fundus_paths) == len(graphs_path) == len(target_topologies_path), (
             "All input lists must have the same length"
@@ -200,6 +246,7 @@ class VBranchDigraphDataset(PygDataset):
         self.resize_to = resize_to
         self.verbose = verbose
         self.augment = augment
+        self.line_p_smoothing = line_p_smoothing
 
         self._graphs_path = graphs_path
         self._target_topologies_path = target_topologies_path
@@ -240,6 +287,13 @@ class VBranchDigraphDataset(PygDataset):
     def process(self):
         av2tree = GNNAVSegToTree()
 
+        if (od_mac_file := Path(self.processed_dir) / "od_mac.csv").exists() and self.overwrite is not True:
+            od_mac_df = pd.read_csv(od_mac_file).set_index("name")
+            if "Unnamed: 0" in od_mac_df.columns:
+                od_mac_df.drop(columns=["Unnamed: 0"], inplace=True)
+        else:
+            od_mac_df = pd.DataFrame(columns=["name", "od_y", "od_x", "mac_y", "mac_x"]).set_index("name")
+
         to_process = [
             (graph_in, topo_in, raw_in, av2tree, self.processed_dir, self.resize_to)
             for i, (graph_in, topo_in, raw_in) in enumerate(
@@ -254,14 +308,10 @@ class VBranchDigraphDataset(PygDataset):
             or graph_out.stat().st_mtime < graph_in.stat().st_mtime
             or art_out.stat().st_mtime < topo_in[0].stat().st_mtime
             or vei_out.stat().st_mtime < topo_in[1].stat().st_mtime
+            or self._raw_fundus_paths[i].stem not in od_mac_df.index
         ]
         if len(to_process) == 0:
             return
-
-        if (od_mac_file := Path(self.processed_dir) / "od_mac.csv").exists() and self.overwrite is not True:
-            od_mac_df = pd.read_csv(od_mac_file, index_col="name")
-        else:
-            od_mac_df = pd.DataFrame(columns=["name", "od_y", "od_x", "mac_y", "mac_x"]).set_index("name")
 
         # run_parallel = Parallel(n_jobs=-2, return_as="generator_unordered")
         for name, od_yx, mac_yx in tqdm.tqdm(  # type: ignore
@@ -273,7 +323,7 @@ class VBranchDigraphDataset(PygDataset):
         ):
             od_mac_df.loc[name] = [od_yx[0], od_yx[1], mac_yx[0], mac_yx[1]]
 
-        od_mac_df.reset_index().to_csv(Path(self.processed_dir) / "od_mac.csv")
+        od_mac_df.to_csv(Path(self.processed_dir) / "od_mac.csv")
 
     @staticmethod
     def process_single(
@@ -408,8 +458,7 @@ class VBranchDigraphDataset(PygDataset):
         # === Compute BranchDigraph ===
         assert self.target_topologies is not None, "Target topologies not loaded"
         branch_digraph = VBranchDigraph.from_graph(graph, check=False)
-        branch_digraph.compute_p_from_gt(*self.target_topologies[idx], check=False)
-        # branch_digraph.graph.geometric_data().sample_branch_curves(n_points=20)
+        branch_digraph.compute_p_from_gt(*self.target_topologies[idx], check=False, smooth_p=self.line_p_smoothing)
 
         # === Test ===
         if test:
@@ -436,9 +485,48 @@ class VBranchDigraphDataset(PygDataset):
         return sample
 
     def draw_jppype(
-        self, idx: int, *, test: bool = False, augment: bool = False
+        self,
+        idx: int | str,
+        *,
+        test: bool = False,
+        augment: bool = False,
+        gt_topo: bool = True,
+        branch_label=False,
+        node_label=False,
     ) -> tuple[Mosaic, VBranchDigraph, npt.NDArray, npt.NDArray, npt.NDArray]:
-        name = self._raw_fundus_paths[idx].stem
+        """Draw the sample using jppype for visualization. If gt_topo is True, also draw the ground truth topology.
+        Parameters
+        ----------
+        idx : int or str
+            Index of the sample to draw, or the name of the fundus image (without extension).
+        test : bool, optional
+            Whether to run checks and optimizations on the graph before drawing, by default False.
+        augment : bool, optional
+            Whether to apply data augmentation to the sample before drawing, by default False.
+        gt_topo : bool, optional
+            Whether to draw the ground truth topology in a separate view, by default True.
+        branch_label : bool, optional
+            Whether to label the branches with their indices, by default False.
+        node_label : bool, optional
+            Whether to label the nodes with their indices, by default False.
+        Returns
+        -------
+        mosaic: Mosaic
+            A jppype Mosaic object containing the visualizations.
+        digraph: VBranchDigraph
+            The branch digraph of the sample, after augmentation and checks.
+        fundus_img: npt.NDArray
+            The fundus image of the sample, after augmentation.
+        od_yx: npt.NDArray
+            The (y, x) coordinates of the optic disc center.
+        mac_yx: npt.NDArray
+            The (y, x) coordinates of the macula center.
+        """
+        if isinstance(idx, str):
+            name = idx
+            idx = [_.stem for _ in self._raw_fundus_paths].index(name)
+        else:
+            name = self._raw_fundus_paths[idx].stem
         fundus = FundusData(self.fundus_paths[idx])
         art_tree = VTree.load(Path(self.processed_dir) / "target-topo" / (name + "_art.npz"))
         vei_tree = VTree.load(Path(self.processed_dir) / "target-topo" / (name + "_vei.npz"))
@@ -448,8 +536,8 @@ class VBranchDigraphDataset(PygDataset):
         digraph, fundus_img, od_yx, mac_yx = self.get_sample(idx, augment=augment, test=test)
 
         m = Mosaic(
-            3,
-            cols_titles=["Predicted", "Predicted with GT Topology", "Ground Truth " + name],
+            3 if gt_topo else 2,
+            cols_titles=[name, "Predicted with GT Topology"] + (["Ground Truth"] if gt_topo else []),
             cell_height=700,
             background=fundus_img,
         )
@@ -457,64 +545,68 @@ class VBranchDigraphDataset(PygDataset):
             digraph.graph,
             view=m[0],
             edge="bspline",
-            # edge_labels=True,
-            # node_labels=True,
+            edge_labels=branch_label,
+            node_labels=node_label,
         )
+
+        m.views[0].add_graph([], nodes_yx=[od_yx, mac_yx], name="OD/Macula")
+        m.views[0]["OD/Macula"].nodes_cmap = {0: "green", 1: "yellow"}
+
         try:
             solved_tree = digraph.optimize_tree(keep_missing_branch=False)
             draw_tree(solved_tree, view=m[1], branch_color="subtree", bspline_dir=True)
         except Exception:
             warnings.warn(f"Could not optimize tree for sample {name}. Drawing unoptimized tree instead.")
 
-        def overlay_topo(img: npt.NDArray[np.float64], topo: TreeTopology, art: bool) -> npt.NDArray[np.float64]:
-            topo = topo.as_dense()
-            subtree_map = TopologicalLabel.decode_subtree(topo.branch_map)
-            alpha = np.zeros(topo.shape, dtype=np.float64)
-            topo_img = np.zeros(img.shape, dtype=np.float64)
-            main_color = AV_COLORS[AVLabel.ART if art else AVLabel.VEI]
-            colors = iter(color_jitter(main_color, hue=0.1))
+        if gt_topo:
 
-            for subtree_id in np.unique(subtree_map):
-                if subtree_id == -1:
-                    continue
-                subtree_mask = subtree_map == subtree_id
-                topo_img[subtree_mask] = next(colors) / 255.0
-                subtree_rank_map = topo.rank_map[subtree_mask]
-                alpha[subtree_mask] = 0.8 - 0.7 * (subtree_rank_map / subtree_rank_map.max())
+            def overlay_topo(img: npt.NDArray[np.float64], topo: TreeTopology, art: bool) -> npt.NDArray[np.float64]:
+                topo = topo.as_dense()
+                subtree_map = TopologicalLabel.decode_subtree(topo.branch_map)
+                alpha = np.zeros(topo.shape, dtype=np.float64)
+                topo_img = np.zeros(img.shape, dtype=np.float64)
+                main_color = AV_COLORS[AVLabel.ART if art else AVLabel.VEI]
+                colors = iter(color_jitter(main_color, hue=0.1))
 
-            return img * (1 - alpha[:, :, None]) + topo_img * alpha[:, :, None]
+                for subtree_id in np.unique(subtree_map):
+                    if subtree_id == -1:
+                        continue
+                    subtree_mask = subtree_map == subtree_id
+                    topo_img[subtree_mask] = next(colors) / 255.0
+                    subtree_rank_map = topo.rank_map[subtree_mask]
+                    alpha[subtree_mask] = 0.8 - 0.7 * (subtree_rank_map / subtree_rank_map.max())
 
-        topo_map = (fundus.image).transpose(1, 2, 0)
-        topo_map = overlay_topo(topo_map, topo_gt[0], art=True)
-        topo_map = overlay_topo(topo_map, topo_gt[1], art=False)
+                return img * (1 - alpha[:, :, None]) + topo_img * alpha[:, :, None]
 
-        m[2].add_image(topo_map, name="background")
-        draw_trees(trees_gt, view=m[2], bspline_dir=True)
+            topo_map = (fundus.image).transpose(1, 2, 0)
+            topo_map = overlay_topo(topo_map, topo_gt[0], art=True)
+            topo_map = overlay_topo(topo_map, topo_gt[1], art=False)
+
+            m[2].add_image(topo_map, name="background")
+            draw_trees(trees_gt, view=m[2], bspline_dir=True)
         return m, digraph, fundus_img, od_yx, mac_yx
 
     def split(self, indices: Sequence[int], augment: Optional[bool] = None) -> VBranchDigraphDataset:
         """Create a new dataset with only the samples at the specified indices."""
-        return VBranchDigraphDataset(
-            root=self.root,
-            fundus_paths=[self.fundus_paths[i] for i in indices],
-            graphs_path=[self._graphs_path[i] for i in indices],
-            target_topologies_path=[self._target_topologies_path[i] for i in indices],
-            od_yx=self.od_yx[indices],
-            mac_yx=self.mac_yx[indices],
-            verbose=self.verbose,
-            resize_to=self.resize_to,
-            transform=self.transform,
-            overwrite=False,
-            graphs=[self.graphs[i] for i in indices],
-            target_topologies=[self.target_topologies[i] for i in indices],
-            processed_fundus_paths=[self.fundus_paths[i] for i in indices],
-            augment=self.augment if augment is None else augment,
-        )
+        dataset = copy.copy(self)
+        dataset.fundus_paths = [self.fundus_paths[i] for i in indices]
+        dataset._raw_fundus_paths = [self._raw_fundus_paths[i] for i in indices]
+        dataset.graphs = [self.graphs[i] for i in indices]
+        dataset._graphs_path = [self._graphs_path[i] for i in indices]
+        dataset.target_topologies = [self.target_topologies[i] for i in indices]
+        dataset._target_topologies_path = [self._target_topologies_path[i] for i in indices]
+        dataset.od_yx = self.od_yx[indices]
+        dataset.mac_yx = self.mac_yx[indices]
+        if augment is not None:
+            dataset.augment = augment
+        return dataset
 
     def split_loaders(
         self,
         train_ratio: float = 0.8,
         val_ratio: float = 0.1,
+        *,
+        rng_seed: Optional[int] = None,
     ) -> tuple[VBranchDigraphDataset, VBranchDigraphDataset, VBranchDigraphDataset]:
         """Split the dataset into train, validation and test sets and return corresponding DataLoaders."""
         assert train_ratio + val_ratio < 1.0, "train_ratio and val_ratio must sum to less than 1.0"
@@ -525,8 +617,9 @@ class VBranchDigraphDataset(PygDataset):
         train_indices = []
         val_indices = []
         test_indices = []
+        rs = RandomState(MT19937(SeedSequence(if_none(rng_seed, 123456))))
         for _, samples in np_group_by(np.arange(len(self)), np.array(samples_subset)):
-            np.random.shuffle(samples)
+            rs.shuffle(samples)
             num_samples = len(samples)
             train_end = int(train_ratio * num_samples)
             val_end = int((train_ratio + val_ratio) * num_samples)
@@ -548,6 +641,7 @@ class VBranchDigraphDataset(PygDataset):
         graph_dir: Path | Sequence[Path | None] | None = None,
         av_dir: Path | Sequence[Path | None] | None = None,
         *,
+        line_p_smoothing: float = 0.0,
         root: Optional[str | Path] = None,
         fundus_ext: str | None | Sequence[str | None] = None,
         av_ext: str | None | Sequence[str | None] = None,
@@ -647,4 +741,5 @@ class VBranchDigraphDataset(PygDataset):
             resize_to=resize_to,
             transform=transform,
             overwrite=overwrite,
+            line_p_smoothing=line_p_smoothing,
         )

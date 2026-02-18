@@ -1,4 +1,4 @@
-#include "tree_topology.h"
+#include "tree.h"
 
 std::string label2str(const TopoLabel& label, const float& r = -1.0f) {
     std::ostringstream oss;

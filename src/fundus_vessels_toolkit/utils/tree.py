@@ -5,6 +5,7 @@ import torch  # Required for cpp extension loading
 from .cpp_extensions.fvt_cpp import find_cycles as find_cycles_cpp
 from .cpp_extensions.fvt_cpp import has_cycle as has_cycle_cpp
 from .cpp_extensions.fvt_cpp import node_accessible_from_root as node_accessible_from_root_cpp
+from .cpp_extensions.fvt_cpp import tree_distance as tree_distance_cpp
 from .torch import TensorArray, autocast_torch
 
 
@@ -72,3 +73,24 @@ def accessible_from_root(edge_index: torch.Tensor, N: int, root: int = 0) -> tor
     if root_is_minus_one:
         accessible_tensor = accessible_tensor[1:]
     return accessible_tensor
+
+
+@autocast_torch
+def tree_distance(tree_list: torch.Tensor) -> torch.Tensor:
+    """Compute distance matrices between each pair of node of the tree.
+
+    Parameters
+    ----------
+    tree_list: torch.Tensor
+        A tensor of shape (N,) containing the parent index of each node. The root node should have a parent index of -1.
+
+    Returns
+    -------
+    path_distance: torch.Tensor [N, N]
+        The topological distance (i.e., the length of the shortest path) between each pair of node.
+
+    common_ancestor_distance: torch.Tensor [N, N]
+        The distance to the closest common ancestor of each pair of node. Distance from a parent node to its descendent are stored negatively, i.e. if node A is a child of B, dist[A][B] = 1 and dist[B][A] = -1.
+
+    """  # noqa: E501
+    return tree_distance_cpp(tree_list)

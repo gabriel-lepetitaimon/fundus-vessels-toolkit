@@ -3,6 +3,9 @@
 
 #include "common.h"
 
+/**************************************************************************************
+ *              === GRAPHICAL TOPOLOGICAL REPRESENTATION  ===
+ **************************************************************************************/
 using TopoLabel = uint64_t;
 
 inline uint8_t get_rank(const TopoLabel& label) { return static_cast<uint8_t>(label); }
@@ -27,6 +30,28 @@ std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 
     const Tensor1DAcc<at::Half>& fuzzy_skeleton, float min_rank_threshold, float max_rank_tolerance, int b_id);
 
 TopoLabel most_present_ancestor(const std::vector<int32_t>& curve, const Tensor1DAcc<TopoLabel>& topo_labels);
+
+/**************************************************************************************
+ *              === TREE UTILS  ===
+ **************************************************************************************/
+
+struct TreeNode {
+    long id = -1;
+    std::vector<long> children;
+    long parent = -1;
+};
+struct Tree {
+    std::vector<TreeNode> nodes;
+    std::vector<long> root_nodes;
+
+    Tree(const Tensor1DAcc<long>& tree);
+};
+
+torch::Tensor tree_distance(const torch::Tensor& tree);
+
+/**************************************************************************************
+ *              === Vector Subset utility ===
+ **************************************************************************************/
 
 template <typename T>
 T minimum(const Tensor1DAcc<T>& values, const std::vector<int32_t>& idxs) {

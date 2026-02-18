@@ -137,6 +137,7 @@ struct Point {
     Point(const FloatPair& yx);
     Point(const IntPoint& yx);
     Point(const Tensor1DAcc<float>& yx);
+    Point(const Tensor1DAcc<double>& yx);
 
     // assignment operator modifies object, therefore non-const
     Point& operator=(const Point& p);

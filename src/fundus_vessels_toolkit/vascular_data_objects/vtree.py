@@ -1,4 +1,7 @@
 from __future__ import annotations
+from tabnanny import check
+
+from streamlit import success
 
 __all__ = ["VTree"]
 
@@ -29,8 +32,9 @@ import pandas as pd
 from ..utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
 from ..utils.lookup_array import add_empty_to_lookup, complete_lookup, invert_complete_lookup, lookup_from_mapping
 from ..utils.numpy import array_is_equal
-from ..utils.tree import find_cycles, has_cycle
+from ..utils.tree import find_cycles, has_cycle, tree_distance
 from ..utils.typing import (
+    Bool1DArray,
     Bool1DArrayLike,
     Float1DArrayLike,
     Indices,
@@ -365,7 +369,7 @@ class VTree(VGraph):
         node_attr: Optional[pd.DataFrame] = None,
         branch_attr: Optional[pd.DataFrame] = None,
         node_count: Optional[int] = None,
-        check_integrity: bool = True,
+        check_integrity: bool | int = True,
     ):
         """Create a Graph object from the given data.
 
@@ -416,16 +420,18 @@ class VTree(VGraph):
             node_attr=node_attr,
             branch_attr=branch_attr,
             node_count=node_count,
-            check_integrity=check_integrity,
+            check_integrity=2 if check_integrity is True else (check_integrity + 1),
         )
 
     @overload
-    def check_tree_integrity(self, on_error: Literal["warn", "skip"] = "skip") -> bool: ...
+    def check_tree_integrity(self, on_error: Literal["warn", "skip"] = "skip", *, stack_level: int = 1) -> bool: ...
     @overload
-    def check_tree_integrity(self, on_error: Literal["raise"]) -> Literal[True]: ...
+    def check_tree_integrity(self, on_error: Literal["raise"], *, stack_level: int = 1) -> Literal[True]: ...
     @overload
-    def check_tree_integrity(self, on_error: Literal["report"]) -> str: ...
-    def check_tree_integrity(self, on_error: Literal["raise", "warn", "skip", "report"] = "skip") -> bool | str:
+    def check_tree_integrity(self, on_error: Literal["report"], *, stack_level: int = 1) -> str: ...
+    def check_tree_integrity(
+        self, on_error: Literal["raise", "warn", "skip", "report"] = "skip", *, stack_level: int = 1
+    ) -> bool | str:
         """Check the integrity of the tree.
 
         Raises
@@ -437,13 +443,13 @@ class VTree(VGraph):
         if B == 0:
             return "" if on_error == "report" else True
         errors = []
-        if self.branch_tree.min() >= -1:
+        if self.branch_tree.min() < -1:
             errors.append("the provided branch parents contains invalid indices")
-        if self.branch_tree.max() < B:
+        if self.branch_tree.max() >= B:
             errors.append("the provided branch parents contains invalid indices")
-        if np.all(self.branch_tree != np.arange(B)):
+        if np.any(self.branch_tree == np.arange(B)):
             errors.append("some branches are their own parent")
-        if not has_cycle(self.branch_tree):
+        if has_cycle(self.branch_tree):
             errors.append(
                 "it contains the cycles "
                 + "; ".join("{" + ", ".join(str(_) for _ in cycle) + "}" for cycle in find_cycles(self.branch_tree))
@@ -453,23 +459,26 @@ class VTree(VGraph):
             if on_error == "raise":
                 raise ValueError(msg)
             elif on_error == "warn":
-                warnings.warn(msg, stacklevel=2)
+                warnings.warn(msg, stacklevel=stack_level + 1)
             elif on_error == "report":
                 return msg
             return False
         return "" if on_error == "report" else True
 
     @overload
-    def check_integrity(self, on_error: Literal["warn", "skip"] = "skip") -> bool: ...
+    def check_integrity(self, on_error: Literal["warn", "skip"] = "skip", *, stack_level: int = 1) -> bool: ...
     @overload
-    def check_integrity(self, on_error: Literal["raise"]) -> Literal[True]: ...
+    def check_integrity(self, on_error: Literal["raise"], *, stack_level: int = 1) -> Literal[True]: ...
     @overload
-    def check_integrity(self, on_error: Literal["report"]) -> str: ...
-    def check_integrity(self, on_error: Literal["raise", "warn", "skip", "report"] = "skip") -> bool | str:
-        graph_out = super().check_integrity(on_error=on_error)
-        tree_out = self.check_tree_integrity(on_error=on_error)
+    def check_integrity(self, on_error: Literal["report"], *, stack_level: int = 1) -> str: ...
+    def check_integrity(
+        self, on_error: Literal["raise", "warn", "skip", "report"] = "skip", *, stack_level: int = 1
+    ) -> bool | str:
+        graph_out = super().check_integrity(on_error=on_error, stack_level=stack_level + 1)
+        tree_out = self.check_tree_integrity(on_error=on_error, stack_level=stack_level + 1)
         if on_error == "report":
-            return graph_out + "\n" + tree_out if graph_out and tree_out else graph_out + tree_out
+            assert isinstance(graph_out, str) and isinstance(tree_out, str)
+            return (graph_out + "\n" + tree_out) if graph_out and tree_out else (graph_out + tree_out)
         return graph_out and tree_out
 
     def __eq__(self, other: object) -> bool:
@@ -724,7 +733,7 @@ class VTree(VGraph):
             )
         else:
             node_attr = None
-        return cls(branches, branch_parents, node_attr=node_attr)
+        return cls(branches, branch_parents, node_attr=node_attr, check_integrity=2)
 
     def print_tree(self) -> str:
         """Print the tree structure in a human-readable format. Unlike print_graph() this displays the connection between branches instead of nodes.
@@ -732,10 +741,10 @@ class VTree(VGraph):
 
         Example
         -------
-        >>> # branch ids:        0   1 2
-        >>> tree = VTree.parse("0➔1;3➔2➔1")
+        >>> # branch ids:        0    1 2 3     4
+        >>> tree = VTree.parse("O➔Q; R➔A➔B➔C ; A➔E")
         >>> tree.print_tree()
-        '|b0 |b1➔b2'
+        '|b0 |b1➔b2➔b3 b1➔b4'
         """  # noqa: E501
         tree_str = ""
         previous_b = None
@@ -1112,7 +1121,10 @@ class VTree(VGraph):
         while stack:
             branch_id = stack.pop() if depth_first else stack.pop(0)
             yield branch_id
-            stack.extend(self.branch_successors(branch_id))
+            successors = self.branch_successors(branch_id)
+            if depth_first:
+                successors = successors[::-1]
+            stack.extend(successors)
 
     ####################################################################################################################
     #  === TREE NODES PROPERTIES ===
@@ -1403,12 +1415,10 @@ class VTree(VGraph):
         return np.array(dist, dtype=int)
 
     @overload
-    def passing_nodes(self, *, as_mask: Literal[False] = False, exclude_loop: bool = True) -> npt.NDArray[np.int32]: ...
+    def passing_nodes(self, *, as_mask: Literal[False] = False, exclude_loop: bool = True) -> Indices: ...
     @overload
-    def passing_nodes(self, *, as_mask: Literal[True], exclude_loop: bool = True) -> npt.NDArray[np.bool_]: ...
-    def passing_nodes(
-        self, *, as_mask=False, exclude_loop: bool = True
-    ) -> npt.NDArray[np.int32 | np.bool_] | Tuple[npt.NDArray[np.int32 | np.bool_], List[npt.NDArray[np.int32]]]:
+    def passing_nodes(self, *, as_mask: Literal[True], exclude_loop: bool = True) -> Bool1DArray: ...
+    def passing_nodes(self, *, as_mask=False, exclude_loop: bool = True) -> Indices | Bool1DArray:
         """Return the indices of the nodes that have exactly one incoming and one outgoing branch.
 
         Parameters
@@ -1433,17 +1443,14 @@ class VTree(VGraph):
     @overload
     def passing_nodes_with_branch_index(
         self, *, return_branch_direction: Literal[False] = False, exclude_loop: bool = True
-    ) -> Tuple[npt.NDArray[np.int32], npt.NDArray[np.int32]]: ...
+    ) -> tuple[Indices, Indices]: ...
     @overload
     def passing_nodes_with_branch_index(
         self, *, return_branch_direction: Literal[True], exclude_loop: bool = True
-    ) -> Tuple[npt.NDArray[np.int32], npt.NDArray[np.int32], npt.NDArray[np.bool_]]: ...
+    ) -> tuple[Indices, Indices, Bool1DArray]: ...
     def passing_nodes_with_branch_index(
         self, *, return_branch_direction: bool = False, exclude_loop: bool = True
-    ) -> (
-        Tuple[npt.NDArray[np.int32], npt.NDArray[np.int32]]
-        | Tuple[npt.NDArray[np.int32], npt.NDArray[np.int32], npt.NDArray[np.bool_]]
-    ):
+    ) -> tuple[Indices, Indices] | tuple[Indices, Indices, Bool1DArray]:
         """Return the indices of the nodes that are connected to exactly two branches along with the indices of these branches.
 
         Parameters
@@ -1489,6 +1496,49 @@ class VTree(VGraph):
         if not return_branch_direction:
             return passing_nodes, passing_branch
         return passing_nodes, passing_branch, passing_branch_dirs
+
+    def tree_distance_matrix(self) -> npt.NDArray[np.float32]:
+        """Compute two distance matrices between each pair of branches of the tree:
+            1. The topological distance (i.e., the length of the shortest path between two branches)
+            2. The distance to their closest common ancestor. Distance from a parent node to its descendent are stored negatively, i.e. if node A is a child of B, dist[A][B] = 1 and dist[B][A] = -1.
+
+        Returns
+        -------
+        np.ndarray
+            A distance matrix of shape (2, B, B) where B is the number of branches in the tree.
+
+        Example
+        -------
+        >>> # branch ids:        0    1 2 3     4
+        >>> tree = VTree.parse("O➔Q; R➔A➔B➔C ; A➔D")  # noqa: E501
+        >>> tree.print_tree()
+        '|b0 |b1➔b2➔b3 b1➔b4'
+
+        >>> dist, common_ancestor = tree.tree_distance_matrix()
+        >>> float(dist[0,0])  # Distance between b0 and itself is 0
+        0.0
+        >>> float(dist[0,1])  # No path between b0 and b1
+        nan
+        >>> float(dist[1,2]), float(dist[2,1])  # Distance between b1 and b2 is 1 (b1 -> b2)
+        (1.0, 1.0)
+        >>> float(dist[3,4]), float(dist[4,3])  # Distance between b3 and b4 is 3 (b3 <- b2 <- b1 -> b4)
+        (3.0, 3.0)
+        >>> float(common_ancestor[0,0])  # Closest common ancestor from b0 to itself is itself, with distance 0
+        0.0
+        >>> float(common_ancestor[2,1]), float(common_ancestor[1,2])  # Closest common ancestor from b2 to b1 is b1
+        (1.0, -1.0)
+        >>> float(common_ancestor[3,1]), float(common_ancestor[1,3])  # Closest common ancestor from b3 to b1 is b1
+        (2.0, -2.0)
+
+        >>> float(common_ancestor[2,4]), float(common_ancestor[4,2])  # Closest common ancestor from b2 to b4 is b1
+        (1.0, 1.0)
+
+        >>> float(common_ancestor[3,4])  # Closest common ancestor from b3 to b4 is b1 (b3 <- b2 <- b1)
+        2.0
+        >>> float(common_ancestor[4,3])  # Closest common ancestor from b4 to b3 is b1 (b4 <- b1)
+        1.0
+        """  # noqa: E501
+        return tree_distance(self.branch_tree)
 
     ####################################################################################################################
     #  === TREE MANIPULATION ===

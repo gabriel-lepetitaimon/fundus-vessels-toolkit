@@ -80,6 +80,28 @@ def groupby_mean(x: torch.Tensor, group_idx: torch.Tensor) -> torch.Tensor:
     return group_sum
 
 
+def unique_first(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return the indices of the first occurrence of each unique value in `x`.
+
+    Parameters
+    ----------
+    x : torch.Tensor
+        An integer tensor of shape (N,) containing the values to be processed.
+
+    Returns
+    -------
+    unique_values : torch.Tensor
+        A tensor of shape (G,) containing the unique values in `x`, where G is the number of unique values in `x`.
+    first_indices : torch.Tensor
+        A tensor of shape (G,) containing the indices of the first occurrence of each unique value in `x`, where G is the number of unique values in `x`.
+    """  #  # noqa: E501
+    unique_values, inverse_idxs, counts = x.unique(return_inverse=True, return_counts=True)
+    grouped_idxs = inverse_idxs.argsort(stable=True)
+    group_start_idxs = counts.cumsum(0).roll(1)
+    group_start_idxs[0] = 0
+    return unique_values, grouped_idxs[group_start_idxs]
+
+
 class GroupByCrossEntropyLoss(torch.nn.Module):
     def __init__(self, reduction: Literal["none", "mean", "sum"] = "mean", label_smoothing: float = 0.0):
         super().__init__()
@@ -91,6 +113,7 @@ class GroupByCrossEntropyLoss(torch.nn.Module):
         x: torch.Tensor,
         target: torch.Tensor,
         group_idx: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Compute the cross-entropy loss which enforce the selection of one sample per group, given sample-wise logits and group indices.
 
@@ -105,13 +128,16 @@ class GroupByCrossEntropyLoss(torch.nn.Module):
         group_idx : torch.Tensor
             A tensor of shape (N,) containing the group affiliation for each sample. The values in `group_idx` should be non-negative integers, and samples with the same group index belong to the same group.
 
+        mask : Optional[torch.Tensor], optional
+            A boolean tensor of shape (N,) indicating which group should be included in the loss computation. If None, all samples are included.
+
         Returns
         -------
         torch.Tensor
             A scalar tensor containing the mean cross-entropy loss over all groups.
         """  # noqa: E501
         group_idx = group_idx.long()
-        num_group = int(group_idx.max().item()) + 1
+        num_group = len(mask) if mask is not None else int(group_idx.max().item()) + 1
         group_size = torch.bincount(group_idx, minlength=num_group)
         assert torch.all(group_size > 0), "All groups must have at least one sample."
 
@@ -119,12 +145,12 @@ class GroupByCrossEntropyLoss(torch.nn.Module):
         group_max = torch.zeros(num_group, device=x.device).scatter_reduce_(0, group_idx, x, "amax", include_self=False)
 
         # Compute the log-sum-exp
-        x_exp = (x - group_max[group_idx]).exp()
-        group_sum_exp = torch.zeros(num_group, device=x.device).scatter_add_(0, group_idx, x_exp)
-        group_log_sum_exp = (group_sum_exp + 1e-16).log() + group_max
+        x_normed = x - group_max[group_idx]
+        group_sum_exp = torch.zeros(num_group, device=x.device).scatter_add_(0, group_idx, x_normed.exp())
+        group_log_sum_exp = (group_sum_exp + 1e-16).log()
 
         # Compute the log-softmax
-        log_softmax = x - group_log_sum_exp[group_idx]
+        log_softmax = x_normed - group_log_sum_exp[group_idx]
 
         # Compute the loss
         if self.label_smoothing > 0:
@@ -133,6 +159,10 @@ class GroupByCrossEntropyLoss(torch.nn.Module):
 
         # Sum over samples in the same group
         group_loss = torch.zeros(num_group, device=x.device).scatter_add_(0, group_idx, loss)
+
+        # Apply mask if provided
+        if mask is not None:
+            group_loss = group_loss[mask]
 
         # Reduce the loss according to the specified reduction method
         if self.reduction == "mean":

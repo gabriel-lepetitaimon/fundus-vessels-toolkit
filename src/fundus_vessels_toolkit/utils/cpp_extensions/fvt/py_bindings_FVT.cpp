@@ -8,7 +8,7 @@
 #include "rasterize_topo.h"
 #include "ray_iterators.h"
 #include "skeleton.h"
-#include "tree_topology.h"
+#include "tree.h"
 #include "vector_fields.h"
 
 /*********************************************************************************************
@@ -680,19 +680,18 @@ void facing_tips(const torch::Tensor& tips_yx, const torch::Tensor& tips_tan, fl
 
     for (int b0 = 0; b0 < B; b0++) {
         for (int tip0 = 0; tip0 < 2; tip0++) {
-            Point p0(tips_yx_acc[b0][tip0][1], tips_yx_acc[b0][tip0][0]);
-            Point t0(tips_tan_acc[b0][tip0][1], tips_tan_acc[b0][tip0][0]);
+            Point p0(tips_yx_acc[b0][tip0]), t0(tips_tan_acc[b0][tip0]);
 
             for (int b1 = b0 + 1; b1 < B; b1++) {
                 for (int tip1 = 0; tip1 < 2; tip1++) {
-                    Point p1(tips_yx_acc[b1][tip1][1], tips_yx_acc[b1][tip1][0]);
+                    Point p1(tips_yx_acc[b1][tip1]);
 
                     // Distance check
                     float sqr_dist = (p1 - p0).squaredNorm();
                     if (sqr_dist > sqr_max_dist) continue;
 
                     // Facing tangent check
-                    Point t1(tips_tan_acc[b1][tip1][1], tips_tan_acc[b1][tip1][0]);
+                    Point t1(tips_tan_acc[b1][tip1]);
                     if (t1.dot(-t0) < min_tan_cos) continue;
 
                     // Proximity or ...
@@ -777,6 +776,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // === tree_topology.h ===
     m.def("read_branches_topology", &read_branches_topology, "Read the topology of branches.");
+    m.def("tree_distance", &tree_distance, "Compute the distance between nodes of a tree.");
 
     // === vector_fields.h ===
     m.def("vec_bilinear_interpolate", &vec_bilinear_interpolate, "Bilinear interpolation of a vector field.");

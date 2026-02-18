@@ -75,6 +75,7 @@ Point::Point(const IntPair& yx) : y(yx[0]), x(yx[1]) {}
 Point::Point(const FloatPair& yx) : y(yx[0]), x(yx[1]) {}
 Point::Point(const IntPoint& yx) : y(yx.y), x(yx.x) {}
 Point::Point(const Tensor1DAcc<float>& yx) : y(yx[0]), x(yx[1]) {}
+Point::Point(const Tensor1DAcc<double>& yx) : y(yx[0]), x(yx[1]) {}
 
 // assignment operator modifies object, therefore non-const
 Point& Point::operator=(const Point& p) {

@@ -454,7 +454,7 @@ class VGraph:
         node_attr: Optional[pd.DataFrame] = None,
         branch_attr: Optional[pd.DataFrame] = None,
         node_count: Optional[int] = None,
-        check_integrity: bool = True,
+        check_integrity: bool | int = True,
     ):
         """Create a Graph object from the given data.
 
@@ -526,7 +526,9 @@ class VGraph:
         self._geometric_data: list[VGeometricData] = list(geometric_data)
 
         if check_integrity or node_count is None:
-            self.check_integrity("warn" if check_integrity else "skip", stack_level=2)
+            self.check_integrity(
+                "warn" if check_integrity else "skip", stack_level=2 if check_integrity is True else check_integrity + 1
+            )
 
         self._node_refs: WeakSet[VGraphNode] = WeakSet()
         self._branch_refs: WeakSet[VGraphBranch] = WeakSet()
@@ -3561,10 +3563,9 @@ class VGraph:
             graph._delete_node(nodes_to_remove, update_refs=False)
 
         # 6. Update branches references
-        if graph._branch_refs and updated_branches:
-            updated_branches = np.unique(np.concatenate(updated_branches, dtype=int))
+        if graph._branch_refs:
             for branch in graph._branch_refs:
-                if branch._id in updated_branches:
+                if branch.is_valid():
                     branch._node_ids = graph._branch_list[branch._id]
 
         return (graph, branch_lookup) if return_branch_reindex_lookup else graph
