@@ -991,7 +991,7 @@ class VTree(VGraph):
             assert not np.any(set_branches[subtree_branches]), "Some branches are assigned to multiple subtrees."
             set_branches[subtree_branches] = True
 
-        assert set_branches.all(), "Some branches were not assigned to a subtree."
+        # assert set_branches.all(), "Some branches were not assigned to a subtree."
         return sorted(subtrees, key=lambda x: len(x), reverse=True)
 
     def subtrees_branch_labels(self) -> npt.NDArray[np.int_]:

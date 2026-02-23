@@ -659,7 +659,7 @@ torch::Tensor terminal_tips(const torch::Tensor& branch_list, std::size_t N_node
 }
 
 void facing_tips(const torch::Tensor& tips_yx, const torch::Tensor& tips_tan, float max_distance, float max_angle,
-                 float tan_max_angle, float pos_tolerance, const torch::Tensor& out) {
+                 float tan_max_angle, float tan_to_hyp_max_angle, float pos_tolerance, const torch::Tensor& out) {
     auto const& tips_yx_acc = tips_yx.accessor<double, 3>();
     auto const& tips_tan_acc = tips_tan.accessor<double, 3>();
     const int B = tips_yx_acc.size(0);
@@ -676,6 +676,7 @@ void facing_tips(const torch::Tensor& tips_yx, const torch::Tensor& tips_tan, fl
     TORCH_CHECK_VALUE(out_acc.size(3) == 2, "The output tensor shape must by (B, 2, B, 2).");
 
     float min_cos = cos(deg2rad(max_angle)), min_tan_cos = cos(deg2rad(tan_max_angle));
+    float min_tan_to_hyp_cos = cos(deg2rad(tan_to_hyp_max_angle));
     float sqr_max_dist = max_distance * max_distance, sqr_pos_tolerance = pos_tolerance * pos_tolerance;
 
     for (int b0 = 0; b0 < B; b0++) {
@@ -693,6 +694,9 @@ void facing_tips(const torch::Tensor& tips_yx, const torch::Tensor& tips_tan, fl
                     // Facing tangent check
                     Point t1(tips_tan_acc[b1][tip1]);
                     if (t1.dot(-t0) < min_tan_cos) continue;
+
+                    Point t_hyp = (p1 - p0).normalize();
+                    if (t_hyp.dot(-t0) < min_tan_to_hyp_cos || t_hyp.dot(t1) < min_tan_to_hyp_cos) continue;
 
                     // Proximity or ...
                     if (sqr_dist > sqr_pos_tolerance) {

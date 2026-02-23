@@ -146,7 +146,7 @@ def build_line_digraph(
         virtual_edges[:, 1] = lookup[virtual_edges[:, 1]]
 
     # === Refresh the tip geometric data ===
-    graph = derive_tips_geometry_from_curve_geometry(graph, inplace=True)
+    graph = derive_tips_geometry_from_curve_geometry(graph, tangent=True, inplace=True)
 
     # === Duplicate all branch with BOTH or UNKNOWN AV label ===
     av_col_id = graph.branch_attr.columns.get_loc(av_attr)

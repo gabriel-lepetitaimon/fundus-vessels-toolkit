@@ -8,6 +8,7 @@
 *.py[cod]
 **/.ipynb_checkpoints/
 **/__pycache__/
+**/tmp/
 
 # Distribution / packaging
 /build/

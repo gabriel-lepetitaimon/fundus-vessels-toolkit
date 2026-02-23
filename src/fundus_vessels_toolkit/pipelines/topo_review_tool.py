@@ -2,7 +2,7 @@ from copy import copy
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import List, Literal, overload
+from typing import List, Literal, Optional, overload
 
 import numpy as np
 from fundus_data_toolkit.functional import open_image
@@ -17,6 +17,7 @@ from fundus_vessels_toolkit.segment_to_graph.av_tree_parsing import naive_infer_
 from fundus_vessels_toolkit.segment_to_graph.graph_simplification import simplify_passing_nodes
 from fundus_vessels_toolkit.segment_to_graph.tree_simplification import disconnect_crossing
 from fundus_vessels_toolkit.segment_to_graph.tree_topology import TopologicalLabel, TreeTopology
+from fundus_vessels_toolkit.utils.data_io import most_common_image_ext
 from fundus_vessels_toolkit.utils.jppype import draw_tree
 from fundus_vessels_toolkit.vascular_data_objects.vgraph import NodeIndices
 from fundus_vessels_toolkit.vascular_data_objects.vtree import VTree, VTreeNode
@@ -75,8 +76,8 @@ class ReviewTool:
         save_path: Path,
         index: int | str | None = None,
         *,
-        raw_ext="png",
-        av_ext="png",
+        raw_ext: Optional[str] = None,
+        av_ext: Optional[str] = None,
         height=800,
         av2tree=None,
         N_MAX_STATES=20,
@@ -84,8 +85,14 @@ class ReviewTool:
         self.raw_path = Path(raw_path)
         self.av_path = Path(av_path)
         self.save_path = Path(save_path)
-        self.raw_ext = raw_ext if "." in raw_ext else "." + raw_ext
-        self.av_ext = av_ext if "." in av_ext else "." + av_ext
+        if raw_ext is None:
+            self.raw_ext = most_common_image_ext(self.raw_path)
+        else:
+            self.raw_ext = raw_ext if "." in raw_ext else "." + raw_ext
+        if av_ext is None:
+            self.av_ext = most_common_image_ext(self.av_path)
+        else:
+            self.av_ext = av_ext if "." in av_ext else "." + av_ext
         img_names = {_.name[: -len(self.raw_ext)] for _ in self.raw_path.glob(f"*{self.raw_ext}")} & {
             _.name[: -len(self.av_ext)] for _ in self.av_path.glob(f"*{self.av_ext}")
         }
@@ -204,7 +211,7 @@ class ReviewTool:
 
         fundus_pred = fundus.copy()
         segment_av(fundus_pred)
-        self.trees_from_av_pred = self.av2tree_pred(fundus_pred)
+        self.trees_from_av_pred = self.av2tree(fundus_pred)
 
         try:
             fundus = fundus.update(av=FundusData.load_av(self.av_path / (img_name + self.av_ext), ensure_valid_av=True))
@@ -215,7 +222,7 @@ class ReviewTool:
             av *= vessels
             fundus = fundus.update(av=av)
             self._has_av_gt = False
-        self.trees_from_av = (self.av2tree_pred if self._has_av_gt else self.av2tree)(fundus)
+        self.trees_from_av = (self.av2tree if self._has_av_gt else self.av2tree_pred)(fundus)
         self._fundus = fundus
 
         # Draw fundus

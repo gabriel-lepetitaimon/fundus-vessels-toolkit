@@ -781,7 +781,8 @@ def find_facing_tips(
     *,
     max_distance: float = 100,
     max_angle: float = 30,
-    tan_max_angle: float = 60,
+    tan_max_angle: float = 120,
+    tan_to_hyp_max_angle: float = 90,
     pos_tolerance: float = 25,
     tangent: VBranchGeoData.Key = VBranchGeoData.Fields.TIPS_TANGENT,
     as_mask: Literal[False] = False,
@@ -792,7 +793,8 @@ def find_facing_tips(
     *,
     max_distance: float = 100,
     max_angle: float = 30,
-    tan_max_angle: float = 60,
+    tan_max_angle: float = 120,
+    tan_to_hyp_max_angle: float = 90,
     pos_tolerance: float = 25,
     tangent: VBranchGeoData.Key = VBranchGeoData.Fields.TIPS_TANGENT,
     as_mask: Literal[True],
@@ -802,7 +804,8 @@ def find_facing_tips(
     *,
     max_distance: float = 100,
     max_angle: float = 30,
-    tan_max_angle: float = 80,
+    tan_max_angle: float = 120,
+    tan_to_hyp_max_angle: float = 90,
     pos_tolerance: float = 25,
     tangent: VBranchGeoData.Key = VBranchGeoData.Fields.TIPS_TANGENT,
     as_mask: bool = False,
@@ -840,7 +843,9 @@ def find_facing_tips(
     tips_tan = torch.from_numpy(geodata.tip_tangent(attr=tangent))
     out_tensor = torch.from_numpy(out)
 
-    facing_tips_cpp(tips_yx, tips_tan, max_distance, max_angle, tan_max_angle, pos_tolerance, out_tensor)
+    facing_tips_cpp(
+        tips_yx, tips_tan, max_distance, max_angle, tan_max_angle, tan_to_hyp_max_angle, pos_tolerance, out_tensor
+    )
 
     return out if as_mask else np.argwhere(out)
 

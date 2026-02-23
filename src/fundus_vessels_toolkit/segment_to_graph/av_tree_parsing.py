@@ -6,8 +6,8 @@ import numpy.typing as npt
 
 from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.geometric import Point
-from fundus_vessels_toolkit.utils.typing import Indices
-from fundus_vessels_toolkit.vascular_data_objects.vgraph import NodeIndicesLike
+from fundus_vessels_toolkit.utils.typing import Bool1DArray, Indices
+from fundus_vessels_toolkit.vascular_data_objects.vgraph import BranchIndicesLike, NodeIndicesLike
 
 from ..pipelines.seg_to_graph import SegToGraph
 from ..utils.cluster import cluster_by_distance, reduce_clusters
@@ -784,3 +784,147 @@ def naive_infer_roots(
         vtree.reindex_branches(new_order, inverse_lookup=True)
 
     return vtree
+
+
+def naive_infer_arborescence(
+    graph: VGraph,
+    root_pos: Point,
+    *,
+    force_roots: Optional[Indices] = None,
+    branch_subset: Optional[BranchIndicesLike] = None,
+) -> tuple[Indices, Bool1DArray]:
+    # === Prepare graph ===
+    if branch_subset is not None:
+        branch_mask = np.zeros(graph.branch_count, dtype=bool)
+        branch_mask[graph.as_branch_ids(branch_subset)] = True
+    else:
+        branch_mask = np.ones(graph.branch_count, dtype=bool)
+
+    loop_branches = graph.self_loop_branches(as_mask=True)
+    if (loop_branches & branch_mask).sum() > 0:
+        warnings.warn("The graph contains self loop branches in the branch subset. They will be ignored.")
+        branch_mask &= ~loop_branches
+
+    nodes_coord = graph.node_coord()
+    branch_list = graph.branch_list
+
+    # === Prepare result variables ===
+    branch_tree = -np.ones((graph.branch_count,), dtype=int)
+    branch_dirs = np.zeros(len(graph.branch_list), dtype=bool)
+    visited_branches = np.zeros(graph.branch_count, dtype=bool)
+
+    # === Utilities method ===
+    def list_adjacent_branches(node: int) -> npt.NDArray[np.intp]:
+        branches = np.argwhere(np.any(branch_list == node, axis=1)).flatten()
+        branches = branches[branch_mask[branches]]
+        return np.stack([branches, np.where(branch_list[branches, 0] == node, 1, 0)]).T
+
+    ID, DIR = 0, 1
+
+    def list_direct_successors(branch: int) -> npt.NDArray[np.intp]:
+        head_node = branch_list[branch, 1 if branch_dirs[branch] else 0]
+        branches_id_dirs = list_adjacent_branches(head_node)
+        branches_id_dirs = branches_id_dirs[branches_id_dirs[:, ID] != branch]
+        return branches_id_dirs
+
+    stack = []
+
+    def affiliate(branch: int, successors: np.ndarray):
+        succ_ids, succ_dirs = successors.T
+        branch_tree[succ_ids] = branch
+        branch_dirs[succ_ids] = succ_dirs
+        visited_branches[succ_ids] = True
+        stack.extend(succ_ids)
+
+    # === Find the root node of each sub tree ===
+    roots = {}
+
+    if force_roots is not None:
+        for node in force_roots:
+            roots[node] = np.linalg.norm(nodes_coord[node] - root_pos)
+
+    for nodes in reduce_clusters(graph._branch_list[branch_mask], drop_singleton=False):
+        nodes = np.asarray(nodes, dtype=int)
+        if np.any(np.isin(nodes, list(roots.keys()))):
+            continue
+        nodes_dist = np.linalg.norm(nodes_coord[nodes] - root_pos, axis=1)
+        min_node_id = np.argmin(nodes_dist)
+        roots[nodes[min_node_id]] = nodes_dist[min_node_id]
+
+    for root in sorted(roots, key=roots.get):
+        root_branches_dirs = list_adjacent_branches(root)
+        for root_branch, root_dir in root_branches_dirs:
+            if not visited_branches[root_branch]:
+                stack.append(root_branch)
+                visited_branches[root_branch] = True
+                branch_dirs[root_branch] = root_dir
+
+    # === Walk the branches list of each sub tree ===
+    delayed_stack: Dict[int, List[int]] = {}  # {node: [branch, ...]}
+    while stack or delayed_stack:
+        if stack:
+            branch = stack.pop(0)
+
+            # 1. List the children of the first branch on the stack
+            successors = list_direct_successors(branch)
+            successors_ids = successors[:, ID]
+
+            # 2. If the branch has more than 2 successors, its evaluation is delayed until
+            #    all other branch are visited, to resolve potential cycles.
+            if len(successors_ids) > 2:
+                head_node = branch_list[branch, 1 if branch_dirs[branch] else 0]
+                if head_node not in delayed_stack:
+                    delayed_stack[head_node] = [branch]
+                else:
+                    delayed_stack[head_node].append(branch)
+                continue
+
+            # 3. Otherwise, check if any of the children has already been visited
+            if np.any(visited_branches[successors_ids]):
+                successors = successors[~visited_branches[successors_ids]]
+
+            # 4. Remember the hierarchy of the branches and add the children to the stack
+            affiliate(branch, successors)
+
+        else:
+            # 1'. If the stack is empty, evaluate a delayed nodes
+            node, ancestors = (k := next(iter(delayed_stack)), delayed_stack.pop(k))
+
+            if len(ancestors) == 1:
+                # 2'. If the node has only one ancestor, process it as a normal branch
+                branch = ancestors[0]
+                successors = list_direct_successors(branch)
+                affiliate(branch, successors)
+                continue
+            ancestors = np.array(ancestors, dtype=int)
+
+            # 3'. Otherwise, list all incident branches of the node and remove the ancestors
+            successors_id_dirs = list_adjacent_branches(node)
+            successors_id_dirs = successors_id_dirs[~np.isin(successors_id_dirs[:, ID], ancestors)]
+            successors = successors_id_dirs[:, ID]
+            succ_dirs = successors_id_dirs[:, DIR]
+            acst_dirs = branch_dirs[ancestors]
+
+            # 4'. For each successor, determine the best ancestor base on branch direction
+            adjacent_branches = np.concatenate([ancestors, successors])
+            adjacent_dirs = np.concatenate([~acst_dirs, succ_dirs])
+            adjacent_nodes = branch_list[adjacent_branches][np.arange(len(adjacent_branches)), adjacent_dirs]
+            tangents = graph.geometric_data().tip_data(
+                VBranchGeoData.Fields.TIPS_TANGENT, adjacent_branches, first_tip=adjacent_dirs.astype(bool)
+            )
+            for i, t in enumerate(tangents):  # If the tangent is not available, use the nodes coordinates
+                if np.isnan(t).any() or np.sum(t) == 0:
+                    tangents[i] = Point.from_array(nodes_coord[adjacent_nodes[i]] - nodes_coord[node]).normalized()
+            acst_tangents = -tangents[: len(ancestors)]
+            succ_tangents = tangents[len(ancestors) :]
+            cos_angles = np.sum(succ_tangents[:, None, :] * acst_tangents[None, :, :], axis=-1)
+            best_ancestor = np.argmax(cos_angles, axis=1)
+            for succ, succ_dir, acst in zip(successors, succ_dirs, ancestors[best_ancestor], strict=True):
+                branch_tree[succ] = acst
+                branch_dirs[succ] = succ_dir
+                stack.append(succ)
+                visited_branches[succ] = True
+
+    assert np.all(visited_branches[branch_mask]), "Some branches were not added to the tree."
+
+    return branch_tree[branch_mask], branch_dirs[branch_mask]

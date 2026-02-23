@@ -42,4 +42,4 @@ BoolPairArrayLike: TypeAlias = (
 
 Index: TypeAlias = int
 Indices: TypeAlias = npt.NDArray[np.int_]
-IndicesLike: TypeAlias = Index | Indices | List[int] | pd.Series
+IndicesLike: TypeAlias = Index | npt.NDArray[np.integer] | List[int] | pd.Series

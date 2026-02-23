@@ -1,7 +1,7 @@
 import warnings
 from functools import cached_property
 from itertools import pairwise
-from typing import Literal, Optional, Protocol, Self, overload
+from typing import Literal, Optional, Protocol, Self, Sequence, overload
 
 from cv2 import line
 import numpy as np
@@ -12,7 +12,7 @@ from ..utils.lookup_array import create_removal_lookup
 from ..utils.math import gaussian, sigmoid, softmax
 from ..utils.numpy import np_first_true, np_group_by
 from ..utils.tree import accessible_from_root, find_cycles, has_cycle, tree_distance
-from ..utils.typing import Bool1DArray, Float1DArray, Indices, Int2DArrayLike
+from ..utils.typing import Bool1DArray, Float1DArray, Indices, Int1DArray, Int1DArrayLike, Int2DArrayLike
 from ..vascular_data_objects import VGraph
 from ..vascular_data_objects.fundus_data import AVLabel
 from ..vascular_data_objects.vbranch_geodata import VBranchGeoData
@@ -163,12 +163,21 @@ class VBranchDigraph(LineDigraph):
             An array of shape (B,) representing whether each branch is invalid.
         """
         if self.branch_av_p is None:
-            return np.ones(self.branch_count, dtype=bool)
+            return np.zeros(self.branch_count, dtype=bool)
         return 1 - self.branch_av_p.sum(axis=1) >= self.branch_av_p.max(axis=1)
 
     @classmethod
     def from_graph(
-        cls, graph: VGraph, *, max_distance=200, max_angle=30, tan_max_angle=110, pos_tolerance=25, check: bool = True
+        cls,
+        graph: VGraph,
+        *,
+        max_distance=200,
+        max_angle=30,
+        tan_max_angle=110,
+        tan_to_hyp_max_angle=90,
+        pos_tolerance=25,
+        check: bool = True,
+        split_for_reconnections: bool = True,
     ) -> Self:
         """Create a BranchDigraph from a VGraph.
 
@@ -183,44 +192,27 @@ class VBranchDigraph(LineDigraph):
             The BranchDigraph instance.
         """
         graph = graph.copy()
-        graph.geometric_data().clear_attribute(
-            all_except={VBranchGeoData.Fields.TANGENTS, VBranchGeoData.Fields.TIPS_TANGENT}
-        )
-        _, candidates = prepare_graph_for_reconnections(
-            graph, max_distance=max_distance, max_angle=max_angle, av_attr="av", inplace=True
-        )
-        derive_tips_geometry_from_curve_geometry(graph, tangent=True, inplace=True)
-
-        def check_candidates_using_both_tips(facing_tips: npt.NDArray[np.bool_]) -> None:
-            b0, b1, b1_tip = np.where(np.all(facing_tips, axis=(1,)))
-            if len(b0) > 0:
-                print("Both tip of b0 are used in the candidates b0->b1 pairs:")
-                for b0_, b1_, b1_tip_ in zip(b0, b1, b1_tip, strict=True):
-                    print(f"\t  b{b0_} -> b{b1_}[{b1_tip_}]")
-
-            b0, b0_tip, b1 = np.where(np.all(facing_tips, axis=(3,)))
-            if len(b0) > 0:
-                print("Both tip of b1 are used in the candidates b0->b1 pairs:")
-                for b0_, b1_, b0_tip_ in zip(b0, b1, b0_tip, strict=True):
-                    print(f"\t  b{b0_}[{b0_tip_}] -> b{b1_}")
+        if split_for_reconnections:
+            _, candidates = prepare_graph_for_reconnections(
+                graph, max_distance=max_distance, max_angle=max_angle, av_attr="av", inplace=True
+            )
+            derive_tips_geometry_from_curve_geometry(graph, tangent=True, inplace=True)
+        else:
+            candidates = np.empty((0, 4), dtype=int)
 
         facing_tips = find_facing_tips(
             graph=graph,
             max_distance=max_distance,
             max_angle=max_angle,
             tan_max_angle=tan_max_angle,
+            tan_to_hyp_max_angle=tan_to_hyp_max_angle,
             pos_tolerance=pos_tolerance,
             as_mask=True,
         )
-        # print("Facing Tips:")
-        # check_candidates_using_both_tips(facing_tips)
 
         for b0, tip0, b1, tip1 in candidates:
             facing_tips[b0, tip0, b1, tip1] = True
             facing_tips[b1, tip1, b0, tip0] = True
-
-        # print("Facing Tips with initial candidates:")
-        # check_candidates_using_both_tips(facing_tips)
 
         graph.branch_tips_connectivity_matrix(facing_tips, erase_opposite_tips=True)
 
@@ -229,11 +221,7 @@ class VBranchDigraph(LineDigraph):
         facing_tips[Bidx, 0, Bidx, 0] = False
         facing_tips[Bidx, 1, Bidx, 1] = False
 
-        # print("Final candidates:")
-        # check_candidates_using_both_tips(facing_tips)
-
         line_list = np.argwhere(facing_tips)
-
         line_list = [
             line_list,
             np.stack([np.full(B, -1), np.zeros(B), np.arange(B), np.zeros(B)], axis=-1).astype(np.int_),
@@ -461,7 +449,7 @@ class VBranchDigraph(LineDigraph):
         if check_dir_consistency:
             raise NotImplementedError("Direction consistency check is not implemented yet in max_parent computation")
 
-        line_list = self.line_list[self.line_p.argsort(order="desc")]
+        line_list = self.line_list[self.line_p.argsort()[::-1]]
         b0, _, b1, _ = line_list.T
         b1, first_idx = np.unique(b1, return_index=True)
         parent = np.full((self.branch_count,), -1, dtype=np.int_)
@@ -540,7 +528,14 @@ class VBranchDigraph(LineDigraph):
 
         return branch_parents_full, branch_dir_full
 
-    def optimize_tree(self, keep_missing_branch: bool = False) -> VTree:
+    def compute_tree_from_arborescence(
+        self,
+        branch_parents: Int1DArray,
+        branch_dir: Bool1DArray,
+        missing_branch: Optional[Bool1DArray] = None,
+        *,
+        keep_missing_branch: bool = False,
+    ) -> VTree:
         """Resolve the directed graph into an arborescence (a directed tree).
 
         Returns
@@ -550,12 +545,11 @@ class VBranchDigraph(LineDigraph):
         """
         assert self.graph is not None, "The graph attribute must be set to compute the optimized tree"
 
-        # === Solve Optimal Arborescence ===
-        branch_parents, branch_dir = self.solve_optimal_arboresence(remove_missing_branch=not keep_missing_branch)
-
         # === Update graph according to optimal arborescence ===
         vgraph = self.graph.copy()
-        missing_branch = self.missing_branch()
+
+        if missing_branch is None:
+            missing_branch = self.missing_branch()
 
         if not keep_missing_branch:
             # - Remove missing branches from the graph if needed
@@ -593,7 +587,26 @@ class VBranchDigraph(LineDigraph):
 
         return tree
 
-    def lines_by_branch(self, branch: int, sort_by_p: Optional[bool] = None) -> npt.NDArray[np.float64]:
+    def optimize_tree(self, keep_missing_branch: bool = False) -> VTree:
+        """Resolve the directed graph into an arborescence (a directed tree).
+
+        Returns
+        -------
+        VTree
+            The tree representation of the directed graph.
+        """
+        # === Solve Optimal Arborescence ===
+        branch_parents, branch_dir = self.solve_optimal_arboresence(remove_missing_branch=not keep_missing_branch)
+        return self.compute_tree_from_arborescence(branch_parents, branch_dir, keep_missing_branch=keep_missing_branch)
+
+    def lines_by_branch(
+        self,
+        b: Optional[int | Int1DArrayLike] = None,
+        sort_by_p: Optional[bool] = None,
+        *,
+        b0: Optional[int | Int1DArrayLike] = None,
+        b1: Optional[int | Int1DArrayLike] = None,
+    ) -> npt.NDArray[np.float64]:
         """Get the lines in the directed graph that start from a given branch.
 
         Parameters
@@ -608,7 +621,18 @@ class VBranchDigraph(LineDigraph):
         npt.NDArray[np.float64]
             An array of shape (M, 4) representing the directed edges starting from the given branch.
         """
-        concerned_lines = (self.line_list[:, 0] == branch) | (self.line_list[:, 2] == branch)
+        if b is None:
+            assert b0 is not None or b1 is not None, "Either b or (b0 and b1) must be provided"
+            if b0 is not None:
+                concerned_lines = np.isin(self.line_list[:, 0], np.asarray(b0))
+            else:
+                concerned_lines = np.ones(len(self.line_list), dtype=bool)
+            if b1 is not None:
+                concerned_lines &= np.isin(self.line_list[:, 2], np.asarray(b1))
+        else:
+            b = np.asarray(b)
+            concerned_lines = np.isin(self.line_list[:, 0], b) | np.isin(self.line_list[:, 2], b)
+
         lines = self.line_list[concerned_lines]
         if sort_by_p is None and self.line_p is not None:
             sort_by_p = True
@@ -627,8 +651,9 @@ class VBranchDigraph(LineDigraph):
                 b0_dir_p = b1_dir_p = np.array([])
             sorted_ids = np.argsort(total_p)[::-1]
             lines = lines[sorted_ids]
-            lines[:, 1] = self.graph.branch_list[lines[:, 0], lines[:, 1]]
-            lines[:, 3] = self.graph.branch_list[lines[:, 2], lines[:, 3]]
+            if self.graph is not None:
+                lines[:, 1] = self.graph.branch_list[lines[:, 0], lines[:, 1]]
+                lines[:, 3] = self.graph.branch_list[lines[:, 2], lines[:, 3]]
             lines = np.concatenate([lines, p[sorted_ids][:, None]], axis=1)
             if self.branch_dir_p is not None:
                 lines = np.concatenate([lines, b0_dir_p[sorted_ids][:, None], b1_dir_p[sorted_ids][:, None]], axis=1)
@@ -966,7 +991,6 @@ def solve_line_digraph_approx(
             if (already_added := digraph.edges.get((b0, b1), None)) is not None and already_added["p"] >= data["p"]:
                 continue
             digraph.add_edge(b0, b1, p=data["p"], id=data["id"], tips=[b0_tip, b1_tip])
-
     else:
         digraph = nx.DiGraph()
         for id, (line, p) in enumerate(zip(line_list, line_p, strict=True)):

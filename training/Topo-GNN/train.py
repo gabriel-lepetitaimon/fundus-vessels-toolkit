@@ -23,7 +23,7 @@ def train():
     config = wandb.config
     config.setdefaults(
         {
-            "epoch": 300,
+            "epoch": 160,
             "lr": 1e-2,
             # "weight_decay": 1e-5,
             # "batch_size": 4,
@@ -42,7 +42,9 @@ def train():
     RAW = [path / "1-images" for path in PATH]
     AV = [path / "2-av-pred_CLEMENT" for path in PATH]
     TOPO = [path / "3-topo" for path in PATH]
-    dataset = VBranchDigraphDataset.load_from_dirs(RAW, TOPO, av_dir=AV, resize_to=1024)
+    dataset = VBranchDigraphDataset.load_from_dirs(
+        RAW, TOPO, av_dir=AV, resize_to=1024, root=str(Path(__file__).parent / "tmp/DATA"), overwrite=False
+    )
     train_set, val_set, test_set = dataset.split_loaders(train_ratio=0.7, val_ratio=0.15)
     train_loader = PyGDataLoader(train_set, batch_size=3, shuffle=True, num_workers=5)
     val_loader = PyGDataLoader(val_set, batch_size=6, num_workers=2)
@@ -56,7 +58,7 @@ def train():
         # gradient_clip_val=0.5,
         # gradient_clip_algorithm="value",wandb
         # num_sanity_val_steps=0,
-        callbacks=[L_callbacks.ModelCheckpoint(monitor="val_line_loss", mode="min", save_top_k=1)],
+        callbacks=[L_callbacks.ModelCheckpoint(monitor="val_tree-parent-acc", mode="max", save_top_k=1)],
     )
 
     trainer.fit(model, train_loader, val_loader)

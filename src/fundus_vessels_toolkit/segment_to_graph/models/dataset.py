@@ -26,16 +26,19 @@ from fundus_toolkits.utils.color import color_jitter
 from fundus_toolkits.utils.geometric import Point, Rect
 from fundus_toolkits.utils.image import read_image
 
+from fundus_vessels_toolkit.segment_to_graph.av_tree_parsing import naive_infer_arborescence, naive_infer_roots
+
 from ...pipelines.avseg_to_tree import GNNAVSegToTree
 from ...utils import if_none
 from ...utils.data_io import most_common_image_ext
 from ...utils.fundus_projections import ResizeTranslateProjection
 from ...utils.jppype import AV_COLORS, draw_graph, draw_tree, draw_trees
 from ...utils.numpy import np_group_by
+from ...utils.typing import Bool1DArray, Int1DArray
 from ...vascular_data_objects import VBranchGeoData, VTree
 from ..graph_simplification import merge_nodes_by_distance
 from ..tree_topology import TopologicalLabel
-from ..vbranch_digraph import EdgeAttrExtractor, TreeTopology, VBranchDigraph, VGraph
+from ..vbranch_digraph import EdgeAttrExtractor, TreeTopology, VBranchDigraph, VGraph, branch_dist_tangent_extractor
 from .data_augmentation import deteriorate_graph, geometric_augment
 
 
@@ -140,7 +143,7 @@ class VBranchDigraphData(PygData):
                     halfC = C // 2
                     repeat = math.ceil(10 / halfC)
                     curves_[i, :10] = torch.tile(curve[:halfC], (repeat, 1))[:10]
-                    curves_[i, 10:] = torch.tile(curve[C - halfC :], (repeat, 1))[:10]
+                    curves_[i, 10:] = torch.tile(curve[C - halfC :], (repeat, 1))[:10].flip(0)
                 else:
                     indices = torch.linspace(0, C - 1, 20).long()
                     curves_[i] = curve[indices]
@@ -199,7 +202,7 @@ class VBranchDigraphData(PygData):
         return cls(
             edge_index=torch.from_numpy(digraph.b0b1[not_root]).T,
             edge_first_tip=torch.from_numpy(digraph.b0tip_b1tip[not_root]) == 0,
-            edge_attr=torch.from_numpy(edge_attr_fn(digraph)) if edge_attr_fn is not None else None,
+            edge_attr=torch.from_numpy(edge_attr_fn(digraph)).float() if edge_attr_fn is not None else None,
             img=fundus_img.half(),
             branch_curves=branch_curves,
             edge_p=torch.from_numpy(digraph.line_p[not_root]).float(),
@@ -313,10 +316,10 @@ class VBranchDigraphDataset(PygDataset):
         if len(to_process) == 0:
             return
 
-        # run_parallel = Parallel(n_jobs=-2, return_as="generator_unordered")
+        run_parallel = Parallel(n_jobs=-2, return_as="generator_unordered")
         for name, od_yx, mac_yx in tqdm.tqdm(  # type: ignore
-            # run_parallel(delayed(VBranchDigraphDataset.process_single)(arg) for arg in to_process),
-            (VBranchDigraphDataset.process_single(arg) for arg in to_process),
+            run_parallel(delayed(VBranchDigraphDataset.process_single)(arg) for arg in to_process),
+            # (VBranchDigraphDataset.process_single(arg) for arg in to_process),
             total=len(to_process),
             desc="Processing dataset",
             disable=not self.verbose,
@@ -417,6 +420,10 @@ class VBranchDigraphDataset(PygDataset):
         df = df.loc[[path.stem for path in raw_paths]]
         od_yx = df[["od_y", "od_x"]].values.astype(np.float32)
         mac_yx = df[["mac_y", "mac_x"]].values.astype(np.float32)
+        half = np.array([0, graphs[0].geometric_data().domain.size.x / 2])
+        for i, (od, mac) in enumerate(zip(od_yx, mac_yx, strict=True)):
+            if np.isnan(mac).any():
+                mac_yx[i] = od + half if od[1] < half[1] else od - half
 
         return raw_paths, target_topologies, graphs, od_yx, mac_yx
 
@@ -436,14 +443,22 @@ class VBranchDigraphDataset(PygDataset):
     def len(self):
         return len(self.fundus_paths)
 
-    def get(self, idx) -> VBranchDigraphData:
+    def get(self, idx: int | str) -> VBranchDigraphData:
+        if isinstance(idx, str):
+            name = idx
+            idx = [_.stem for _ in self._raw_fundus_paths].index(idx)
+        else:
+            name = self._raw_fundus_paths[idx].stem
         digraph, fundus_img, od_yx, mac_yx = self.get_sample(idx, augment=self.augment, test=False)
-        name = self._raw_fundus_paths[idx].stem
-        return VBranchDigraphData.from_branch_digraph(digraph, torch.from_numpy(fundus_img), od_yx, mac_yx, name)
+        return VBranchDigraphData.from_branch_digraph(
+            digraph, torch.from_numpy(fundus_img), od_yx, mac_yx, name, branch_dist_tangent_extractor
+        )
 
     def get_sample(
-        self, idx: int, *, augment: bool = False, test: bool = False
+        self, idx: int | str, *, augment: bool = False, test: bool = False
     ) -> tuple[VBranchDigraph, npt.NDArray, npt.NDArray, npt.NDArray]:
+        if isinstance(idx, str):
+            idx = [_.stem for _ in self._raw_fundus_paths].index(idx)
         fundus_path = self.fundus_paths[idx]
         fundus_image = read_image(fundus_path, cast_to_float=True)
         od_yx = self.od_yx[idx]
@@ -585,6 +600,90 @@ class VBranchDigraphDataset(PygDataset):
             m[2].add_image(topo_map, name="background")
             draw_trees(trees_gt, view=m[2], bspline_dir=True)
         return m, digraph, fundus_img, od_yx, mac_yx
+
+    def show_tree_diff(
+        self, idx: int | str, parent_pred: Int1DArray, dir_pred: Bool1DArray, fp_pred: Optional[Bool1DArray] = None
+    ) -> tuple[Mosaic, VTree]:
+        if isinstance(idx, str):
+            name = idx
+            idx = [_.stem for _ in self._raw_fundus_paths].index(name)
+        else:
+            name = self._raw_fundus_paths[idx].stem
+        fundus = FundusData(self.fundus_paths[idx])
+        art_tree = VTree.load(Path(self.processed_dir) / "target-topo" / (name + "_art.npz"))
+        vei_tree = VTree.load(Path(self.processed_dir) / "target-topo" / (name + "_vei.npz"))
+        trees_gt = (art_tree, vei_tree)
+        topo_gt = self.target_topologies[idx]
+
+        digraph, fundus_img, od_yx, mac_yx = self.get_sample(idx, augment=False, test=False)
+
+        m = Mosaic(
+            3,
+            cols_titles=[f"GT Tree: {name}", "Predicted Tree", "Reference Topology"],
+            cell_height=700,
+            background=fundus_img,
+        )
+
+        # Draw GT tree
+        solved_tree = digraph.optimize_tree(keep_missing_branch=True)
+        draw_tree(solved_tree, view=m[0], branch_color="subtree", bspline_dir=True)
+        # cmap = m.views[0]["tree"].edges_cmap
+        # for b_fp in np.where(digraph.missing_branch())[0]:
+        #     cmap[b_fp] = "#ffffff"
+        # m.views[0]["tree"].edges_cmap = cmap
+
+        # Draw Predicted tree
+        baseline_tree = digraph.compute_tree_from_arborescence(parent_pred, dir_pred, fp_pred, keep_missing_branch=True)
+        draw_tree(
+            baseline_tree, view=m[1], branch_color="subtree", bspline_dir=True, edge_labels=True, node_labels=False
+        )
+        # if fp_pred is not None:
+        #     cmap = m.views[1]["tree"].edges_cmap
+        #     for b_fp in np.where(fp_pred)[0]:
+        #         cmap[b_fp] = "#ffffff"
+        #     m.views[1]["tree"].edges_cmap = cmap
+
+        # def overlay_topo(img: npt.NDArray[np.float64], topo: TreeTopology, art: bool) -> npt.NDArray[np.float64]:
+        #     topo = topo.as_dense()
+        #     subtree_map = TopologicalLabel.decode_subtree(topo.branch_map)
+        #     alpha = np.zeros(topo.shape, dtype=np.float64)
+        #     topo_img = np.zeros(img.shape, dtype=np.float64)
+        #     main_color = AV_COLORS[AVLabel.ART if art else AVLabel.VEI]
+        #     colors = iter(color_jitter(main_color, hue=0.1))
+
+        #     for subtree_id in np.unique(subtree_map):
+        #         if subtree_id == -1:
+        #             continue
+        #         subtree_mask = subtree_map == subtree_id
+        #         topo_img[subtree_mask] = next(colors) / 255.0
+        #         subtree_rank_map = topo.rank_map[subtree_mask]
+        #         alpha[subtree_mask] = 0.8 - 0.7 * (subtree_rank_map / subtree_rank_map.max())
+
+        #     return img * (1 - alpha[:, :, None]) + topo_img * alpha[:, :, None]
+
+        # topo_map = (fundus.image).transpose(1, 2, 0)
+        # topo_map = overlay_topo(topo_map, topo_gt[0], art=True)
+        # topo_map = overlay_topo(topo_map, topo_gt[1], art=False)
+
+        # m[2].add_image(topo_map, name="background")
+        # draw_trees(trees_gt, view=m[2], bspline_dir=True)
+        assert digraph.graph is not None, "Graph must be loaded to infer tree"
+        OD = Point(od_yx[0], od_yx[1])
+        art_branch = digraph.graph.branch_attr["av"] == AVLabel.ART
+        vei_branch = digraph.graph.branch_attr["av"] == AVLabel.VEI
+        parent_base = -np.ones(digraph.graph.branch_count, dtype=np.int_)
+        dir_base = np.zeros(digraph.graph.branch_count, dtype=np.bool_)
+        parent_base[art_branch], dir_base[art_branch] = naive_infer_arborescence(
+            digraph.graph, OD, branch_subset=art_branch
+        )
+        parent_base[vei_branch], dir_base[vei_branch] = naive_infer_arborescence(
+            digraph.graph, OD, branch_subset=vei_branch
+        )
+
+        baseline_tree = digraph.compute_tree_from_arborescence(parent_base, dir_base, fp_pred, keep_missing_branch=True)
+        draw_tree(baseline_tree, view=m[2], branch_color="subtree", bspline_dir=True)
+
+        return m, baseline_tree
 
     def split(self, indices: Sequence[int], augment: Optional[bool] = None) -> VBranchDigraphDataset:
         """Create a new dataset with only the samples at the specified indices."""

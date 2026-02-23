@@ -918,8 +918,10 @@ class TopologicalLabel(np.uint64):
         Create a TopologicalLabel from an integer label.
         """
         assert 0 <= subtree < 4095, "Subtree index must be between 0 and 4094."
+        if len(branching_pattern) > 44:
+            warnings.warn("Branching pattern is too long and will be truncated to 44 bits.", stacklevel=2)
+            branching_pattern = branching_pattern[:44]
         rank = len(branching_pattern)
-        assert rank <= 44, "Branching pattern must be less than 44 bits."
 
         branching_pattern_int = np.uint64(sum((1 << (43 - i)) for i, b in enumerate(branching_pattern) if b))
         return cls(

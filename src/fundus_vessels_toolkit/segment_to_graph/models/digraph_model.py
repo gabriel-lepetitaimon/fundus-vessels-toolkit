@@ -2,22 +2,28 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from functools import cached_property
+from types import EllipsisType
 from typing import Literal, Optional
 
+from matplotlib.widgets import EllipseSelector
 import numpy as np
 import torch
 import torch.nn.functional as F
 import torch_geometric.nn as pyg_nn
 from torch import Tensor, nn
 from torch_geometric.data import Batch as PyGBatch
-from torch_geometric.nn.conv import GATv2Conv, MessagePassing
+from torch_geometric.nn.conv import GATv2Conv, MessagePassing, TransformerConv
 from torch_geometric.nn.dense.linear import Linear
+from torch_geometric.utils import softmax
 from torchvision.models import EfficientNet_V2_S_Weights
 from torchvision.models.efficientnet import efficientnet_v2_s
 from torchvision.transforms.functional import normalize
 
+from fundus_vessels_toolkit.segment_to_graph.vbranch_digraph import VBranchDigraph
+
 from ...utils.torch import torch_interp_bilinear, unique_first
 from .dataset import VBranchDigraphBatch, VBranchDigraphData
+from .gnn_with_pos_encoding import APE, RoPE, TransformerConvWithPosEncoding
 
 
 class BranchFeaturesEfficientNetV2S(torch.nn.Module):
@@ -25,8 +31,6 @@ class BranchFeaturesEfficientNetV2S(torch.nn.Module):
         super().__init__()
         net = efficientnet_v2_s(weights=EfficientNet_V2_S_Weights.DEFAULT if pretrained else None).features
         self.efficient_net = net
-        self._features_cache = [None] * 4
-
         self.net = nn.Sequential(*[nn.Sequential(*[net[_] for _ in idxs]) for idxs in [(0, 1), (2,), (3,), (4, 5, 6)]])
 
     def forward(self, x):
@@ -51,9 +55,9 @@ class Gatv2GCN(torch.nn.Module):
             edge_dim: Optional[int] = edge_attr_dim
             residual: bool = True
             add_self_loops: bool = True
-            fill_value: float | Tensor | str = "mean"
+            fill_value: float | Tensor | str = torch.ones(7)
 
-        opt = asdict(GATv2Opt())  # fill_value=torch.ones(7)))
+        opt = asdict(GATv2Opt())
 
         self.bn0 = pyg_nn.InstanceNorm(n_in)
         self.gat0 = GATv2Conv(n_in, 64, heads=8, dropout=0.1, **opt)
@@ -67,7 +71,7 @@ class Gatv2GCN(torch.nn.Module):
         self.gat3a = GATv2Conv(256 * 4, 512, heads=2, dropout=0, **opt)
         self.gat3b = GATv2Conv(512 * 2, n_out, heads=1, dropout=0, **opt)
 
-    def forward(self, x, edge_index, batch_idx, batch_size, edge_attr=None):
+    def forward(self, x, edge_index, batch_idx, batch_size, edge_attr=None, pos=None):
         x = self.bn0(x, batch_idx, batch_size)
         x = self.gat0(x, edge_index, edge_attr=edge_attr).relu()
         x = self.bn1(x, batch_idx, batch_size)
@@ -83,12 +87,61 @@ class Gatv2GCN(torch.nn.Module):
         return x
 
 
+class TransformerGCN(torch.nn.Module):
+    def __init__(self, n_in: int = 512, n_out: int = 1024, edge_attr_dim: Optional[int] = None):
+        super().__init__()
+        self.n_in = n_in
+        self.n_out = n_out
+
+        @dataclass(frozen=True)
+        class TransformerConvOpt:
+            edge_dim: Optional[int] = edge_attr_dim
+            beta: bool = True
+            pos_encoding: Optional[RoPE | Literal["axial", "spiral"]] = "spiral"
+
+        opt = asdict(TransformerConvOpt())  # fill_value=torch.ones(7)))
+
+        self.bn0 = pyg_nn.InstanceNorm(n_in)
+        self.conv0 = TransformerConvWithPosEncoding(n_in, 64, heads=8, dropout=0.1, **opt)
+        self.bn1 = pyg_nn.InstanceNorm(64 * 8)
+        self.conv1a = TransformerConvWithPosEncoding(64 * 8, 128, heads=8, dropout=0.1, **opt)
+        self.conv1b = TransformerConvWithPosEncoding(128 * 8, 256, heads=4, dropout=0, **opt)
+        # self.bn2 = pyg_nn.InstanceNorm(256 * 4)
+        self.conv2a = TransformerConvWithPosEncoding(256 * 4, 128, heads=8, dropout=0, **opt)
+        self.conv2b = TransformerConvWithPosEncoding(128 * 8, 256, heads=4, dropout=0, **opt)
+        # self.bn3 = pyg_nn.InstanceNorm(256 * 4)
+        self.conv3a = TransformerConvWithPosEncoding(256 * 4, 512, heads=2, dropout=0, **opt)
+        self.conv3b = TransformerConvWithPosEncoding(512 * 2, n_out, heads=1, dropout=0, **opt)
+
+    def forward(self, x, edge_index, batch_idx, batch_size, edge_attr=None, pos=None):
+        x = self.bn0(x, batch_idx, batch_size)
+        x = self.conv0(x, edge_index, edge_attr=edge_attr, pos=pos).relu()
+        x = self.bn1(x, batch_idx, batch_size)
+        x = self.conv1a(x, edge_index, edge_attr=edge_attr, pos=pos).relu()
+        x = self.conv1b(x, edge_index, edge_attr=edge_attr, pos=pos).relu()
+        # x = self.bn2(x, batch_idx, batch_size)
+        x = self.conv2a(x, edge_index, edge_attr=edge_attr, pos=pos).relu()
+        x = self.conv2b(x, edge_index, edge_attr=edge_attr, pos=pos).relu()
+        # x = self.bn3(x, batch_idx, batch_size)
+        x = self.conv3a(x, edge_index, edge_attr=edge_attr, pos=pos).relu()
+        x = self.conv3b(x, edge_index, edge_attr=edge_attr, pos=pos)
+
+        return x
+
+
 class BranchDigraphModel(torch.nn.Module):
-    def __init__(self, img_feature_extractor: nn.Module, gnn: nn.Module, gnn_out_channels: Optional[int] = None):
+    def __init__(
+        self,
+        img_feature_extractor: nn.Module,
+        gnn: nn.Module,
+        gnn_out_channels: Optional[int] = None,
+        oriented_affinity: bool = True,
+    ):
         super().__init__()
 
         self.img_feature_extractor = img_feature_extractor.to(dtype=torch.bfloat16)
         self.gnn = gnn
+        self.positional_encoding = APE(head_dim=gnn.n_in // 2)  # type: ignore
 
         if gnn_out_channels is None:
             assert hasattr(gnn, "n_out"), "gnn_out_channels must be specified if gnn does not have n_out attribute"
@@ -98,8 +151,10 @@ class BranchDigraphModel(torch.nn.Module):
         self.lin_fp = Linear(gnn_out_channels, 1, weight_initializer="glorot")
         self.lin_av = Linear(gnn_out_channels, 1, weight_initializer="glorot")
         self.lin_dir = Linear(gnn_out_channels, 1, weight_initializer="glorot")
-        self.lin_affinity = Linear(gnn_out_channels, 128, weight_initializer="glorot")
         self.lin_root = Linear(gnn_out_channels, 1, weight_initializer="glorot")
+        self.lin_affinity = Linear(gnn_out_channels, 128 * (2 if oriented_affinity else 1), weight_initializer="glorot")
+
+        self.polarized_affinity = oriented_affinity
 
     def sample_features(
         self,
@@ -159,15 +214,35 @@ class BranchDigraphModel(torch.nn.Module):
         return torch.cat([features_tip0, features_tip1], dim=-1)  # (B, 512)
 
     def forward(self, data: VBranchDigraphBatch) -> Output:
+        if not isinstance(data, PyGBatch):
+            data.batch = torch.zeros(data.branch_curves.shape[0], dtype=torch.long, device=data.branch_curves.device)
+            data.batch_size = 1
+
         # === Extract branch features ===
         img = data.img.reshape(data.batch_size, 3, *data.img.shape[1:]).to(dtype=torch.bfloat16)
         img_size = (img.shape[-2], img.shape[-1])
         img_features = self.img_feature_extractor(img)
         branch_features = self.sample_features(img_features, data.branch_curves, data.batch, img_size)
 
+        # Add positional encoding
+        pos = data.branch_curves[:, [0, -1], :].reshape(-1, 2)  # (N_branch * 2, 2)
+        pos = reproject_pos(pos, data.od_yx, data.mac_yx - data.od_yx, data.batch.repeat_interleave(2))
+        if False:
+            pos_encoding = self.positional_encoding.compute_pos_encoding(pos)
+            pos_encoding = pos_encoding.reshape(branch_features.shape)
+
+            branch_features += pos_encoding
+
         # === Refine branch representation with the GNN ===
         lines = Lines(data.edge_index, data.edge_first_tip)
-        x = self.gnn(branch_features, lines.edge_index, data.batch, data.batch_size, edge_attr=data.edge_attr)
+        x = self.gnn(
+            branch_features,
+            lines.edge_index,
+            data.batch,
+            data.batch_size,
+            edge_attr=data.edge_attr,
+            pos=pos.reshape(2, -1, 2),
+        )
 
         # === Predict branch AV class, direction, affinity and root probability ===
         branch_fp = self.lin_fp(x).squeeze(-1)
@@ -177,7 +252,11 @@ class BranchDigraphModel(torch.nn.Module):
         branch_root_score = self.lin_root(x).squeeze(-1)
 
         # Compute affinity between connected branches
-        edge_score = F.cosine_similarity(branch_affinity_v[lines.b0], branch_affinity_v[lines.b1], dim=-1)
+        if self.polarized_affinity:
+            b0_affinity_v, b1_affinity_v = branch_affinity_v.view(x.shape[0], -1, 2).unbind(-1)
+        else:
+            b0_affinity_v = b1_affinity_v = branch_affinity_v
+        edge_score = (b0_affinity_v[lines.b0] * b1_affinity_v[lines.b1]).sum(dim=-1)
 
         return BranchDigraphModel.Output(
             batch=data,
@@ -185,7 +264,7 @@ class BranchDigraphModel(torch.nn.Module):
             av_logit=branch_av,
             dir_logit=branch_dir,
             edge_score=edge_score,
-            root_score=branch_root_score,
+            root_logit=branch_root_score,
         )
 
     @dataclass(frozen=True)
@@ -205,7 +284,7 @@ class BranchDigraphModel(torch.nn.Module):
         edge_score: Tensor
         """Tensor of shape (N_edge,) containing affinity scores"""  # noqa: E501
 
-        root_score: Tensor
+        root_logit: Tensor
         """Tensor of shape (N_branch,) containing root affinity scores"""  # noqa: E501
 
         @property
@@ -230,6 +309,10 @@ class BranchDigraphModel(torch.nn.Module):
             return self.batch.name
 
         @property
+        def device(self):
+            return self.batch.edge_index.device
+
+        @property
         def edge_lines(self):
             """Lines linking two branches. Their score are specified by the edge_score attribute."""
             return self.lines[: self.n_edge]
@@ -252,11 +335,26 @@ class BranchDigraphModel(torch.nn.Module):
             )
 
         @cached_property
-        def lines_score(self):
-            root_score = self.root_score[self.root_lines.b1]
+        def lines_logit(self):
+            root_score = self.root_logit[self.root_lines.b1]
             return torch.cat([self.edge_score, root_score], dim=0)
 
-        def lines_mask(self, filter_dir: Literal["gt"] | bool = False, filter_fp: Literal["gt"] | bool = False):
+        @cached_property
+        def final_lines_p(self):
+            lines_p = softmax(
+                self.lines_logit,
+                index=self.lines.b1 + torch.where(self.lines.tip1 == 0, 0, self.n_branch),
+                num_nodes=2 * self.n_branch,
+            )
+            # dir_p = torch.stack([1 - self.dir_p, self.dir_p], dim=-1)[self.lines.b1, self.lines.tip1.int()]
+            # lines_p *= dir_p
+            return lines_p
+
+        def lines_mask(
+            self,
+            filter_dir: Literal["gt"] | bool | EllipsisType = ...,
+            filter_fp: Literal["gt"] | bool | EllipsisType = ...,
+        ):
             """
             Compute a boolean mask to select lines based on their consistency with the branches direction and false positive predictions.
 
@@ -272,6 +370,13 @@ class BranchDigraphModel(torch.nn.Module):
             -------
                 A boolean tensor of shape (N_line,) indicating the selected lines.
             """  # noqa: E501
+            if filter_dir is Ellipsis and filter_fp is Ellipsis:
+                filter_dir = filter_fp = True
+            elif filter_dir is Ellipsis:
+                filter_dir = False
+            elif filter_fp is Ellipsis:
+                filter_fp = False
+
             mask = torch.ones(len(self.lines), dtype=torch.bool, device=self.lines.b0.device)
             cache = self.__dict__.setdefault("__dir_cache", {})
             if filter_dir:
@@ -303,8 +408,8 @@ class BranchDigraphModel(torch.nn.Module):
             -------
                 An integer tensor of shape (N_branch,) containing for each branch the index of its optimal parent, or -1 if it has no parent. Branch with no incoming valid lines are considered root branches by default.
             """  # noqa: E501
-            line_mask = self.lines_mask(filter_dir=use_gt, filter_fp=use_gt)
-            return _max_parent(self.lines[line_mask], self.lines_score[line_mask], self.n_branch)
+            line_mask = self.lines_mask(filter_dir="gt" if use_gt else True, filter_fp="gt" if use_gt else True)
+            return _max_parent(self.lines[line_mask], self.lines_logit[line_mask], self.n_branch)
 
         @cached_property
         def optimal_tree(self) -> tuple[Tensor, Tensor]:
@@ -318,10 +423,33 @@ class BranchDigraphModel(torch.nn.Module):
                 branch_dir: Tensor (N_branch,)
                     Boolean tensor containing for each branch the direction of the line linking it to its optimal parent (True: from tip0 to tip1, False: from tip1 to tip0). The direction of branches with no parent is set to False by default.
             """  # noqa: E501
-            return _optimal_arborescence_parent(
-                self.lines, self.lines_score, self.fp_logit, self.av_logit, self.dir_logit
-            )
+            opti_parent, opti_dir = self.to_digraph().solve_optimal_arboresence()
+            return torch.from_numpy(opti_parent).to(self.device), torch.from_numpy(opti_dir).to(self.device)
 
+        def to_digraph(self) -> VBranchDigraph:
+            """
+            Convert the predicted tree structure to a VBranchDigraph object.
+
+            Only the lines consistent with the predicted branch direction and false positive status are considered.
+
+            Returns
+            -------
+                A VBranchDigraph object containing the predicted tree structure.
+            """  # noqa: E501
+            line_list = np.empty((len(self.lines), 4), dtype=np.int64)
+            line_list[:, 0] = self.lines.b0.numpy(force=True)
+            line_list[:, 1] = 1 - self.lines.tip0.numpy(force=True)
+            line_list[:, 2] = self.lines.b1.numpy(force=True)
+            line_list[:, 3] = 1 - self.lines.tip1.numpy(force=True)
+
+            line_p = self.final_lines_p.numpy(force=True)
+            dir_p = torch.sigmoid(self.dir_logit).numpy(force=True)
+            fp_p = torch.sigmoid(self.fp_logit).numpy(force=True)
+            av_p = torch.sigmoid(self.av_logit).numpy(force=True)
+            av_p = np.stack([av_p, 1 - av_p], axis=-1) * (1 - fp_p[:, None])
+            return VBranchDigraph(line_list=line_list, line_p=line_p, branch_dir_p=dir_p, branch_av_p=av_p)
+
+        @cached_property
         def gt_parent(self):
             """
             Compute the optimal parent branch using the line scores provided in the ground truth.
@@ -334,6 +462,12 @@ class BranchDigraphModel(torch.nn.Module):
             """  # noqa: E501
             line_mask = self.lines_mask(filter_dir="gt", filter_fp="gt")
             return _max_parent(self.lines[line_mask], self.gt_lines_score[line_mask], self.n_branch)
+
+        @cached_property
+        def gt_root_p(self):
+            """Tensor of shape (N_branch,) containing the ground truth probability of each branch being a root branch (i.e., not having any parent)"""  # noqa: E501
+            B = torch.arange(self.n_branch, device=self.device)
+            return self.batch.branch_root_p[B, (self.gt_dir_p < 0.5).int()]
 
         @cached_property
         def fp_p(self):
@@ -393,24 +527,18 @@ class BranchDigraphModel(torch.nn.Module):
                         av_logit=self.av_logit[branch_mask],
                         dir_logit=self.dir_logit[branch_mask],
                         edge_score=self.edge_score[branch_mask[self.edge_lines.b0]],
-                        root_score=self.root_score[branch_mask],
+                        root_logit=self.root_logit[branch_mask],
                     )
                 )
             return outputs
 
 
+@dataclass(frozen=True)
 class Lines:
-    def __init__(
-        self,
-        edge_index: Tensor,
-        edge_first_tip: Tensor,
-        mask: Optional[Tensor] = None,
-        whole_mask: Optional[Tensor] = None,
-    ):
-        self.edge_index = edge_index
-        self.edge_first_tip = edge_first_tip
-        self.mask = mask
-        self.whole_mask = whole_mask
+    edge_index: Tensor
+    edge_first_tip: Tensor
+    mask: Optional[Tensor] = None
+    whole_mask: Optional[Tensor] = None
 
     def __bool__(self):
         return self.edge_index.shape[1] > 0
@@ -457,9 +585,6 @@ class Lines:
         """Boolean tensor of shape (N_line,) indicating whether the line is incident to the first tip (True) or the second tip (False) of its target branch"""  # noqa: E501
         return self.edge_first_tip[:, 1]
 
-    def select_valid_lines(self, b1_dir, fp) -> Lines:
-        return self[self.b1_dir_mask(b1_dir) & ~fp[self.b1] & ~fp[self.b0]]
-
     def b1_dir_mask(self, b_dir: Tensor) -> Tensor:
         """
         Compute the mask indicating which lines is compatible with the provided direction of their target branch.
@@ -480,19 +605,6 @@ class Lines:
         """  # noqa: E501
         return self.tip1 == b_dir[self.b1]
 
-    def groupby_incident_edges(self, select_b1_dir=None):
-        if select_b1_dir is None:
-            return self.b1
-        else:
-            b1 = self.b1
-            return (b1 + 1) * (self.tip1 == select_b1_dir[b1])
-
-    def sort_b1(self) -> Tensor:
-        sort_idx = torch.argsort(self.b1)
-        self.edge_index = self.edge_index[:, sort_idx]
-        self.edge_first_tip = self.edge_first_tip[sort_idx]
-        return sort_idx
-
 
 def split_fp_av_p(av_p: Tensor) -> tuple[Tensor, Tensor]:
     """Split pairs of artery and vein probabilities into false positive and artery/vein probabilities."""
@@ -501,53 +613,6 @@ def split_fp_av_p(av_p: Tensor) -> tuple[Tensor, Tensor]:
     art = av_p[..., 0]
     art[av_sum != 0] /= av_sum[av_sum != 0]
     return fp, art
-
-
-def root_lines_mask(data):
-    return data.edge_index[0] == -1
-
-
-def root_lines_index(data, dir):
-    b0 = data.edge_index[0]
-    b1 = data.edge_index[1]
-    tip1 = data.edge_first_tip[:, 1]
-
-    mask = (b0 == -1) & (tip1 == dir[b1])
-    return mask, b1[mask]
-
-
-def groupby_incident_edges(data, b_dir=None):
-    b1 = data.edge_index[1]
-    tip1 = data.edge_first_tip[:, 1]
-
-    if b_dir is None:
-        return b1
-    else:
-        return (b1 + 1) * (tip1 == b_dir[b1])
-
-
-def incident_mask(data, branch_dir):
-    edge_index = data.edge_index
-    edge_first_tip = data.edge_first_tip
-
-    edge_mask = ~root_lines_mask(data)
-    edge_index = edge_index[:, edge_mask]
-    edge_first_tip = edge_first_tip[edge_mask]
-
-    source_branches = edge_index[0]
-    target_branches = edge_index[1]
-
-    source_first_tip = edge_first_tip[:, 0]
-    target_first_tip = edge_first_tip[:, 1]
-
-    source_dirs = branch_dir[source_branches]
-    target_dirs = branch_dir[target_branches]
-
-    source_out = source_first_tip ^ source_dirs  # if dir is True, the edge should be emitted from the second tip
-    target_in = target_first_tip == target_dirs  # if dir is True, the edge should be incident to the first tip
-
-    edge_mask[edge_mask.clone()] = source_out & target_in
-    return edge_mask
 
 
 class BranchDigraphGATv2Conv(MessagePassing):
@@ -610,10 +675,6 @@ class BranchDigraphGATv2Conv(MessagePassing):
 ###########################
 # === Utils functions === #
 ###########################
-def b1_from_edges(valid_lines: Lines, valid_root_mask: Tensor):
-    return torch.cat([valid_lines.b1, torch.where(valid_root_mask.any(dim=1))[0]], dim=0)
-
-
 def _max_parent(lines: Lines, lines_score: Tensor, n_branch: int):
     """Retreive for each branch its parent with the maximum edge score, considering the provided valid edge and root assignments.
 
@@ -682,14 +743,41 @@ def _optimal_arborescence_parent(
     line_list[:, 2] = lines.b1.numpy(force=True)
     line_list[:, 3] = lines.tip1.numpy(force=True)
 
-    line_p = lines_score.numpy(force=True)
+    B = dir_logit.numel()
+
+    lines_p = softmax(lines_score, index=lines.b1 + torch.where(lines.tip1 == 0, 0, B), num_nodes=2 * B)
+    line_p = lines_p.numpy(force=True)
     dir_p = torch.sigmoid(dir_logit).numpy(force=True)
     fp_p = torch.sigmoid(fp_logit).numpy(force=True)
     av_p = torch.sigmoid(av_logit).numpy(force=True)
     av_p = np.stack([av_p, 1 - av_p], axis=-1) * (1 - fp_p[:, None])
-
     digraph = VBranchDigraph(line_list=line_list, line_p=line_p, branch_dir_p=dir_p, branch_av_p=av_p)
     b_parent, b_dir = digraph.solve_optimal_arboresence()
 
     device = lines_score.device
     return torch.from_numpy(b_parent).to(device), torch.from_numpy(b_dir).to(device)
+
+
+def reproject_pos(pos, o, v, batch_index):
+    """Reproject position pos onto an orthonormal base defined by the origin o, direction v and u (orthogonal to v).
+
+    Parameters
+    ----------
+    pos: Tensor (N, 2)
+        tensor of positions to reproject
+    o: Tensor (B,2)
+        origin of the new base
+    v: Tensor (B,2)
+        direction of the new base
+    batch_index: Tensor (N,)
+        tensor of batch indices for each position, indicating which origin and direction to use for each position
+    """
+    o, v = o.view(-1, 2), v.view(-1, 2)
+    v_norm = v.norm(dim=-1, keepdim=True) + 1e-8
+    v = v / v_norm
+    u = torch.stack([-v[:, 1], v[:, 0]], dim=-1)
+    R = torch.stack([v, u], dim=-2)
+    p = (pos - o[batch_index]) / v_norm[batch_index]
+    p = torch.einsum("nij,ni->nj", R[batch_index], p)
+    p[:, 0] *= v[batch_index, 1].sign()
+    return p

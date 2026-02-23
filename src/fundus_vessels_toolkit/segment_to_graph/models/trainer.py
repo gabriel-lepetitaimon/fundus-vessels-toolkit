@@ -14,7 +14,7 @@ import wandb
 
 from ...utils.torch import GroupByCrossEntropyLoss
 from .dataset import VBranchDigraphBatch
-from .digraph_model import BranchDigraphModel, BranchFeaturesEfficientNetV2S, Gatv2GCN
+from .digraph_model import BranchDigraphModel, BranchFeaturesEfficientNetV2S, Gatv2GCN, TransformerGCN
 
 
 class MetricCollectionDict(nn.ModuleDict):
@@ -36,22 +36,25 @@ class MetricCollectionDict(nn.ModuleDict):
 
 # Define your LightningModule
 class DigraphGNNTrainer(L.LightningModule):
-    def __init__(self, config):
+    def __init__(self, config=None):
         super().__init__()
         # Access hyperparameters from wandb.config
-        self.config = config
-        self.model = BranchDigraphModel(BranchFeaturesEfficientNetV2S(), Gatv2GCN(n_in=784, n_out=512, edge_attr_dim=7))
+        self.config = config if config is not None else {}
+        self.model = BranchDigraphModel(
+            BranchFeaturesEfficientNetV2S(), TransformerGCN(n_in=784, n_out=512, edge_attr_dim=7)
+        )
 
         # === LOSSES ===
         self.fp_bce_loss = nn.BCEWithLogitsLoss()
         self.av_bce_loss = nn.BCEWithLogitsLoss()
         self.dir_bce_loss = nn.BCEWithLogitsLoss()
+        self.root_bce_loss = nn.BCEWithLogitsLoss()
         self.line_ce_loss = GroupByCrossEntropyLoss()
 
         # === METRICS ===
         self.val_metrics = self.metrics_collection(opti_tree=False)
         self.val_preds = {}
-        self.test_metrics = self.metrics_collection()
+        self.test_metrics = self.metrics_collection(opti_tree=False)
         self.test_preds = {}
         # register metrics to be properly reset at each epoch end and moved to the right device
 
@@ -75,7 +78,8 @@ class DigraphGNNTrainer(L.LightningModule):
             "opti_dir": MetricCollection({"-acc": Accuracy("binary")}),
             "tree": MetricCollection(
                 {
-                    "-root-acc": RootAcc(),
+                    "-root-spe": RootSpecificity(),
+                    "-root-sen": RootSensitivity(),
                     "-parent-acc": ParentAcc(ignore_root=False),
                     "-parent-same-subtree-acc": ParentSameSubtreeAcc(ignore_root=False),
                     "-parent-same-subtree-mean-dist": ParentSameSubtreeMeanDist(),
@@ -86,7 +90,8 @@ class DigraphGNNTrainer(L.LightningModule):
         if opti_tree:
             collection["opti_tree"] = MetricCollection(
                 {
-                    "-root-acc": RootAcc(),
+                    "-root-spe": RootSpecificity(),
+                    "-root-sen": RootSensitivity(),
                     "-parent-acc": ParentAcc(ignore_root=False),
                     "-parent-same-subtree-acc": ParentSameSubtreeAcc(ignore_root=False),
                     "-parent-same-subtree-mean-dist": ParentSameSubtreeMeanDist(),
@@ -108,7 +113,7 @@ class DigraphGNNTrainer(L.LightningModule):
                 return out, opti_parent, opti_dir
 
             parallel = Parallel(n_jobs=batched_out.batch_size)
-            outs = [parallel(delayed(optimize_tree)(out) for out in batched_out.unbatch())]
+            outs = list(parallel(delayed(optimize_tree)(out) for out in batched_out.unbatch()))
         else:
             outs = batched_out.unbatch()
         for out in outs:
@@ -127,28 +132,27 @@ class DigraphGNNTrainer(L.LightningModule):
             metric_values["dir"] = metrics["dir"](dir_p[tp_mask], dir_gt_p[tp_mask] > 0.5)
 
             # === Parent classification metrics ===
-            metric_values["tree"] = metrics["tree"](out.max_parent(use_gt=True), out.gt_parent(), tp_mask)
+            metric_values["tree"] = metrics["tree"](out.max_parent(use_gt=True), out.gt_parent, tp_mask)
 
             if opti_tree:
                 metric_values["opti_dir"] = metrics["opti_dir"](opti_dir[tp_mask], dir_gt_p[tp_mask] > 0.5)
-                metric_values["opti_tree"] = metrics["opti_tree"](opti_parent, out.gt_parent(), tp_mask)
+                metric_values["opti_tree"] = metrics["opti_tree"](opti_parent, out.gt_parent, tp_mask)
 
         # Flatten metric values dict
         metric_values = {prefix + k1 + k2: v for k1, group in metric_values.items() for k2, v in group.items()}
         return metric_values
 
-    def update_preds(self, preds_dict: dict, batched_out: BranchDigraphModel.Output):
+    def update_preds(self, preds_dict: dict, batched_out: BranchDigraphModel.Output, optimal=False):
         for out in batched_out.unbatch():
             if "table" not in preds_dict:
-                preds_dict["table"] = wandb.Table(columns=["name", "parent", "dir", "opti_parent", "opti_dir", "av"])
-            preds_dict["table"].add_data(
-                out.name,
-                out.max_parent(use_gt=False).cpu().tolist(),
-                (out.dir_logit > 0).cpu().int().tolist(),
-                out.optimal_tree[0].cpu().tolist(),
-                out.optimal_tree[1].cpu().int().tolist(),
-                out.fp_av_class.cpu().tolist(),
-            )
+                columns = ["name", "avparent", "dir"]
+                if optimal:
+                    columns += ["opti_parent", "opti_dir"]
+                preds_dict["table"] = wandb.Table(columns=columns)
+            data = [out.name, out.max_parent(use_gt=False).cpu().tolist(), (out.dir_logit > 0).cpu().int().tolist()]
+            if optimal:
+                data += [out.optimal_tree[0].cpu().tolist(), out.optimal_tree[1].cpu().int().tolist()]
+            preds_dict["table"].add_data(*data)
 
     def forward(self, data: VBranchDigraphBatch) -> BranchDigraphModel.Output:
         return self.model(data)
@@ -164,13 +168,21 @@ class DigraphGNNTrainer(L.LightningModule):
         dir_loss = self.dir_bce_loss(out.dir_logit[tp_mask], out.gt_dir_p[tp_mask])
 
         # Line loss
+        # root_loss = self.root_bce_loss(out.root_logit[tp_mask], out.gt_root_p[tp_mask])
         mask = out.lines_mask(filter_dir="gt")
-        line_loss = self.line_ce_loss(out.lines_score[mask], out.gt_lines_score[mask], out.lines[mask].b1, tp_mask)
+        line_loss = self.line_ce_loss(out.lines_logit[mask], out.gt_lines_score[mask], out.lines[mask].b1, tp_mask)
 
-        f_curi_dir = max(min(1.0, (self.current_epoch - 20) / 10), 0)
-        f_curi_line = max(min(1.0, (self.current_epoch - 40) / 10), 0)
-        loss = fp_loss + av_loss + line_loss * f_curi_line + dir_loss * f_curi_dir
-        return {"fp_loss": fp_loss, "av_loss": av_loss, "dir_loss": dir_loss, "line_loss": line_loss, "loss": loss}
+        # f_curi_dir = max(min(1.0, (self.current_epoch - 20) / 10), 0)
+        f_curi_line = max(min(1.0, (self.current_epoch - 20) / 10), 0)
+        loss = fp_loss + av_loss + dir_loss + line_loss  #  * f_curi_line  # + root_loss
+        return {
+            "fp_loss": fp_loss,
+            "av_loss": av_loss,
+            "dir_loss": dir_loss,
+            # "root_loss": root_loss,
+            "line_loss": line_loss,
+            "loss": loss,
+        }
 
     def training_step(self, batch, batch_idx):
         model_out = self(batch)
@@ -319,7 +331,7 @@ class ParentSameSubtreeAcc(TreeMetric):
 
 class ParentSameSubtreeMeanDist(TreeMetric):
     def compute(self) -> Tensor:
-        return self.same_subtree_mean_dist / self.root_tn
+        return self.same_subtree_mean_dist / (self.true + self.false_same_subtree + 1e-8)
 
 
 class ParentCloseAcc(TreeMetric):
