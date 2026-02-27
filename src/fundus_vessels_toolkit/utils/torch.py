@@ -56,7 +56,7 @@ def torch_interp_bilinear(
     return img_y0x0 * (dy0 * dx0) + img_y1x0 * (dy1 * dx0) + img_y0x1 * (dy0 * dx1) + img_y1x1 * (dy1 * dx1)
 
 
-def groupby_mean(x: torch.Tensor, group_idx: torch.Tensor) -> torch.Tensor:
+def groupby_mean(x: torch.Tensor, group_idx: torch.Tensor, *, num_group: Optional[int] = None) -> torch.Tensor:
     """Compute the mean of values in `x` grouped by `group_idx`.
 
     Parameters
@@ -72,9 +72,10 @@ def groupby_mean(x: torch.Tensor, group_idx: torch.Tensor) -> torch.Tensor:
         A tensor of shape (G,) containing the mean values for each group, where G is the maximum group index + 1.
     """  # noqa: E501
     group_idx = group_idx.long()
-    num_idx = int(group_idx.max().item()) + 1
-    group_sum = torch.zeros(num_idx, device=x.device).scatter_add_(0, group_idx, x)
-    count = torch.bincount(group_idx, minlength=num_idx)
+    if num_group is None:
+        num_group = int(group_idx.max().item()) + 1
+    group_sum = torch.zeros(num_group, dtype=x.dtype, device=x.device).scatter_add_(0, group_idx, x)
+    count = torch.bincount(group_idx, minlength=num_group)
     not_null_mask = count != 0
     group_sum[not_null_mask] /= count[not_null_mask].float()
     return group_sum
@@ -103,10 +104,16 @@ def unique_first(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 class GroupByCrossEntropyLoss(torch.nn.Module):
-    def __init__(self, reduction: Literal["none", "mean", "sum"] = "mean", label_smoothing: float = 0.0):
+    def __init__(
+        self,
+        reduction: Literal["none", "mean", "sum"] = "mean",
+        label_smoothing: float = 0.0,
+        invalid_metagroup_penalty: float = 0.0,
+    ):
         super().__init__()
         self.reduction = reduction
         self.label_smoothing = label_smoothing
+        self.invalid_metagroup_penalty = invalid_metagroup_penalty
 
     def forward(
         self,
@@ -114,6 +121,8 @@ class GroupByCrossEntropyLoss(torch.nn.Module):
         target: torch.Tensor,
         group_idx: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
+        metagroup_idx: Optional[torch.Tensor] = None,
+        other_group_idx: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Compute the cross-entropy loss which enforce the selection of one sample per group, given sample-wise logits and group indices.
 
@@ -131,6 +140,12 @@ class GroupByCrossEntropyLoss(torch.nn.Module):
         mask : Optional[torch.Tensor], optional
             A boolean tensor of shape (N,) indicating which group should be included in the loss computation. If None, all samples are included.
 
+        metagroup_idx : Optional[torch.Tensor], optional
+            A tensor of shape (G,) containing the metagroup affiliation for each group.
+
+        other_group_idx : Optional[torch.Tensor], optional
+            A tensor of shape (N,) containing the group affiliation for each sample according to another grouping scheme, used to apply a penalty to samples belonging to metagroup that are not consistent between the two grouping schemes.
+
         Returns
         -------
         torch.Tensor
@@ -141,11 +156,16 @@ class GroupByCrossEntropyLoss(torch.nn.Module):
         group_size = torch.bincount(group_idx, minlength=num_group)
         assert torch.all(group_size > 0), "All groups must have at least one sample."
 
-        # Compute the max logit for each group
+        # Normalize logits by group max for numerical stability
         group_max = torch.zeros(num_group, device=x.device).scatter_reduce_(0, group_idx, x, "amax", include_self=False)
+        x_normed = x - group_max[group_idx]
+
+        # Add penalty for invalid metagroups if provided
+        if self.invalid_metagroup_penalty > 0 and metagroup_idx is not None and other_group_idx is not None:
+            penalized_samples = (other_group_idx >= 0) & metagroup_idx[group_idx] != other_group_idx[group_idx]
+            x_normed[penalized_samples] += self.invalid_metagroup_penalty
 
         # Compute the log-sum-exp
-        x_normed = x - group_max[group_idx]
         group_sum_exp = torch.zeros(num_group, device=x.device).scatter_add_(0, group_idx, x_normed.exp())
         group_log_sum_exp = (group_sum_exp + 1e-16).log()
 

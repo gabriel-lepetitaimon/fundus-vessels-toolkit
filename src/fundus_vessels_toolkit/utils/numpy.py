@@ -169,6 +169,32 @@ def np_group_by(array: npt.NDArray, keys: npt.NDArray) -> list[tuple[npt.NDArray
     return [(unique_keys[i], array[inverse_indices == i]) for i in range(len(unique_keys))]
 
 
+def np_groupby_mean(array: npt.NDArray, keys: npt.NDArray, n: Optional[int] = None) -> npt.NDArray:
+    """
+    Group the elements of an array by keys and compute the mean of each group.
+
+    Parameters
+    ----------
+    array : np.ndarray
+        The array to group.
+    keys : np.ndarray
+        The keys to group by. Must be the same length as array.
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray]
+        A tuple containing the unique keys and the mean of each group.
+    """
+    assert array.shape[0] == keys.shape[0], "array and keys must have the same length."
+    if n is None:
+        n: int = keys.max() + 1
+    means = np.zeros((n,), dtype=array.dtype)
+    np.add.at(means, keys, array)
+    counts = np.bincount(keys, minlength=n)
+    means[counts != 0] /= counts[counts != 0]
+    return means
+
+
 def bit_invert(bits: npt.NDArray[np.uint64]) -> npt.NDArray[np.uint64]:
     """Invert the bits of a numpy array of uint64.
 

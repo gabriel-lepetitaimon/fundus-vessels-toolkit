@@ -1,21 +1,30 @@
+from __future__ import annotations
+
 import warnings
 from functools import cached_property
 from itertools import pairwise
-from typing import Literal, Optional, Protocol, Self, Sequence, overload
+from typing import Literal, Optional, Protocol, Self, overload
 
-from cv2 import line
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
+from networkx import maximum_branching
 
 from ..utils.cluster import cluster_by_distance
 from ..utils.lookup_array import create_removal_lookup
 from ..utils.math import gaussian, sigmoid, softmax
-from ..utils.numpy import np_first_true, np_group_by
-from ..utils.tree import accessible_from_root, find_cycles, has_cycle, tree_distance
-from ..utils.typing import Bool1DArray, Float1DArray, Indices, Int1DArray, Int1DArrayLike, Int2DArrayLike
+from ..utils.numpy import np_first_true, np_group_by, np_groupby_mean
+from ..utils.tree import (
+    accessible_from_root,
+    find_cycles,
+    has_cycle,
+    tree_connected_components,
+    tree_distance,
+    tree_node_rank,
+)
+from ..utils.typing import Bool1DArray, Indices, Int1DArray, Int1DArrayLike, Int2DArrayLike
 from ..vascular_data_objects import VGraph
 from ..vascular_data_objects.fundus_data import AVLabel
-from ..vascular_data_objects.vbranch_geodata import VBranchGeoData
 from ..vascular_data_objects.vtree import VTree
 from .geometry_parsing import derive_tips_geometry_from_curve_geometry
 from .graph_simplification import find_facing_tips
@@ -154,6 +163,20 @@ class VBranchDigraph(LineDigraph):
         av_p = np.hstack([1 - self.branch_av_p.sum(axis=1, keepdims=True), self.branch_av_p])
         return np.argmax(av_p, axis=1).astype(np.int_)
 
+    def branch_art_logit(self) -> npt.NDArray[np.float32]:
+        """Get the artery logit of each branch.
+
+        Returns
+        -------
+        npt.NDArray[np.float32]
+            An array of shape (B,) representing the artery logits of each branch.
+        """
+        assert self.branch_av_p is not None, "branch_av_p must be provided to compute branch logits"
+        art_p = self.branch_av_p[:, 0]
+        sum_p = self.branch_av_p.sum(axis=1)
+        art_p[sum_p != 0] /= sum_p[sum_p != 0]
+        return np.log(art_p + 1e-6) - np.log(1 - art_p + 1e-6)
+
     def missing_branch(self) -> npt.NDArray[np.bool_]:
         """Get a mask of invalid branches.
 
@@ -235,27 +258,42 @@ class VBranchDigraph(LineDigraph):
         return digraph
 
     @overload
-    def check_lines(self, on_invalid: Literal["raise", "warn", "ignore"] = "ignore") -> bool: ...
+    def check_lines(
+        self, on_invalid: Literal["raise", "warn", "ignore"] = "ignore", branch_mask: Optional[Bool1DArray] = None
+    ) -> bool: ...
     @overload
-    def check_lines(self, on_invalid: Literal["report"]) -> str: ...
-    def check_lines(self, on_invalid: Literal["raise", "warn", "ignore", "report"] = "ignore") -> str | bool:
+    def check_lines(self, on_invalid: Literal["report"], branch_mask: Optional[Bool1DArray] = None) -> str: ...
+    def check_lines(
+        self,
+        on_invalid: Literal["raise", "warn", "ignore", "report"] = "ignore",
+        branch_mask: Optional[Bool1DArray] = None,
+    ) -> str | bool:
         msg = "Invalid lines: \n"
         B = self.branch_count
-        b0, b0_tip, b1, b1_tip = self.line_list.T
+        if branch_mask is None:
+            b0, b0_tip, b1, b1_tip = self.line_list.T
+            lines_lookup = np.arange(len(self.line_list))
+            branch_mask = np.ones(B, dtype=bool)
+            valid_branch = np.arange(B)
+        else:
+            valid_branch = np.argwhere(branch_mask).flatten()
+            line_mask = branch_mask[self.line_list[:, 0]] & branch_mask[self.line_list[:, 2]]
+            b0, b0_tip, b1, b1_tip = self.line_list[line_mask].T
+            lines_lookup = np.arange(len(line_mask))[line_mask]
 
         # === Check that no line connects a branch tip to itself ===
         if len(invalid_l := np.argwhere((b0 == b1) & (b0_tip == b1_tip)).flatten()):
-            invalid_l = ", ".join(str(int(_)) for _ in invalid_l)
+            invalid_l = ", ".join(str(int(lines_lookup[_])) for _ in invalid_l)
             msg += f" - lines {invalid_l} are self-loop lines;\n"
 
         # === Check that all branches have at least one ingoing line ===
         incoming_b = np.unique(b1)
-        if len(no_parent := np.setdiff1d(np.arange(B), incoming_b)):
+        if len(no_parent := np.setdiff1d(valid_branch, incoming_b)):
             msg += f" - branches {', '.join(str(int(_)) for _ in no_parent)} have no ingoing line;\n"
 
         # === Check that all branches are accessible from the root ===
         accessible_b = accessible_from_root(np.stack([b0, b1], axis=1), B, root=-1)
-        if len(inaccessible_b := np.argwhere(~accessible_b).flatten()) > 1:
+        if len(inaccessible_b := np.argwhere(~accessible_b & branch_mask).flatten()) > 1:
             msg += f" - branches {', '.join(str(int(_)) for _ in inaccessible_b)} are not accessible from the root;\n"
 
         # === Report results ===
@@ -380,26 +418,33 @@ class VBranchDigraph(LineDigraph):
         return line_p
 
     @overload
-    def check_line_p(self, on_invalid: Literal["raise", "warn", "ignore"] = "ignore") -> bool: ...
+    def check_line_p(self, on_invalid: Literal["raise", "warn", "ignore"] = "ignore", strict: bool = True) -> bool: ...
     @overload
-    def check_line_p(self, on_invalid: Literal["report"]) -> str: ...
-    def check_line_p(self, on_invalid: Literal["raise", "warn", "ignore", "report"] = "ignore") -> bool | str:
-        line_p = self.line_p
+    def check_line_p(self, on_invalid: Literal["report"], strict: bool = True) -> str: ...
+    def check_line_p(
+        self, on_invalid: Literal["raise", "warn", "ignore", "report"] = "ignore", strict: bool = True
+    ) -> bool | str:
         msg = "Invalid line probabilities: \n"
-        optimal_lines = self.line_list[line_p > 0.5]
+        if strict:
+            assert self.line_p is not None, "line_p must be provided to check line probabilities"
+            optimal_lines = self.line_list[self.line_p > 0.5]
+        else:
+            optimal_lines = self.line_list[self.max_lines()]
 
-        # === Check that missing branches have no outgoing lines ===
-        missing_b = self.missing_branch()
-        outgoing_b = np.unique(optimal_lines[:, 0])
-        if len(outgoing_b) > 0 and outgoing_b[0] == -1:
-            outgoing_b = outgoing_b[1:]
-        if len(invalid_outgoing_b := outgoing_b[missing_b[outgoing_b]]):
-            msg += f" - missing branches {', '.join(str(int(_)) for _ in invalid_outgoing_b)} have outgoing lines;\n"
+        if strict:
+            # === Check that missing branches have no outgoing lines ===
+            missing_b = self.missing_branch()
+            outgoing_b = np.unique(optimal_lines[:, 0])
+            if len(outgoing_b) > 0 and outgoing_b[0] == -1:
+                outgoing_b = outgoing_b[1:]
+            if len(invalid_outgoing_b := outgoing_b[missing_b[outgoing_b]]):
+                invalid_outgoing_b = ", ".join(str(int(_)) for _ in invalid_outgoing_b)
+                msg += f" - missing branches {invalid_outgoing_b} have outgoing lines;\n"
 
-        # === Check that missing branches have only a root ingoing line ===
-        not_root_b = np.unique(optimal_lines[optimal_lines[:, 0] != -1, 2])
-        if len(invalid_ingoing_b := not_root_b[missing_b[not_root_b]]):
-            msg += f" - missing branches {', '.join(str(int(_)) for _ in invalid_ingoing_b)} have ingoing lines;\n"
+            # === Check that missing branches have only a root ingoing line ===
+            not_root_b = np.unique(optimal_lines[optimal_lines[:, 0] != -1, 2])
+            if len(invalid_ingoing_b := not_root_b[missing_b[not_root_b]]):
+                msg += f" - missing branches {', '.join(str(int(_)) for _ in invalid_ingoing_b)} have ingoing lines;\n"
 
         # === Check all branches have exactly one parent ===
         incoming_b, incoming_b_count = np.unique(optimal_lines[:, 2], return_counts=True)
@@ -419,11 +464,11 @@ class VBranchDigraph(LineDigraph):
         if (b_dir_p := self.branch_dir_p) is not None:
             b0, b0_tip, b1, b1_tip = optimal_lines.T
             valid_lines = (b0 == -1) | (b_dir_p[b0] == 0.5) | (b0_tip.astype(bool) == (b_dir_p[b0] > 0.5))
-            if len(invalid_b := optimal_lines[~valid_lines, 0]) > 0:
+            if len(invalid_b := np.unique(optimal_lines[~valid_lines, 0])) > 0:
                 invalid_b = ", ".join(str(int(_)) for _ in invalid_b)
                 msg += f" - outgoing branches {invalid_b} have inconsistent direction probabilities;\n"
             valid_lines = (b_dir_p[b1] == 0.5) | (b1_tip.astype(bool) == (b_dir_p[b1] < 0.5))
-            if len(invalid_b := optimal_lines[~valid_lines, 2]) > 0:
+            if len(invalid_b := np.unique(optimal_lines[~valid_lines, 2])) > 0:
                 invalid_b = ", ".join(str(int(_)) for _ in invalid_b)
                 msg += f" - ingoing branches {invalid_b} have inconsistent direction probabilities;\n"
 
@@ -456,7 +501,28 @@ class VBranchDigraph(LineDigraph):
         parent[b1] = b0[first_idx]
         return parent
 
-    def solve_optimal_arboresence(self, *, remove_missing_branch=False) -> tuple[Indices, Bool1DArray]:
+    def max_lines(self, both_direction=False) -> npt.NDArray[np.bool_]:
+        """Compute which lines are the most probable amongst all lines incoming to each branch.
+
+        Returns
+        -------
+        npt.NDArray[np.bool_]
+            An array of shape (L,) indicating which lines are the most probable for each branch.
+        """
+        assert self.line_p is not None, "line_p must be provided to compute maximum parent"
+
+        argsort = self.line_p.argsort()[::-1]
+        b1 = self.b1[argsort]
+        if both_direction:
+            b1 += self.b1_tip[argsort] * self.branch_count
+        b1, first_idx = np.unique(b1, return_index=True)
+        max_lines = np.zeros((len(argsort),), dtype=bool)
+        max_lines[argsort[first_idx]] = True
+        return max_lines
+
+    def solve_optimal_arboresence(
+        self, *, remove_missing_branch=False, detect_major_av_error=False
+    ) -> tuple[Indices, Bool1DArray]:
         """Compute the optimal arborescence of the directed graph. Missing branches are ignored in the optimization and can optionally be removed from the output.
 
         Parameters
@@ -515,6 +581,22 @@ class VBranchDigraph(LineDigraph):
             branch_dir_p=dir_p,
             ignore_branch_dir_in_MSA=dir_p is None,
         )
+
+        if detect_major_av_error and self.branch_av_p is not None:
+            av_local = 2 - self.branch_av()[~missing_branch]
+            branch_rank = tree_node_rank(branch_parents)
+            cumulative_av = np.zeros_like(branch_rank)
+            for r in reversed(range(branch_rank.max() + 1)):
+                rank_mask = branch_rank == r
+                cumulative_av[rank_mask] += 2 * av_local[branch_rank == r] - 1
+                np.add.at(cumulative_av, branch_parents[rank_mask], cumulative_av[rank_mask])
+
+            subtree = tree_connected_components(branch_parents)
+            av_subtree = np_groupby_mean(self.branch_art_logit()[~missing_branch], subtree)[subtree]
+            cumulative_av *= np.sign(av_subtree).astype(int)
+
+            branch_parents[(cumulative_av < -5) & (cumulative_av[branch_parents] >= 0)] = -1
+
         if remove_missing_branch or branch_lookup is None:
             return branch_parents, branch_dir
 
@@ -606,7 +688,7 @@ class VBranchDigraph(LineDigraph):
         *,
         b0: Optional[int | Int1DArrayLike] = None,
         b1: Optional[int | Int1DArrayLike] = None,
-    ) -> npt.NDArray[np.float64]:
+    ) -> pd.DataFrame:
         """Get the lines in the directed graph that start from a given branch.
 
         Parameters
@@ -634,9 +716,10 @@ class VBranchDigraph(LineDigraph):
             concerned_lines = np.isin(self.line_list[:, 0], b) | np.isin(self.line_list[:, 2], b)
 
         lines = self.line_list[concerned_lines]
+        data_p = {}
         if sort_by_p is None and self.line_p is not None:
             sort_by_p = True
-        if sort_by_p and self.line_p is not None:
+        if self.line_p is not None:
             p = self.line_p[concerned_lines]
             total_p = p.copy()
             if self.branch_dir_p is not None:
@@ -649,15 +732,33 @@ class VBranchDigraph(LineDigraph):
                 total_p += line_dir_p
             else:
                 b0_dir_p = b1_dir_p = np.array([])
-            sorted_ids = np.argsort(total_p)[::-1]
-            lines = lines[sorted_ids]
-            if self.graph is not None:
-                lines[:, 1] = self.graph.branch_list[lines[:, 0], lines[:, 1]]
-                lines[:, 3] = self.graph.branch_list[lines[:, 2], lines[:, 3]]
-            lines = np.concatenate([lines, p[sorted_ids][:, None]], axis=1)
+
+            if sort_by_p:
+                sorted_ids = np.argsort(total_p)[::-1]
+                total_p = total_p[sorted_ids]
+                p = p[sorted_ids]
+                lines = lines[sorted_ids]
+                if self.branch_dir_p is not None:
+                    b0_dir_p = b0_dir_p[sorted_ids]
+                    b1_dir_p = b1_dir_p[sorted_ids]
+            data_p["line_p"] = p
+            data_p["total_p"] = total_p
             if self.branch_dir_p is not None:
-                lines = np.concatenate([lines, b0_dir_p[sorted_ids][:, None], b1_dir_p[sorted_ids][:, None]], axis=1)
-        return lines.astype(np.float64)
+                data_p["b0_dir_p"] = b0_dir_p
+                data_p["b1_dir_p"] = b1_dir_p
+
+        data = {
+            "b0": lines[:, 0],
+            "b1": lines[:, 2],
+        }
+        if self.graph is not None:
+            data["n0"] = self.graph.branch_list[lines[:, 0], lines[:, 1]]
+            data["n1"] = self.graph.branch_list[lines[:, 2], lines[:, 3]]
+        else:
+            data["tip0"] = lines[:, 1]
+            data["tip1"] = lines[:, 3]
+
+        return pd.DataFrame(data=data | data_p)
 
 
 ########################################################################################################################
@@ -979,7 +1080,7 @@ def solve_line_digraph_approx(
             optimal_tree = maximum_spanning_arborescence(digraph, attr="p", preserve_attrs=True)
         except nx.NetworkXException as e:
             warnings.warn(f"Error while presolving the optimal tree: {e}", stacklevel=2)
-            optimal_tree = digraph
+            optimal_tree = maximum_branching(digraph, attr="p", preserve_attrs=True)
 
         # === Build the simplified directed graph (merging both directions of each branch) ===
         digraph = nx.DiGraph()
@@ -991,6 +1092,20 @@ def solve_line_digraph_approx(
             if (already_added := digraph.edges.get((b0, b1), None)) is not None and already_added["p"] >= data["p"]:
                 continue
             digraph.add_edge(b0, b1, p=data["p"], id=data["id"], tips=[b0_tip, b1_tip])
+        invalid_roots = [_ for _, in_degree in digraph.in_degree() if in_degree == 0 and _ != -1]
+        if len(invalid_roots):
+            warnings.warn(f"After presolving the optimal tree: {invalid_roots} were not rooted properly.", stacklevel=2)
+            for root_B in invalid_roots:
+                root_b = abs(root_B) - 1
+                root_tip = 0 if root_B > 0 else 1
+                p = branch_dir_p[root_b] if root_tip == 1 else 1 - branch_dir_p[root_b]
+                lines = line_digraph.search_lines(line_digraph.line_list, [-1, 0, root_b, root_tip])
+                if len(lines):
+                    p += lines.argmax()
+                digraph.add_edge(
+                    -1, root_b, p=p, id=-1, tips=[0, root_tip]
+                )  # Add a dummy root edge for branches without parent
+
     else:
         digraph = nx.DiGraph()
         for id, (line, p) in enumerate(zip(line_list, line_p, strict=True)):
@@ -1004,10 +1119,18 @@ def solve_line_digraph_approx(
             raise e
         else:
             warnings.warn(
-                f"Impossible to solve the simplified optimal tree: {e}. \n Fallback to single step solving.",
+                f"Impossible to solve the simplified optimal tree: {e}. \n Fallback to maximum branching.",
                 stacklevel=2,
             )
-            return solve_line_digraph_approx(line_list, line_p, branch_dir_p, True)
+            try:
+                optimal_tree = maximum_branching(digraph, attr="p", preserve_attrs=True)
+            except nx.NetworkXException as e:
+                warnings.warn(
+                    f"Impossible to solve the maximum branching over the simplified optimal tree: {e}. \n"
+                    "Fall back to single step solving.",
+                    stacklevel=2,
+                )
+                return solve_line_digraph_approx(line_list, line_p, branch_dir_p, True)
 
     # === Clean the MSA to prevent rebound ===
     branch_tree = -np.ones(B, dtype=np.int_)

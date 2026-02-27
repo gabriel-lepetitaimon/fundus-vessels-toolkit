@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 import pytorch_lightning as L
@@ -17,7 +18,7 @@ torch.backends.cuda.matmul.fp32_precision = "tf32"
 
 def train():
     # Initialize a new W&B run (wandb.agent handles the config)
-    wandb.init(project="GNN-topo-debug")
+    wandb.init(project="GNN-topo-MICCAI")
 
     # Access the hyperparms assigned to this specific run
     config = wandb.config
@@ -43,7 +44,13 @@ def train():
     AV = [path / "2-av-pred_CLEMENT" for path in PATH]
     TOPO = [path / "3-topo" for path in PATH]
     dataset = VBranchDigraphDataset.load_from_dirs(
-        RAW, TOPO, av_dir=AV, resize_to=1024, root=str(Path(__file__).parent / "tmp/DATA"), overwrite=False
+        RAW,
+        TOPO,
+        av_dir=AV,
+        resize_to=1024,
+        root=str(Path(__file__).parent / "tmp/DATA"),
+        overwrite=False,
+        ignore_recent=datetime(2026, 2, 19),
     )
     train_set, val_set, test_set = dataset.split_loaders(train_ratio=0.7, val_ratio=0.15)
     train_loader = PyGDataLoader(train_set, batch_size=3, shuffle=True, num_workers=5)
@@ -59,6 +66,7 @@ def train():
         # gradient_clip_algorithm="value",wandb
         # num_sanity_val_steps=0,
         callbacks=[L_callbacks.ModelCheckpoint(monitor="val_tree-parent-acc", mode="max", save_top_k=1)],
+        precision="bf16-mixed",
     )
 
     trainer.fit(model, train_loader, val_loader)

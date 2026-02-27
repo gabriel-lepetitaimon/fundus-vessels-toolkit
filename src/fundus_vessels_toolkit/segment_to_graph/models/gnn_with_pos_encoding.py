@@ -67,7 +67,7 @@ class RoPE(torch.nn.Module):
         self.support_pattern = support_pattern
         self.max_pos = max_pos
         self._last_pos: Optional[Tensor] = None
-        self._last_freqs: Optional[Tensor] = None
+        self._last_freqs: Optional[Tensor | tuple] = None
 
         self.register_buffer("freqs_support", self.compute_freqs_support(), persistent=False)
 
@@ -107,7 +107,17 @@ class RoPE(torch.nn.Module):
             Input tensor of shape (n_branch, n_heads, head_dim) containing the query/key/value vectors.
 
         pos : Tensor
-            Tensor of shape (n_branch * 2, 2) containing the 2d positions corresponding to each branch (start and end points).
+            Tensor of shape (n_branch, 2) containing the 2d positions corresponding to each branch.
+
+        Examples
+        --------
+        >>> x = torch.randn(4, 8, 64)  # n_branch=2, n_heads=8, head_dim=64
+        >>> pos = torch.tensor([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=torch.float32)  # n_branch*2=4
+        >>> rope = RoPE(head_dim=64, support_pattern="axial", max_pos=1000)
+        >>> x_float32 = rope.apply_rot_emb(x, pos)
+        >>> x_float16 = rope.to(torch.bfloat16).apply_rot_emb(x.to(torch.bfloat16), pos.to(torch.bfloat16)).to(torch.float32)
+        >>> torch.allclose(x_float16, x_float32, atol=5e-2)
+        True
         """  # noqa: E501
 
         n_pos, n_heads, head_dim = x.shape
@@ -117,13 +127,21 @@ class RoPE(torch.nn.Module):
             freqs = self._last_freqs
         else:
             freqs = pos @ self.freqs_support.T  # [n_pos, 2] @ [2, half] -> [n_pos, half]
-            freqs = torch.complex(torch.cos(freqs), torch.sin(freqs))  # [n_pos, half]
+            if freqs.dtype == torch.bfloat16:  # === Complex computation is not implemented for bfloat16 ===
+                freqs = (torch.cos(freqs), torch.sin(freqs))
+            else:
+                freqs = torch.complex(torch.cos(freqs), torch.sin(freqs))  # [n_pos, half]
             self._last_pos = pos
             self._last_freqs = freqs
 
         x = x.reshape(n_pos, n_heads, half, 2)
-        x_rot = torch.view_as_complex(x) * freqs.view(n_pos, 1, half)  # n_pos, n_heads, half
-        x_real = torch.view_as_real(x_rot)  # bsz, n_heads, seq_len, head_dim // 2, 2
+        if isinstance(freqs, tuple):
+            cos, sin = freqs
+            v = torch.stack([cos, -sin, sin, cos], dim=-1).view(n_pos, 1, half, 2, 2)
+            x_real = torch.sum(v * x.view(n_pos, n_heads, half, 1, 2), dim=-1)  # n_pos, n_heads, half, 2
+        else:
+            x_rot = torch.view_as_complex(x) * freqs.view(n_pos, 1, half)  # n_pos, n_heads, half
+            x_real = torch.view_as_real(x_rot)  # bsz, n_heads, seq_len, head_dim // 2, 2
         return x_real.reshape(n_pos, n_heads, head_dim)
 
 

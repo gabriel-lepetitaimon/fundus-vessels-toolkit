@@ -16,7 +16,7 @@ from ..utils.lookup_array import invert_complete_lookup
 from ..utils.math import gaussian_kernel2d
 from ..utils.numpy import Sparse2DAccessor, binary_sparse_conv2d, bit_invert
 from ..utils.rasterization import draw_lines, rasterize_line, rasterize_topology
-from ..utils.typing import Bool1DArray, Float1DArray, Int1DArray
+from ..utils.typing import Bool1DArray, Int1DArray
 from ..vascular_data_objects.vbranch_geodata import VBranchGeoData
 from ..vascular_data_objects.vgraph import VGraph
 from ..vascular_data_objects.vtree import VTree, VTreeBranch

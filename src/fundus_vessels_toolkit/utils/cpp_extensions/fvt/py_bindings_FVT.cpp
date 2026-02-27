@@ -778,9 +778,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("has_cycle", &has_cycle, "Find cycles in a list of parent.");
     m.def("find_cycles", &find_cycles, "Find all cycles in a list of parent.");
 
-    // === tree_topology.h ===
+    // === tree.h ===
     m.def("read_branches_topology", &read_branches_topology, "Read the topology of branches.");
     m.def("tree_distance", &tree_distance, "Compute the distance between nodes of a tree.");
+    m.def("tree_connected_components", &tree_connected_components, "Compute the connected components of a tree.");
+    m.def("tree_node_rank", &tree_node_rank, "Compute the rank of each node in a tree.");
 
     // === vector_fields.h ===
     m.def("vec_bilinear_interpolate", &vec_bilinear_interpolate, "Bilinear interpolation of a vector field.");

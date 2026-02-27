@@ -48,6 +48,8 @@ struct Tree {
 };
 
 torch::Tensor tree_distance(const torch::Tensor& tree);
+torch::Tensor tree_connected_components(const torch::Tensor& tree);
+torch::Tensor tree_node_rank(const torch::Tensor& tree);
 
 /**************************************************************************************
  *              === Vector Subset utility ===

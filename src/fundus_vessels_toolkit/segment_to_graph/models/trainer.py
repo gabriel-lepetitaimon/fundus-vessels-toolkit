@@ -5,7 +5,6 @@ from typing import Iterable
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
-from joblib import Parallel, delayed
 from torch import Tensor
 from torchmetrics import Metric, MetricCollection, Specificity
 from torchmetrics.classification import Accuracy, Precision, Recall
@@ -49,12 +48,12 @@ class DigraphGNNTrainer(L.LightningModule):
         self.av_bce_loss = nn.BCEWithLogitsLoss()
         self.dir_bce_loss = nn.BCEWithLogitsLoss()
         self.root_bce_loss = nn.BCEWithLogitsLoss()
-        self.line_ce_loss = GroupByCrossEntropyLoss()
+        self.line_ce_loss = GroupByCrossEntropyLoss(invalid_metagroup_penalty=0)
 
         # === METRICS ===
-        self.val_metrics = self.metrics_collection(opti_tree=False)
+        self.val_metrics = self.metrics_collection(opti_tree=True)
         self.val_preds = {}
-        self.test_metrics = self.metrics_collection(opti_tree=False)
+        self.test_metrics = self.metrics_collection(opti_tree=True)
         self.test_preds = {}
         # register metrics to be properly reset at each epoch end and moved to the right device
 
@@ -75,7 +74,6 @@ class DigraphGNNTrainer(L.LightningModule):
                 },
             ),
             "dir": MetricCollection({"-acc": Accuracy("binary")}),
-            "opti_dir": MetricCollection({"-acc": Accuracy("binary")}),
             "tree": MetricCollection(
                 {
                     "-root-spe": RootSpecificity(),
@@ -88,7 +86,7 @@ class DigraphGNNTrainer(L.LightningModule):
             ),
         }
         if opti_tree:
-            collection["opti_tree"] = MetricCollection(
+            collection["tree_opti"] = MetricCollection(
                 {
                     "-root-spe": RootSpecificity(),
                     "-root-sen": RootSensitivity(),
@@ -98,28 +96,22 @@ class DigraphGNNTrainer(L.LightningModule):
                     "-parent-1tol-acc": ParentCloseAcc(ignore_root=False),
                 }
             )
+            collection["dir_opti"] = MetricCollection({"-acc": Accuracy("binary")})
+            collection["av_opti"] = MetricCollection(
+                {
+                    "-acc": Accuracy("binary"),
+                    "-art-recall": Recall("binary"),
+                    "-ven-recall": Specificity("binary"),
+                },
+            )
         return MetricCollectionDict(collection)
 
     def update_metrics_collection(
         self, metrics: MetricCollectionDict, batched_out: BranchDigraphModel.Output, prefix=""
     ):
         metric_values = dict()
-        opti_tree = "opti_tree" in metrics
 
-        if opti_tree:
-
-            def optimize_tree(out: BranchDigraphModel.Output):
-                opti_parent, opti_dir = out.optimal_tree
-                return out, opti_parent, opti_dir
-
-            parallel = Parallel(n_jobs=batched_out.batch_size)
-            outs = list(parallel(delayed(optimize_tree)(out) for out in batched_out.unbatch()))
-        else:
-            outs = batched_out.unbatch()
-        for out in outs:
-            if opti_tree:
-                assert isinstance(out, tuple)
-                out, opti_parent, opti_dir = out
+        for out in batched_out.unbatch():
             assert isinstance(out, BranchDigraphModel.Output)
             # === AV metrics ===
             metric_values["fp"] = metrics["fp"](out.fp_p, out.gt_fp_p > 0.5)
@@ -134,9 +126,14 @@ class DigraphGNNTrainer(L.LightningModule):
             # === Parent classification metrics ===
             metric_values["tree"] = metrics["tree"](out.max_parent(use_gt=True), out.gt_parent, tp_mask)
 
-            if opti_tree:
-                metric_values["opti_dir"] = metrics["opti_dir"](opti_dir[tp_mask], dir_gt_p[tp_mask] > 0.5)
-                metric_values["opti_tree"] = metrics["opti_tree"](opti_parent, out.gt_parent, tp_mask)
+            if "tree_opti" in metrics:
+                # === Optimal parent classification metrics ===
+                opti_parent, opti_dir, opti_av_logit = out.optimal_tree
+                metric_values["dir_opti"] = metrics["dir_opti"](opti_dir[tp_mask], dir_gt_p[tp_mask] > 0.5)
+                metric_values["tree_opti"] = metrics["tree_opti"](opti_parent, out.gt_parent, tp_mask)
+
+                opti_av_p = opti_av_logit[tp_mask].sigmoid()
+                metric_values["av_opti"] = metrics["av_opti"](opti_av_p, out.gt_av_p[tp_mask] > 0.5)
 
         # Flatten metric values dict
         metric_values = {prefix + k1 + k2: v for k1, group in metric_values.items() for k2, v in group.items()}
@@ -145,13 +142,14 @@ class DigraphGNNTrainer(L.LightningModule):
     def update_preds(self, preds_dict: dict, batched_out: BranchDigraphModel.Output, optimal=False):
         for out in batched_out.unbatch():
             if "table" not in preds_dict:
-                columns = ["name", "avparent", "dir"]
+                columns = ["name", "parent", "dir"]
                 if optimal:
-                    columns += ["opti_parent", "opti_dir"]
+                    columns += ["opti_parent", "opti_dir", "opti_av"]
                 preds_dict["table"] = wandb.Table(columns=columns)
             data = [out.name, out.max_parent(use_gt=False).cpu().tolist(), (out.dir_logit > 0).cpu().int().tolist()]
             if optimal:
-                data += [out.optimal_tree[0].cpu().tolist(), out.optimal_tree[1].cpu().int().tolist()]
+                opti_parent, opti_dir = out.optimal_tree[:2]
+                data += [opti_parent.cpu().tolist(), opti_dir.cpu().int().tolist()]
             preds_dict["table"].add_data(*data)
 
     def forward(self, data: VBranchDigraphBatch) -> BranchDigraphModel.Output:
@@ -170,7 +168,14 @@ class DigraphGNNTrainer(L.LightningModule):
         # Line loss
         # root_loss = self.root_bce_loss(out.root_logit[tp_mask], out.gt_root_p[tp_mask])
         mask = out.lines_mask(filter_dir="gt")
-        line_loss = self.line_ce_loss(out.lines_logit[mask], out.gt_lines_score[mask], out.lines[mask].b1, tp_mask)
+        line_loss = self.line_ce_loss(
+            x=out.lines_logit[mask],
+            target=out.gt_lines_score[mask],
+            group_idx=out.lines[mask].b1,
+            mask=tp_mask,
+            metagroup_idx=out.batch.branch_subtree_idx,
+            other_group_idx=out.lines[mask].b0,
+        )
 
         # f_curi_dir = max(min(1.0, (self.current_epoch - 20) / 10), 0)
         f_curi_line = max(min(1.0, (self.current_epoch - 20) / 10), 0)
@@ -187,7 +192,7 @@ class DigraphGNNTrainer(L.LightningModule):
     def training_step(self, batch, batch_idx):
         model_out = self(batch)
         losses = self.losses(model_out)
-        self.log_dict({"train_" + k: l for k, l in losses.items()}, batch_size=batch.num_graphs, prog_bar=True)
+        self.log_dict({k: l for k, l in losses.items()}, batch_size=batch.num_graphs, prog_bar=True)
         return losses["loss"]
 
     def validation_step(self, batch, batch_idx):

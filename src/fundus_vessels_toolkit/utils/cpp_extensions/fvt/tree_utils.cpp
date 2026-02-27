@@ -20,13 +20,14 @@ torch::Tensor tree_distance(const torch::Tensor& tree_tensor) {
     auto path_dist = out_acc[0], common_ancestor_dist = out_acc[1];
 
     for (const auto& root_id : tree.root_nodes) {
-        std::vector<long> stack{root_id};
+        std::stack<long> stack;
+        stack.push(root_id);
         std::list<long> related_nodes{root_id};
         path_dist[root_id][root_id] = common_ancestor_dist[root_id][root_id] = 0;
 
         while (!stack.empty()) {
-            long node_id = stack.back();
-            stack.pop_back();
+            long node_id = stack.top();
+            stack.pop();
             const auto& node = tree.nodes[node_id];
 
             auto ca_dist_node_ = common_ancestor_dist[node_id];
@@ -54,10 +55,58 @@ torch::Tensor tree_distance(const torch::Tensor& tree_tensor) {
                     }
                 }
 
-                stack.push_back(child_id);
+                stack.push(child_id);
                 related_nodes.push_back(child_id);
             }
         }
     }
     return out;
+}
+
+torch::Tensor tree_connected_components(const torch::Tensor& tree_tensor) {
+    const Tree tree(tree_tensor.accessor<long, 1>());
+    long N = tree_tensor.size(0);
+
+    auto out = torch::full({N}, -1, torch::kLong);
+    auto out_acc = out.accessor<long, 1>();
+
+    int i = 0;
+    for (const auto& root_id : tree.root_nodes) {
+        std::stack<long> stack;
+        stack.push(root_id);
+        while (!stack.empty()) {
+            long node_id = stack.top();
+            stack.pop();
+            out_acc[node_id] = i;
+            const auto& node = tree.nodes[node_id];
+            for (const auto& child_id : node.children) stack.push(child_id);
+        }
+        i++;
+    }
+    return out;
+}
+
+torch::Tensor tree_node_rank(const torch::Tensor& tree_tensor) {
+    const Tree tree(tree_tensor.accessor<long, 1>());
+    long N = tree_tensor.size(0);
+
+    auto rank = torch::zeros({N}, torch::kLong);
+    auto rank_acc = rank.accessor<long, 1>();
+
+    for (const auto& root_id : tree.root_nodes) {
+        std::stack<long> stack;
+        stack.push(root_id);
+        while (!stack.empty()) {
+            long node_id = stack.top();
+            stack.pop();
+            const auto& node = tree.nodes[node_id];
+            const auto& node_rank = rank_acc[node_id];
+            for (const auto& child_id : node.children) {
+                rank_acc[child_id] = node_rank + 1;
+                stack.push(child_id);
+            }
+        }
+    }
+
+    return rank;
 }

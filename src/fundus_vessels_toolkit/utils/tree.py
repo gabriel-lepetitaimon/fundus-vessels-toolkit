@@ -5,7 +5,9 @@ import torch  # Required for cpp extension loading
 from .cpp_extensions.fvt_cpp import find_cycles as find_cycles_cpp
 from .cpp_extensions.fvt_cpp import has_cycle as has_cycle_cpp
 from .cpp_extensions.fvt_cpp import node_accessible_from_root as node_accessible_from_root_cpp
+from .cpp_extensions.fvt_cpp import tree_connected_components as tree_connected_components_cpp
 from .cpp_extensions.fvt_cpp import tree_distance as tree_distance_cpp
+from .cpp_extensions.fvt_cpp import tree_node_rank as tree_node_rank_cpp
 from .torch import TensorArray, autocast_torch
 
 
@@ -94,3 +96,39 @@ def tree_distance(tree_list: torch.Tensor) -> torch.Tensor:
 
     """  # noqa: E501
     return tree_distance_cpp(tree_list)
+
+
+@autocast_torch
+def tree_connected_components(tree_list: torch.Tensor) -> torch.Tensor:
+    """Compute the connected components of a tree.
+
+    Parameters
+    ----------
+    tree_list: torch.Tensor
+        A tensor of shape (N,) containing the parent index of each node. The root node should have a parent index of -1.
+
+    Returns
+    -------
+    torch.Tensor [N,]
+        A tensor containing the component index of each node. Nodes in the same tree have the same component index.
+
+    """  # noqa: E501
+    return tree_connected_components_cpp(tree_list)
+
+
+@autocast_torch
+def tree_node_rank(tree_list: torch.Tensor) -> torch.Tensor:
+    """Compute the rank of each node in a tree.
+
+    Parameters
+    ----------
+    tree_list: torch.Tensor
+        A tensor of shape (N,) containing the parent index of each node. The root node should have a parent index of -1.
+
+    Returns
+    -------
+    torch.Tensor [N,]
+        A tensor containing the rank of each node. The rank of a node is defined as the number of branching nodes on the path from the root to the node. The root has a rank of 0, its children have a rank of 1, and so on.
+
+    """  # noqa: E501
+    return tree_node_rank_cpp(tree_list)

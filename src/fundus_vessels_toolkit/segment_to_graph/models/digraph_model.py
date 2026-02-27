@@ -5,7 +5,6 @@ from functools import cached_property
 from types import EllipsisType
 from typing import Literal, Optional
 
-from matplotlib.widgets import EllipseSelector
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -20,8 +19,9 @@ from torchvision.models.efficientnet import efficientnet_v2_s
 from torchvision.transforms.functional import normalize
 
 from fundus_vessels_toolkit.segment_to_graph.vbranch_digraph import VBranchDigraph
+from fundus_vessels_toolkit.utils.tree import tree_connected_components
 
-from ...utils.torch import torch_interp_bilinear, unique_first
+from ...utils.torch import groupby_mean, torch_interp_bilinear, unique_first
 from .dataset import VBranchDigraphBatch, VBranchDigraphData
 from .gnn_with_pos_encoding import APE, RoPE, TransformerConvWithPosEncoding
 
@@ -106,10 +106,10 @@ class TransformerGCN(torch.nn.Module):
         self.bn1 = pyg_nn.InstanceNorm(64 * 8)
         self.conv1a = TransformerConvWithPosEncoding(64 * 8, 128, heads=8, dropout=0.1, **opt)
         self.conv1b = TransformerConvWithPosEncoding(128 * 8, 256, heads=4, dropout=0, **opt)
-        # self.bn2 = pyg_nn.InstanceNorm(256 * 4)
+        self.bn2 = pyg_nn.InstanceNorm(256 * 4)
         self.conv2a = TransformerConvWithPosEncoding(256 * 4, 128, heads=8, dropout=0, **opt)
         self.conv2b = TransformerConvWithPosEncoding(128 * 8, 256, heads=4, dropout=0, **opt)
-        # self.bn3 = pyg_nn.InstanceNorm(256 * 4)
+        self.bn3 = pyg_nn.InstanceNorm(256 * 4)
         self.conv3a = TransformerConvWithPosEncoding(256 * 4, 512, heads=2, dropout=0, **opt)
         self.conv3b = TransformerConvWithPosEncoding(512 * 2, n_out, heads=1, dropout=0, **opt)
 
@@ -139,7 +139,7 @@ class BranchDigraphModel(torch.nn.Module):
     ):
         super().__init__()
 
-        self.img_feature_extractor = img_feature_extractor.to(dtype=torch.bfloat16)
+        self.img_feature_extractor = img_feature_extractor
         self.gnn = gnn
         self.positional_encoding = APE(head_dim=gnn.n_in // 2)  # type: ignore
 
@@ -219,7 +219,7 @@ class BranchDigraphModel(torch.nn.Module):
             data.batch_size = 1
 
         # === Extract branch features ===
-        img = data.img.reshape(data.batch_size, 3, *data.img.shape[1:]).to(dtype=torch.bfloat16)
+        img = data.img.reshape(data.batch_size, 3, *data.img.shape[1:])
         img_size = (img.shape[-2], img.shape[-1])
         img_features = self.img_feature_extractor(img)
         branch_features = self.sample_features(img_features, data.branch_curves, data.batch, img_size)
@@ -292,6 +292,10 @@ class BranchDigraphModel(torch.nn.Module):
             return self.batch.batch_size if isinstance(self.batch, PyGBatch) else 0
 
         @property
+        def batch_idx(self):
+            return self.batch.batch if isinstance(self.batch, PyGBatch) else 0
+
+        @property
         def n_branch(self):
             return self.batch.branch_curves.shape[0]
 
@@ -346,9 +350,9 @@ class BranchDigraphModel(torch.nn.Module):
                 index=self.lines.b1 + torch.where(self.lines.tip1 == 0, 0, self.n_branch),
                 num_nodes=2 * self.n_branch,
             )
-            # dir_p = torch.stack([1 - self.dir_p, self.dir_p], dim=-1)[self.lines.b1, self.lines.tip1.int()]
-            # lines_p *= dir_p
-            return lines_p
+            # Artery/Vein label consistency
+            av_consistency = self.av_logit[self.lines.b0] * self.av_logit[self.lines.b1]
+            return lines_p + av_consistency.sigmoid()
 
         def lines_mask(
             self,
@@ -412,7 +416,7 @@ class BranchDigraphModel(torch.nn.Module):
             return _max_parent(self.lines[line_mask], self.lines_logit[line_mask], self.n_branch)
 
         @cached_property
-        def optimal_tree(self) -> tuple[Tensor, Tensor]:
+        def optimal_tree(self) -> tuple[Tensor, Tensor, Tensor]:
             """
             Compute the optimal parent branch using the line scores predicted by the model, considering only the lines consistent with the ground truth branch direction and false positive status.
 
@@ -422,9 +426,28 @@ class BranchDigraphModel(torch.nn.Module):
                     Integer tensor containing for each branch the index of its optimal parent, or -1 if it has no parent. Branch with no incoming valid lines are considered root branches by default.
                 branch_dir: Tensor (N_branch,)
                     Boolean tensor containing for each branch the direction of the line linking it to its optimal parent (True: from tip0 to tip1, False: from tip1 to tip0). The direction of branches with no parent is set to False by default.
+                branch_av: Tensor (N_branch,)
+                    Tensor containing for each branch the predicted artery/vein logit average over the connected components of the optimal tree.
             """  # noqa: E501
-            opti_parent, opti_dir = self.to_digraph().solve_optimal_arboresence()
-            return torch.from_numpy(opti_parent).to(self.device), torch.from_numpy(opti_dir).to(self.device)
+            digraph = self.to_digraph()
+            try:
+                opti_parent, opti_dir = digraph.solve_optimal_arboresence(detect_major_av_error=True)
+            except Exception as e:
+                print(f"Error solving optimal arborescence for batch {self.names}: {e}")
+                digraph.check_lines("warn", branch_mask=~digraph.missing_branch())
+                opti_parent = self.max_parent(use_gt=False)
+                opti_dir = self.dir_logit > 0
+                opti_av = self.av_logit
+                return opti_parent, opti_dir, opti_av
+
+            opti_parent = (opti_parent_cpu := torch.from_numpy(opti_parent)).to(self.device)
+            opti_dir = torch.from_numpy(opti_dir).to(self.device)
+
+            opti_subtree = tree_connected_components(opti_parent_cpu.cpu()).to(self.device)
+            subtree_inverse = torch.unique(opti_subtree + self.batch_idx, return_inverse=True)[1]
+            opti_av = groupby_mean(self.av_logit, subtree_inverse)[subtree_inverse]
+
+            return opti_parent, opti_dir, opti_av
 
         def to_digraph(self) -> VBranchDigraph:
             """
@@ -442,10 +465,10 @@ class BranchDigraphModel(torch.nn.Module):
             line_list[:, 2] = self.lines.b1.numpy(force=True)
             line_list[:, 3] = 1 - self.lines.tip1.numpy(force=True)
 
-            line_p = self.final_lines_p.numpy(force=True)
-            dir_p = torch.sigmoid(self.dir_logit).numpy(force=True)
-            fp_p = torch.sigmoid(self.fp_logit).numpy(force=True)
-            av_p = torch.sigmoid(self.av_logit).numpy(force=True)
+            line_p = self.final_lines_p.float().numpy(force=True)
+            dir_p = torch.sigmoid(self.dir_logit).float().numpy(force=True)
+            fp_p = torch.sigmoid(self.fp_logit).float().numpy(force=True)
+            av_p = torch.sigmoid(self.av_logit).float().numpy(force=True)
             av_p = np.stack([av_p, 1 - av_p], axis=-1) * (1 - fp_p[:, None])
             return VBranchDigraph(line_list=line_list, line_p=line_p, branch_dir_p=dir_p, branch_av_p=av_p)
 
@@ -513,6 +536,11 @@ class BranchDigraphModel(torch.nn.Module):
         def gt_av_p(self):
             """Tensor of shape (N_branch,) containing the ground truth probability of each branch being an artery (values close to 1) or a vein (values close to 0)"""  # noqa: E501
             return self._gt_fp_av_p[1]
+
+        @property
+        def gt_subtree_idx(self):
+            """Tensor of shape (N_branch,) containing the ground truth subtree index of each branch"""  # noqa: E501
+            return self.batch.branch_subtree_idx
 
         def unbatch(self) -> list[BranchDigraphModel.Output]:
             assert isinstance(self.batch, PyGBatch), "Batch data must be a torch geometric Batch for unbatching"
