@@ -278,6 +278,7 @@ def clement_pre_postprocessing(model_name: str, multitask: bool = False) -> PreP
         model_name=model_name,
         final_activation="softmax" if multitask else "sigmoid",
         output_channels=["background", "artery", "vein"],
+        pad_to_multiple=32,
     )
 
     if not multitask:
