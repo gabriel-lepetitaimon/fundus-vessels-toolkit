@@ -1,36 +1,25 @@
 from __future__ import annotations
 
-from typing import Iterable
-
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
-from torch import Tensor
-from torchmetrics import Metric, MetricCollection, Specificity
+from torchmetrics import MetricCollection, Specificity
 from torchmetrics.classification import Accuracy, Precision, Recall
 
 import wandb
 
-from ...utils.torch import GroupByCrossEntropyLoss
 from .dataset import VBranchDigraphBatch
-from .digraph_model import BranchDigraphModel, BranchFeaturesEfficientNetV2S, Gatv2GCN, TransformerGCN
-
-
-class MetricCollectionDict(nn.ModuleDict):
-    _modules: dict[str, Metric]  # type: ignore[assignment]
-
-    def reset(self):
-        for metric in self.values():
-            metric.reset()
-
-    def items(self) -> Iterable[tuple[str, Metric]]:  # type: ignore
-        return super().items()  # type: ignore
-
-    def values(self) -> Iterable[Metric]:  # type: ignore
-        return super().values()  # type: ignore
-
-    def __getitem__(self, key: str) -> Metric:  # type: ignore
-        return super().__getitem__(key)  # type: ignore
+from .losses import CrossEntropyLoss
+from .metrics import (
+    MetricCollectionDict,
+    ParentAcc,
+    ParentCloseAcc,
+    ParentSameSubtreeAcc,
+    ParentSameSubtreeMeanDist,
+    RootSensitivity,
+    RootSpecificity,
+)
+from .model import BranchDigraphModel, BranchFeaturesEfficientNetV2S, Gatv2GCN, TransformerGCN
 
 
 # Define your LightningModule
@@ -48,7 +37,7 @@ class DigraphGNNTrainer(L.LightningModule):
         self.av_bce_loss = nn.BCEWithLogitsLoss()
         self.dir_bce_loss = nn.BCEWithLogitsLoss()
         self.root_bce_loss = nn.BCEWithLogitsLoss()
-        self.line_ce_loss = GroupByCrossEntropyLoss(invalid_metagroup_penalty=0)
+        self.line_ce_loss = CrossEntropyLoss(invalid_metagroup_penalty=0)
 
         # === METRICS ===
         self.val_metrics = self.metrics_collection(opti_tree=True)
@@ -86,7 +75,7 @@ class DigraphGNNTrainer(L.LightningModule):
             ),
         }
         if opti_tree:
-            collection["tree_opti"] = MetricCollection(
+            collection["treeOpti"] = MetricCollection(
                 {
                     "-root-spe": RootSpecificity(),
                     "-root-sen": RootSensitivity(),
@@ -96,8 +85,8 @@ class DigraphGNNTrainer(L.LightningModule):
                     "-parent-1tol-acc": ParentCloseAcc(ignore_root=False),
                 }
             )
-            collection["dir_opti"] = MetricCollection({"-acc": Accuracy("binary")})
-            collection["av_opti"] = MetricCollection(
+            collection["dirOpti"] = MetricCollection({"-acc": Accuracy("binary")})
+            collection["avOpti"] = MetricCollection(
                 {
                     "-acc": Accuracy("binary"),
                     "-art-recall": Recall("binary"),
@@ -126,14 +115,14 @@ class DigraphGNNTrainer(L.LightningModule):
             # === Parent classification metrics ===
             metric_values["tree"] = metrics["tree"](out.max_parent(use_gt=True), out.gt_parent, tp_mask)
 
-            if "tree_opti" in metrics:
+            if "treeOpti" in metrics:
                 # === Optimal parent classification metrics ===
                 opti_parent, opti_dir, opti_av_logit = out.optimal_tree
-                metric_values["dir_opti"] = metrics["dir_opti"](opti_dir[tp_mask], dir_gt_p[tp_mask] > 0.5)
-                metric_values["tree_opti"] = metrics["tree_opti"](opti_parent, out.gt_parent, tp_mask)
+                metric_values["dirOpti"] = metrics["dirOpti"](opti_dir[tp_mask], dir_gt_p[tp_mask] > 0.5)
+                metric_values["treeOpti"] = metrics["treeOpti"](opti_parent, out.gt_parent, tp_mask)
 
                 opti_av_p = opti_av_logit[tp_mask].sigmoid()
-                metric_values["av_opti"] = metrics["av_opti"](opti_av_p, out.gt_av_p[tp_mask] > 0.5)
+                metric_values["avOpti"] = metrics["avOpti"](opti_av_p, out.gt_av_p[tp_mask] > 0.5)
 
         # Flatten metric values dict
         metric_values = {prefix + k1 + k2: v for k1, group in metric_values.items() for k2, v in group.items()}
@@ -144,7 +133,7 @@ class DigraphGNNTrainer(L.LightningModule):
             if "table" not in preds_dict:
                 columns = ["name", "parent", "dir"]
                 if optimal:
-                    columns += ["opti_parent", "opti_dir", "opti_av"]
+                    columns += ["parentOpti", "dirOpti", "avOpti"]
                 preds_dict["table"] = wandb.Table(columns=columns)
             data = [out.name, out.max_parent(use_gt=False).cpu().tolist(), (out.dir_logit > 0).cpu().int().tolist()]
             if optimal:
@@ -231,120 +220,3 @@ class DigraphGNNTrainer(L.LightningModule):
             optimizer, max_lr=self.config.get("lr"), epochs=self.config.get("epoch"), steps_per_epoch=54
         )
         return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "monitor": "train_loss"}}
-
-
-class TreeMetric(Metric):
-    total: Tensor
-    root_tp: Tensor
-    root_fp: Tensor
-    root_fn: Tensor
-    true: Tensor
-    wrong_subtree: Tensor
-    false_same_subtree: Tensor
-    dist_1_or_less: Tensor
-    same_subtree_mean_dist: Tensor
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.add_state("total", default=torch.tensor(0, dtype=torch.int32), dist_reduce_fx="sum")
-        self.add_state("root_tp", default=torch.tensor(0, dtype=torch.int32), dist_reduce_fx="sum")
-        self.add_state("root_fp", default=torch.tensor(0, dtype=torch.int32), dist_reduce_fx="sum")
-        self.add_state("root_fn", default=torch.tensor(0, dtype=torch.int32), dist_reduce_fx="sum")
-        self.add_state("true", default=torch.tensor(0, dtype=torch.int32), dist_reduce_fx="sum")
-        self.add_state("wrong_subtree", default=torch.tensor(0, dtype=torch.int32), dist_reduce_fx="sum")
-        self.add_state("false_same_subtree", default=torch.tensor(0, dtype=torch.int32), dist_reduce_fx="sum")
-        self.add_state("dist_1_or_less", default=torch.tensor(0, dtype=torch.int32), dist_reduce_fx="sum")
-        self.add_state("same_subtree_mean_dist", default=torch.tensor(0, dtype=torch.float32), dist_reduce_fx="mean")
-
-    def update(self, pred: Tensor, target: Tensor, mask: Tensor) -> None:
-        from ...utils.cpp_extensions.fvt_cpp import tree_distance
-
-        if pred.shape != target.shape:
-            raise ValueError("preds and target must have the same shape")
-
-        self.total += len(pred)
-
-        assert target.max() < len(target), "target contains invalid parent indices"
-        tree_dist_gt = tree_distance(target.detach().cpu()).to(device=target.device)[0]
-        pred, target = pred[mask], target[mask]
-
-        root_preds = pred == -1
-        root_target = target == -1
-
-        self.root_tp += torch.sum(root_preds & root_target)
-        self.root_fp += torch.sum(root_preds & ~root_target)
-        self.root_fn += torch.sum(~root_preds & root_target)
-
-        pred, target = pred[~root_target], target[~root_target]  # Exclude root nodes from parent metrics
-        true_mask = pred == target
-        true_parent_n = torch.sum(true_mask)
-        self.true += true_parent_n
-
-        pred, target = pred[~true_mask], target[~true_mask]
-        same_subtree_mask = ~tree_dist_gt[pred, target].isnan()
-        same_subtree_n = same_subtree_mask.sum()
-        self.wrong_subtree += len(pred) - same_subtree_n
-        self.false_same_subtree += same_subtree_n
-
-        pred, target = pred[same_subtree_mask], target[same_subtree_mask]
-        dist = tree_dist_gt[pred, target]
-        self.same_subtree_mean_dist += dist.sum() / (same_subtree_n + true_parent_n + 1e-8)
-        self.dist_1_or_less += torch.sum(dist <= 1) + true_parent_n
-
-    @property
-    def root_tn(self):
-        return self.true + self.wrong_subtree + self.false_same_subtree
-
-    def compute(self) -> Tensor:
-        return (self.root_tp + self.true) / self.total
-
-
-class RootAcc(TreeMetric):
-    def compute(self) -> Tensor:
-        return self.root_tp / (self.root_tp + self.root_fp + self.root_fn)
-
-
-class RootSpecificity(TreeMetric):
-    def compute(self) -> Tensor:
-        return self.root_tp / (self.root_tp + self.root_fp)
-
-
-class RootSensitivity(TreeMetric):
-    def compute(self) -> Tensor:
-        return self.root_tp / (self.root_tp + self.root_fn)
-
-
-class ParentAcc(TreeMetric):
-    def __init__(self, ignore_root=True, **kwargs):
-        super().__init__(**kwargs)
-        self.ignore_root = ignore_root
-
-    def compute(self) -> Tensor:
-        return self.true / self.root_tn if self.ignore_root else (self.root_tp + self.true) / self.total
-
-
-class ParentSameSubtreeAcc(TreeMetric):
-    def __init__(self, ignore_root=True, **kwargs):
-        super().__init__(**kwargs)
-        self.ignore_root = ignore_root
-
-    def compute(self) -> Tensor:
-        if self.ignore_root:
-            return (self.false_same_subtree + self.true) / self.root_tn
-        return (self.root_tp + self.true + self.false_same_subtree) / self.total
-
-
-class ParentSameSubtreeMeanDist(TreeMetric):
-    def compute(self) -> Tensor:
-        return self.same_subtree_mean_dist / (self.true + self.false_same_subtree + 1e-8)
-
-
-class ParentCloseAcc(TreeMetric):
-    def __init__(self, ignore_root=True, **kwargs):
-        super().__init__(**kwargs)
-        self.ignore_root = ignore_root
-
-    def compute(self) -> Tensor:
-        if self.ignore_root:
-            return self.dist_1_or_less / self.root_tn
-        return (self.root_tp + self.dist_1_or_less) / self.total

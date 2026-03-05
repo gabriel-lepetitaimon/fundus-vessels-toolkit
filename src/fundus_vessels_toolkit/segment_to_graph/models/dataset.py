@@ -1,24 +1,24 @@
 from __future__ import annotations
 
 import copy
-from datetime import datetime
 import hashlib
 import math
 import tempfile
 import warnings
+from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Optional, Self, Sequence
+from typing import Iterable, Optional, Self, Sequence, TypeGuard
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from fundus_vessels_toolkit.utils.tree import tree_connected_components
 import torch
 import tqdm
 from fundus_data_toolkit.functional import open_image
 from joblib import Parallel, delayed
 from jppype import Mosaic
 from numpy.random import MT19937, RandomState, SeedSequence
+from torch import Tensor
 from torch_geometric.data import Data as PygData
 from torch_geometric.data import Dataset as PygDataset
 
@@ -27,8 +27,8 @@ from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.color import color_jitter
 from fundus_toolkits.utils.geometric import Point, Rect
 from fundus_toolkits.utils.image import read_image
-
-from fundus_vessels_toolkit.segment_to_graph.av_tree_parsing import naive_infer_arborescence, naive_infer_roots
+from fundus_vessels_toolkit.segment_to_graph.av_tree_parsing import naive_infer_arborescence
+from fundus_vessels_toolkit.utils.tree import tree_connected_components
 
 from ...pipelines.avseg_to_tree import GNNAVSegToTree
 from ...utils import if_none
@@ -40,106 +40,180 @@ from ...utils.typing import Bool1DArray, Int1DArray
 from ...vascular_data_objects import VBranchGeoData, VTree
 from ..graph_simplification import merge_nodes_by_distance
 from ..tree_topology import TopologicalLabel
-from ..vbranch_digraph import EdgeAttrExtractor, TreeTopology, VBranchDigraph, VGraph, branch_dist_tangent_extractor
+from ..vbranch_digraph import BaseEdgeAttrExtractor, EdgeAttrExtractor, TreeTopology, VBranchDigraph, VGraph
 from .data_augmentation import deteriorate_graph, geometric_augment
 
 
 class VBranchDigraphData(PygData):
-    edge_index: torch.Tensor  # type: ignore[assignment]
+    img: Tensor
+    """Fundus image as a tensor of shape (3, H, W)."""
 
-    edge_first_tip: torch.Tensor
-    """Boolean tensor of shape (E, 2) indicating whether the edge connects the first (true) or second (false) tip of the source and target branches."""  # noqa: E501
+    od_yx: Tensor
+    """(y, x) coordinates of the optic disc center as a tensor of shape (2,)."""
 
-    edge_p: torch.Tensor
-    """Tensor of shape (E,) containing the probability of each edge being correct."""  # noqa: E501
+    mac_yx: Tensor
+    """(y, x) coordinates of the macula center as a tensor of shape (2,)."""
 
-    branch_curves: torch.Tensor
-    """Tensor of shape (B, 20, 2) containing the (x, y) coordinates of 20 points sampled along each branch curve."""  # noqa: E501
+    vnode_count: int
+    """Number of nodes in the vascular graph."""
 
-    branch_root_candidates: torch.Tensor
-    """Boolean tensor of shape (B, 2) indicating whether each branch tip is a valid vascular root."""  # noqa: E501
+    branch_list: Tensor = (None,)  # type: ignore
+    """Indices of the two tip nodes of each branch in the graph, as a tensor of shape (B, 2)."""
 
-    branch_root_p: torch.Tensor
-    """Tensor of shape (B, 2) containing the probability of each branch tip being a vascular root."""  # noqa: E501
+    branch_curves: Tensor
+    """List of the branch curves, each as a Nx2 tensor of (x, y) coordinates."""
 
-    branch_av_p: torch.Tensor
-    """Tensor of shape (B, 2) containing the probability of each branch being an artery (first column) or a vein (second column). If the sum of both is higher than their maximum, the branch is considered to be a false positive from the segmentation"""  # noqa: E501
+    branch_root_candidates: Tensor
+    """Valid vascular roots as a boolean tensor of shape (B, 2) indicating for each branch tip whether it is a valid root."""  # noqa: E501
 
-    branch_dir_p: torch.Tensor
-    """Tensor of shape (B,) containing for each branch the probability of being oriented from their first tip to their second tip (>=0.5) or the contrary (<0.5)."""  # noqa: E501
+    edge_index: Tensor  # type: ignore[assignment]+
+    """Edges list as a (2, E) tensor, storing the indices of the source and target branches."""
 
-    branch_subtree_idx: torch.Tensor
-    """Tensor of shape (B,) containing the subtree index of each branch, computed from the ground truth topology. Branches with the same subtree index are connected in the ground truth tree."""  # noqa: E501
+    edge_dir: Tensor
+    """The required direction of the source and target branches for each edge as a boolean tensor of shape (E, 2). For each edge, the first column indicates whether the source branch should be oriented from its first tip to its second tip (True) or the contrary (False), and the second column indicates the same for the target branch."""  # noqa: E501
 
-    img: torch.Tensor
-    """Tensor of shape (3, H, W) containing the fundus image."""
+    edge_attr: Tensor | None
+    """Edge attributes as a tensor of shape (E, F_e)."""
 
-    od_yx: torch.Tensor
-    """Tensor of shape (2,) containing the (y, x) coordinates of the optic disc center."""
+    edge_p: Tensor | None
+    """Ground truth probability of each edge being correct as a tensor of shape (E,)."""  # noqa: E501
 
-    mac_yx: torch.Tensor
-    """Tensor of shape (2,) containing the (y, x) coordinates of the macula center."""
+    branch_root_p: Tensor | None
+    """Ground truth probability of each branch tip being a vascular root as a tensor of shape (B,2)."""  # noqa: E501
+
+    branch_fp_p: Tensor | None
+    """Ground truth probability of each branch being a false positive from the segmentation as a tensor of shape (B,)."""  # noqa: E501
+
+    branch_av_p: Tensor | None
+    """Ground truth probability of each branch being an artery (as opposed to a vein) as a tensor of shape (B,)."""  # noqa: E501
+
+    branch_dir_p: Tensor | None
+    """Ground truth probability of each branch being oriented from their first tip to their second tip (>=0.5) or the contrary (<0.5) as a tensor of shape (B,)."""  # noqa: E501
+
+    branch_subtree_idx: Tensor | None
+    """Subtree index of each branch accordingly to the ground truth topology, as a tensor of shape (B,)."""
 
     name: str
     """Name of the sample, usually the original fundus image file name without extension. (For debug and logging purposes)."""  # noqa: E501
 
+    BRANCH_ATTR = {
+        "branch_list",
+        "branch_curves",
+        "branch_root_candidates",
+        "branch_root_p",
+        "branch_fp_p",
+        "branch_av_p",
+        "branch_dir_p",
+        "branch_subtree_idx",
+    }
+
+    EDGE_ATTR = {"edge_dir", "edge_p"}
+
     def __init__(
         self,
-        edge_index: torch.Tensor = None,  # type: ignore
-        edge_first_tip: torch.Tensor = None,  # type: ignore
-        edge_p: torch.Tensor = None,  # type: ignore
-        edge_attr: Optional[torch.Tensor] = None,  # type: ignore
-        branch_curves: list[torch.Tensor] = None,  # type: ignore
-        branch_root_candidates: torch.Tensor = None,  # type: ignore
-        branch_root_p: torch.Tensor = None,  # type: ignore
-        branch_av_p: torch.Tensor = None,  # type: ignore
-        branch_dir_p: torch.Tensor = None,  # type: ignore
-        branch_subtree_idx: torch.Tensor = None,  # type: ignore
-        img: torch.Tensor = None,  # type: ignore
-        od_yx: torch.Tensor = None,  # type: ignore
-        mac_yx: torch.Tensor = None,  # type: ignore
+        img: Tensor = None,  # type: ignore
+        od_yx: Tensor = None,  # type: ignore
+        mac_yx: Tensor = None,  # type: ignore
+        vnode_count: int = None,  # type: ignore
+        branch_list: Tensor = None,  # type: ignore
+        branch_curves: list[Tensor] = None,  # type: ignore
+        branch_root_candidates: Tensor = None,  # type: ignore
+        edge_index: Tensor = None,  # type: ignore
+        edge_dir: Tensor = None,  # type: ignore
+        edge_attr: Optional[Tensor] = None,
+        edge_p: Optional[Tensor] = None,
+        branch_root_p: Optional[Tensor] = None,
+        branch_fp_p: Optional[Tensor] = None,
+        branch_av_p: Optional[Tensor] = None,
+        branch_dir_p: Optional[Tensor] = None,
+        branch_subtree_idx: Optional[Tensor] = None,
         name: str = "",
     ):
         """Store branch digraph data in PyG format.
 
         Parameters
         ----------
-        edge_index : torch.Tensor
-            Edges list as a (2, E) tensor, storing the indices of the source and target branches.
-        edge_first_tip : torch.Tensor
-            A (E, 2) boolean tensor storing whether the edges connect the first (true) or second (false) tip of the source and target branches.
-        edge_attr : torch.Tensor
-            Edge attributes as a tensor of shape (E, F_e).
-        branch_curves : list[torch.Tensor]
-            List of branch curves, each as a Nx2 tensor of (x, y) coordinates.
-        edge_p : torch.Tensor
-            Probability of each edge being correct as a tensor of shape (E,).
-        branch_root_candidates: torch.Tensor
-            A boolean tensor of shape (B, 2) indicating whether each branch tip is a valid vascular root.
-        branch_root_p : torch.Tensor
-            Probability of each branch tip being a vascular root as a tensor of shape (B,2).
-        branch_av_p : torch.Tensor
-            Probability of each branch being an artery or a vein (or neither) as a tensor of shape (B, 2).
-        branch_dir_p : torch.Tensor
-            Direction of each branch as a tensor of shape (B, 2).
-        branch_subtree_idx : torch.Tensor
-            Subtree index of each branch as a tensor of shape (B,).
-        img : torch.Tensor
+        img : Tensor
             The fundus image tensor as a 3xHxW tensor.
+        od_yx : Tensor
+            The (y, x) coordinates of the optic disc center as a tensor of shape (2,).
+        mac_yx : Tensor
+            The (y, x) coordinates of the macula center as a tensor of shape (2,).
+        node_count: int
+            Number of nodes in the vascular graph.
+        branch_list: Tensor
+            Indices of the tips nodes of each branch as a tensor of shape (B, 2), where B is the number of branches.
+        branch_curves : list[Tensor]
+            The coordinates of the branches curve, as a list of B tensors containing (y, x) coordinates.
+        branch_root_candidates: Tensor
+            Valid vascular roots as a boolean tensor of shape (B, 2) indicating for each branch tip whether it is a valid root.
+        edge_index : Tensor
+            Edges list as a (2, E) tensor, storing the indices of the source and target branches.
+        edge_dir : Tensor
+            The required direction of the source and target branches for each edge as a boolean tensor of shape (E, 2). For each edge, the first column indicates whether the source branch should be oriented from its first tip to its second tip (True) or the contrary (False), and the second column indicates the same for the target branch.
+        edge_attr : Tensor, optional
+            Edge attributes as a tensor of shape (E, F_e).
+        edge_p : Tensor, optional
+            Ground truth probability of each edge being correct as a tensor of shape (E,).
+        branch_root_p : Tensor, optional
+            Ground truth probability of each branch tip being a vascular root as a tensor of shape (B,2).
+        branch_fp_p : Tensor, optional
+            Ground truth probability of each branch being a false positive from the segmentation as a tensor of shape (B,).
+        branch_av_p : Tensor, optional
+            Ground truth probability of each branch being an artery (as opposed to a vein) as a tensor of shape (B,).
+        branch_dir_p : Tensor, optional
+            Ground truth probability of each branch being oriented from their first tip to their second tip (>=0.5) or the contrary (<0.5) as a tensor of shape (B,).
+        branch_subtree_idx : Tensor, optional
+            Subtree index of each branch accordingly to the ground truth topology, as a tensor of shape (B,).
         """  # noqa: E501
-        if edge_index is not None:
+        if img is not None:
+            # === DATA INTEGRITY CHECKS ===
+            # --- Global fields ---
+            assert img.ndim == 3 and img.shape[0] == 3, f"fundus_img must be of shape (3, H, W) but got {img.shape}"
+            assert od_yx.shape == (2,), f"od_yx must be of shape (2,) but got {od_yx.shape}"
+            assert mac_yx.shape == (2,), f"mac_yx must be of shape (2,) but got {mac_yx.shape}"
+            assert isinstance(vnode_count, int) and vnode_count >= 0, (
+                f"node_count must be a non-negative integer but got {vnode_count}"
+            )
+
+            # --- Branch attributes ---
+            B = len(branch_curves)
+            assert all(curve.ndim == 2 and curve.shape[1] == 2 for curve in branch_curves), (
+                "Each branch curve must be a Nx2 tensor of (y, x) coordinates"
+            )
+            assert branch_list.shape == (B, 2), f"branch_list must be of shape (B, 2) but got {branch_list.shape}"
+            assert branch_root_candidates.shape == (B, 2), (
+                f"branch_root_candidates must be of shape (B, 2) but got {branch_root_candidates.shape}"
+            )
+            assert branch_root_p is None or branch_root_p.shape == (B, 2), (
+                f"branch_root_p must be of shape (B, 2) but got {branch_root_p.shape}"
+            )
+            assert branch_fp_p is None or branch_fp_p.shape == (B,), (
+                f"branch_fp_p must be of shape (B,) but got {branch_fp_p.shape}"
+            )
+            assert branch_av_p is None or branch_av_p.shape == (B,), (
+                f"branch_av_p must be of shape (B,) but got {branch_av_p.shape}"
+            )
+            assert branch_dir_p is None or branch_dir_p.shape == (B,), (
+                f"branch_dir_p must be of shape (B,) but got {branch_dir_p.shape}"
+            )
+            assert branch_subtree_idx is None or branch_subtree_idx.shape == (B,), (
+                f"branch_subtree_idx must be of shape (B,) but got {branch_subtree_idx.shape}"
+            )
+
+            # --- Edge attributes ---
             assert edge_index.ndim == 2 and edge_index.shape[0] == 2, (
                 f"edge_index must be of shape (2, E) but got {edge_index.shape}"
             )
             E = edge_index.shape[1]
-            assert edge_first_tip.shape == (E, 2), (
-                f"edge_first_tip must be of shape (E, 2) but got {edge_first_tip.shape}"
+            assert edge_dir.shape == (E, 2), f"edge_dir must be of shape (E, 2) but got {edge_dir.shape}"
+            assert edge_dir.dtype == torch.bool, "edge_dir must be a boolean tensor"
+            assert edge_attr is None or (edge_attr.ndim == 2 and edge_attr.shape[0] == E), (
+                f"edge_attr must be of shape (E, F_e) but got {edge_attr.shape}"
             )
-            assert edge_first_tip.dtype == torch.bool, "edge_first_tip must be a boolean tensor"
-            assert img.ndim == 3 and img.shape[0] == 3, f"fundus_img must be of shape (3, H, W) but got {img.shape}"
-            B = len(branch_curves)
-            assert branch_av_p.shape == (B, 2), f"branch_av_p must be of shape (B, 2) but got {branch_av_p.shape}"
-            assert branch_dir_p.shape == (B,), f"branch_dir must be of shape (B,) but got {branch_dir_p.shape}"
+            assert edge_p is None or edge_p.shape == (E,), f"edge_p must be of shape (E,) but got {edge_p.shape}"
+
+            # === PREPROCESSING ===
             curves_ = torch.full((B, 20, 2), -1.0)
             pos = []
             for i, curve in enumerate(branch_curves):
@@ -160,14 +234,17 @@ class VBranchDigraphData(PygData):
             B = 0
             pos = None
             curves_ = None
+
         super().__init__(
             edge_index=edge_index,
-            edge_first_tip=edge_first_tip,
+            edge_dir=edge_dir,
             edge_attr=edge_attr,
+            branch_list=branch_list,
             branch_curves=curves_,
             edge_p=edge_p,
             branch_root_candidates=branch_root_candidates,
             branch_root_p=branch_root_p,
+            branch_fp_p=branch_fp_p,
             branch_av_p=branch_av_p,
             branch_dir_p=branch_dir_p,
             branch_subtree_idx=branch_subtree_idx,
@@ -175,70 +252,105 @@ class VBranchDigraphData(PygData):
             img=img,
             od_yx=od_yx,
             mac_yx=mac_yx,
+            vnode_count=vnode_count,
             name=name,
         )
         self.num_nodes = B
 
     def is_node_attr(self, key: str) -> bool:
-        branch_attrs = {
-            "branch_curves",
-            "branch_av_p",
-            "branch_dir_p",
-            "branch_root_candidates",
-            "branch_root_p",
-            "branch_subtree_idx",
-        }
-        return super().is_node_attr(key) or key in branch_attrs
+        return super().is_node_attr(key) or key in self.BRANCH_ATTR
 
     def is_edge_attr(self, key: str) -> bool:
-        return super().is_edge_attr(key) or key in {"edge_first_tip", "edge_p"}
+        return super().is_edge_attr(key) or key in self.EDGE_ATTR
+
+    def __inc__(self, key: str, value, *args, **kwargs):
+        if key == "edge_index":
+            return self.num_nodes
+        elif key == "branch_list":
+            return self.vnode_count
+        else:
+            return 0
 
     @classmethod
     def from_branch_digraph(
         cls,
         digraph: VBranchDigraph,
-        fundus_img: torch.Tensor,
+        fundus_img: Tensor,
         od_yx: npt.NDArray,
         mac_yx: npt.NDArray,
         name: str,
-        edge_attr_fn: Optional[EdgeAttrExtractor] = None,
+        edge_attr_fn: Optional[BaseEdgeAttrExtractor] = None,
     ) -> Self:
-        assert digraph.line_p is not None, "branch_digraph must have line_p computed"
-        assert digraph.branch_av_p is not None, "branch_digraph must have branch_av_p computed"
-        assert digraph.branch_dir_p is not None, "branch_digraph must have branch_dir_p computed"
+        assert VBranchDigraph.has_all_p(digraph), "branch_digraph must have branch_fp_p and branch_av_p"
+        assert digraph.graph is not None, "branch_digraph must have graph constructed"
 
         not_root = ~digraph.root_mask
         geodata = digraph.graph.geometric_data()
         branch_curves = [torch.from_numpy(curve).float() for curve in geodata.branch_curve(fill_with_nodes=True)]
         branch_subtree_idx = tree_connected_components(torch.from_numpy(digraph.max_parent()))
 
-        valid_root_tips = np.zeros((digraph.graph.branch_count, 2), dtype=np.bool_)
+        valid_root_tips = np.zeros((digraph.branch_count, 2), dtype=np.bool_)
         valid_root_tips[digraph.b1[digraph.root_mask], digraph.b1_tip[digraph.root_mask]] = True
-        root_p = np.zeros((digraph.graph.branch_count, 2), dtype=np.float32)
+        root_p = np.zeros((digraph.branch_count, 2), dtype=np.float32)
         root_p[digraph.b1[digraph.root_mask], digraph.b1_tip[digraph.root_mask]] = digraph.line_p[digraph.root_mask]
 
         return cls(
-            edge_index=torch.from_numpy(digraph.b0b1[not_root]).T,
-            edge_first_tip=torch.from_numpy(digraph.b0tip_b1tip[not_root]) == 0,
-            edge_attr=torch.from_numpy(edge_attr_fn(digraph)).float() if edge_attr_fn is not None else None,
             img=fundus_img,
+            od_yx=torch.from_numpy(od_yx).float(),
+            mac_yx=torch.from_numpy(mac_yx).float(),
+            vnode_count=digraph.graph.node_count,
+            branch_list=torch.from_numpy(digraph.graph.branch_list).int(),
             branch_curves=branch_curves,
+            branch_root_candidates=torch.from_numpy(valid_root_tips),
+            edge_index=torch.from_numpy(digraph.b0b1[not_root]).T,
+            edge_dir=torch.from_numpy(digraph.b0b1_dir[not_root]),
+            edge_attr=torch.from_numpy(edge_attr_fn(digraph)).float() if edge_attr_fn is not None else None,
             edge_p=torch.from_numpy(digraph.line_p[not_root]).float(),
+            branch_fp_p=torch.from_numpy(digraph.branch_fp_p).float(),
             branch_av_p=torch.from_numpy(digraph.branch_av_p).float(),
             branch_dir_p=torch.from_numpy(digraph.branch_dir_p).float(),
             branch_subtree_idx=branch_subtree_idx.int(),
-            branch_root_candidates=torch.from_numpy(valid_root_tips),
             branch_root_p=torch.from_numpy(root_p),
-            od_yx=torch.from_numpy(od_yx).float(),
-            mac_yx=torch.from_numpy(mac_yx).float(),
             name=name,
+        )
+
+    @classmethod
+    def has_gt(cls, instance: Self) -> TypeGuard[VBranchDigraphDataWithGT]:
+        """Check if the data instance has ground truth probabilities (i.e. if edge_p, branch_fp_p, branch_av_p and branch_dir_p are not None)."""  # noqa: E501
+        return VBranchDigraphDataWithGT.check(instance)
+
+
+class VBranchDigraphDataWithGT(VBranchDigraphData):
+    """Utility class for typechecking to ensure that the data has ground truth probabilities."""
+
+    edge_p: Tensor
+    branch_root_p: Tensor
+    branch_fp_p: Tensor
+    branch_av_p: Tensor
+    branch_dir_p: Tensor
+    branch_subtree_idx: Tensor
+
+    @classmethod
+    def check(cls, inst: VBranchDigraphData) -> TypeGuard[Self]:
+        return (
+            inst.edge_p is not None
+            and inst.branch_root_p is not None
+            and inst.branch_fp_p is not None
+            and inst.branch_av_p is not None
+            and inst.branch_dir_p is not None
+            and inst.branch_subtree_idx is not None
         )
 
 
 class VBranchDigraphBatch(VBranchDigraphData):
-    batch: torch.Tensor  # type: ignore[assignment]
-    """Tensor of shape (B,) containing for each branch the index of its graph in the batch."""  # noqa: E501
+    batch: Tensor  # type: ignore[assignment]
+    """Tensor of shape (B,) containing for each branch the index of its graph in the batch."""
+
     batch_size: int
+    """Number of graphs in the batch."""
+
+    vnode_count: Tensor
+    """Tensor of shape (batch_size,) containing the number of vascular nodes for each graph in the batch."""
 
 
 class VBranchDigraphDataset(PygDataset):
@@ -470,7 +582,7 @@ class VBranchDigraphDataset(PygDataset):
             name = self._raw_fundus_paths[idx].stem
         digraph, fundus_img, od_yx, mac_yx = self.get_sample(idx, augment=self.augment, test=False)
         return VBranchDigraphData.from_branch_digraph(
-            digraph, torch.from_numpy(fundus_img), od_yx, mac_yx, name, branch_dist_tangent_extractor
+            digraph, torch.from_numpy(fundus_img), od_yx, mac_yx, name, EdgeAttrExtractor()
         )
 
     def get_sample(

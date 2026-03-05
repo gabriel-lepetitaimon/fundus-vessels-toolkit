@@ -7,11 +7,10 @@ from typing import Literal, Optional
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 import torch_geometric.nn as pyg_nn
 from torch import Tensor, nn
 from torch_geometric.data import Batch as PyGBatch
-from torch_geometric.nn.conv import GATv2Conv, MessagePassing, TransformerConv
+from torch_geometric.nn.conv import GATv2Conv
 from torch_geometric.nn.dense.linear import Linear
 from torch_geometric.utils import softmax
 from torchvision.models import EfficientNet_V2_S_Weights
@@ -234,7 +233,7 @@ class BranchDigraphModel(torch.nn.Module):
             branch_features += pos_encoding
 
         # === Refine branch representation with the GNN ===
-        lines = Lines(data.edge_index, data.edge_first_tip)
+        lines = Lines(data.edge_index, data.edge_dir)
         x = self.gnn(
             branch_features,
             lines.edge_index,
@@ -327,15 +326,15 @@ class BranchDigraphModel(torch.nn.Module):
             return self.lines[self.n_edge :]
 
         @cached_property
-        def lines(self):
+        def lines(self) -> Lines:
             """The concatenation of edge lines (linking two branches) and root lines (linking the virtual root node to a branch). The root lines are added based on the valid root candidates indicated in the batch data, and their score is given by the root affinity score of their target branch."""  # noqa: E501
             root_branch, root_tip = torch.where(self.batch.branch_root_candidates)
             root_lines = torch.stack([-torch.ones_like(root_branch), root_branch], dim=0)
-            root_first_tip = root_tip == 0
-            root_first_tip = torch.stack([torch.zeros_like(root_first_tip), root_first_tip], dim=-1)
+            root_dir = root_tip == 0
+            root_dir = torch.stack([torch.zeros_like(root_dir), root_dir], dim=-1)
             return Lines(
                 edge_index=torch.cat([self.batch.edge_index, root_lines], dim=1),
-                edge_first_tip=torch.cat([self.batch.edge_first_tip, root_first_tip], dim=0),
+                edge_dir=torch.cat([self.batch.edge_dir, root_dir], dim=0),
             )
 
         @cached_property
@@ -347,7 +346,7 @@ class BranchDigraphModel(torch.nn.Module):
         def final_lines_p(self):
             lines_p = softmax(
                 self.lines_logit,
-                index=self.lines.b1 + torch.where(self.lines.tip1 == 0, 0, self.n_branch),
+                index=self.lines.b1 + torch.where(self.lines.b1_dir, 0, self.n_branch),
                 num_nodes=2 * self.n_branch,
             )
             # Artery/Vein label consistency
@@ -386,7 +385,7 @@ class BranchDigraphModel(torch.nn.Module):
             if filter_dir:
                 if (dir_mask := cache.get(f"dir_{filter_dir}")) is None:
                     branch_dir = self.gt_dir_p > 0.5 if filter_dir == "gt" else self.dir_logit > 0
-                    dir_mask = self.lines.b1_dir_mask(branch_dir)
+                    dir_mask = self.lines.b1_dir == branch_dir[self.lines.b1]
                     cache[f"dir_{filter_dir}"] = dir_mask
                 mask &= dir_mask
             if filter_fp:
@@ -416,6 +415,44 @@ class BranchDigraphModel(torch.nn.Module):
             return _max_parent(self.lines[line_mask], self.lines_logit[line_mask], self.n_branch)
 
         @cached_property
+        def gt_parent(self) -> Tensor:
+            """
+            Compute the optimal parent branch using the line scores provided in the ground truth.
+
+            Only the lines consistent with the ground truth branch direction and false positive status are considered.
+
+            Returns
+            -------
+                An integer tensor of shape (N_branch,) containing for each branch the index of its optimal parent, or -1 if it has no parent.
+            """  # noqa: E501
+            line_mask = self.lines_mask(filter_dir="gt", filter_fp="gt")
+            return _max_parent(self.lines[line_mask], self.gt_lines_score[line_mask], self.n_branch)
+
+        def to_digraph(self) -> VBranchDigraph:
+            """
+            Convert the predicted tree structure to a VBranchDigraph object.
+
+            Only the lines consistent with the predicted branch direction and false positive status are considered.
+
+            Returns
+            -------
+                A VBranchDigraph object containing the predicted tree structure.
+            """  # noqa: E501
+            line_list = np.empty((len(self.lines), 4), dtype=np.int64)
+            line_list[:, 0] = self.lines.b0.numpy(force=True)
+            line_list[:, 1] = self.lines.b0_dir.numpy(force=True).astype(np.int64)
+            line_list[:, 2] = self.lines.b1.numpy(force=True)
+            line_list[:, 3] = 1 - self.lines.b1_dir.numpy(force=True)
+
+            return VBranchDigraph(
+                line_list=line_list,
+                line_p=self.final_lines_p.float().numpy(force=True),
+                branch_dir_logit=self.dir_logit.float().numpy(force=True),
+                branch_fp_logit=self.fp_logit.float().numpy(force=True),
+                branch_av_logit=self.av_logit.float().numpy(force=True),
+            )
+
+        @cached_property
         def optimal_tree(self) -> tuple[Tensor, Tensor, Tensor]:
             """
             Compute the optimal parent branch using the line scores predicted by the model, considering only the lines consistent with the ground truth branch direction and false positive status.
@@ -434,7 +471,7 @@ class BranchDigraphModel(torch.nn.Module):
                 opti_parent, opti_dir = digraph.solve_optimal_arboresence(detect_major_av_error=True)
             except Exception as e:
                 print(f"Error solving optimal arborescence for batch {self.names}: {e}")
-                digraph.check_lines("warn", branch_mask=~digraph.missing_branch())
+                digraph.check_lines("warn", branch_mask=~digraph.branch_fp())
                 opti_parent = self.max_parent(use_gt=False)
                 opti_dir = self.dir_logit > 0
                 opti_av = self.av_logit
@@ -449,97 +486,72 @@ class BranchDigraphModel(torch.nn.Module):
 
             return opti_parent, opti_dir, opti_av
 
-        def to_digraph(self) -> VBranchDigraph:
-            """
-            Convert the predicted tree structure to a VBranchDigraph object.
-
-            Only the lines consistent with the predicted branch direction and false positive status are considered.
-
-            Returns
-            -------
-                A VBranchDigraph object containing the predicted tree structure.
-            """  # noqa: E501
-            line_list = np.empty((len(self.lines), 4), dtype=np.int64)
-            line_list[:, 0] = self.lines.b0.numpy(force=True)
-            line_list[:, 1] = 1 - self.lines.tip0.numpy(force=True)
-            line_list[:, 2] = self.lines.b1.numpy(force=True)
-            line_list[:, 3] = 1 - self.lines.tip1.numpy(force=True)
-
-            line_p = self.final_lines_p.float().numpy(force=True)
-            dir_p = torch.sigmoid(self.dir_logit).float().numpy(force=True)
-            fp_p = torch.sigmoid(self.fp_logit).float().numpy(force=True)
-            av_p = torch.sigmoid(self.av_logit).float().numpy(force=True)
-            av_p = np.stack([av_p, 1 - av_p], axis=-1) * (1 - fp_p[:, None])
-            return VBranchDigraph(line_list=line_list, line_p=line_p, branch_dir_p=dir_p, branch_av_p=av_p)
-
         @cached_property
-        def gt_parent(self):
-            """
-            Compute the optimal parent branch using the line scores provided in the ground truth.
-
-            Only the lines consistent with the ground truth branch direction and false positive status are considered.
-
-            Returns
-            -------
-                An integer tensor of shape (N_branch,) containing for each branch the index of its optimal parent, or -1 if it has no parent.
-            """  # noqa: E501
-            line_mask = self.lines_mask(filter_dir="gt", filter_fp="gt")
-            return _max_parent(self.lines[line_mask], self.gt_lines_score[line_mask], self.n_branch)
-
-        @cached_property
-        def gt_root_p(self):
-            """Tensor of shape (N_branch,) containing the ground truth probability of each branch being a root branch (i.e., not having any parent)"""  # noqa: E501
+        def gt_root_p(self) -> Tensor:
+            """Ground truth probability of each branch being a root branch (i.e., not having any parent) as a tensor of shape (B,)"""  # noqa: E501
+            assert VBranchDigraphData.has_gt(self.batch), (
+                "Ground truth root probabilities are not available in the batch data"
+            )
             B = torch.arange(self.n_branch, device=self.device)
             return self.batch.branch_root_p[B, (self.gt_dir_p < 0.5).int()]
 
         @cached_property
-        def fp_p(self):
-            """Tensor of shape (N_branch,) containing the probability of each branch being a false positive (i.e., not corresponding to any GT branch)"""  # noqa: E501
+        def fp_p(self) -> Tensor:
+            """Predicted probability of each branch being a false positive (i.e., not corresponding to any GT branch) as a tensor of shape (B,)"""  # noqa: E501
             return torch.sigmoid(self.fp_logit)
 
         @cached_property
-        def av_p(self):
-            """Tensor of shape (N_branch,) containing the probability of each branch being an artery (values close to 1) or a vein (values close to 0)"""  # noqa: E501
+        def av_p(self) -> Tensor:
+            """Predicted probability of each branch being an artery (as opposed to a vein) as a tensor of shape (B,)"""  # noqa: E501
             return torch.sigmoid(self.av_logit)
 
         @cached_property
-        def fp_av_class(self):
+        def fp_av_class(self) -> Tensor:
             """Tensor of shape (N_branch,) containing the predicted class of each branch (0: vein, 1: artery, 2: false positive)"""  # noqa: E501
             av_class = (self.av_logit > 0).int()
             av_class[self.fp_logit > 0] = -1
             return av_class
 
         @cached_property
-        def dir_p(self):
-            """Tensor of shape (N_branch,) containing the probability of each branch being oriented from tip0 to tip1 (values close to 1) or from tip1 to tip0 (values close to 0)"""  # noqa: E501
+        def dir_p(self) -> Tensor:
+            """Predicted probability of each branch being oriented from tip0 to tip1 (values close to 1) or from tip1 to tip0 (values close to 0) as a tensor of shape (N_line,)"""  # noqa: E501
             return torch.sigmoid(self.dir_logit)
 
         @property
-        def gt_lines_score(self):
+        def gt_lines_score(self) -> Tensor:
+            assert VBranchDigraphData.has_gt(self.batch), "Ground truth line scores are not available in the batch data"
             return torch.cat([self.batch.edge_p, self.batch.branch_root_p[self.batch.branch_root_candidates]], dim=0)
 
         @property
-        def gt_dir_p(self):
-            """Tensor of shape (N_branch,) containing the ground truth probability of each branch being oriented from tip0 to tip1 (values close to 1) or from tip1 to tip0 (values close to 0)"""  # noqa: E501
+        def gt_dir_p(self) -> Tensor:
+            """Ground truth probability of each branch being oriented from tip0 to tip1 (values close to 1) or from tip1 to tip0 (values close to 0) as a tensor of shape (B,)"""  # noqa: E501
+            assert VBranchDigraphData.has_gt(self.batch), (
+                "Ground truth branch directions are not available in the batch data"
+            )
             return self.batch.branch_dir_p
 
-        @cached_property
-        def _gt_fp_av_p(self):
-            return split_fp_av_p(self.batch.branch_av_p)
+        @property
+        def gt_fp_p(self) -> Tensor:
+            """Ground truth probability of each branch being a false positive from the segmentation as a tensor of shape (B,)"""  # noqa: E501
+            assert VBranchDigraphData.has_gt(self.batch), (
+                "Ground truth false positive probabilities are not available in the batch data"
+            )
+            return self.batch.branch_fp_p
 
         @property
-        def gt_fp_p(self):
-            """Tensor of shape (N_branch,) containing the ground truth probability of each branch being a false positive (i.e., not corresponding to any GT branch)"""  # noqa: E501
-            return self._gt_fp_av_p[0]
+        def gt_av_p(self) -> Tensor:
+            """Ground truth probability of each branch being an artery (as opposed to a vein) as a tensor of shape (B,)"""  # noqa: E501
+            assert VBranchDigraphData.has_gt(self.batch), (
+                "Ground truth artery probabilities are not available in the batch data"
+            )
+            return self.batch.branch_av_p
 
         @property
-        def gt_av_p(self):
-            """Tensor of shape (N_branch,) containing the ground truth probability of each branch being an artery (values close to 1) or a vein (values close to 0)"""  # noqa: E501
-            return self._gt_fp_av_p[1]
-
-        @property
-        def gt_subtree_idx(self):
+        def gt_subtree_idx(self) -> Tensor:
             """Tensor of shape (N_branch,) containing the ground truth subtree index of each branch"""  # noqa: E501
+            assert VBranchDigraphData.has_gt(self.batch), (
+                "Ground truth subtree indices are not available in the batch data"
+            )
             return self.batch.branch_subtree_idx
 
         def unbatch(self) -> list[BranchDigraphModel.Output]:
@@ -564,7 +576,7 @@ class BranchDigraphModel(torch.nn.Module):
 @dataclass(frozen=True)
 class Lines:
     edge_index: Tensor
-    edge_first_tip: Tensor
+    edge_dir: Tensor
     mask: Optional[Tensor] = None
     whole_mask: Optional[Tensor] = None
 
@@ -583,7 +595,7 @@ class Lines:
             whole_mask[self.whole_mask][idx] = True
         return Lines(
             self.edge_index[:, idx],
-            self.edge_first_tip[idx],
+            self.edge_dir[idx],
             mask=self.mask[idx] if self.mask is not None else None,
             whole_mask=whole_mask,
         )
@@ -604,100 +616,24 @@ class Lines:
         return self.edge_index[1]
 
     @property
+    def b0_dir(self) -> Tensor:
+        """Boolean tensor of shape (N_line,) indicating for each line the required direction of its source branch (True: from tip0 to tip1, False: from tip1 to tip0)"""  # noqa: E501
+        return self.edge_dir[:, 0]
+
+    @property
+    def b1_dir(self) -> Tensor:
+        """Boolean tensor of shape (N_line,) indicating for each line the required direction of its target branch (True: from tip0 to tip1, False: from tip1 to tip0)"""  # noqa: E501
+        return self.edge_dir[:, 1]
+
+    @property
     def tip0(self) -> Tensor:
         """Boolean tensor of shape (N_line,) indicating whether the line is emitted from the first tip (True) or the second tip (False) of its source branch"""  # noqa: E501
-        return self.edge_first_tip[:, 0]
+        return ~self.edge_dir[:, 0]
 
     @property
     def tip1(self) -> Tensor:
         """Boolean tensor of shape (N_line,) indicating whether the line is incident to the first tip (True) or the second tip (False) of its target branch"""  # noqa: E501
-        return self.edge_first_tip[:, 1]
-
-    def b1_dir_mask(self, b_dir: Tensor) -> Tensor:
-        """
-        Compute the mask indicating which lines is compatible with the provided direction of their target branch.
-
-        Parameters
-        ----------
-        b_dir: Tensor
-            Boolean tensor of shape (N_branch,) indicating the direction of each branch (True: from tip0 to tip1, False: from tip1 to tip0)
-
-        Returns
-        -------
-        Tensor
-            Boolean tensor of shape (N_line,) indicating whether each line is compatible with the provided direction of
-            their target branch.
-            (True: the line is incident to the tip of the target branch that should be the end of the branch according to b_dir;
-            False: the line is incident to the tip of the target branch that should be the start of the branch according to b_dir.)
-
-        """  # noqa: E501
-        return self.tip1 == b_dir[self.b1]
-
-
-def split_fp_av_p(av_p: Tensor) -> tuple[Tensor, Tensor]:
-    """Split pairs of artery and vein probabilities into false positive and artery/vein probabilities."""
-    av_sum = av_p.sum(dim=-1)
-    fp = 1 - av_sum
-    art = av_p[..., 0]
-    art[av_sum != 0] /= av_sum[av_sum != 0]
-    return fp, art
-
-
-class BranchDigraphGATv2Conv(MessagePassing):
-    def __init__(
-        self,
-        in_branch_channels: int,
-        out_branch_channels: int,
-        in_tip_channels: int,
-        out_tip_channels: int,
-        *,
-        heads: int = 1,
-        negative_slope: float = 0.2,
-        dropout: float = 0.0,
-        bias: bool = True,
-    ):
-        super().__init__(node_dim=0, aggr="add")
-
-        self.in_branch_channels = in_branch_channels
-        self.out_branch_channels = out_branch_channels
-        self.in_tip_channels = in_tip_channels
-        self.out_tip_channels = out_tip_channels
-        self.heads = heads
-        self.negative_slope = negative_slope
-        self.dropout = dropout
-
-        f_Bin, f_Bout = in_branch_channels, out_branch_channels
-        f_Tin, f_Tout = in_tip_channels, out_tip_channels
-
-        self.lin_B = Linear(f_Bin, heads * f_Bout, bias=bias, weight_initializer="glorot")
-        self.lin_B_self = Linear(f_Bin + f_Tin, heads * f_Bout, bias=bias, weight_initializer="glorot")
-
-        self.lin_T_source = Linear(f_Bin + f_Tin, heads * f_Tout, bias=bias, weight_initializer="glorot")
-        self.lin_T_target = Linear(f_Bin + f_Tin, heads * f_Tout, bias=bias, weight_initializer="glorot")
-        self.lin_T_self = Linear(f_Tin, heads * f_Tout, bias=bias, weight_initializer="glorot")
-
-        self.att = torch.nn.Parameter(torch.empty(1, heads, f_Bout + f_Tout))
-
-    def reset_parameters(self) -> None:
-        super().reset_parameters()
-
-        self.lin_B.reset_parameters()
-        self.lin_B_self.reset_parameters()
-
-        self.lin_T_source.reset_parameters()
-        self.lin_T_target.reset_parameters()
-        self.lin_T_self.reset_parameters()
-
-    def forward(self, data):
-        pass
-        # x, edge_index = data.x, data.edge_index
-
-        # x = self.conv1(x, edge_index)
-        # x = F.relu(x)
-        # x = F.dropout(x, training=self.training)
-        # x = self.conv2(x, edge_index)
-
-        # return F.log_softmax(x, dim=1)
+        return self.edge_dir[:, 1]
 
 
 ###########################
@@ -724,66 +660,11 @@ def _max_parent(lines: Lines, lines_score: Tensor, n_branch: int):
 
     score_sort_idx = torch.argsort(lines_score, descending=True)
     b1, first_idx = unique_first(lines.b1[score_sort_idx])
-    # first_idx = torch.cumsum(F.pad(first_idx[:-1], (1, 0), value=0), dim=0)
 
     parent = torch.full((n_branch,), -1, device=lines_score.device)
     parent[b1] = lines.b0[score_sort_idx[first_idx]]
 
     return parent
-
-
-def _optimal_arborescence_parent(
-    lines: Lines, lines_score: Tensor, fp_logit: Tensor, av_logit: Tensor, dir_logit: Tensor
-) -> tuple[Tensor, Tensor]:
-    """Retreive for each branch its parent with the maximum edge score, considering the provided valid edge and root assignments.
-
-    Parameters
-    ----------
-    lines: Lines
-        Lines object containing the valid incident edges and valid root assignments
-
-    line_score: Tensor (N_valid_edges + N_valid_roots,)
-        tensor of line scores for valid incident edges and valid root assignments
-
-    fp_logit: Tensor (N_branch,)
-        tensor of logits for each branch being a false positive (i.e., not corresponding to any GT branch)
-
-    av_logit: Tensor (N_branch,)
-        tensor of logits for each branch being an artery (values close to 1) or a vein (values close to 0)
-
-    dir_logit: Tensor (N_branch,)
-        tensor of logits for each branch being oriented from tip0 to tip1 (values close to 1) or from tip1 to tip0 (values close to 0)
-
-    Returns
-    -------
-        b_parent: Tensor (N_branch,)
-            integer tensor containing for each branch the index of its optimal parent, or -1 if it has no parent.
-
-        b_dir: Tensor (N_branch,)
-            boolean tensor containing for each branch the direction of its optimal parent line (True: from tip0 to tip1, False: from tip1 to tip0).
-
-    """  # noqa: E501
-    from ..vbranch_digraph import VBranchDigraph
-
-    line_list = np.empty((lines.n_lines, 4), dtype=np.int64)
-    line_list[:, 0] = lines.b0.numpy(force=True)
-    line_list[:, 1] = lines.tip0.numpy(force=True)
-    line_list[:, 2] = lines.b1.numpy(force=True)
-    line_list[:, 3] = lines.tip1.numpy(force=True)
-
-    B = dir_logit.numel()
-
-    lines_p = softmax(lines_score, index=lines.b1 + torch.where(lines.tip1 == 0, 0, B), num_nodes=2 * B)
-    line_p = lines_p.numpy(force=True)
-    dir_p = torch.sigmoid(dir_logit).numpy(force=True)
-    fp_p = torch.sigmoid(fp_logit).numpy(force=True)
-    av_p = torch.sigmoid(av_logit).numpy(force=True)
-    av_p = np.stack([av_p, 1 - av_p], axis=-1) * (1 - fp_p[:, None])
-    digraph = VBranchDigraph(line_list=line_list, line_p=line_p, branch_dir_p=dir_p, branch_av_p=av_p)
-    b_parent, b_dir = digraph.solve_optimal_arboresence()
-
-    device = lines_score.device
-    return torch.from_numpy(b_parent).to(device), torch.from_numpy(b_dir).to(device)
 
 
 def reproject_pos(pos, o, v, batch_index):
