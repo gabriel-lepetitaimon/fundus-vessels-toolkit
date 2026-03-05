@@ -136,30 +136,53 @@ class ContrastiveLoss(torch.nn.Module):
         S = x.shape[0]
         device = x.device
 
-        # Sample contrastive pairs
+        # === Sample contrastive pairs ===
         if group_idx is not None and self.use_same_idx:
+            samples_idx = torch.arange(S, device=device)
             group_idx_, group_counts, group_inv = group_idx.unique(return_counts=True, return_inverse=True)
-            valid_group = group_idx_[group_counts > 1]
-            N = math.ceil(len(valid_group) * self.sample_ratio)
-            if N == 0:
+            G = group_idx_[-1] + 1
+
+            def select_samples(by_sample=None, *, by_group=None):
+                nonlocal samples_idx, group_inv, S
+                if by_group is not None:
+                    if by_group.dtype == torch.bool:
+                        mask = group_idx_[by_group]
+                    else:
+                        mask = torch.zeros(G, device=device, dtype=torch.bool)
+                        mask[by_group] = True
+                        mask = group_idx_[mask]
+                elif by_sample is not None:
+                    mask = by_sample
+                else:
+                    raise ValueError("Either by_samples or by_groups must be provided.")
+                samples_idx = samples_idx[mask]
+                S = len(samples_idx)
+                group_inv = group_inv[mask]
+                
+            # → Select pairable groups (with more than 1 sample)
+            pairable_group_mask = group_counts > 1
+            pairable_group = group_idx_[pairable_group_mask]
+            select_samples(by_group=pairable_group_mask)
+            
+            N_group = len(pairable_group)
+            N_pair = math.ceil(N_group * self.sample_ratio)
+            if N_pair == 0:
                 return torch.tensor(0.0, device=device)
 
-            selected_group_idx = group_idx_[torch.randperm(len(valid_group), device=device)[:N]]
-            selected_lookup = torch.zeros_like(group_idx_)
-            selected_lookup[selected_group_idx] = torch.arange(1, len(selected_group_idx) + 1, device=device)
-            valid_group_idx = selected_lookup[group_inv]
+            # → Randomly select a subset of pairable groups
+            selected_group_idx = pairable_group[torch.randperm(N_group, device=device)[:N_pair]]
+            selected_group_mask = torch.zeros(G, device=device, dtype=torch.bool)
+            selected_group_mask[selected_group_idx] = True
+            select_samples(by_group=selected_group_mask)
 
+            # → Randomly select one sample amongst each valid group
             random_order = torch.randperm(S, device=device)
             inv_sample_order = torch.empty_like(random_order)
             inv_sample_order[random_order] = torch.arange(S, device=device)
+            selected_group, s0 = unique_first(group_inv[random_order])
+            s0 = inv_sample_order[s0]  # Map back to original sample index
 
-            # Randomly select one sample amongst each valid group
-            _, s0 = unique_first(valid_group_idx[random_order])
-            assert _[0] == 0, "The first unique value should be 0 since unselected samples have group_inv 0"
-            s0 = inv_sample_order[s0[1:]]  # Remove unselected samples and map back to original sample index
-
-            s_idx = torch.arange(S, device=device)
-            contrast_idx = 
+            s0_contrast_idx = contrast_idx[s0]
             group_inv[] = 0 # Set samples of the same group as p0 and same contrast_idx to 0
         else:
-            N = x.shape[0] * self.sample_ratio
+            N_pair = x.shape[0] * self.sample_ratio
