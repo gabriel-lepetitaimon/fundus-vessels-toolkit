@@ -1,9 +1,13 @@
-import math
 from typing import Literal, Optional
 
 import torch
+from pytorch_metric_learning import distances as pml_distances
+from pytorch_metric_learning import losses as pml_losses
+from pytorch_metric_learning import miners as pml_miners
+from torch import Tensor
 
-from fundus_vessels_toolkit.utils.torch import unique_first
+from fundus_vessels_toolkit.segment_to_graph.models.model import BranchDigraphModel
+from fundus_vessels_toolkit.utils.torch import with_weight
 
 
 class CrossEntropyLoss(torch.nn.Module):
@@ -20,38 +24,38 @@ class CrossEntropyLoss(torch.nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,
-        target: torch.Tensor,
-        group_idx: torch.Tensor,
-        mask: Optional[torch.Tensor] = None,
-        metagroup_idx: Optional[torch.Tensor] = None,
-        other_group_idx: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+        x: Tensor,
+        target: Tensor,
+        group_idx: Tensor,
+        mask: Optional[Tensor] = None,
+        metagroup_idx: Optional[Tensor] = None,
+        other_group_idx: Optional[Tensor] = None,
+    ) -> Tensor:
         """Compute the cross-entropy loss which enforce the selection of one sample per group, given sample-wise logits and group indices.
 
         Parameters
         ----------
-        x : torch.Tensor
+        x : Tensor
             A tensor of shape (N,) containing the predicted logits for each sample.
 
-        target : torch.Tensor
+        target : Tensor
             A tensor of shape (N,) containing whether each sample is the elected one in its group. The sum of target values for each group should be 1.
 
-        group_idx : torch.Tensor
+        group_idx : Tensor
             A tensor of shape (N,) containing the group affiliation for each sample. The values in `group_idx` should be non-negative integers, and samples with the same group index belong to the same group.
 
-        mask : Optional[torch.Tensor], optional
+        mask : Optional[Tensor], optional
             A boolean tensor of shape (N,) indicating which group should be included in the loss computation. If None, all samples are included.
 
-        metagroup_idx : Optional[torch.Tensor], optional
+        metagroup_idx : Optional[Tensor], optional
             A tensor of shape (G,) containing the metagroup affiliation for each group.
 
-        other_group_idx : Optional[torch.Tensor], optional
+        other_group_idx : Optional[Tensor], optional
             A tensor of shape (N,) containing the group affiliation for each sample according to another grouping scheme, used to apply a penalty to samples belonging to metagroup that are not consistent between the two grouping schemes.
 
         Returns
         -------
-        torch.Tensor
+        Tensor
             A scalar tensor containing the mean cross-entropy loss over all groups.
         """  # noqa: E501
         group_idx = group_idx.long()
@@ -95,94 +99,77 @@ class CrossEntropyLoss(torch.nn.Module):
         return group_loss
 
 
-class ContrastiveLoss(torch.nn.Module):
-    def __init__(
-        self,
-        sample_ratio: float = 1.0,
-        use_same_idx: bool = False,
-    ):
+class VBranchDigraphMiner(pml_miners.BaseMiner):
+    def __init__(self, sample_ratio: float = 1.0, triplet: bool = False, same_tail_node: bool = True):
         super().__init__()
         self.sample_ratio = sample_ratio
-        self.use_same_idx = use_same_idx
+        self.triplet = triplet
+        self.same_tail_node = same_tail_node
+
+    def mine(
+        self, embedding, subtree_idx, tail_node_idx
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
+        device = embedding.device
+
+        # → Shuffle samples to ensure random sampling of pairs
+        # sample_idx = torch.arange(embedding.size(0), device=device)
+        sample_idx = torch.randperm(embedding.size(0), device=device)
+        subtree_idx = subtree_idx[sample_idx]
+        tail_node_idx = tail_node_idx[sample_idx]
+
+        # → List all positive and negative pairs
+        pos_pairs = subtree_idx[:, None] == subtree_idx[None, :]
+        neg_pairs = ~pos_pairs
+        if self.same_tail_node:
+            same_tail_mask = tail_node_idx[:, None] == tail_node_idx[None, :]
+            pos_pairs &= same_tail_mask
+            neg_pairs &= same_tail_mask
+
+        if self.triplet:
+            pos_pairs.triu_(diagonal=1)
+            neg_pairs.fill_diagonal_(False)
+            anchors = pos_pairs.any(dim=1) & neg_pairs.any(dim=1)
+            a_idx = anchors.argwhere().squeeze()
+
+            # Sample one positive and one negative pair for each anchor
+            def rng_one_sample_per_row(mask):
+                pairs_ = torch.zeros_like(mask, dtype=torch.int)
+                pairs_[mask] = torch.randperm(mask.sum(), dtype=torch.int, device=device) + 1
+                return pairs_.argmax(dim=1)
+
+            p_idx = rng_one_sample_per_row(pos_pairs[a_idx])
+            n_idx = rng_one_sample_per_row(neg_pairs[a_idx])
+            return sample_idx[a_idx], sample_idx[p_idx], sample_idx[n_idx]
+        else:
+            pos_pairs = sample_idx[pos_pairs.triu(diagonal=1).argwhere()].T
+            neg_pairs = sample_idx[neg_pairs.triu(diagonal=1).argwhere()].T
+            return pos_pairs[0], pos_pairs[1], neg_pairs[0], neg_pairs[1]
 
     def forward(
-        self,
-        x: torch.Tensor,
-        contrast_idx: torch.Tensor,
-        group_idx: Optional[torch.Tensor] = None,
-        mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """Compute the cross-entropy loss which enforce the selection of one sample per group, given sample-wise logits and group indices.
+        self, out: BranchDigraphModel.Output
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
+        self.reset_stats()
+        with torch.no_grad():
+            mining_output = self.mine(out.b1_embedding, out.gt_subtree_idx, out.gt_tail_nodes(use_parent_head=True))
+        self.output_assertion(mining_output)
+        return mining_output
 
-        Parameters
-        ----------
-        x : torch.Tensor
-            A tensor of shape (N,F) containing features vectors for each sample.
 
-        target : torch.Tensor
-            A tensor of shape (N,) containing whether each sample is the elected one in its group. The sum of target values for each group should be 1.
+class BranchContrastiveLoss(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        dist = pml_distances.CosineSimilarity()
+        self.contrastive_loss = with_weight(pml_losses.CircleLoss(distance=dist), 0.1)
+        self.triplet_loss = with_weight(pml_losses.TripletMarginLoss(distance=dist), 1)
+        self.pairs_miner = VBranchDigraphMiner(triplet=False, same_tail_node=True)
+        self.triplet_miner = VBranchDigraphMiner(triplet=True, same_tail_node=True)
 
-        contrast_idx : torch.Tensor
-            A tensor of shape (N,) containing affiliation for each sample. Contrastive pairs will be sampled to contains elements with different affiliation according to `main_idx`.
+    def __call__(self, out: BranchDigraphModel.Output) -> dict[str, Tensor]:
+        return super().__call__(out)
 
-        group_idx: Optional[torch.Tensor] = None
-            A tensor of shape (N,) containing  a second affiliation for each sample. If `use_same_idx` is True, contrastive pairs will be sampled to contains elements with same affiliation according to `group_idx` in addition to different affiliation according to `main_idx`.
-
-        Returns
-        -------
-        torch.Tensor
-            A scalar tensor containing the mean cross-entropy loss over all groups.
-        """  # noqa: E501
-        S = x.shape[0]
-        device = x.device
-
-        # === Sample contrastive pairs ===
-        if group_idx is not None and self.use_same_idx:
-            samples_idx = torch.arange(S, device=device)
-            group_idx_, group_counts, group_inv = group_idx.unique(return_counts=True, return_inverse=True)
-            G = group_idx_[-1] + 1
-
-            def select_samples(by_sample=None, *, by_group=None):
-                nonlocal samples_idx, group_inv, S
-                if by_group is not None:
-                    if by_group.dtype == torch.bool:
-                        mask = group_idx_[by_group]
-                    else:
-                        mask = torch.zeros(G, device=device, dtype=torch.bool)
-                        mask[by_group] = True
-                        mask = group_idx_[mask]
-                elif by_sample is not None:
-                    mask = by_sample
-                else:
-                    raise ValueError("Either by_samples or by_groups must be provided.")
-                samples_idx = samples_idx[mask]
-                S = len(samples_idx)
-                group_inv = group_inv[mask]
-                
-            # → Select pairable groups (with more than 1 sample)
-            pairable_group_mask = group_counts > 1
-            pairable_group = group_idx_[pairable_group_mask]
-            select_samples(by_group=pairable_group_mask)
-            
-            N_group = len(pairable_group)
-            N_pair = math.ceil(N_group * self.sample_ratio)
-            if N_pair == 0:
-                return torch.tensor(0.0, device=device)
-
-            # → Randomly select a subset of pairable groups
-            selected_group_idx = pairable_group[torch.randperm(N_group, device=device)[:N_pair]]
-            selected_group_mask = torch.zeros(G, device=device, dtype=torch.bool)
-            selected_group_mask[selected_group_idx] = True
-            select_samples(by_group=selected_group_mask)
-
-            # → Randomly select one sample amongst each valid group
-            random_order = torch.randperm(S, device=device)
-            inv_sample_order = torch.empty_like(random_order)
-            inv_sample_order[random_order] = torch.arange(S, device=device)
-            selected_group, s0 = unique_first(group_inv[random_order])
-            s0 = inv_sample_order[s0]  # Map back to original sample index
-
-            s0_contrast_idx = contrast_idx[s0]
-            group_inv[] = 0 # Set samples of the same group as p0 and same contrast_idx to 0
-        else:
-            N_pair = x.shape[0] * self.sample_ratio
+    def forward(self, out: BranchDigraphModel.Output) -> dict[str, Tensor]:
+        pairs = self.pairs_miner(out)
+        triplets = self.triplet_miner(out)
+        contrastive_loss = self.contrastive_loss(out.b1_embedding, indices_tuple=pairs)
+        triplet_loss = self.triplet_loss(out.b1_embedding, indices_tuple=triplets)
+        return {"contr_loss": contrastive_loss, "triplet_loss": triplet_loss}

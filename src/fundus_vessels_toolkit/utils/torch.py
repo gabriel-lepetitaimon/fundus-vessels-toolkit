@@ -80,6 +80,66 @@ def groupby_mean(x: Tensor, group_idx: Tensor, *, num_group: Optional[int] = Non
     return group_sum
 
 
+def rng_shuffle(x: Tensor, *, return_inverse: bool = False) -> Tensor | tuple[Tensor, Tensor]:
+    """Randomly shuffle the elements of `x` along the first dimension.
+
+    Parameters
+    ----------
+    x : Tensor
+        A tensor of shape (N, ...) containing the values to be shuffled.
+    return_inverse : bool, optional
+        Whether to return the inverse permutation indices, by default False.
+
+    Returns
+    -------
+    Tensor
+        A tensor of shape (N, ...) containing the shuffled values.
+    Tensor, optional
+        If `return_inverse` is True, a tensor of shape (N,) containing the indices that can be used to restore the original order of `x`.
+    """  # noqa: E501
+    perm = torch.randperm(x.shape[0], device=x.device)
+    if return_inverse:
+        inverse_perm = torch.empty_like(perm)
+        inverse_perm[perm] = torch.arange(len(perm), device=x.device)
+        return x[perm], inverse_perm
+    else:
+        return x[perm]
+
+
+def randperm_with_inverse(n: int, *, device=None) -> tuple[Tensor, Tensor]:
+    """Randomly shuffle the elements of `x` along the first dimension.
+
+    Parameters
+    ----------
+    x : Tensor
+        A tensor of shape (N, ...) containing the values to be shuffled.
+    return_inverse : bool, optional
+        Whether to return the inverse permutation indices, by default False.
+
+    Returns
+    -------
+    Tensor
+        A tensor of shape (N, ...) containing the shuffled values.
+    Tensor, optional
+        If `return_inverse` is True, a tensor of shape (N,) containing the indices that can be used to restore the original order of `x`.
+    """  # noqa: E501
+    perm = torch.randperm(n, device=device)
+    inverse_perm = torch.empty_like(perm)
+    inverse_perm[perm] = torch.arange(len(perm), device=device)
+    return perm, inverse_perm
+
+
+def with_weight[**P](func: Callable[P, Tensor], w: float) -> Callable[P, Tensor]:
+    if w == 1.0:
+        return func
+
+    @functools.wraps(func)
+    def decorated_func(*args: P.args, **kwargs: P.kwargs) -> Tensor:
+        return func(*args, **kwargs) * w
+
+    return decorated_func
+
+
 @overload
 def unique_first(x: Tensor, *, return_inverse: Literal[False] = False) -> tuple[Tensor, Tensor]: ...
 @overload

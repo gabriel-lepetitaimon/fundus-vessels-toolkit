@@ -233,7 +233,7 @@ class BranchDigraphModel(torch.nn.Module):
             branch_features += pos_encoding
 
         # === Refine branch representation with the GNN ===
-        lines = Lines(data.edge_index, data.edge_dir)
+        lines = Lines.from_batch(data)
         x = self.gnn(
             branch_features,
             lines.edge_index,
@@ -252,17 +252,17 @@ class BranchDigraphModel(torch.nn.Module):
 
         # Compute affinity between connected branches
         if self.polarized_affinity:
-            b0_affinity_v, b1_affinity_v = branch_affinity_v.view(x.shape[0], -1, 2).unbind(-1)
+            b0_embedding, b1_embedding = branch_affinity_v.view(x.shape[0], -1, 2).unbind(-1)
         else:
-            b0_affinity_v = b1_affinity_v = branch_affinity_v
-        edge_score = (b0_affinity_v[lines.b0] * b1_affinity_v[lines.b1]).sum(dim=-1)
+            b0_embedding = b1_embedding = branch_affinity_v
 
         return BranchDigraphModel.Output(
             batch=data,
             fp_logit=branch_fp,
             av_logit=branch_av,
             dir_logit=branch_dir,
-            edge_score=edge_score,
+            b0_embedding=b0_embedding,
+            b1_embedding=b1_embedding,
             root_logit=branch_root_score,
         )
 
@@ -275,16 +275,19 @@ class BranchDigraphModel(torch.nn.Module):
         """Tensor of shape (N_branch,) containing the logits for each branch being a false positive (i.e., not corresponding to any GT branch)"""  # noqa: E501
 
         av_logit: Tensor
-        """Tensor of shape (N_branch,) containing the logits for each branch class (1: artery, 0: vein)"""  # noqa: E501
+        """Tensor of shape (N_branch,) containing the logits for each branch class (1: artery, 0: vein)"""
 
         dir_logit: Tensor
         """Tensor of shape (N_branch,) containing logits for each branch direction (positive: branch is oriented from tip0 to tip1, negative: branch is oriented from tip1 to tip0)"""  # noqa: E501
 
-        edge_score: Tensor
-        """Tensor of shape (N_edge,) containing affinity scores"""  # noqa: E501
+        b0_embedding: Tensor
+        """Tensor of shape (N_branch, F) containing the embeddings for each branch as a parent branch"""
+
+        b1_embedding: Tensor
+        """Tensor of shape (N_branch, F) containing the embeddings for each branch as a child branch"""
 
         root_logit: Tensor
-        """Tensor of shape (N_branch,) containing root affinity scores"""  # noqa: E501
+        """Tensor of shape (N_branch,) containing root affinity scores"""
 
         @property
         def batch_size(self):
@@ -335,7 +338,13 @@ class BranchDigraphModel(torch.nn.Module):
             return Lines(
                 edge_index=torch.cat([self.batch.edge_index, root_lines], dim=1),
                 edge_dir=torch.cat([self.batch.edge_dir, root_dir], dim=0),
+                branch_nodes=self.batch.branch_nodes,
             )
+
+        @cached_property
+        def edge_score(self):
+            """Affinity score for edge lines, computed from the embeddings of the connected branches."""
+            return (self.b0_embedding[self.edge_lines.b0] * self.b1_embedding[self.edge_lines.b1]).sum(dim=-1)
 
         @cached_property
         def lines_logit(self):
@@ -531,6 +540,14 @@ class BranchDigraphModel(torch.nn.Module):
             return self.batch.branch_dir_p
 
         @property
+        def gt_dir(self) -> Tensor:
+            """Ground truth direction of each branch as a boolean tensor of shape (B,) (True: from tip0 to tip1, False: from tip1 to tip0)"""  # noqa: E501
+            assert VBranchDigraphData.has_gt(self.batch), (
+                "Ground truth branch directions are not available in the batch data"
+            )
+            return self.gt_dir_p > 0.5
+
+        @property
         def gt_fp_p(self) -> Tensor:
             """Ground truth probability of each branch being a false positive from the segmentation as a tensor of shape (B,)"""  # noqa: E501
             assert VBranchDigraphData.has_gt(self.batch), (
@@ -554,6 +571,29 @@ class BranchDigraphModel(torch.nn.Module):
             )
             return self.batch.branch_subtree_idx
 
+        def gt_tail_nodes(self, use_parent_head: bool = False) -> Tensor:
+            """Indices of the node at the tail of each branch (according to gt_dir) as a tensor of shape (N_line,)."""
+            assert VBranchDigraphData.has_gt(self.batch), (
+                "Ground truth branch directions are not available in the batch data"
+            )
+            branch_tails = torch.gather(self.batch.branch_nodes, 1, (1 - self.gt_dir[:, None].int())).squeeze()
+            if use_parent_head:
+                parent = self.gt_parent
+                parent = parent[has_parent := parent >= 0]
+
+                nodes = torch.empty_like(self.batch.branch_nodes[:, 0])
+                parent_heads = torch.gather(self.batch.branch_nodes[parent], 1, self.gt_dir[parent, None].int())
+                nodes[has_parent] = parent_heads.squeeze()
+                nodes[~has_parent] = branch_tails[~has_parent]
+                return nodes
+            else:
+                return branch_tails
+
+        @property
+        def gt_head_nodes(self) -> Tensor:
+            """Indices of the node at the head of each branch (according to gt_dir) as a tensor of shape (N_line,)."""
+            return torch.gather(self.batch.branch_nodes, 1, self.gt_dir[:, None].int()).squeeze()
+
         def unbatch(self) -> list[BranchDigraphModel.Output]:
             assert isinstance(self.batch, PyGBatch), "Batch data must be a torch geometric Batch for unbatching"
             outputs = []
@@ -566,8 +606,9 @@ class BranchDigraphModel(torch.nn.Module):
                         fp_logit=self.fp_logit[branch_mask],
                         av_logit=self.av_logit[branch_mask],
                         dir_logit=self.dir_logit[branch_mask],
-                        edge_score=self.edge_score[branch_mask[self.edge_lines.b0]],
                         root_logit=self.root_logit[branch_mask],
+                        b0_embedding=self.b0_embedding[branch_mask],
+                        b1_embedding=self.b1_embedding[branch_mask],
                     )
                 )
             return outputs
@@ -577,8 +618,13 @@ class BranchDigraphModel(torch.nn.Module):
 class Lines:
     edge_index: Tensor
     edge_dir: Tensor
+    branch_nodes: Tensor
     mask: Optional[Tensor] = None
     whole_mask: Optional[Tensor] = None
+
+    @classmethod
+    def from_batch(cls, batch: VBranchDigraphBatch):
+        return cls(edge_index=batch.edge_index, edge_dir=batch.edge_dir, branch_nodes=batch.branch_nodes)
 
     def __bool__(self):
         return self.edge_index.shape[1] > 0
@@ -594,8 +640,9 @@ class Lines:
             whole_mask = torch.zeros_like(self.whole_mask)
             whole_mask[self.whole_mask][idx] = True
         return Lines(
-            self.edge_index[:, idx],
-            self.edge_dir[idx],
+            edge_index=self.edge_index[:, idx],
+            edge_dir=self.edge_dir[idx],
+            branch_nodes=self.branch_nodes,
             mask=self.mask[idx] if self.mask is not None else None,
             whole_mask=whole_mask,
         )
@@ -624,6 +671,11 @@ class Lines:
     def b1_dir(self) -> Tensor:
         """Boolean tensor of shape (N_line,) indicating for each line the required direction of its target branch (True: from tip0 to tip1, False: from tip1 to tip0)"""  # noqa: E501
         return self.edge_dir[:, 1]
+
+    @property
+    def b1_node(self) -> Tensor:
+        """Integer tensor of shape (N_line, 2) containing the index of the tail node for each target branch."""
+        return torch.gather(self.branch_nodes[self.b1], 1, 1 - self.b1_dir[:, None].long()).squeeze()
 
     @property
     def tip0(self) -> Tensor:

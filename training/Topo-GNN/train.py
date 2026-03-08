@@ -24,7 +24,7 @@ def train():
     config = wandb.config
     config.setdefaults(
         {
-            "epoch": 160,
+            "epoch": 260,
             "lr": 1e-2,
             # "weight_decay": 1e-5,
             # "batch_size": 4,

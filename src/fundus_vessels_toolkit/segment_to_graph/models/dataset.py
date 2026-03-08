@@ -57,7 +57,7 @@ class VBranchDigraphData(PygData):
     vnode_count: int
     """Number of nodes in the vascular graph."""
 
-    branch_list: Tensor = (None,)  # type: ignore
+    branch_nodes: Tensor
     """Indices of the two tip nodes of each branch in the graph, as a tensor of shape (B, 2)."""
 
     branch_curves: Tensor
@@ -97,7 +97,7 @@ class VBranchDigraphData(PygData):
     """Name of the sample, usually the original fundus image file name without extension. (For debug and logging purposes)."""  # noqa: E501
 
     BRANCH_ATTR = {
-        "branch_list",
+        "branch_nodes",
         "branch_curves",
         "branch_root_candidates",
         "branch_root_p",
@@ -115,7 +115,7 @@ class VBranchDigraphData(PygData):
         od_yx: Tensor = None,  # type: ignore
         mac_yx: Tensor = None,  # type: ignore
         vnode_count: int = None,  # type: ignore
-        branch_list: Tensor = None,  # type: ignore
+        branch_nodes: Tensor = None,  # type: ignore
         branch_curves: list[Tensor] = None,  # type: ignore
         branch_root_candidates: Tensor = None,  # type: ignore
         edge_index: Tensor = None,  # type: ignore
@@ -181,7 +181,7 @@ class VBranchDigraphData(PygData):
             assert all(curve.ndim == 2 and curve.shape[1] == 2 for curve in branch_curves), (
                 "Each branch curve must be a Nx2 tensor of (y, x) coordinates"
             )
-            assert branch_list.shape == (B, 2), f"branch_list must be of shape (B, 2) but got {branch_list.shape}"
+            assert branch_nodes.shape == (B, 2), f"branch_list must be of shape (B, 2) but got {branch_nodes.shape}"
             assert branch_root_candidates.shape == (B, 2), (
                 f"branch_root_candidates must be of shape (B, 2) but got {branch_root_candidates.shape}"
             )
@@ -239,7 +239,7 @@ class VBranchDigraphData(PygData):
             edge_index=edge_index,
             edge_dir=edge_dir,
             edge_attr=edge_attr,
-            branch_list=branch_list,
+            branch_nodes=branch_nodes,
             branch_curves=curves_,
             edge_p=edge_p,
             branch_root_candidates=branch_root_candidates,
@@ -266,7 +266,7 @@ class VBranchDigraphData(PygData):
     def __inc__(self, key: str, value, *args, **kwargs):
         if key == "edge_index":
             return self.num_nodes
-        elif key == "branch_list":
+        elif key == "branch_nodes":
             return self.vnode_count
         else:
             return 0
@@ -299,7 +299,7 @@ class VBranchDigraphData(PygData):
             od_yx=torch.from_numpy(od_yx).float(),
             mac_yx=torch.from_numpy(mac_yx).float(),
             vnode_count=digraph.graph.node_count,
-            branch_list=torch.from_numpy(digraph.graph.branch_list).int(),
+            branch_nodes=torch.from_numpy(digraph.graph.branch_list).int(),
             branch_curves=branch_curves,
             branch_root_candidates=torch.from_numpy(valid_root_tips),
             edge_index=torch.from_numpy(digraph.b0b1[not_root]).T,
@@ -769,10 +769,8 @@ class VBranchDigraphDataset(PygDataset):
         # m.views[0]["tree"].edges_cmap = cmap
 
         # Draw Predicted tree
-        baseline_tree = digraph.compute_tree_from_arborescence(parent_pred, dir_pred, fp_pred, keep_missing_branch=True)
-        draw_tree(
-            baseline_tree, view=m[1], branch_color="subtree", bspline_dir=True, edge_labels=True, node_labels=False
-        )
+        tree = digraph.compute_tree_from_arborescence(parent_pred, dir_pred, fp_pred, keep_missing_branch=True)
+        draw_tree(tree, view=m[1], branch_color="subtree", bspline_dir=True, edge_labels=True, node_labels=False)
         if av_pred is not None:
             cmap = {i: AV_COLORS[AVLabel.ART] if av else AV_COLORS[AVLabel.VEI] for i, av in enumerate(av_pred)}
             if fp_pred is not None:
@@ -821,12 +819,10 @@ class VBranchDigraphDataset(PygDataset):
                 digraph.graph, OD, branch_subset=vei_branch
             )
 
-            baseline_tree = digraph.compute_tree_from_arborescence(
-                parent_base, dir_base, fp_pred, keep_missing_branch=True
-            )
-            draw_tree(baseline_tree, view=m[2], branch_color="subtree", bspline_dir=True)
+            tree = digraph.compute_tree_from_arborescence(parent_base, dir_base, fp_pred, keep_missing_branch=True)
+            draw_tree(tree, view=m[2], branch_color="subtree", bspline_dir=True)
 
-        return m, baseline_tree
+        return m, tree
 
     def split(self, indices: Sequence[int], augment: Optional[bool] = None) -> VBranchDigraphDataset:
         """Create a new dataset with only the samples at the specified indices."""

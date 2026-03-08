@@ -9,7 +9,7 @@ from torchmetrics.classification import Accuracy, Precision, Recall
 import wandb
 
 from .dataset import VBranchDigraphBatch
-from .losses import CrossEntropyLoss
+from .losses import BranchContrastiveLoss, CrossEntropyLoss
 from .metrics import (
     MetricCollectionDict,
     ParentAcc,
@@ -38,6 +38,7 @@ class DigraphGNNTrainer(L.LightningModule):
         self.dir_bce_loss = nn.BCEWithLogitsLoss()
         self.root_bce_loss = nn.BCEWithLogitsLoss()
         self.line_ce_loss = CrossEntropyLoss(invalid_metagroup_penalty=0)
+        self.line_contrastive_loss = BranchContrastiveLoss()
 
         # === METRICS ===
         self.val_metrics = self.metrics_collection(opti_tree=True)
@@ -166,17 +167,20 @@ class DigraphGNNTrainer(L.LightningModule):
             other_group_idx=out.lines[mask].b0,
         )
 
-        # f_curi_dir = max(min(1.0, (self.current_epoch - 20) / 10), 0)
-        f_curi_line = max(min(1.0, (self.current_epoch - 20) / 10), 0)
-        loss = fp_loss + av_loss + dir_loss + line_loss  #  * f_curi_line  # + root_loss
-        return {
-            "fp_loss": fp_loss,
-            "av_loss": av_loss,
-            "dir_loss": dir_loss,
-            # "root_loss": root_loss,
-            "line_loss": line_loss,
-            "loss": loss,
-        }
+        contrastive_losses = self.line_contrastive_loss(out)
+
+        loss = fp_loss + av_loss + dir_loss + line_loss + sum(contrastive_losses.values()) * 0.2
+        return (
+            {
+                "fp_loss": fp_loss,
+                "av_loss": av_loss,
+                "dir_loss": dir_loss,
+                # "root_loss": root_loss,
+                "line_loss": line_loss,
+            }
+            | contrastive_losses
+            | {"loss": loss}
+        )
 
     def training_step(self, batch, batch_idx):
         model_out = self(batch)
