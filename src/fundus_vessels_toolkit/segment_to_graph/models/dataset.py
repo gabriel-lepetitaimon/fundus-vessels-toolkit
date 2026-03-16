@@ -547,7 +547,7 @@ class VBranchDigraphDataset(PygDataset):
             graphs[i] = graph
             target_topologies[i] = target_topology
 
-        df = pd.read_csv(Path(self.processed_dir) / "od_mac.csv", index_col="name")
+        df = pd.read_csv(Path(self.processed_dir) / "od_mac.csv", index_col="name", dtype={"name": str})
         df = df.loc[[path.stem for path in raw_paths]]
         od_yx = df[["od_y", "od_x"]].values.astype(np.float32)
         mac_yx = df[["mac_y", "mac_x"]].values.astype(np.float32)
@@ -619,7 +619,7 @@ class VBranchDigraphDataset(PygDataset):
                     f"Issues found in sample {idx} ({fundus_path.stem}):{lines_msg}{lines_p_msg}", stacklevel=1
                 )
             try:
-                branch_digraph.optimize_tree(keep_missing_branch=False)
+                branch_digraph.optimize_tree(keep_missing_branch=True)
             except Exception as e:
                 warnings.warn(f"No optimal tree from sample {idx} ({fundus_path.stem}): {e}", stacklevel=1)
 
@@ -699,7 +699,7 @@ class VBranchDigraphDataset(PygDataset):
         m.views[0]["OD/Macula"].nodes_cmap = {0: "green", 1: "yellow"}
 
         try:
-            solved_tree = digraph.optimize_tree(keep_missing_branch=False)
+            solved_tree = digraph.optimize_tree(keep_missing_branch=True)
             draw_tree(solved_tree, view=m[1], branch_color="subtree", bspline_dir=True)
         except Exception:
             warnings.warn(f"Could not optimize tree for sample {name}. Drawing unoptimized tree instead.")
@@ -761,7 +761,7 @@ class VBranchDigraphDataset(PygDataset):
         )
 
         # Draw GT tree
-        solved_tree = digraph.optimize_tree(keep_missing_branch=True)
+        solved_tree = digraph.optimize_tree(keep_missing_branch=False)
         draw_tree(solved_tree, view=m[0], branch_color="subtree", bspline_dir=True)
         # cmap = m.views[0]["tree"].edges_cmap
         # for b_fp in np.where(digraph.missing_branch())[0]:
@@ -769,14 +769,14 @@ class VBranchDigraphDataset(PygDataset):
         # m.views[0]["tree"].edges_cmap = cmap
 
         # Draw Predicted tree
-        tree = digraph.compute_tree_from_arborescence(parent_pred, dir_pred, fp_pred, keep_missing_branch=True)
+        tree = digraph.compute_tree_from_arborescence(parent_pred, dir_pred, fp_pred, keep_missing_branch=False)
         draw_tree(tree, view=m[1], branch_color="subtree", bspline_dir=True, edge_labels=True, node_labels=False)
-        if av_pred is not None:
-            cmap = {i: AV_COLORS[AVLabel.ART] if av else AV_COLORS[AVLabel.VEI] for i, av in enumerate(av_pred)}
-            if fp_pred is not None:
-                for i in np.where(fp_pred)[0]:
-                    cmap[i] = AV_COLORS[AVLabel.BKG]
-            m.views[1]["tree"].edges_cmap = cmap
+        # if av_pred is not None:
+        #     cmap = {i: AV_COLORS[AVLabel.ART] if av else AV_COLORS[AVLabel.VEI] for i, av in enumerate(av_pred)}
+        #     if fp_pred is not None:
+        #         for i in np.where(fp_pred)[0]:
+        #             cmap[i] = AV_COLORS[AVLabel.BKG]
+        #     m.views[1]["tree"].edges_cmap = cmap
 
         if True:
 

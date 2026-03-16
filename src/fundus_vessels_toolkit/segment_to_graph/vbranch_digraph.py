@@ -873,6 +873,9 @@ class VBranchDigraph(LineDigraph):
         if not keep_missing_branch:
             # - Remove missing branches from the graph if needed
             vgraph.delete_branch(fp_branch, inplace=True)
+            branch_lookup = create_removal_lookup(fp_branch, add_empty="no increment", replace_value=-1)
+            branch_parents = branch_lookup[branch_parents[~fp_branch] + 1]
+            branch_dir = branch_dir[~fp_branch]
 
         # - Insert branches on connections of not-adjacent branches
         added_branch_parents = np.array([], dtype=np.int_)
@@ -965,7 +968,7 @@ class VBranchDigraph(LineDigraph):
                 digraph = digraph[sorted_ids]
 
             av_p = digraph.line_av_p()
-            data_p["line_p"] = digraph.line_p - av_p
+            data_p["line_p"] = digraph.line_p
             data_p["av_p"] = av_p
             data_p["total_p"] = total_p
             b0_dir_p, b1_dir_p = digraph.branch_dir_p[digraph.b0], digraph.branch_dir_p[digraph.b1]

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytorch_lightning as L
 import torch
-from pytorch_lightning import callbacks as L_callbacks
+from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from torch_geometric.loader import DataLoader as PyGDataLoader
 
@@ -24,7 +24,7 @@ def train():
     config = wandb.config
     config.setdefaults(
         {
-            "epoch": 260,
+            "epoch": 160,
             "lr": 1e-2,
             # "weight_decay": 1e-5,
             # "batch_size": 4,
@@ -38,7 +38,7 @@ def train():
     # === DATASET ===
     PATH = [
         Path("/run/media/gaby/GREY SSD/PostDoc/DATA/Fundus/" + folder)
-        for folder in ["GAVE-train", "MAPLES-DR", "Fundus-AV"]
+        for folder in ["GAVE-train", "MAPLES-DR", "Fundus-AV", "LES-AV", "INSPIRE"]
     ]
     RAW = [path / "1-images" for path in PATH]
     AV = [path / "2-av-pred_CLEMENT" for path in PATH]
@@ -48,13 +48,16 @@ def train():
         TOPO,
         av_dir=AV,
         resize_to=1024,
-        root=str(Path(__file__).parent / "tmp/DATA"),
+        root=str(Path(__file__).parent / "tmp/DATA2"),
         overwrite=False,
-        ignore_recent=datetime(2026, 2, 19),
+        # ignore_recent=datetime(2026, 2, 19),
+        ignore_recent=datetime(2026, 3, 8),
     )
     train_set, val_set, test_set = dataset.split_loaders(train_ratio=0.7, val_ratio=0.15)
     train_loader = PyGDataLoader(train_set, batch_size=3, shuffle=True, num_workers=5)
     val_loader = PyGDataLoader(val_set, batch_size=6, num_workers=2)
+
+    checkpoints = [ModelCheckpoint(monitor="val_tree-parent-acc", mode="max")]
 
     trainer = L.Trainer(
         max_epochs=config.epoch,
@@ -65,14 +68,14 @@ def train():
         # gradient_clip_val=0.5,
         # gradient_clip_algorithm="value",wandb
         # num_sanity_val_steps=0,
-        callbacks=[L_callbacks.ModelCheckpoint(monitor="val_tree-parent-acc", mode="max", save_top_k=1)],
+        callbacks=checkpoints,
         precision="bf16-mixed",
     )
 
     trainer.fit(model, train_loader, val_loader)
 
     test_loader = PyGDataLoader(test_set, batch_size=6, num_workers=2)
-    trainer.test(model, dataloaders=[test_loader])
+    trainer.test(model, dataloaders=[test_loader], ckpt_path="best")
 
     # Finish the run
     wandb.finish()

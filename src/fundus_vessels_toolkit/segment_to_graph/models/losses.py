@@ -129,7 +129,10 @@ class VBranchDigraphMiner(pml_miners.BaseMiner):
             pos_pairs.triu_(diagonal=1)
             neg_pairs.fill_diagonal_(False)
             anchors = pos_pairs.any(dim=1) & neg_pairs.any(dim=1)
-            a_idx = anchors.argwhere().squeeze()
+            a_idx = anchors.argwhere().squeeze(-1)
+            if a_idx.numel() == 0:
+                empty = torch.empty(0, dtype=torch.long, device=device)
+                return empty, empty, empty
 
             # Sample one positive and one negative pair for each anchor
             def rng_one_sample_per_row(mask):
@@ -159,8 +162,10 @@ class BranchContrastiveLoss(torch.nn.Module):
     def __init__(self):
         super().__init__()
         dist = pml_distances.CosineSimilarity()
-        self.contrastive_loss = with_weight(pml_losses.CircleLoss(distance=dist), 0.1)
-        self.triplet_loss = with_weight(pml_losses.TripletMarginLoss(distance=dist), 1)
+        self.contrastive_loss = with_weight(pml_losses.CircleLoss(distance=dist), 0.2)
+        self.triplet_loss = with_weight(
+            pml_losses.TripletMarginLoss(distance=dist, swap=True, margin=0.15, smooth_loss=True), 2
+        )
         self.pairs_miner = VBranchDigraphMiner(triplet=False, same_tail_node=True)
         self.triplet_miner = VBranchDigraphMiner(triplet=True, same_tail_node=True)
 
@@ -170,6 +175,6 @@ class BranchContrastiveLoss(torch.nn.Module):
     def forward(self, out: BranchDigraphModel.Output) -> dict[str, Tensor]:
         pairs = self.pairs_miner(out)
         triplets = self.triplet_miner(out)
-        contrastive_loss = self.contrastive_loss(out.b1_embedding, indices_tuple=pairs)
-        triplet_loss = self.triplet_loss(out.b1_embedding, indices_tuple=triplets)
+        contrastive_loss = self.contrastive_loss(out.b1_embedding_gt_tail_tip(), indices_tuple=pairs)
+        triplet_loss = self.triplet_loss(out.b1_embedding_gt_tail_tip(), indices_tuple=triplets)
         return {"contr_loss": contrastive_loss, "triplet_loss": triplet_loss}

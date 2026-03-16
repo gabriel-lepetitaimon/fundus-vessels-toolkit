@@ -22,138 +22,45 @@ from fundus_vessels_toolkit.utils.tree import tree_connected_components
 
 from ...utils.torch import groupby_mean, torch_interp_bilinear, unique_first
 from .dataset import VBranchDigraphBatch, VBranchDigraphData
-from .gnn_with_pos_encoding import APE, RoPE, TransformerConvWithPosEncoding
-
-
-class BranchFeaturesEfficientNetV2S(torch.nn.Module):
-    def __init__(self, pretrained: bool = True):
-        super().__init__()
-        net = efficientnet_v2_s(weights=EfficientNet_V2_S_Weights.DEFAULT if pretrained else None).features
-        self.efficient_net = net
-        self.net = nn.Sequential(*[nn.Sequential(*[net[_] for _ in idxs]) for idxs in [(0, 1), (2,), (3,), (4, 5, 6)]])
-
-    def forward(self, x):
-        # Normalize x to ImageNet stats
-        x = normalize(x, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-
-        features = []
-        for f in self.net:
-            x = f(x)
-            features.append(x)
-        return features
-
-
-class Gatv2GCN(torch.nn.Module):
-    def __init__(self, n_in: int = 512, n_out: int = 1024, edge_attr_dim: Optional[int] = None):
-        super().__init__()
-        self.n_in = n_in
-        self.n_out = n_out
-
-        @dataclass(frozen=True)
-        class GATv2Opt:
-            edge_dim: Optional[int] = edge_attr_dim
-            residual: bool = True
-            add_self_loops: bool = True
-            fill_value: float | Tensor | str = torch.ones(7)
-
-        opt = asdict(GATv2Opt())
-
-        self.bn0 = pyg_nn.InstanceNorm(n_in)
-        self.gat0 = GATv2Conv(n_in, 64, heads=8, dropout=0.1, **opt)
-        self.bn1 = pyg_nn.InstanceNorm(64 * 8)
-        self.gat1a = GATv2Conv(64 * 8, 128, heads=8, dropout=0.1, **opt)
-        self.gat1b = GATv2Conv(128 * 8, 256, heads=4, dropout=0, **opt)
-        # self.bn2 = pyg_nn.InstanceNorm(256 * 4)
-        self.gat2a = GATv2Conv(256 * 4, 128, heads=8, dropout=0, **opt)
-        self.gat2b = GATv2Conv(128 * 8, 256, heads=4, dropout=0, **opt)
-        # self.bn3 = pyg_nn.InstanceNorm(256 * 4)
-        self.gat3a = GATv2Conv(256 * 4, 512, heads=2, dropout=0, **opt)
-        self.gat3b = GATv2Conv(512 * 2, n_out, heads=1, dropout=0, **opt)
-
-    def forward(self, x, edge_index, batch_idx, batch_size, edge_attr=None, pos=None):
-        x = self.bn0(x, batch_idx, batch_size)
-        x = self.gat0(x, edge_index, edge_attr=edge_attr).relu()
-        x = self.bn1(x, batch_idx, batch_size)
-        x = self.gat1a(x, edge_index, edge_attr=edge_attr).relu()
-        x = self.gat1b(x, edge_index, edge_attr=edge_attr).relu()
-        # x = self.bn2(x, batch_idx, batch_size)
-        x = self.gat2a(x, edge_index, edge_attr=edge_attr).relu()
-        x = self.gat2b(x, edge_index, edge_attr=edge_attr).relu()
-        # x = self.bn3(x, batch_idx, batch_size)
-        x = self.gat3a(x, edge_index, edge_attr=edge_attr).relu()
-        x = self.gat3b(x, edge_index, edge_attr=edge_attr)
-
-        return x
-
-
-class TransformerGCN(torch.nn.Module):
-    def __init__(self, n_in: int = 512, n_out: int = 1024, edge_attr_dim: Optional[int] = None):
-        super().__init__()
-        self.n_in = n_in
-        self.n_out = n_out
-
-        @dataclass(frozen=True)
-        class TransformerConvOpt:
-            edge_dim: Optional[int] = edge_attr_dim
-            beta: bool = True
-            pos_encoding: Optional[RoPE | Literal["axial", "spiral"]] = "spiral"
-
-        opt = asdict(TransformerConvOpt())  # fill_value=torch.ones(7)))
-
-        self.bn0 = pyg_nn.InstanceNorm(n_in)
-        self.conv0 = TransformerConvWithPosEncoding(n_in, 64, heads=8, dropout=0.1, **opt)
-        self.bn1 = pyg_nn.InstanceNorm(64 * 8)
-        self.conv1a = TransformerConvWithPosEncoding(64 * 8, 128, heads=8, dropout=0.1, **opt)
-        self.conv1b = TransformerConvWithPosEncoding(128 * 8, 256, heads=4, dropout=0, **opt)
-        self.bn2 = pyg_nn.InstanceNorm(256 * 4)
-        self.conv2a = TransformerConvWithPosEncoding(256 * 4, 128, heads=8, dropout=0, **opt)
-        self.conv2b = TransformerConvWithPosEncoding(128 * 8, 256, heads=4, dropout=0, **opt)
-        self.bn3 = pyg_nn.InstanceNorm(256 * 4)
-        self.conv3a = TransformerConvWithPosEncoding(256 * 4, 512, heads=2, dropout=0, **opt)
-        self.conv3b = TransformerConvWithPosEncoding(512 * 2, n_out, heads=1, dropout=0, **opt)
-
-    def forward(self, x, edge_index, batch_idx, batch_size, edge_attr=None, pos=None):
-        x = self.bn0(x, batch_idx, batch_size)
-        x = self.conv0(x, edge_index, edge_attr=edge_attr, pos=pos).relu()
-        x = self.bn1(x, batch_idx, batch_size)
-        x = self.conv1a(x, edge_index, edge_attr=edge_attr, pos=pos).relu()
-        x = self.conv1b(x, edge_index, edge_attr=edge_attr, pos=pos).relu()
-        # x = self.bn2(x, batch_idx, batch_size)
-        x = self.conv2a(x, edge_index, edge_attr=edge_attr, pos=pos).relu()
-        x = self.conv2b(x, edge_index, edge_attr=edge_attr, pos=pos).relu()
-        # x = self.bn3(x, batch_idx, batch_size)
-        x = self.conv3a(x, edge_index, edge_attr=edge_attr, pos=pos).relu()
-        x = self.conv3b(x, edge_index, edge_attr=edge_attr, pos=pos)
-
-        return x
+from .gnn_with_pos_encoding import APE, PolarizedTransformerConvWithPosEncoding, RoPE, TransformerConvWithPosEncoding
 
 
 class BranchDigraphModel(torch.nn.Module):
     def __init__(
         self,
         img_feature_extractor: nn.Module,
-        gnn: nn.Module,
-        gnn_out_channels: Optional[int] = None,
         oriented_affinity: bool = True,
+        positional_encoding: Optional[RoPE | Literal["axial", "spiral", "APE"]] = "spiral",
+        polarized_branch: bool = False,
+        tip_branch_ratio: float = 0.5,
     ):
         super().__init__()
 
         self.img_feature_extractor = img_feature_extractor
-        self.gnn = gnn
-        self.positional_encoding = APE(head_dim=gnn.n_in // 2)  # type: ignore
-
-        if gnn_out_channels is None:
-            assert hasattr(gnn, "n_out"), "gnn_out_channels must be specified if gnn does not have n_out attribute"
-            gnn_out_channels = int(gnn.n_out)  # type: ignore
+        if positional_encoding == "APE":
+            self.absolute_pos_encoding = APE(head_dim=self.gnn.n_in // 2)
+            positional_encoding = None
+        else:
+            self.absolute_pos_encoding = None
+        self.gnn = TransformerGCN(
+            (784 * 2) if polarized_branch else 784,
+            512,
+            edge_attr_dim=7,
+            polarized=polarized_branch,
+            pos_encoding=positional_encoding,
+            pole_node_ratio=tip_branch_ratio,
+        )
 
         # === Classification layers ===
-        self.lin_fp = Linear(gnn_out_channels, 1, weight_initializer="glorot")
-        self.lin_av = Linear(gnn_out_channels, 1, weight_initializer="glorot")
-        self.lin_dir = Linear(gnn_out_channels, 1, weight_initializer="glorot")
-        self.lin_root = Linear(gnn_out_channels, 1, weight_initializer="glorot")
-        self.lin_affinity = Linear(gnn_out_channels, 128 * (2 if oriented_affinity else 1), weight_initializer="glorot")
+        if not polarized_branch:
+            self.classif_head = SimpleClassifHead(self.gnn.n_out, 128, oriented_affinity=oriented_affinity)
+        else:
+            self.classif_head = PolarizedClassifHead(self.gnn.n_out, self.gnn.n_out_pole, 128, oriented_affinity)
 
-        self.polarized_affinity = oriented_affinity
+        self.oriented_affinity = oriented_affinity
+        self.polarized_branch = polarized_branch
+
+        self._tip_sample_decay = None
 
     def sample_features(
         self,
@@ -183,34 +90,56 @@ class BranchDigraphModel(torch.nn.Module):
         curves_y_tip1, curves_x_tip1 = branch_curves[:, C // 2 :].int().unbind(-1)
         batch_idx = batch_idx[:, None]
 
-        if isinstance(features_map, list):
+        if not isinstance(features_map, list):
+            features_map = [features_map]
+
+        def sample_at(fmap, y, x):
+            """Sample features at given coordinates using bilinear interpolation if the feature map resolution is different from the image resolution.
+
+            fmap: Tensor of shape (B, F, H_fmap, W_fmap)
+            y, x: Tensor of shape (N,) containing the y and x coordinates of the sample points in the original image space
+
+            Returns a tensor of shape (B, F, N)
+            """  # noqa: E501
+            if fmap.shape[-2:] == img_shape:
+                return fmap[batch_idx, :, y, x]
+            else:
+                H_fmap, W_fmap = fmap.shape[-2:]
+                H_img, W_img = img_shape
+                y, x = y * H_fmap / H_img, x * W_fmap / W_img
+                return torch_interp_bilinear(fmap, y, x, batch_idx)
+
+        if not self.polarized_branch:
             features_tip0, features_tip1 = [], []
 
             for fmap in features_map:
-                fmap_shape = fmap.shape[-2:]
-                if fmap_shape == img_shape:
-                    assert fmap_shape[-2] > curves_y_tip0.max() and fmap_shape[-1] > curves_x_tip0.max(), (
-                        f"Feature map shape {fmap_shape} is smaller than max curve coordinates {(curves_y_tip0.max(), curves_x_tip0.max())}"
-                    )
-                    features_tip0.append(fmap[batch_idx, :, curves_y_tip0, curves_x_tip0].mean(dim=-2))
-                    features_tip1.append(fmap[batch_idx, :, curves_y_tip1, curves_x_tip1].mean(dim=-2))
-                else:
-                    Y, X = fmap_shape
-                    scale_y = img_shape[0] / Y
-                    scale_x = img_shape[1] / X
-                    y_tip0, y_tip1 = curves_y_tip0 / scale_y, curves_y_tip1 / scale_y
-                    x_tip0, x_tip1 = curves_x_tip0 / scale_x, curves_x_tip1 / scale_x
-
-                    features_tip0.append(torch_interp_bilinear(fmap, y_tip0, x_tip0, batch_idx).mean(dim=-2))
-                    features_tip1.append(torch_interp_bilinear(fmap, y_tip1, x_tip1, batch_idx).mean(dim=-2))
+                features_tip0.append(sample_at(fmap, curves_y_tip0, curves_x_tip0).mean(dim=-2))
+                features_tip1.append(sample_at(fmap, curves_y_tip1, curves_x_tip1).mean(dim=-2))
 
             features_tip0 = torch.cat(features_tip0, dim=-1)
             features_tip1 = torch.cat(features_tip1, dim=-1)
-        else:
-            features_tip0 = features_map[batch_idx, :, curves_y_tip0, curves_x_tip0].mean(dim=-2)
-            features_tip1 = features_map[batch_idx, :, curves_y_tip1, curves_x_tip1].mean(dim=-2)
 
-        return torch.cat([features_tip0, features_tip1], dim=-1)  # (B, 512)
+            return torch.cat([features_tip0, features_tip1], dim=-1)  # (B, 512)
+        else:
+            if self._tip_sample_decay is None or self._tip_sample_decay.shape[0] != C // 2:
+                tip_decay = torch.exp(-(torch.linspace(0, 2, C // 2, device=branch_curves.device) ** 2))
+                tip_decay /= tip_decay.sum()  # Normalize gaussian decay to sum to 1
+                self._tip_sample_decay = tip_decay[None, :, None]
+
+            features_tip0, features_tip1, features_branch = [], [], []
+
+            for fmap in features_map:
+                f0 = sample_at(fmap, curves_y_tip0, curves_x_tip0)
+                f1 = sample_at(fmap, curves_y_tip1, curves_x_tip1)
+                features_tip0.append((f0 * self._tip_sample_decay).sum(dim=-2))
+                features_tip1.append((f1 * self._tip_sample_decay).sum(dim=-2))
+                features_branch.append(torch.cat([f0.mean(dim=-2), f1.mean(dim=-2)], dim=-1))
+
+            features_tip0 = torch.cat(features_tip0, dim=-1)
+            features_tip1 = torch.cat(features_tip1, dim=-1)
+            features_branch = torch.cat(features_branch, dim=-1)
+
+            return torch.cat([features_branch, features_tip0, features_tip1], dim=-1)  # (B, 512 * 3)
 
     def forward(self, data: VBranchDigraphBatch) -> Output:
         if not isinstance(data, PyGBatch):
@@ -224,47 +153,31 @@ class BranchDigraphModel(torch.nn.Module):
         branch_features = self.sample_features(img_features, data.branch_curves, data.batch, img_size)
 
         # Add positional encoding
-        pos = data.branch_curves[:, [0, -1], :].reshape(-1, 2)  # (N_branch * 2, 2)
+        pos = data.branch_curves[:, [0, -1], :].view(-1, 2)  # (N_branch * 2, 2)
         pos = reproject_pos(pos, data.od_yx, data.mac_yx - data.od_yx, data.batch.repeat_interleave(2))
+        pos = pos.reshape(-1, 2, 2).permute(1, 0, 2)  # (2, N_branch, 2)
+
         if False:
-            pos_encoding = self.positional_encoding.compute_pos_encoding(pos)
+            pos_encoding = self.absolute_pos_encoding.compute_pos_encoding(pos)
             pos_encoding = pos_encoding.reshape(branch_features.shape)
 
             branch_features += pos_encoding
 
-        # === Refine branch representation with the GNN ===
-        lines = Lines.from_batch(data)
+        lines = Lines(data.edge_index, data.edge_dir, data.branch_nodes)
         x = self.gnn(
             branch_features,
-            lines.edge_index,
-            data.batch,
-            data.batch_size,
+            edge_index=lines.edge_index,
+            edge_tip=lines.edge_tip,
             edge_attr=data.edge_attr,
-            pos=pos.reshape(2, -1, 2),
+            batch_idx=data.batch,
+            batch_size=data.batch_size,
+            pos=pos,
         )
 
-        # === Predict branch AV class, direction, affinity and root probability ===
-        branch_fp = self.lin_fp(x).squeeze(-1)
-        branch_av = self.lin_av(x).squeeze(-1)
-        branch_dir = self.lin_dir(x).squeeze(-1)
-        branch_affinity_v = self.lin_affinity(x)
-        branch_root_score = self.lin_root(x).squeeze(-1)
+        return self.classif_head(batch=data, x=x)
 
-        # Compute affinity between connected branches
-        if self.polarized_affinity:
-            b0_embedding, b1_embedding = branch_affinity_v.view(x.shape[0], -1, 2).unbind(-1)
-        else:
-            b0_embedding = b1_embedding = branch_affinity_v
-
-        return BranchDigraphModel.Output(
-            batch=data,
-            fp_logit=branch_fp,
-            av_logit=branch_av,
-            dir_logit=branch_dir,
-            b0_embedding=b0_embedding,
-            b1_embedding=b1_embedding,
-            root_logit=branch_root_score,
-        )
+    def __call__(self, data: VBranchDigraphBatch) -> Output:
+        return super().__call__(data)
 
     @dataclass(frozen=True)
     class Output:
@@ -281,10 +194,10 @@ class BranchDigraphModel(torch.nn.Module):
         """Tensor of shape (N_branch,) containing logits for each branch direction (positive: branch is oriented from tip0 to tip1, negative: branch is oriented from tip1 to tip0)"""  # noqa: E501
 
         b0_embedding: Tensor
-        """Tensor of shape (N_branch, F) containing the embeddings for each branch as a parent branch"""
+        """Embedding representation for each branch as a parent branch. (Tensor of shape (N_branch, F) or (N_branch, 2, F) if polarized affinity is used.)"""  # noqa: E501
 
         b1_embedding: Tensor
-        """Tensor of shape (N_branch, F) containing the embeddings for each branch as a child branch"""
+        """Embedding representation for each branch as a child branch. (Tensor of shape (N_branch, F) or (N_branch, 2, F) if polarized affinity is used.)"""  # noqa: E501
 
         root_logit: Tensor
         """Tensor of shape (N_branch,) containing root affinity scores"""
@@ -341,10 +254,24 @@ class BranchDigraphModel(torch.nn.Module):
                 branch_nodes=self.batch.branch_nodes,
             )
 
+        def b1_embedding_gt_tail_tip(self):
+            """Return the embedding of branches as child branches (b1_embedding) indexed by their ground truth tail node and tip (0 or 1). This is used for the contrastive loss to mine pairs of branches with the same tail node."""  # noqa: E501
+            if self.b1_embedding.ndim == 2:
+                return self.b1_embedding
+            tail_node_idx = (~self.gt_dir).int()
+            return self.b1_embedding[torch.arange(self.n_branch, device=self.device), tail_node_idx]
+
         @cached_property
         def edge_score(self):
             """Affinity score for edge lines, computed from the embeddings of the connected branches."""
-            return (self.b0_embedding[self.edge_lines.b0] * self.b1_embedding[self.edge_lines.b1]).sum(dim=-1)
+            if self.b0_embedding.ndim == 3:
+                # Polarized affinity: b0_embedding and b1_embedding have shape (N_branch, 2, F)
+                b0_emb = self.b0_embedding[self.edge_lines.b0, self.edge_lines.tip0]
+                b1_emb = self.b1_embedding[self.edge_lines.b1, self.edge_lines.tip1]
+                return (b0_emb * b1_emb).sum(dim=-1)
+            else:
+                # Non polarized affinity: b0_embedding and b1_embedding have shape (N_branch, F).
+                return (self.b0_embedding[self.edge_lines.b0] * self.b1_embedding[self.edge_lines.b1]).sum(dim=-1)
 
         @cached_property
         def lines_logit(self):
@@ -352,15 +279,25 @@ class BranchDigraphModel(torch.nn.Module):
             return torch.cat([self.edge_score, root_score], dim=0)
 
         @cached_property
-        def final_lines_p(self):
-            lines_p = softmax(
+        def lines_p(self):
+            return softmax(
                 self.lines_logit,
                 index=self.lines.b1 + torch.where(self.lines.b1_dir, 0, self.n_branch),
                 num_nodes=2 * self.n_branch,
             )
-            # Artery/Vein label consistency
-            av_consistency = self.av_logit[self.lines.b0] * self.av_logit[self.lines.b1]
-            return lines_p + av_consistency.sigmoid()
+
+        @cached_property
+        def final_lines_p(self):
+            fp_logit = self.fp_logit[self.lines.b1].clone()
+            not_root = self.lines.b0 != -1
+            fp_logit[not_root] += self.fp_logit[self.lines.b0[not_root]]
+            tp = fp_logit < 0
+            lines_p = softmax(
+                self.lines_logit,
+                index=torch.where(tp, self.lines.b1 + torch.where(self.lines.b1_dir, 1, 1 + self.n_branch), 0),
+                num_nodes=2 * self.n_branch + 1,
+            )
+            return lines_p
 
         def lines_mask(
             self,
@@ -455,7 +392,7 @@ class BranchDigraphModel(torch.nn.Module):
 
             return VBranchDigraph(
                 line_list=line_list,
-                line_p=self.final_lines_p.float().numpy(force=True),
+                line_p=self.lines_p.float().numpy(force=True),
                 branch_dir_logit=self.dir_logit.float().numpy(force=True),
                 branch_fp_logit=self.fp_logit.float().numpy(force=True),
                 branch_av_logit=self.av_logit.float().numpy(force=True),
@@ -477,7 +414,7 @@ class BranchDigraphModel(torch.nn.Module):
             """  # noqa: E501
             digraph = self.to_digraph()
             try:
-                opti_parent, opti_dir = digraph.solve_optimal_arboresence(detect_major_av_error=True)
+                opti_parent, opti_dir = digraph.solve_optimal_arboresence(detect_major_av_error=False)
             except Exception as e:
                 print(f"Error solving optimal arborescence for batch {self.names}: {e}")
                 digraph.check_lines("warn", branch_mask=~digraph.branch_fp())
@@ -678,14 +615,267 @@ class Lines:
         return torch.gather(self.branch_nodes[self.b1], 1, 1 - self.b1_dir[:, None].long()).squeeze()
 
     @property
+    def edge_tip(self) -> Tensor:
+        """Tensor of shape (N_line, 2) containing for each line the indices of the tips of its source and target branches involved in the line, ordered from tip0 to tip1. For example, if a line links the tip0 of branch A to the tip1 of branch B, the corresponding edge_tip will be [0, 1]."""  # noqa: E501
+        return torch.stack([~self.edge_dir[:, 0], self.edge_dir[:, 1]], dim=-1).int()
+
+    @property
     def tip0(self) -> Tensor:
-        """Boolean tensor of shape (N_line,) indicating whether the line is emitted from the first tip (True) or the second tip (False) of its source branch"""  # noqa: E501
-        return ~self.edge_dir[:, 0]
+        """Boolean tensor of shape (N_line,) indicating for each line the tip indices of the source branches."""  # noqa: E501
+        return (~self.edge_dir[:, 0]).int()
 
     @property
     def tip1(self) -> Tensor:
-        """Boolean tensor of shape (N_line,) indicating whether the line is incident to the first tip (True) or the second tip (False) of its target branch"""  # noqa: E501
-        return self.edge_dir[:, 1]
+        """Boolean tensor of shape (N_line,) indicating for each line the tip indices of the target branches."""  # noqa: E501
+        return self.edge_dir[:, 1].int()
+
+
+################################
+# === Classification Heads === #
+################################
+
+
+class ClassifHead(torch.nn.Module):
+    def forward(self, batch: VBranchDigraphBatch, x: Tensor) -> BranchDigraphModel.Output:
+        raise NotImplementedError
+
+    def __call__(self, batch: VBranchDigraphBatch, x: Tensor) -> BranchDigraphModel.Output:
+        return super().__call__(batch, x)
+
+
+class SimpleClassifHead(ClassifHead):
+    def __init__(self, out_channels: int, affinity_embedding_dim: int = 128, oriented_affinity: bool = True):
+        super().__init__()
+        self.oriented_affinity = oriented_affinity
+
+        # === Classification layers ===
+        self.lin_fp = Linear(out_channels, 1, weight_initializer="glorot")
+        self.lin_av = Linear(out_channels, 1, weight_initializer="glorot")
+        self.lin_dir = Linear(out_channels, 1, weight_initializer="glorot")
+        self.lin_root = Linear(out_channels, 1, weight_initializer="glorot")
+        affinity_embedding_dim *= 2 if oriented_affinity else 1
+        self.lin_affinity = Linear(out_channels, affinity_embedding_dim, weight_initializer="glorot")
+
+    def forward(self, batch: VBranchDigraphBatch, x: Tensor) -> BranchDigraphModel.Output:
+        branch_fp = self.lin_fp(x).squeeze(-1)
+        branch_av = self.lin_av(x).squeeze(-1)
+        branch_dir = self.lin_dir(x).squeeze(-1)
+        branch_affinity_v = self.lin_affinity(x)
+        branch_root_score = self.lin_root(x).squeeze(-1)
+
+        if self.oriented_affinity:
+            b0_embedding, b1_embedding = branch_affinity_v.view(x.shape[0], -1, 2).unbind(-1)
+        else:
+            b0_embedding = b1_embedding = branch_affinity_v
+
+        return BranchDigraphModel.Output(
+            batch=batch,
+            fp_logit=branch_fp,
+            av_logit=branch_av,
+            dir_logit=branch_dir,
+            b0_embedding=b0_embedding,
+            b1_embedding=b1_embedding,
+            root_logit=branch_root_score,
+        )
+
+
+class PolarizedClassifHead(ClassifHead):
+    def __init__(
+        self,
+        branch_channels: int,
+        tip_channels: int,
+        affinity_embedding_dim: int = 128,
+        oriented_affinity: bool = True,
+    ):
+        super().__init__()
+        self.oriented_affinity = oriented_affinity
+        self.branch_channels = branch_channels
+        self.tip_channels = tip_channels
+
+        # === Classification layers ===
+        both_channels = branch_channels + tip_channels
+        self.lin_fp = Linear(both_channels, 1, weight_initializer="glorot")
+        self.lin_av = Linear(branch_channels, 1, weight_initializer="glorot")
+        self.lin_dir = Linear(both_channels, 1, weight_initializer="glorot")
+        self.lin_root = Linear(both_channels, 1, weight_initializer="glorot")
+        affinity_embedding_dim *= 2 if oriented_affinity else 1
+        self.lin_affinity = Linear(both_channels, affinity_embedding_dim, weight_initializer="glorot")
+
+    def forward(self, batch: VBranchDigraphBatch, x: Tensor) -> BranchDigraphModel.Output:
+        B, T = self.branch_channels, self.tip_channels
+        x_branch, x_tip0, x_tip1 = x[:, :B], x[:, B : B + T], x[:, B + T :]
+        x_tip = (x_tip0 + x_tip1) * 0.5
+        x_branch_tip = torch.cat([x_branch, x_tip], dim=-1)
+        branch_fp = self.lin_fp(x_branch_tip).squeeze(-1)
+        branch_av = self.lin_av(x_branch).squeeze(-1)
+        branch_dir = self.lin_dir(torch.cat([x_branch, (x_tip0 - x_tip1) / 2], dim=-1)).squeeze(-1)
+        branch_root_score = self.lin_root(x_branch_tip).squeeze(-1)
+        tip0_emb = self.lin_affinity(torch.cat([x_branch, x_tip0], dim=-1))
+        tip1_emb = self.lin_affinity(torch.cat([x_branch, x_tip1], dim=-1))
+
+        if self.oriented_affinity:
+            b0_tip0_emb, b1_tip0_emb = tip0_emb.view(x_branch.shape[0], -1, 2).unbind(-1)
+            b0_tip1_emb, b1_tip1_emb = tip1_emb.view(x_branch.shape[0], -1, 2).unbind(-1)
+            b0_embedding = torch.stack([b0_tip0_emb, b0_tip1_emb], dim=-2)
+            b1_embedding = torch.stack([b1_tip0_emb, b1_tip1_emb], dim=-2)
+        else:
+            b0_embedding = b1_embedding = torch.stack([tip0_emb, tip1_emb], dim=-2)
+
+        return BranchDigraphModel.Output(
+            batch=batch,
+            fp_logit=branch_fp,
+            av_logit=branch_av,
+            dir_logit=branch_dir,
+            b0_embedding=b0_embedding,
+            b1_embedding=b1_embedding,
+            root_logit=branch_root_score,
+        )
+
+
+###############################
+# === Features Extractors === #
+###############################
+class BranchFeaturesEfficientNetV2S(torch.nn.Module):
+    def __init__(self, pretrained: bool = True):
+        super().__init__()
+        net = efficientnet_v2_s(weights=EfficientNet_V2_S_Weights.DEFAULT if pretrained else None).features
+        self.efficient_net = net
+        self.net = nn.Sequential(*[nn.Sequential(*[net[_] for _ in idxs]) for idxs in [(0, 1), (2,), (3,), (4, 5, 6)]])
+
+    def forward(self, x):
+        # Normalize x to ImageNet stats
+        x = normalize(x, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
+        features = []
+        for f in self.net:
+            x = f(x)
+            features.append(x)
+        return features
+
+
+######################
+# === GCN Models === #
+######################
+class Gatv2GCN(torch.nn.Module):
+    def __init__(self, n_in: int = 512, n_out: int = 1024, edge_attr_dim: Optional[int] = None):
+        super().__init__()
+        self.n_in = n_in
+        self.n_out = n_out
+
+        @dataclass(frozen=True)
+        class GATv2Opt:
+            edge_dim: Optional[int] = edge_attr_dim
+            residual: bool = True
+            add_self_loops: bool = True
+            fill_value: float | Tensor | str = torch.ones(7)
+
+        opt = asdict(GATv2Opt())
+
+        self.bn0 = pyg_nn.InstanceNorm(n_in)
+        self.gat0 = GATv2Conv(n_in, 64, heads=8, dropout=0.1, **opt)
+        self.bn1 = pyg_nn.InstanceNorm(64 * 8)
+        self.gat1a = GATv2Conv(64 * 8, 128, heads=8, dropout=0.1, **opt)
+        self.gat1b = GATv2Conv(128 * 8, 256, heads=4, dropout=0, **opt)
+        # self.bn2 = pyg_nn.InstanceNorm(256 * 4)
+        self.gat2a = GATv2Conv(256 * 4, 128, heads=8, dropout=0, **opt)
+        self.gat2b = GATv2Conv(128 * 8, 256, heads=4, dropout=0, **opt)
+        # self.bn3 = pyg_nn.InstanceNorm(256 * 4)
+        self.gat3a = GATv2Conv(256 * 4, 512, heads=2, dropout=0, **opt)
+        self.gat3b = GATv2Conv(512 * 2, n_out, heads=1, dropout=0, **opt)
+
+    def forward(self, x, edge_index, batch_idx, batch_size, edge_attr=None, pos=None):
+        x = self.bn0(x, batch_idx, batch_size)
+        x = self.gat0(x, edge_index, edge_attr=edge_attr).relu()
+        x = self.bn1(x, batch_idx, batch_size)
+        x = self.gat1a(x, edge_index, edge_attr=edge_attr).relu()
+        x = self.gat1b(x, edge_index, edge_attr=edge_attr).relu()
+        # x = self.bn2(x, batch_idx, batch_size)
+        x = self.gat2a(x, edge_index, edge_attr=edge_attr).relu()
+        x = self.gat2b(x, edge_index, edge_attr=edge_attr).relu()
+        # x = self.bn3(x, batch_idx, batch_size)
+        x = self.gat3a(x, edge_index, edge_attr=edge_attr).relu()
+        x = self.gat3b(x, edge_index, edge_attr=edge_attr)
+
+        return x
+
+
+class TransformerGCN(torch.nn.Module):
+    def __init__(
+        self,
+        n_in: int = 512,
+        n_out: int = 1024,
+        edge_attr_dim: Optional[int] = None,
+        dropout: float = 0.1,
+        pos_encoding: Optional[RoPE | Literal["axial", "spiral"]] = "spiral",
+        polarized: bool = False,
+        pole_node_ratio: float = 0.5,
+    ):
+        super().__init__()
+        self.n_in = n_in
+        self.polarized = polarized
+
+        def ConvBlock(in_channels, out_channels, heads, dropout: float = 0):
+            if polarized:
+                in_channels_pole = int((in_channels * pole_node_ratio) / 2)
+                in_channels_node = in_channels - 2 * in_channels_pole
+                out_channels_pole = int((out_channels * pole_node_ratio) / 2)
+                out_channels_node = out_channels - 2 * out_channels_pole
+                conv = PolarizedTransformerConvWithPosEncoding(
+                    in_channels_node=in_channels_node,
+                    in_channels_pole=in_channels_pole,
+                    out_channels_node=out_channels_node,
+                    out_channels_pole=out_channels_pole,
+                    heads=heads,
+                    dropout=dropout,
+                    edge_dim=edge_attr_dim,
+                    pos_encoding=pos_encoding,
+                    beta=True,
+                )
+            else:
+                conv = TransformerConvWithPosEncoding(
+                    in_channels=in_channels,
+                    out_channels=out_channels,
+                    heads=heads,
+                    dropout=dropout,
+                    edge_dim=edge_attr_dim,
+                    pos_encoding=pos_encoding,
+                    beta=True,
+                )
+            return conv
+
+        self.bn0 = pyg_nn.InstanceNorm(n_in)
+        self.conv0 = ConvBlock(n_in, 64, heads=8, dropout=0.1)
+        self.bn1 = pyg_nn.InstanceNorm(64 * 8)
+        self.conv1a = ConvBlock(64 * 8, 128, heads=8, dropout=0.1)
+        self.conv1b = ConvBlock(128 * 8, 256, heads=4)
+        # self.bn2 = pyg_nn.InstanceNorm(256 * 4)
+        self.conv2a = ConvBlock(256 * 4, 128, heads=8)
+        self.conv2b = ConvBlock(128 * 8, 256, heads=4)
+        # self.bn3 = pyg_nn.InstanceNorm(256 * 4)
+        self.conv3a = ConvBlock(256 * 4, 512, heads=2)
+        self.conv3b = ConvBlock(512 * 2, n_out, heads=1)
+
+        if polarized:
+            self.n_out = self.conv3b.out_channels_node
+            self.n_out_pole = self.conv3b.out_channels_pole
+        else:
+            self.n_out = n_out
+            self.n_out_pole = 0
+
+    def forward(self, x, edge_index, edge_tip, batch_idx, batch_size, edge_attr=None, pos=None):
+        x = self.bn0(x, batch_idx, batch_size)
+        x = self.conv0(x, edge_index, edge_pole=edge_tip, edge_attr=edge_attr, pos=pos).relu()
+        x = self.bn1(x, batch_idx, batch_size)
+        x = self.conv1a(x, edge_index, edge_pole=edge_tip, edge_attr=edge_attr, pos=pos).relu()
+        x = self.conv1b(x, edge_index, edge_pole=edge_tip, edge_attr=edge_attr, pos=pos).relu()
+        # x = self.bn2(x, batch_idx, batch_size)
+        x = self.conv2a(x, edge_index, edge_pole=edge_tip, edge_attr=edge_attr, pos=pos).relu()
+        x = self.conv2b(x, edge_index, edge_pole=edge_tip, edge_attr=edge_attr, pos=pos).relu()
+        # x = self.bn3(x, batch_idx, batch_size)
+        x = self.conv3a(x, edge_index, edge_pole=edge_tip, edge_attr=edge_attr, pos=pos).relu()
+        x = self.conv3b(x, edge_index, edge_pole=edge_tip, edge_attr=edge_attr, pos=pos)
+
+        return x
 
 
 ###########################

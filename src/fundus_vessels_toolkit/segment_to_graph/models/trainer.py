@@ -28,9 +28,7 @@ class DigraphGNNTrainer(L.LightningModule):
         super().__init__()
         # Access hyperparameters from wandb.config
         self.config = config if config is not None else {}
-        self.model = BranchDigraphModel(
-            BranchFeaturesEfficientNetV2S(), TransformerGCN(n_in=784, n_out=512, edge_attr_dim=7)
-        )
+        self.model = BranchDigraphModel(BranchFeaturesEfficientNetV2S(), polarized_branch=False)
 
         # === LOSSES ===
         self.fp_bce_loss = nn.BCEWithLogitsLoss()
@@ -169,7 +167,7 @@ class DigraphGNNTrainer(L.LightningModule):
 
         contrastive_losses = self.line_contrastive_loss(out)
 
-        loss = fp_loss + av_loss + dir_loss + line_loss + sum(contrastive_losses.values()) * 0.2
+        loss = fp_loss + av_loss + dir_loss + line_loss + contrastive_losses["triplet_loss"] * 0.1
         return (
             {
                 "fp_loss": fp_loss,

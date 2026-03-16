@@ -17,6 +17,7 @@ from fundus_vessels_toolkit.segment_to_graph.av_tree_parsing import naive_infer_
 from fundus_vessels_toolkit.segment_to_graph.graph_simplification import simplify_passing_nodes
 from fundus_vessels_toolkit.segment_to_graph.tree_simplification import disconnect_crossing
 from fundus_vessels_toolkit.segment_to_graph.tree_topology import TopologicalLabel, TreeTopology
+from fundus_vessels_toolkit.utils.cluster import reduce_clusters
 from fundus_vessels_toolkit.utils.data_io import most_common_image_ext
 from fundus_vessels_toolkit.utils.jppype import draw_tree
 from fundus_vessels_toolkit.vascular_data_objects.vgraph import NodeIndices
@@ -158,12 +159,23 @@ class ReviewTool:
         bReset.on_click(lambda btn: self.reset_annotations())
         bCompleteReset = Button(description="Complete Reset", layout=btn_layout)
         bCompleteReset.on_click(lambda btn: self.complete_reset())
+        bRemoveDuplicates = Button(description="Remove AV Duplicates", layout=btn_layout)
+        bRemoveDuplicates.on_click(lambda btn: self.remove_av_duplicates())
 
         buttons = GridBox(
-            children=[bPrev, bNext, self.undo_btn, self.save_btn, bReset, bCompleteReset, self.label],
+            children=[
+                bPrev,
+                bNext,
+                self.undo_btn,
+                self.save_btn,
+                bReset,
+                bCompleteReset,
+                bRemoveDuplicates,
+                self.label,
+            ],
             layout=Layout(
                 width="100%",
-                grid_template_columns="repeat(6, 150px) auto",
+                grid_template_columns="repeat(8, 150px) auto",
                 grid_template_rows="auto",
                 justify_content="space-around",
             ),
@@ -296,6 +308,30 @@ class ReviewTool:
             vei_file_tmp.rename(vei_file)
 
         self.save_btn.disabled = True
+
+    def remove_av_duplicates(self):
+        if self.trees_from_av is None:
+            raise ValueError("AV trees have not been computed yet.")
+        self._push_annotation_state()
+        a_tree, v_tree = self.trees
+
+        node_mapping = np.all(a_tree.node_coord()[:, None, :] == v_tree.node_coord()[None, :, :], axis=-1)
+        node_mapping = (node_mapping * np.arange(1, v_tree.node_count + 1)[None, :]).max(axis=1) - 1
+        a_branch_list = np.sort(node_mapping[a_tree.branch_list], axis=1)
+        v_branch_list = np.sort(v_tree.branch_list, axis=1)
+        same_branches = np.argwhere((a_branch_list[:, None, :] == v_branch_list[None, :, :]).all(axis=-1))
+        a_duplicates, v_duplicates = set(), set()
+        for a_id, v_id in same_branches:
+            a_curve = a_tree.branch(a_id).curve()
+            v_curve = v_tree.branch(v_id).curve()
+            if np.array_equal(a_curve, v_curve) or np.array_equal(a_curve, v_curve[::-1]):
+                a_duplicates.add(a_id)
+                v_duplicates.add(v_id)
+
+        a_tree.delete_branch(list(a_duplicates), inplace=True)
+        v_tree.delete_branch(list(v_duplicates), inplace=True)
+
+        self.draw_trees()
 
     def draw_trees(self, which: Literal["artery", "vein", "both"] = "both"):
         if which in ("artery", "both"):
