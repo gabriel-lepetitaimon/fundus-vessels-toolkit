@@ -6,8 +6,8 @@ from pytorch_metric_learning import losses as pml_losses
 from pytorch_metric_learning import miners as pml_miners
 from torch import Tensor
 
-from fundus_vessels_toolkit.segment_to_graph.models.model import BranchDigraphModel
-from fundus_vessels_toolkit.utils.torch import with_weight
+from ...utils.torch import with_weight
+from .model import BranchDigraphModel
 
 
 class CrossEntropyLoss(torch.nn.Module):
@@ -99,7 +99,7 @@ class CrossEntropyLoss(torch.nn.Module):
         return group_loss
 
 
-class VBranchDigraphMiner(pml_miners.BaseMiner):
+class BranchDigraphMiner(pml_miners.BaseMiner):
     def __init__(self, sample_ratio: float = 1.0, triplet: bool = False, same_tail_node: bool = True):
         super().__init__()
         self.sample_ratio = sample_ratio
@@ -166,8 +166,8 @@ class BranchContrastiveLoss(torch.nn.Module):
         self.triplet_loss = with_weight(
             pml_losses.TripletMarginLoss(distance=dist, swap=True, margin=0.15, smooth_loss=True), 2
         )
-        self.pairs_miner = VBranchDigraphMiner(triplet=False, same_tail_node=True)
-        self.triplet_miner = VBranchDigraphMiner(triplet=True, same_tail_node=True)
+        self.pairs_miner = BranchDigraphMiner(triplet=False, same_tail_node=True)
+        self.triplet_miner = BranchDigraphMiner(triplet=True, same_tail_node=True)
 
     def __call__(self, out: BranchDigraphModel.Output) -> dict[str, Tensor]:
         return super().__call__(out)

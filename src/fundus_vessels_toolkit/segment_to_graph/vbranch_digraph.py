@@ -918,7 +918,7 @@ class VBranchDigraph(LineDigraph):
             The tree representation of the directed graph.
         """
         # === Solve Optimal Arborescence ===
-        branch_parents, branch_dir = self.solve_optimal_arboresence(remove_missing_branch=not keep_missing_branch)
+        branch_parents, branch_dir = self.solve_optimal_arboresence()
         return self.compute_tree_from_arborescence(branch_parents, branch_dir, keep_missing_branch=keep_missing_branch)
 
     # === UTILS ===

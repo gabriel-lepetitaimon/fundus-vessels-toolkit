@@ -3,14 +3,13 @@ from typing import Any, Optional
 
 import numpy as np
 import numpy.typing as npt
-import torch
 
 from fundus_toolkits.utils.geometric import Rect
 
-from ...utils.fundus_projections import AffineProjection, ElasticProjection, FlipProjection
+from ...segment_to_graph.graph_simplification import remove_orphan_nodes, simplify_passing_nodes
+from ...segment_to_graph.vbranch_digraph import VBranchDigraph
+from ...utils.fundus_projections import ElasticProjection, FlipProjection
 from ...vascular_data_objects import VBranchGeoData, VGraph, VGraphBranch, VTree
-from ..graph_simplification import remove_orphan_nodes, simplify_passing_nodes
-from ..vbranch_digraph import VBranchDigraph
 
 
 @dataclass
@@ -217,6 +216,8 @@ def geometric_augment(
     rnd: Optional[np.random.Generator] = None,
 ) -> tuple[VBranchDigraph, npt.NDArray, npt.NDArray, npt.NDArray]:
     digraph, fundus_img, od_yx, mac_yx = sample
+    assert digraph.graph is not None, "Graph must be initialized to apply geometric augmentations"
+
     fundus_img = fundus_img.transpose(1, 2, 0)  # C,H,W -> H,W,C
     if rnd is None:
         rnd = np.random.default_rng()

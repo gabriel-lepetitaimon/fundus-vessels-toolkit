@@ -6,7 +6,7 @@ import torch
 import torchmetrics as tm
 from torchmetrics import Metric as TorchMetric
 
-from ...segment_to_graph import RetinalVesselSegToGraph
+from ...segment_to_graph import FundusVesselSegToGraph
 from ...vascular_graph.matching import naive_edit_distance
 
 
@@ -25,7 +25,7 @@ class ClDice(TorchMetric):
                                skeletonization) and will be removed from the skeleton.
         """
         super().__init__()
-        self.seg2graph = RetinalVesselSegToGraph()
+        self.seg2graph = FundusVesselSegToGraph()
         self.seg2graph.max_spurs_length = max_struct_width
         self.eps = 1e-6
 
@@ -87,7 +87,7 @@ class MeanClDice(TorchMetric):
                                skeletonization) and will be removed from the skeleton.
         """
         super().__init__()
-        self.seg2graph = RetinalVesselSegToGraph()
+        self.seg2graph = FundusVesselSegToGraph()
         self.seg2graph.max_spurs_length = max_struct_width
         self.eps = 1e-6
 
@@ -234,7 +234,7 @@ class MeanF1Topo(TorchMetric):
                                skeletonization) and will be removed from the skeleton.
         """
         super().__init__()
-        self.seg2graph = RetinalVesselSegToGraph(max_struct_width)
+        self.seg2graph = FundusVesselSegToGraph(max_struct_width)
         self.eps = 1e-6
 
         self.add_state("sum_precision", default=torch.tensor(0), dist_reduce_fx="sum")
@@ -297,7 +297,7 @@ def _check_input_format(
     target: torch.Tensor,
     skel_pred: torch.Tensor = None,
     skel_target: torch.Tensor = None,
-    seg2graph: RetinalVesselSegToGraph = None,
+    seg2graph: FundusVesselSegToGraph = None,
 ):
     if pred.ndim == 4:
         pred = pred.squeeze(1)
@@ -305,9 +305,9 @@ def _check_input_format(
     if target.ndim == 4:
         target = target.squeeze(1)
     assert target.ndim == 3, f"preds must be of size (B, H, W), got preds.ndim={pred.ndim}."
-    assert (
-        pred.shape == target.shape
-    ), f"preds and target must have the same shape, got {pred.shape} and {target.shape}."
+    assert pred.shape == target.shape, (
+        f"preds and target must have the same shape, got {pred.shape} and {target.shape}."
+    )
 
     if isinstance(pred, torch.Tensor):
         pred = pred.detach().cpu().numpy()
@@ -319,28 +319,28 @@ def _check_input_format(
 
     if skel_pred is not None:
         assert skel_pred.ndim == 3, f"skel_preds must be of size (B, H, W), got skel_preds.shape={skel_pred.shape}."
-        assert (
-            skel_pred.shape == pred.shape
-        ), f"skel_preds and preds must have the same shape, got {skel_pred.shape} and {pred.shape}."
+        assert skel_pred.shape == pred.shape, (
+            f"skel_preds and preds must have the same shape, got {skel_pred.shape} and {pred.shape}."
+        )
         if isinstance(skel_pred, torch.Tensor):
             skel_pred = skel_pred.detach().cpu().numpy()
     else:
         if seg2graph is None:
-            seg2graph = RetinalVesselSegToGraph()
+            seg2graph = FundusVesselSegToGraph()
         skel_pred = np.stack([seg2graph.skeletonize(_) for _ in pred], axis=0)
 
     if skel_target is not None:
-        assert (
-            skel_target.ndim == 3
-        ), f"skel_target must be of size (B, H, W), got skel_target.shape={skel_target.shape}."
-        assert (
-            skel_target.shape == target.shape
-        ), f"skel_target and target must have the same shape, got {skel_target.shape} and {target.shape}."
+        assert skel_target.ndim == 3, (
+            f"skel_target must be of size (B, H, W), got skel_target.shape={skel_target.shape}."
+        )
+        assert skel_target.shape == target.shape, (
+            f"skel_target and target must have the same shape, got {skel_target.shape} and {target.shape}."
+        )
         if isinstance(skel_target, torch.Tensor):
             skel_target = skel_target.detach().cpu().numpy()
     else:
         if seg2graph is None:
-            seg2graph = RetinalVesselSegToGraph()
+            seg2graph = FundusVesselSegToGraph()
         skel_target = np.stack([seg2graph.skeletonize(_) for _ in target], axis=0)
 
     return pred, target, skel_pred, skel_target

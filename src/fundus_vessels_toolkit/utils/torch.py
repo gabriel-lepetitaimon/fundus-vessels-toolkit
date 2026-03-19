@@ -3,16 +3,20 @@ from __future__ import annotations
 import functools
 import inspect
 import warnings
+from collections import OrderedDict
 from typing import Callable, Literal, Optional, TypeVar, Union, get_args, get_origin, overload
 
 import numpy as np
+import numpy.typing as npt
 import torch
 from torch import Tensor
 
 TensorArray = TypeVar("TensorArray", bound=Tensor | np.ndarray)
 
 
-def torch_interp_bilinear(imgs: Tensor, y: Tensor, x: Tensor, batch_idx: Optional[Tensor] = None) -> Tensor:
+def torch_interp_bilinear(
+    imgs: Tensor, y: Tensor, x: Tensor, batch_idx: Optional[Tensor] = None, img_shape: Optional[tuple[int, int]] = None
+) -> Tensor:
     """2D bilinear interpolation for a batch of images.
 
     Parameters
@@ -26,11 +30,21 @@ def torch_interp_bilinear(imgs: Tensor, y: Tensor, x: Tensor, batch_idx: Optiona
     batch_idx : Optional[Tensor], optional
         A vector of batch indices with shape (N1, N2, ...), by default None. If None, ``imgs`` is expected to have no batch dimension, and all coordinates in ``coord`` are assumed to belong to the same image.
 
+    img_shape: Optional[tuple[int, int]], optional
+        The initial shape of the input images (H, W) that the coordinates refer to, by default None. If not None, the input coordinates are rescaled from the original image size to the actual image size in ``imgs``.
+
     Returns
     -------
     Tensor
         A batch of interpolated values with shape (N1, N2, ..., C).
     """  # noqa: E501
+    if img_shape is not None and img_shape != imgs.shape[-2:]:
+        H_fmap, W_fmap = imgs.shape[-2:]
+        H_img, W_img = img_shape
+        y, x = y * H_fmap / H_img, x * W_fmap / W_img
+    elif not y.dtype.is_floating_point and y.dtype.is_floating_point:
+        return imgs[batch_idx, :, y, x] if batch_idx is not None else imgs[:, y, x]
+
     y0 = torch.clamp(torch.floor(y).long(), 0, imgs.shape[-2] - 2)
     x0 = torch.clamp(torch.floor(x).long(), 0, imgs.shape[-1] - 2)
 
@@ -138,6 +152,34 @@ def with_weight[**P](func: Callable[P, Tensor], w: float) -> Callable[P, Tensor]
         return func(*args, **kwargs) * w
 
     return decorated_func
+
+
+def lru_cache(maxsize=128):
+    def decorator(func):
+        func.cache = {}
+
+        @functools.wraps(func)
+        def wrapper(*args):
+            if len(args) == 0 or not isinstance(args, torch.nn.Module):
+                self = None
+            else:
+                self = id(args[0])
+                args = args[1:]
+            self_cache = func.cache.setdefault(self, OrderedDict())
+            key = tuple(id(arg) + sum(arg.shape) if isinstance(arg, Tensor) else arg for arg in args)
+            if (out := self_cache.get(key)) is not None:
+                self_cache.move_to_end(key, last=False)
+                return out
+
+            out = func(*args)
+            self_cache[key] = out
+            if len(self_cache) > maxsize:
+                self_cache.popitem(last=True)
+            return out
+
+        return wrapper
+
+    return decorator
 
 
 @overload
@@ -268,7 +310,7 @@ def autocast_torch(f) -> Callable:
     return decorated_f
 
 
-def to_torch(x: TensorArray, device: str | None = "cpu", dtype=None) -> Tensor:
+def to_torch(x: Tensor | npt.NDArray, device: str | None = "cpu", dtype=None) -> Tensor:
     tensor = torch.from_numpy(x) if isinstance(x, np.ndarray) else x
     if device is not None:
         tensor = tensor.to(device)

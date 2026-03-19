@@ -25,7 +25,7 @@ class MetricCollectionDict(nn.ModuleDict):
         return super().__getitem__(key)  # type: ignore
 
 
-class TreeMetric(Metric):
+class BaseTreeMetric(Metric):
     total: Tensor
     root_tp: Tensor
     root_fp: Tensor
@@ -91,22 +91,22 @@ class TreeMetric(Metric):
         return (self.root_tp + self.true) / self.total
 
 
-class RootAcc(TreeMetric):
+class RootAcc(BaseTreeMetric):
     def compute(self) -> Tensor:
         return self.root_tp / (self.root_tp + self.root_fp + self.root_fn)
 
 
-class RootSpecificity(TreeMetric):
+class RootSpecificity(BaseTreeMetric):
     def compute(self) -> Tensor:
         return self.root_tp / (self.root_tp + self.root_fp)
 
 
-class RootSensitivity(TreeMetric):
+class RootSensitivity(BaseTreeMetric):
     def compute(self) -> Tensor:
         return self.root_tp / (self.root_tp + self.root_fn)
 
 
-class ParentAcc(TreeMetric):
+class ParentAcc(BaseTreeMetric):
     def __init__(self, ignore_root=True, **kwargs):
         super().__init__(**kwargs)
         self.ignore_root = ignore_root
@@ -115,7 +115,7 @@ class ParentAcc(TreeMetric):
         return self.true / self.root_tn if self.ignore_root else (self.root_tp + self.true) / self.total
 
 
-class ParentSameSubtreeAcc(TreeMetric):
+class ParentSameSubtreeAcc(BaseTreeMetric):
     def __init__(self, ignore_root=True, **kwargs):
         super().__init__(**kwargs)
         self.ignore_root = ignore_root
@@ -126,12 +126,12 @@ class ParentSameSubtreeAcc(TreeMetric):
         return (self.root_tp + self.true + self.false_same_subtree) / self.total
 
 
-class ParentSameSubtreeMeanDist(TreeMetric):
+class ParentSameSubtreeMeanDist(BaseTreeMetric):
     def compute(self) -> Tensor:
         return self.same_subtree_mean_dist / (self.true + self.false_same_subtree + 1e-8)
 
 
-class ParentCloseAcc(TreeMetric):
+class ParentCloseAcc(BaseTreeMetric):
     def __init__(self, ignore_root=True, **kwargs):
         super().__init__(**kwargs)
         self.ignore_root = ignore_root
