@@ -206,11 +206,13 @@ def save_label_image(label_img: npt.NDArray[np.uint8], path: str | Path, colors:
     cv2.imwrite(str(path), img)
 
 
-def most_common_image_ext(directory: Path) -> str:
+def most_common_image_ext(directory: Path, raise_if_not_found: bool = True) -> str:
     from collections import Counter
 
     exts_count = Counter(path.suffix for path in directory.glob("*"))
     for ext, _ in exts_count.most_common():
         if ext[1:].lower() in ["jpg", "jpeg", "png", "tif", "tiff", "bmp"]:
             return ext
-    raise ValueError(f"No image extension found in directory {directory}")
+    if raise_if_not_found:
+        raise ValueError(f"No image extension found in directory {directory}")
+    return ""

@@ -1,5 +1,4 @@
 from __future__ import annotations
-from platform import node
 
 __all__ = ["VGraph"]
 

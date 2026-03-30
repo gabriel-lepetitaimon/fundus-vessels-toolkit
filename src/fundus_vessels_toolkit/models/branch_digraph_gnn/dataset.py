@@ -53,18 +53,36 @@ if TYPE_CHECKING:
     from ...utils.jppype import Mosaic
 
 
+GRAPH_EXT, ART_EXT, VEI_EXT = ".npz", "_art.npz", "_vei.npz"
+
+
 @dataclass
 class SampleSource:
-    fundus_path: Path
-    topo: tuple[Path, Path]
+    fundus: Path
+    target_topologies: tuple[Path, Path]
     graphes: dict[str, Path]
     date: datetime
+
+    @classmethod
+    def from_paths(cls, fundus_path: Path, target_topology_stem: Path, graphes_path: dict[str, Path]):
+        art_topo = target_topology_stem.with_suffix(ART_EXT)
+        vei_topo = target_topology_stem.with_suffix(VEI_EXT)
+        target_topologies = (art_topo, vei_topo)
+        date = max(
+            art_topo.stat().st_mtime, vei_topo.stat().st_mtime, max(p.stat().st_mtime for p in graphes_path.values())
+        )
+        return cls(
+            fundus=fundus_path,
+            target_topologies=target_topologies,
+            graphes=graphes_path,
+            date=datetime.fromtimestamp(date),
+        )
 
 
 @dataclass
 class SampleInfo:
-    fundus_path: Path
-    topo: tuple[Path, Path]
+    fundus: Path
+    target_topologies: tuple[Path, Path]
     graphes: dict[str, Path]
     od_center: Point | None
     macula_center: Point | None
@@ -549,10 +567,10 @@ class BranchDigraphDataset(PygDataset):
         fundus_ext: str | None,
         av_ext: str | None,
         ignore_recent: Optional[int | datetime] = None,
-    ):
+    ) -> list[SampleSource]:
         if fundus_ext is None:
             fundus_ext = most_common_image_ext(fundus_dir)
-        GRAPH_EXT, ART_EXT, VEI_EXT = ".npz", "_art.npz", "_vei.npz"
+
         if isinstance(ignore_recent, datetime):
             ignore_recent = int(ignore_recent.timestamp())
 
@@ -560,12 +578,16 @@ class BranchDigraphDataset(PygDataset):
         if not isinstance(graph_dir, dict):
             graph_dir = {"": graph_dir}
 
-        def discover_graph(graph_dir):
-            graph_files =  graph_dir.glob(f"*{GRAPH_EXT}")
-            img_ext = most_common_image_ext(graph_dir)
-            img_files = 
-
-        graphes = {k: p.glob(f"*{GRAPH_EXT}") for k, p in graph_dir.items()}
+        graphes = {}  # {"stem": {"graph_type": Path()} }
+        for graph_type, dir_path in graph_dir.items():
+            graph_files = dir_path.glob(f"*{GRAPH_EXT}")
+            if av_ext is None:
+                av_ext = most_common_image_ext(dir_path, raise_if_not_found=False)
+            if av_ext:
+                img_files = dir_path.glob(f"*{av_ext}")
+                graph_files = ({f.stem: f for f in img_files} | {f.stem: f for f in graph_files}).values()
+            for file in graph_files:
+                graphes.setdefault(file.stem, {}).set(graph_type, file)
 
         target_topo_art: Iterable[Path] = target_topology_dir.glob(f"*{ART_EXT}")
         target_topo_vei: Iterable[Path] = target_topology_dir.glob(f"*{VEI_EXT}")
@@ -575,20 +597,19 @@ class BranchDigraphDataset(PygDataset):
 
         filenames = sorted(
             {p.stem for p in fundus_paths}
-            & {g.stem for g in graphes}
+            & set(graphes.keys())
             & {t.stem[:-4] for t in target_topo_art}
             & {t.stem[:-4] for t in target_topo_vei}
         )
-        fundus_paths = [fundus_dir / f"{name}{fundus_ext}" for name in filenames]
-        if graph_dir is not None:
-            graph_paths = [graph_dir / f"{name}{GRAPH_EXT}" for name in filenames]
-        else:
-            assert av_dir is not None
-            graph_paths = [av_dir / f"{name}{av_ext}" for name in filenames]
-        target_paths: list[tuple[Path, Path]] = [
-            tuple(target_topology_dir / f"{name}{ext}" for ext in [ART_EXT, VEI_EXT]) for name in filenames
+
+        return [
+            SampleSource.from_paths(
+                fundus_path=fundus_dir / f"{name}{fundus_ext}",
+                target_topology_stem=target_topology_dir / name,
+                graphes_path=graphes[name],
+            )
+            for name in filenames
         ]
-        return fundus_paths, graph_paths, target_paths
 
     @classmethod
     def bundle(

@@ -40,8 +40,8 @@ def find_cycles(parents: TensorArray) -> List[List[int]]:
 
     Returns
     -------
-    int
-        The root of the tree.
+    List[List[int]]
+        A list of cycles. The order of the nodes in the cycles is not deterministic.
     """
     parents_tensor = torch.as_tensor(parents, device="cpu", dtype=torch.int)
     return find_cycles_cpp(parents_tensor)

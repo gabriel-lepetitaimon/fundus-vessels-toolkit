@@ -13,7 +13,7 @@ from networkx import maximum_branching
 from ..utils.cluster import cluster_by_distance
 from ..utils.lookup_array import create_removal_lookup
 from ..utils.math import gaussian, sigmoid, softmax
-from ..utils.numpy import np_first_true, np_group_by, np_groupby_mean
+from ..utils.numpy import np_first_true, np_group_by, np_groupby_argmax, np_groupby_mean
 from ..utils.tree import (
     accessible_from_root,
     find_cycles,
@@ -79,6 +79,10 @@ class LineDigraph:
             A new LineDigraph instance containing only the selected lines.
         """
         return self.line_subset(np.asarray(line_mask))
+
+    def __len__(self) -> int:
+        """Get the number of lines in the directed graph."""
+        return len(self.line_list)
 
     def not_root_lines(self) -> Self:
         """Get a subgraph of the directed graph containing only the non-root lines.
@@ -1096,16 +1100,28 @@ class _VBranchDigraphWithAVProba(VBranchDigraph):
     @property
     def branch_fp_p(self) -> Float1DArray: ...
 
+    @branch_fp_p.setter
+    def branch_fp_p(self, value: Float1DArray): ...  # type: ignore
+
     @property
     def branch_fp_logit(self) -> Float1DArray: ...
+
+    @branch_fp_logit.setter
+    def branch_fp_logit(self, value: Float1DArray): ...  # type: ignore
 
     def branch_fp(self) -> Bool1DArray: ...
 
     @property
     def branch_av_p(self) -> Float1DArray: ...
 
+    @branch_av_p.setter
+    def branch_av_p(self, value: Float1DArray): ...  # type: ignore
+
     @property
     def branch_av_logit(self) -> Float1DArray: ...
+
+    @branch_av_logit.setter
+    def branch_av_logit(self, value: Float1DArray): ...  # type: ignore
 
     def branch_av_class(self) -> Int1DArray: ...
 
@@ -1130,10 +1146,16 @@ class _VBranchDigraphWithAllProba(_VBranchDigraphWithAVProba):
     @property
     def branch_dir_p(self) -> Float1DArray: ...
 
+    @branch_dir_p.setter
+    def branch_dir_p(self, value: Float1DArray): ...  # type: ignore
+
     @property
     def branch_dir_logit(self) -> Float1DArray: ...
 
-    def branch_dir(self) -> Bool1DArray: ...
+    @branch_dir_logit.setter
+    def branch_dir_logit(self, value: Float1DArray): ...  # type: ignore
+
+    def branch_dir(self) -> Bool1DArray: ...  # type: ignore
 
     def line_dir_p(self) -> Float1DArray: ...
 
@@ -1511,3 +1533,72 @@ def solve_line_digraph_approx(
         branch_dir[b1] = b1_tip == 0  # Direction is True if incoming tip is 0 (tail)
 
     return branch_tree, branch_dir
+
+
+def solve_line_digraph_a_star(
+    line_list: npt.NDArray[np.int_] | LineDigraph,
+    line_p: npt.NDArray[np.float64],
+    branch_dir_p: npt.NDArray[np.float64],
+) -> tuple[npt.NDArray[np.int_], npt.NDArray[np.bool_]]:
+    """Resolve the directed graph into an arborescence (a directed tree).
+
+    Parameters
+    ----------
+    graph : VGraph
+        The vascular graph.
+    line_list : npt.NDArray[np.int_]
+        An array of shape (N, 4) representing the directed edges connecting the branch b0 to the branch b1. Each row is in the format ``(b0, b0_tip, b1, b1_tip)``, where ``b0_tip`` and ``b1_tip`` are in {0, 1} indicates if the branches are connected through their first (0) or second (1) node.
+        (Namely: ``graph.branch_list[b0,b0_tip]`` and ``graph.branch_list[b1,b1_tip]``).
+        The number of branches B is inferred as ``line_list.max() + 1``.
+    line_p : Optional[npt.NDArray[np.float_]], optional
+        An array of shape (N,) representing the probabilities of each edge, by default None.
+    branch_dir_p : Optional[npt.NDArray[np.float_]], optional
+        An array of shape (B,) representing the direction probabilities of each branch, by default None
+    Returns
+    -------
+    tuple[npt.NDArray[np.int_], npt.NDArray[np.bool_]]
+        The branch parents and branch directions as arrays of shape (B,).
+    """  # noqa: E501
+    import heapq
+
+    B = branch_dir_p.shape[0]
+
+    lines = LineDigraph(line_list) if isinstance(line_list, np.ndarray) else line_list
+    branch_dir_p = branch_dir_p / 2
+    total_line_p = line_p + branch_dir_p[lines.b1] + branch_dir_p[np.where(lines.root_mask, lines.b1, lines.b0)]
+
+    # === Compute minimal but invalid arborescence ===
+    line_argsort = np.argsort(total_line_p)[::-1]
+    B1 = (lines.b1[line_argsort] + 1) * np.where(lines.b1_dir[line_argsort], 1, -1)
+    B1_sorted = B1[line_argsort]
+    min_lines = np.unique((lines.b1 + B * lines.b1_dir)[line_argsort], return_index=True)[1].reshape((2, B))
+    min_p = total_line_p[min_lines]
+    min_dir = min_p[0] >= min_p[1]
+    min_lines[:, ~min_dir] = min_lines[::-1, ~min_dir]
+    min_p[:, ~min_dir] = min_p[::-1, ~min_dir]
+
+    dir_diff = min_p[0] - min_p[1]
+    assert np.all(dir_diff >= 0)
+
+    branch_priority = np.argsort(dir_diff)[::-1]
+
+    # === Constraint check ===
+    def invalid_branches(line_ids: npt.NDArray[np.int_]) -> Bool1DArray:
+        b_invalid = np.zeros((B,), dtype=bool)
+        l = lines[line_ids]
+        b_parent = np.empty(B, dtype=np.int_)
+        b_parent[l.b1] = l.b0
+        b_dir = np.empty(B, dtype=bool)
+        b_dir[l.b1] = l.b1_dir
+
+        for cycle in find_cycles(b_parent):
+            b_invalid[cycle] = True
+
+        invalid_lines = l[l.b0_dir != b_dir[l.b0]]
+        if len(invalid_lines):
+            b_invalid[invalid_lines.b0] = True
+            b_invalid[invalid_lines.b1] = True
+
+        return b_invalid
+
+    # === A* search ===

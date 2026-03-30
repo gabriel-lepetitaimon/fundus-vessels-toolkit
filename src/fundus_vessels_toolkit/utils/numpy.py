@@ -195,6 +195,33 @@ def np_groupby_mean(array: npt.NDArray, keys: npt.NDArray, n: Optional[int] = No
     return means
 
 
+def np_groupby_argmax(array: npt.NDArray, keys: npt.NDArray, n: Optional[int] = None) -> npt.NDArray:
+    """
+    Group the elements of an array by keys and compute the index of the maximum element of each group.
+
+    Parameters
+    ----------
+    array : np.ndarray
+        The array to group.
+    keys : np.ndarray
+        The keys to group by. Must be the same length as array.
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray]
+        A tuple containing the unique keys and the index of the maximum element of each group.
+    """
+    assert array.shape[0] == keys.shape[0], "array and keys must have the same length."
+    if n is None:
+        n: int = keys.max() + 1
+    argmax_idxs = np.full((n,), -1, dtype=int)
+    sort_idx = np.argsort(array)
+    sorted_keys = keys[sort_idx]
+    keys, idx = np.unique(sorted_keys, return_index=True)
+    argmax_idxs[keys] = idx
+    return argmax_idxs
+
+
 def bit_invert(bits: npt.NDArray[np.uint64]) -> npt.NDArray[np.uint64]:
     """Invert the bits of a numpy array of uint64.
 
