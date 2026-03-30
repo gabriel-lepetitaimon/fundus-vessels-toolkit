@@ -19,7 +19,11 @@ from fundus_vessels_toolkit.models.branch_digraph_gnn.data import (
     BranchDigraphData,
     BranchDigraphDataset,
 )
-from fundus_vessels_toolkit.models.branch_digraph_gnn.losses import BranchContrastiveLoss, CrossEntropyLoss
+from fundus_vessels_toolkit.models.branch_digraph_gnn.losses import (
+    BranchContrastiveLoss,
+    BranchContrastiveLossOpt,
+    CrossEntropyLoss,
+)
 from fundus_vessels_toolkit.models.branch_digraph_gnn.model import BranchDigraphModel, BranchDigraphModelOpt
 from fundus_vessels_toolkit.models.metrics.tree import (
     MetricCollectionDict,
@@ -31,16 +35,14 @@ from fundus_vessels_toolkit.models.metrics.tree import (
     RootSpecificity,
 )
 
-torch.set_float32_matmul_precision("medium")
+# torch.set_float32_matmul_precision("medium")
 torch.backends.cudnn.conv.fp32_precision = "tf32"  # type: ignore
 torch.backends.cuda.matmul.fp32_precision = "tf32"
 
 
 def train():
-    # Initialize a new W&B run (wandb.agent handles the config)
     wandb.init(project="GNN-topo-test")
 
-    # Access the hyperparms assigned to this specific run
     config = DigraphGNNTrainerConfig.model_validate(dict(wandb.config))
     config_dict = config.model_dump()
 
@@ -59,16 +61,20 @@ def train():
         resize_to=1024,
         root=str(Path(__file__).parent / "tmp/DATA2"),
         overwrite=False,
-        # ignore_recent=datetime(2026, 2, 19),
         ignore_recent=datetime(2026, 3, 8),
     )
     train_set, val_set, test_set = dataset.split_loaders(train_ratio=0.7, val_ratio=0.15)
-    train_loader = PyGDataLoader(train_set, batch_size=3, shuffle=True, num_workers=5)
+    train_loader = PyGDataLoader(
+        train_set,
+        batch_size=3,
+        shuffle=True,
+        num_workers=6,
+        persistent_workers=True,
+    )
     val_loader = PyGDataLoader(val_set, batch_size=6, num_workers=2)
 
-    #
     # Setup the logger and trainer
-    wandb_logger = WandbLogger(log_model=True)  # logs model checkpoints
+    wandb_logger = WandbLogger(log_model=True)
     model = DigraphGNNTrainer(config_dict, n_step_per_epoch=len(train_loader))
 
     checkpoints: list[Callback] = [ModelCheckpoint(monitor="val_tree-parent-acc", mode="max")]
@@ -76,11 +82,11 @@ def train():
     trainer = L.Trainer(
         max_epochs=config.epoch,
         logger=wandb_logger,
-        enable_progress_bar=True,  # Optional: cleaner console output during sweeps
+        enable_progress_bar=True,
         check_val_every_n_epoch=20,
         accumulate_grad_batches=2,
         # gradient_clip_val=0.5,
-        # gradient_clip_algorithm="value",wandb
+        # gradient_clip_algorithm="value",
         # num_sanity_val_steps=0,
         callbacks=checkpoints,
         precision="bf16-mixed",
@@ -99,6 +105,7 @@ class DigraphGNNTrainerConfig(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True)
 
     model: BranchDigraphModelOpt = Field(default_factory=BranchDigraphModelOpt)
+    contrastive_loss: BranchContrastiveLossOpt = Field(default_factory=BranchContrastiveLossOpt)
 
     epoch: int = 160
     """Maximum number of training epochs."""
@@ -122,7 +129,7 @@ class DigraphGNNTrainer(L.LightningModule):
         self.dir_bce_loss = nn.BCEWithLogitsLoss()
         self.root_bce_loss = nn.BCEWithLogitsLoss()
         self.line_ce_loss = CrossEntropyLoss(invalid_metagroup_penalty=0)
-        self.line_contrastive_loss = BranchContrastiveLoss()
+        self.line_contrastive_loss = BranchContrastiveLoss(self.config.contrastive_loss)
 
         # === METRICS ===
         self.val_metrics = self.metrics_collection(opti_tree=True)
@@ -252,8 +259,9 @@ class DigraphGNNTrainer(L.LightningModule):
         )
 
         contrastive_losses = self.line_contrastive_loss(out)
+        contrastive_loss = contrastive_losses.pop("loss")
 
-        loss = fp_loss + av_loss + dir_loss + line_loss + contrastive_losses["triplet_loss"] * 0.1
+        loss = fp_loss + av_loss + dir_loss + line_loss + contrastive_loss * 0.1
         return (
             {
                 "fp_loss": fp_loss,

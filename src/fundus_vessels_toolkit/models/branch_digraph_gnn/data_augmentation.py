@@ -1,36 +1,175 @@
-from dataclasses import dataclass
-from typing import Any, Optional
+from __future__ import annotations
+
+from typing import Any, Literal, Optional, Self
 
 import numpy as np
 import numpy.typing as npt
+from pydantic import BaseModel, ConfigDict, Field
 
 from fundus_toolkits.utils.geometric import Rect
 
 from ...segment_to_graph.graph_simplification import remove_orphan_nodes, simplify_passing_nodes
 from ...segment_to_graph.vbranch_digraph import VBranchDigraph
-from ...utils.fundus_projections import ElasticProjection, FlipProjection
+from ...utils.fundus_projections import (
+    AffineProjection,
+    ElasticProjection,
+    FlipProjection,
+    FundusProjection,
+    IdentityProjection,
+    ProjectionComposition,
+)
 from ...vascular_data_objects import VBranchGeoData, VGraph, VGraphBranch, VTree
 
 
-@dataclass
-class DeteriorationOpts:
-    min_holes_count: int = 50  # Minimum number of holes to create disconnections
-    max_holes_count: int = 70  # Maximum number of holes to create disconnections
-    w_branch_base: float = 8.0  # Base weight for each branch
-    w_branch_inv_calibre_f: float = 1.5  # Weighting branch calibre
-    w_branch_sqrt_length_f: float = 2.0  # Weighting branch length
-    max_w_spread: float = 0.5  # Scale weighting so the min is max_w_spread * max
-    whole_branch_p: float = 0.1  # Probability to drop an entire branch
-    whole_branch_max_calibre: float = 10.0  # Maximum average calibre to consider dropping entire branch
-    whole_branch_max_length: int = 50  # Maximum length to consider dropping entire branch
-    tip_hole_p: float = 0.4  # Probability to drop an endpoint branch
-    hole_avg_length: int = 10  # Average length of dropped segments (sampled from normal distribution)
-    hole_avg_length_f: float = 0.2  # Factor of the branch length added to the average length of dropped segments
-    hole_std_length: int = 20  # Standard deviation of the length of dropped segments
-    hole_min_length: int = 5  # Standard deviation of the length of dropped segments
-    hole_min_length_f: float = 0.1  # Factor of the branch length added to the minimum length of dropped segments
-    segment_min_length: int = 5  # Minimum length of left segments
-    segment_min_length_f: float = 0.2  # Factor of the branch length added to the minimum length left segments
+class DeteriorationOpts(BaseModel):
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
+    min_holes_count: int = Field(default=50)
+    """Minimum number of holes to create disconnections"""
+
+    max_holes_count: int = Field(default=70)
+    """Maximum number of holes to create disconnections"""
+
+    w_branch_base: float = Field(default=8.0)
+    """Base weight for each branch"""
+
+    w_branch_inv_calibre_f: float = Field(default=1.5)
+    """Weighting branch calibre"""
+
+    w_branch_sqrt_length_f: float = Field(default=2.0)
+    """Weighting branch length"""
+
+    max_w_spread: float = Field(default=0.5)
+    """Scale weighting so the min is max_w_spread * max"""
+    whole_branch_p: float = Field(default=0.1)
+    """Probability to drop an entire branch"""
+
+    whole_branch_max_calibre: float = Field(default=10.0)
+    """Maximum average calibre to consider dropping entire branch"""
+
+    whole_branch_max_length: int = Field(default=50)
+    """Maximum length to consider dropping entire branch"""
+
+    tip_hole_p: float = Field(default=0.4)
+    """Probability to drop an endpoint branch"""
+
+    hole_avg_length: int = Field(default=10)
+    """Average length of dropped segments (sampled from normal distribution)"""
+
+    hole_avg_length_f: float = Field(default=0.2)
+    """Factor of the branch length added to the average length of dropped segments"""
+
+    hole_std_length: int = Field(default=20)
+    """Standard deviation of the length of dropped segments"""
+
+    hole_min_length: int = Field(default=5)
+    """Minimum length of dropped segments"""
+
+    hole_min_length_f: float = Field(default=0.1)
+    """Factor of the branch length added to the minimum length of dropped segments"""
+
+    segment_min_length: int = Field(default=5)
+    """Minimum length of left segments"""
+
+    segment_min_length_f: float = Field(default=0.2)
+    """Factor of the branch length added to the minimum length left segments"""
+
+
+class ElasticOpts(BaseModel):
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
+    displacement_std: float = Field(default=80.0)
+    """Standard deviation of the displacement in pixels"""
+
+    smoothing_size: float = Field(default=200.0)
+    """Size of the Gaussian kernel for smoothing the displacement field"""
+
+    def generate_projection(
+        self, shape: tuple[int, int], rng: Optional[np.random.Generator] = None
+    ) -> ElasticProjection:
+        if rng is None:
+            rng = np.random.default_rng()
+        return ElasticProjection.random(
+            shape, displacement_std=self.displacement_std, smoothing_size=self.smoothing_size
+        )
+
+
+class RotationOpts(BaseModel):
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
+    min_angle: float = Field(default=3.0)
+    """Minimum absolute angle in degrees to apply rotation"""
+
+    max_angle: float = Field(default=30.0)
+    """Maximum absolute angle in degrees to apply rotation"""
+
+    def generate_projection(
+        self, shape: tuple[int, int], rng: Optional[np.random.Generator] = None
+    ) -> AffineProjection:
+        if rng is None:
+            rng = np.random.default_rng()
+        center = shape[0] // 2, shape[1] // 2
+        angle = rng.uniform(self.min_angle, self.max_angle)
+        if rng.random() < 0.5:
+            angle = -angle
+        return AffineProjection.rotate(angle, center)
+
+
+class AugmentationOpts(BaseModel):
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
+    elastic: bool | ElasticOpts = Field(default=True)
+    """Whether to apply elastic deformation"""
+
+    rotate: bool | RotationOpts = Field(default=False)
+    """Whether to apply rotation"""
+
+    horizontal_flip: bool = Field(default=True)
+    """Whether to apply horizontal flip"""
+
+    deteriorate_graph: DeteriorationOpts | bool = Field(default=True)
+    """Whether to apply topological deterioration to the graph"""
+
+    @property
+    def geometric(self) -> bool:
+        return bool(self.horizontal_flip or self.rotate is not False or self.elastic is not False)
+
+    @property
+    def rotation_opts(self) -> RotationOpts:
+        return self.rotate if isinstance(self.rotate, RotationOpts) else RotationOpts()
+
+    @property
+    def elastic_opts(self) -> ElasticOpts:
+        return self.elastic if isinstance(self.elastic, ElasticOpts) else ElasticOpts()
+
+    @property
+    def deterioration_opts(self) -> DeteriorationOpts:
+        return self.deteriorate_graph if isinstance(self.deteriorate_graph, DeteriorationOpts) else DeteriorationOpts()
+
+    def generate_transform(self, shape: tuple[int, int], rng: Optional[np.random.Generator] = None) -> FundusProjection:
+        if rng is None:
+            rng = np.random.default_rng()
+        center = shape[0] // 2, shape[1] // 2
+
+        transforms: list[FundusProjection] = []
+        if self.horizontal_flip and rng.random() < 0.5:
+            transforms.append(FlipProjection(center=center, horizontal=True))
+        if self.rotate:
+            transforms.append(self.rotation_opts.generate_projection(shape, rng=rng))
+        if self.elastic:
+            transforms.append(self.elastic_opts.generate_projection(shape, rng=rng))
+        if len(transforms) == 0:
+            return IdentityProjection()
+        return ProjectionComposition(*transforms)
+
+    @classmethod
+    def parse(cls, data: Self | bool) -> Self:
+        if data is True:
+            return cls()
+        elif data is False:
+            return cls(elastic=False, rotate=False, horizontal_flip=False, deteriorate_graph=False)
+        else:
+            return data
 
 
 def deteriorate_trees(trees: tuple[VTree, VTree], opts: Optional[DeteriorationOpts] = None) -> tuple[VTree, VTree]:
@@ -210,42 +349,27 @@ def deteriorate_graph[T: VGraph](
 def geometric_augment(
     sample: tuple[VBranchDigraph, npt.NDArray, npt.NDArray, npt.NDArray],
     *,
-    max_rotation: float = 30.0,
-    min_rotation: float = 5.0,
-    horizontal_flip: bool = True,
-    rnd: Optional[np.random.Generator] = None,
+    opts: Optional[AugmentationOpts | Literal[True]] = None,
+    rng: Optional[np.random.Generator] = None,
 ) -> tuple[VBranchDigraph, npt.NDArray, npt.NDArray, npt.NDArray]:
     digraph, fundus_img, od_yx, mac_yx = sample
     assert digraph.graph is not None, "Graph must be initialized to apply geometric augmentations"
 
-    fundus_img = fundus_img.transpose(1, 2, 0)  # C,H,W -> H,W,C
-    if rnd is None:
-        rnd = np.random.default_rng()
+    opts = AugmentationOpts() if opts in (True, None) else opts
+    if rng is None:
+        rng = np.random.default_rng()
+
     center = fundus_img.shape[0] // 2, fundus_img.shape[1] // 2
     shape = fundus_img.shape[0], fundus_img.shape[1]
 
-    # === Rotation ===
-    # angle = rnd.uniform(-max_rotation, max_rotation)
-    # if abs(angle) > min_rotation:
-    #     rotate = AffineProjection.rotate(angle, center)
-    #     digraph.graph.transform(rotate, inplace=True)
-    #     fundus_img = rotate.warp(fundus_img, warped_domain="same")[0]
+    fundus_img = fundus_img.transpose(1, 2, 0)  # C,H,W -> H,W,C
 
-    # === Horizontal flip ===
-    if horizontal_flip:  # and rnd.random() < 0.5:
-        flip = FlipProjection(center, horizontal=True)
-        digraph.graph.transform(flip, inplace=True)
-        od_yx, mac_yx = flip.transform(np.array([od_yx, mac_yx]))
-        fundus_img = flip.warp(fundus_img, warped_domain="same")[0]
+    agg_transform = opts.generate_transform(shape, rng=rng)
+    digraph.graph.transform(agg_transform, inplace=True)
+    od_yx, mac_yx = agg_transform.transform(np.array([od_yx, mac_yx]))
+    fundus_img = agg_transform.warp(fundus_img, warped_domain="same")[0]
 
-    # === Elastic ===
-    elastic = ElasticProjection.random(shape, displacement_std=80, smoothing_size=200)
-    digraph.graph.transform(elastic, inplace=True)
-    od_yx, mac_yx = elastic.transform(np.array([od_yx, mac_yx]))
-    fundus_img = elastic.warp(fundus_img, warped_domain="same")[0]
-
-    # Reset domain after augmentation
-    digraph.graph.geometric_data()._domain = Rect.from_size(shape)
+    digraph.graph.geometric_data()._domain = Rect.from_size(shape)  # Reset domain after augmentation
     fundus_img = fundus_img.transpose(2, 0, 1)  # H,W,C -> C,H,W
 
     return digraph, fundus_img, od_yx, mac_yx

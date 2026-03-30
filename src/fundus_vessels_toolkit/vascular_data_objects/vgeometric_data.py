@@ -2218,7 +2218,13 @@ class VGeometricData:
         for name in attr_:
             self._remove_branch_data(name)
 
-    def transform(self, projection: FundusProjection, inplace: bool = False) -> VGeometricData:
+    def transform(
+        self,
+        projection: FundusProjection,
+        *,
+        warped_domain: Rect | Literal["full", "same"] = "full",
+        inplace: bool = False,
+    ) -> VGeometricData:
         """Apply a transformation to the geometric data.
 
         All branch geometric attributes that can't be transformed will be removed.
@@ -2228,6 +2234,9 @@ class VGeometricData:
         transform : FundusProjection
             The transformation to apply.
 
+        warped_domain : Rect or 'full' or 'same', optional
+            The domain to use for the warped coordinates. If 'full' (by default), the full domain of the projection is used. If 'same', the same domain as the original coordinates is used. If a Rect is given, it is used as the domain for the warped coordinates.
+
         inplace : bool, optional
             If True, apply the transformation in place, by default False.
 
@@ -2235,7 +2244,7 @@ class VGeometricData:
         -------
         VGeometricData
             The transformed geometric data.
-        """
+        """  # noqa: E501
         if not inplace:
             self = self.copy()
 
@@ -2243,15 +2252,26 @@ class VGeometricData:
         for branch_id, curve in enumerate(self._branch_curve):
             if curve is None or len(curve) == 0:
                 continue
-            curve = np.round(projection.transform(curve.astype(float))).astype(np.int_)
+            prev_curve_delta_d = np.linalg.norm(np.diff(curve, axis=0), axis=1)
+            curve = projection.transform(curve.astype(float))
+            new_curve_delta_d = np.linalg.norm(np.diff(curve, axis=0), axis=1)
+            local_scale = new_curve_delta_d / (prev_curve_delta_d + 1e-8)
+            local_scale = np.concatenate([local_scale[:1], local_scale, local_scale[-1:]])
+            local_scale = (local_scale[1:] + local_scale[:-1]) / 2
+            curve = np.round(curve).astype(np.int_)
+
             if not isinstance(projection, Translation):
                 cleaned_curve, new_id = remove_consecutive_duplicates(curve, return_index=True)
                 if np.all(new_id == np.arange(len(new_id))):
                     cleaned_curve, new_id = curve, None
+                else:
+                    local_scale = local_scale[new_id]
             else:
                 cleaned_curve, new_id = curve, None
 
             ctx = self._geodata_edit_ctx(branch_id)
+            ctx.set_info(local_scale=local_scale)
+
             for attr_name, attr in ctx.geodata_attrs.items():
                 try:
                     ctx_attr = ctx._replace(attr_name=attr_name)
@@ -2265,7 +2285,12 @@ class VGeometricData:
 
             self._branch_curve[branch_id] = readonly(cleaned_curve)
 
-        self._domain = projection.transform_domain(self._domain)
+        if warped_domain == "full":
+            self._domain = projection.transform_domain(self._domain)
+        elif warped_domain == "same":
+            ...  # Keep the same domain
+        else:  # warped_domain is a Rect
+            self._domain = warped_domain
         return self
 
     def resample_branch_curve(self, branch_id: int, idx: npt.NDArray[np.int_]) -> None:

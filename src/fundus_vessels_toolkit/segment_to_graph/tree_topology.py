@@ -3,12 +3,14 @@ from __future__ import annotations
 import sys
 import warnings
 from copy import deepcopy
+from pathlib import Path
 from typing import List, Literal, Optional, Self, Sequence, Tuple, overload
 
 import numpy as np
 import numpy.typing as npt
 from skimage.segmentation import expand_labels
 
+from fundus_toolkits import FundusData
 from fundus_toolkits.utils.geometric import Rect
 from fundus_vessels_toolkit.utils.cluster import reduce_clusters
 
@@ -172,6 +174,38 @@ class TreeTopology:
 
         return cls(labels_map, topo_map, fuzzy_skeleton_map, sparse=sparse, **tree_opt)  # type: ignore
 
+    def save(self, file_path: str | Path, *, on_exists: Literal["raise", "warn", "skip", "overwrite"] = "warn") -> None:
+        """Export the tree topology (branch_map, rank_map and fuzzy_skeleton_map)"""
+        file_path = Path(file_path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if file_path.exists():
+            if on_exists == "raise":
+                raise FileExistsError(f"File {file_path} already exists.")
+            elif on_exists == "warn":
+                warnings.warn(f"File {file_path} already exists and will be overwritten.", stacklevel=2)
+            elif on_exists == "skip":
+                return
+
+        self = self.as_dense()
+        np.savez_compressed(
+            str(file_path),
+            branch_map=self.branch_map,
+            rank_map=self.rank_map,
+            fuzzy_skeleton_map=self.fuzzy_skeleton_map,
+        )
+
+    @classmethod
+    def load(cls, path: str | Path, *, sparse: bool = False) -> Self:
+        """Load the tree topology from a file."""
+        data = np.load(path)
+        return cls(
+            branch_map=data["branch_map"],
+            rank_map=data["rank_map"],
+            fuzzy_skeleton_map=data["fuzzy_skeleton_map"],
+            sparse=sparse,
+        )
+
     def has_tree(self) -> bool:
         return self._tree is not None
 
@@ -229,6 +263,49 @@ class TreeTopology:
             tree=self._tree,
             branch_mapping=self._branch_mapping,
         )
+
+    def overlay(
+        self, img: npt.NDArray[np.floating], main_color: str | Literal["ART", "VEI"]
+    ) -> npt.NDArray[np.float64]:
+        from fundus_toolkits import AVLabel
+        from fundus_toolkits.utils.color import color_jitter
+
+        from ..utils.jppype import AV_COLORS
+
+        channel_first = img.shape[0] == 3
+        if channel_first:
+            img = np.transpose(img, (1, 2, 0))
+
+        topo = self.as_dense()
+        subtree_map = TopologicalLabel.decode_subtree(topo.branch_map)
+        alpha = np.zeros(topo.shape, dtype=np.float64)
+        topo_img = np.zeros(img.shape, dtype=np.float64)
+        if main_color in ("ART", "VEI"):
+            main_color = AV_COLORS[AVLabel.ART if main_color == "ART" else AVLabel.VEI]
+        colors = iter(color_jitter(main_color, hue=0.1))
+
+        for subtree_id in np.unique(subtree_map):
+            if subtree_id == -1:
+                continue
+            subtree_mask = subtree_map == subtree_id
+            topo_img[subtree_mask] = next(colors) / 255.0
+            subtree_rank_map = topo.rank_map[subtree_mask]
+            alpha[subtree_mask] = 0.8 - 0.7 * (subtree_rank_map / subtree_rank_map.max())
+
+        img = img * (1 - alpha[:, :, None]) + topo_img * alpha[:, :, None]
+        if channel_first:
+            img = np.transpose(img, (2, 0, 1))
+        return img
+
+    @classmethod
+    def av_overlay(cls, img: npt.NDArray[np.floating] | FundusData, art_topo: TreeTopology, vei_topo: TreeTopology):
+        if isinstance(img, FundusData):
+            topo_map = img.image.copy()
+        else:
+            topo_map = img.copy()
+        topo_map = art_topo.overlay(topo_map, main_color="ART")
+        topo_map = vei_topo.overlay(topo_map, main_color="VEI")
+        return topo_map
 
 
 class DenseTreeTopology(TreeTopology):

@@ -246,6 +246,18 @@ class VBranchCurveData(VBranchGeoDataBase):
 
 
 ####################################################################################################
+class VBranchCurveScalableData(VBranchCurveData):
+    """``VBranchCurveData`` is a class that stores the parametric data of a vascular graph."""
+
+    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+        data = self.data * ctx.info.get("local_scale", 1)
+        return self.__class__(data.astype(self.data.dtype))
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, VBranchCurveScalableData) and np.array_equal(self.data, other.data)
+
+
+####################################################################################################
 class LeftRightCurveData(VBranchCurveData):
     """``LeftRightCurveData`` is a class that stores the parametric data of a vascular graph."""
 
@@ -502,6 +514,20 @@ class VBranchTipsScalarData(VBranchTipsData):
 
 
 ####################################################################################################
+class VBranchTipsScalableScalarData(VBranchTipsScalarData):
+    """``VBranchTipsScalableScalarData`` is a class that stores a scalar associated with the tips of a vascular branch."""  # noqa: E501
+
+    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+        if (local_scale := ctx.info.get("local_scale", None)) is None:
+            return self
+        data = self.data * local_scale[[0, -1]]
+        return self.__class__(data.astype(self.data.dtype))
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, VBranchTipsScalableScalarData) and np.array_equal(self.data, other.data)
+
+
+####################################################################################################
 class VBranchTipsDoublePointsData(VBranchTipsData):
     """``VBranchTipsScalarData`` is a class that stores a scalar associated with the tips of a vascular branch."""
 
@@ -701,7 +727,9 @@ class VBranchGeoFields:
     TANGENTS = VBranchGeoDescriptor("TANGENTS", VBranchTangents, VBranchTangents(np.empty((0, 2), dtype=np.float32)))
 
     #: The calibre of the branch at each skeleton point.
-    CALIBRES = VBranchGeoDescriptor("CALIBRES", VBranchCurveData, VBranchCurveData(np.empty((0,), dtype=np.float32)))
+    CALIBRES = VBranchGeoDescriptor(
+        "CALIBRES", VBranchCurveScalableData, VBranchCurveScalableData(np.empty((0,), dtype=np.float32))
+    )
 
     #: The position of the left and right boundaries of the branch.
     BOUNDARIES = VBranchGeoDescriptor("BOUNDARIES", BoundariesData, BoundariesData(np.empty((0, 2, 2), dtype=np.int_)))
@@ -723,7 +751,9 @@ class VBranchGeoFields:
     TIPS_TANGENT = VBranchGeoDescriptor("TIPS_TANGENT", VBranchTipsTangents, VBranchTipsTangents.create_empty())
 
     #: The calibre at the branches tips.
-    TIPS_CALIBRE = VBranchGeoDescriptor("TIPS_CALIBRE", VBranchTipsScalarData, VBranchTipsScalarData.create_empty())
+    TIPS_CALIBRE = VBranchGeoDescriptor(
+        "TIPS_CALIBRE", VBranchTipsScalableScalarData, VBranchTipsScalableScalarData.create_empty()
+    )
 
     #: The position of the left and right boundaries of the branches tips.
     TIPS_BOUNDARIES = VBranchGeoDescriptor(
@@ -842,7 +872,12 @@ class VBranchGeoData:
             if isinstance(data, typehint):
                 return data
             elif isinstance(data, VBranchGeoDataBase):
-                raise ValueError(f"Invalid VBranchGeoData type: {type(data)}. Expected {typehint}.")
+                if isinstance(data, VBranchCurveData) and typehint is VBranchCurveScalableData:
+                    return VBranchCurveScalableData(data.data)
+                elif isinstance(data, VBranchTipsScalarData) and typehint is VBranchTipsScalableScalarData:
+                    return VBranchTipsScalableScalarData(data.data)
+                else:
+                    raise ValueError(f"Invalid VBranchGeoData type: {type(data)}. Expected {typehint}.")
             return typehint(data)
         else:
             if isinstance(data, VBranchGeoDataBase):

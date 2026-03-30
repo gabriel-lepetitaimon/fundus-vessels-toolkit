@@ -148,7 +148,7 @@ class TransformerGCN(torch.nn.Module):
         for name, layer in list(self.layers.items()):
             match layer:
                 case pyg_nn.InstanceNorm():
-                    x = layer(x, batch_idx)
+                    x = layer(x, batch_idx, batch_size=batch_size)
                 case BipolarTransformerConv():
                     x = layer(x, edge_index, edge_pole, edge_attr=edge_attr, pos=pos).relu()
                 case TransformerConvWithPosEncoding():
@@ -196,8 +196,9 @@ class BipolarTransformerConv(MessagePassing):
         self.dropout = dropout
         self.edge_dim = edge_dim
         if isinstance(pos_encoding, str) and pos_encoding != "none":
-            pos_encoding = RoPE(out_channels_node + out_channels_pole, support_pattern=pos_encoding)
-        self.pos_encoding = pos_encoding
+            self.pos_encoding = RoPE(out_channels_node + out_channels_pole, support_pattern=pos_encoding)
+        else:
+            self.pos_encoding = pos_encoding
 
         # === PARAMETERS ===
         in_node, in_pole = in_channels_node, in_channels_pole
@@ -326,10 +327,13 @@ class BipolarTransformerConv(MessagePassing):
 
         if pos is not None and isinstance(self.pos_encoding, RoPE):
             assert pos[0].shape == pos[1].shape == (x.shape[0], 2), "pos[0] and pos[1] must have shape [N, 2]"
-            query_p0 = self.pos_encoding.apply_rot_emb(query_p0, pos[0])
-            key_p0 = self.pos_encoding.apply_rot_emb(key_p0, pos[0])
-            query_p1 = self.pos_encoding.apply_rot_emb(query_p1, pos[1])
-            key_p1 = self.pos_encoding.apply_rot_emb(key_p1, pos[1])
+            pos_emb = self.pos_encoding.compute_freqs_from_pos(pos[0])
+            query_p0 = self.pos_encoding.apply_rot_emb(query_p0, pos_emb)
+            key_p0 = self.pos_encoding.apply_rot_emb(key_p0, pos_emb)
+
+            pos_emb = self.pos_encoding.compute_freqs_from_pos(pos[1])
+            query_p1 = self.pos_encoding.apply_rot_emb(query_p1, pos_emb)
+            key_p1 = self.pos_encoding.apply_rot_emb(key_p1, pos_emb)
 
         y = self.propagate(
             edge_index,

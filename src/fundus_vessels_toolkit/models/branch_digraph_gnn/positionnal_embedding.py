@@ -70,8 +70,6 @@ class RoPE(torch.nn.Module):
         self.head_dim = head_dim
         self.support_pattern = support_pattern
         self.max_pos = max_pos
-        self._last_pos: Optional[Tensor] = None
-        self._last_freqs: Optional[Tensor | tuple] = None
 
         self.register_buffer("freqs_support", self.compute_freqs_support(), persistent=False)
 
@@ -102,11 +100,10 @@ class RoPE(torch.nn.Module):
         freqs = torch.outer(pos, thetas)  # pos, head_dim // 2
         return torch.complex(torch.cos(freqs), torch.sin(freqs))
 
-    @lru_cache(maxsize=2)
-    def compute_freqs_from_pos(self, pos: Tensor) -> Tensor | tuple[Tensor, Tensor]:
+    def compute_freqs_from_pos(self, pos: Tensor) -> Tensor:
         freqs = pos @ self.freqs_support.T  # [n_pos, 2] @ [2, head_dim // 2] -> [n_pos, head_dim // 2]
-        if freqs.dtype == torch.bfloat16:  # === Complex computation is not implemented for bfloat16 ===
-            return torch.cos(freqs), torch.sin(freqs)
+        if freqs.dtype == torch.bfloat16:  # Complex computation is not implemented for bfloat16
+            return torch.stack([torch.cos(freqs), torch.sin(freqs)], dim=0)  # [2, n_pos, head_dim // 2]
         else:
             return torch.complex(torch.cos(freqs), torch.sin(freqs))  # [n_pos, head_dim // 2]
 
@@ -136,9 +133,12 @@ class RoPE(torch.nn.Module):
         assert head_dim == self.head_dim, f"Input head dim ({head_dim}) should be {self.head_dim}"
         x = x.reshape(n_pos, n_heads, half, 2)
 
-        freqs = self.compute_freqs_from_pos(pos)
-        if isinstance(freqs, tuple):
-            cos, sin = freqs
+        if pos.shape == (n_pos, half):
+            freqs = pos
+        else:
+            freqs = self.compute_freqs_from_pos(pos)
+        if freqs.dtype == torch.bfloat16:  # Complex computation is not implemented for bfloat16
+            cos, sin = freqs[0], freqs[1]  # [n_pos, head_dim // 2]
             v = torch.stack([cos, -sin, sin, cos], dim=-1).view(n_pos, 1, half, 2, 2)
             x_real = torch.sum(v * x.view(n_pos, n_heads, half, 1, 2), dim=-1)  # n_pos, n_heads, half, 2
         else:

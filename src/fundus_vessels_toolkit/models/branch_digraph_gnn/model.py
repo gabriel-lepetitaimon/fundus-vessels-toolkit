@@ -23,8 +23,14 @@ from fundus_vessels_toolkit.utils.tree import tree_connected_components
 
 from ...utils.torch import groupby_mean, torch_interp_bilinear, unique_first
 from .bipolar_gcn import TransformerGCN, TransformerGCNOpt
-from .data import BranchDigraphBatch, BranchDigraphData
+from .data import BranchDigraphBatch, BranchDigraphData, DigraphLines
 from .positionnal_embedding import APE
+
+
+class HardwareConfig(BaseModel):
+    device: Literal["cuda", "cpu"] = Field(default="cuda")
+    n_workers: int = Field(default=4)
+    compile: bool = Field(default=True)
 
 
 class BranchDigraphModelOpt(BaseModel):
@@ -42,11 +48,49 @@ class BranchDigraphModelOpt(BaseModel):
     branch_embedding_dim: int = Field(default=128)
     """Dimension of the branch embedding used to compute edge affinities."""
 
+    class EdgeAttr(BaseModel):
+        model_config = ConfigDict(use_attribute_docstrings=True)
+
+        distance: Literal["scalar", "bins", "none"] = "bins"
+        angle: bool = True
+        calibre: Literal["scalar", "bins", "none"] = "none"
+
+        distance_bins: tuple[float, ...] = (4.0, 16.0, 64.0, 254.0)
+        calibre_bins: tuple[float, ...] = (2.0, 4.0, 16.0, 32.0)
+
+        def __post_init__(self):
+            if self.distance == "bins":
+                assert len(self.distance_bins) > 0, "distance_bins must be provided when distance is set to 'bins'"
+            if self.calibre != "none":
+                assert len(self.calibre_bins) > 0, "calibre_bins must be provided when calibre is not set to 'none'"
+
+        @property
+        def n_edge_attr(self):
+            n = 3 if self.angle else 0
+            if self.distance != "none":
+                n += len(self.distance_bins) if self.distance == "bins" else 1
+            if self.calibre != "none":
+                n += 2 * (len(self.calibre_bins) if self.calibre == "bins" else 1)
+            return n
+
+        def distance_bins_tensor(self, device=None):
+            if not hasattr(self, "_distance_bins_tensor") or self._distance_bins_tensor.device != device:
+                self._distance_bins_tensor = torch.tensor(self.distance_bins, device=device)
+            return self._distance_bins_tensor
+
+        def calibre_bins_tensor(self, device=None):
+            if not hasattr(self, "_calibre_bins_tensor") or self._calibre_bins_tensor.device != device:
+                self._calibre_bins_tensor = torch.tensor(self.calibre_bins, device=device)
+            return self._calibre_bins_tensor
+
+    edge_attr: EdgeAttr = Field(default_factory=EdgeAttr)
+
 
 class BranchDigraphModel(torch.nn.Module):
-    def __init__(self, opt: BranchDigraphModelOpt):
+    def __init__(self, opt: BranchDigraphModelOpt, hardware_config: Optional[HardwareConfig] = None):
         super().__init__()
         self.opt = opt
+        self.hardware_config = hardware_config if hardware_config is not None else HardwareConfig()
 
         # --- Model components ---
         self.img_feature_extractor = self.create_img_feature_extractor(opt)
@@ -56,6 +100,10 @@ class BranchDigraphModel(torch.nn.Module):
             self.absolute_pos_encoding = APE(head_dim=self.img_feature_extractor_channels(opt))
         else:
             self.absolute_pos_encoding = None
+
+        if self.hardware_config.compile:
+            self.img_feature_extractor = torch.compile(self.img_feature_extractor)
+            self.gnn = torch.compile(self.gnn, dynamic=True)
 
         # --- Cache variables ---
         self._tip_sample_decay = None
@@ -79,7 +127,7 @@ class BranchDigraphModel(torch.nn.Module):
     @classmethod
     def create_gnn(cls, opt: BranchDigraphModelOpt) -> TransformerGCN:
         n_in = cls.img_feature_extractor_channels(opt) * (3 if opt.gcn.bipolar_node else 2)
-        return TransformerGCN(n_in=n_in, edge_attr_dim=7, opt=opt.gcn)
+        return TransformerGCN(n_in=n_in, edge_attr_dim=opt.edge_attr.n_edge_attr, opt=opt.gcn)
 
     @classmethod
     def create_classif_head(cls, opt: BranchDigraphModelOpt) -> nn.Module:
@@ -159,6 +207,53 @@ class BranchDigraphModel(torch.nn.Module):
                 features_branch.append(features.mean(dim=-2))
             return torch.stack([torch.cat(f, dim=-1) for f in (features_branch,) + features_tip], dim=1)  # (B, 3, F)
 
+    @classmethod
+    def extract_edge_attr(cls, data: BranchDigraphBatch, opt: BranchDigraphModelOpt.EdgeAttr) -> Tensor:
+        lines = data.edge_lines
+        device = data.edge_index.device
+
+        if opt.distance != "none" or opt.angle:
+            assert hasattr(data, "branch_tip_pos") and data.branch_tip_pos is not None, (
+                "branch_tip_pos must be provided to compute distance and angle edge attributes"
+            )
+            b0b1 = data.branch_tip_pos[lines.b0, lines.tip0] - data.branch_tip_pos[lines.b1, lines.tip1]
+            b0b1_d = torch.norm(b0b1, dim=1)
+
+        attr = []
+        if opt.distance == "scalar":
+            attr.append(b0b1_d[:, None])
+        elif opt.distance == "bins":
+            attr.append(1 - torch.clip(b0b1_d[:, None] / opt.distance_bins_tensor(device)[None, :], 0, 1))
+
+        if opt.calibre != "none":
+            assert hasattr(data, "branch_tip_calibre") and data.branch_tip_calibre is not None, (
+                "branch_tip_calibre must be provided to compute calibre edge attributes"
+            )
+
+            b0_calibre = data.branch_tip_calibre[lines.b0, lines.tip0]
+            b1_calibre = data.branch_tip_calibre[lines.b1, lines.tip1]
+
+            if opt.calibre == "scalar":
+                attr.append(b0_calibre[:, None])
+                attr.append(b1_calibre[:, None])
+            elif opt.calibre == "bins":
+                attr.append(1 - torch.clip(b0_calibre[:, None] / opt.calibre_bins_tensor(device)[None, :], 0, 1))
+                attr.append(1 - torch.clip(b1_calibre[:, None] / opt.calibre_bins_tensor(device)[None, :], 0, 1))
+
+        if opt.angle:
+            assert hasattr(data, "branch_tip_tan") and data.branch_tip_tan is not None, (
+                "branch_tip_tan must be provided to compute angle edge attributes"
+            )
+            b0_t = data.branch_tip_tan[lines.b0, lines.tip0]
+            b1_t = data.branch_tip_tan[lines.b1, lines.tip1]
+            b0_b1_t = torch.zeros_like(b0_t)
+            b0_b1_t[b0b1_d != 0, :] = b0b1[b0b1_d != 0] / b0b1_d[b0b1_d != 0, None]  # Avoid division by zero
+            attr += [
+                torch.einsum("ij,ij->i", t1, t2)[:, None] for t1, t2 in [(b0_t, b0_b1_t), (b1_t, b0_b1_t), (b0_t, b1_t)]
+            ]
+
+        return torch.hstack(attr)
+
     def forward(self, data: BranchDigraphBatch) -> Output:
         if not isinstance(data, PyGBatch):
             data.batch = torch.zeros(data.branch_curves.shape[0], dtype=torch.long, device=data.branch_curves.device)
@@ -171,6 +266,9 @@ class BranchDigraphModel(torch.nn.Module):
         img_size = (img.shape[-2], img.shape[-1])
         img_features = self.img_feature_extractor(img)
         branch_features = self.sample_features(img_features, data.branch_curves, data.batch, img_size)
+
+        # === Extract branch attributes ===
+        edge_attr = self.extract_edge_attr(data, self.opt.edge_attr).to(branch_features.dtype)
 
         # === Extract position and positional embedding ===
         pos = data.branch_curves[:, [0, -1], :].view(N_branch * 2, 2)
@@ -187,12 +285,12 @@ class BranchDigraphModel(torch.nn.Module):
         branch_features = branch_features.view(N_branch, -1)
 
         # === Apply GNN ===
-        lines = Lines(data.edge_index, data.edge_dir, data.branch_nodes)
+        lines = data.edge_lines
         x = self.gnn(
             branch_features,
             edge_index=lines.edge_index,
             edge_pole=lines.edge_tip,
-            edge_attr=data.edge_attr,
+            edge_attr=edge_attr,
             batch_idx=data.batch,
             batch_size=data.batch_size,
             pos=pos,
@@ -257,27 +355,19 @@ class BranchDigraphModel(torch.nn.Module):
             return self.batch.edge_index.device
 
         @property
-        def edge_lines(self):
+        def edge_lines(self) -> DigraphLines:
             """Lines linking two branches. Their score are specified by the edge_score attribute."""
             return self.lines[: self.n_edge]
 
         @property
-        def root_lines(self):
+        def root_lines(self) -> DigraphLines:
             """Lines linking the root node to branches. Their score are specified by the root_score attribute."""
             return self.lines[self.n_edge :]
 
         @cached_property
-        def lines(self) -> Lines:
+        def lines(self) -> DigraphLines:
             """The concatenation of edge lines (linking two branches) and root lines (linking the virtual root node to a branch). The root lines are added based on the valid root candidates indicated in the batch data, and their score is given by the root affinity score of their target branch."""  # noqa: E501
-            root_branch, root_tip = torch.where(self.batch.branch_root_candidates)
-            root_lines = torch.stack([-torch.ones_like(root_branch), root_branch], dim=0)
-            root_dir = root_tip == 0
-            root_dir = torch.stack([torch.zeros_like(root_dir), root_dir], dim=-1)
-            return Lines(
-                edge_index=torch.cat([self.batch.edge_index, root_lines], dim=1),
-                edge_dir=torch.cat([self.batch.edge_dir, root_dir], dim=0),
-                branch_nodes=self.batch.branch_nodes,
-            )
+            return self.batch.lines
 
         def b1_embedding_gt_tail_tip(self):
             """Return the embedding of branches as child branches (b1_embedding) indexed by their ground truth tail node and tip (0 or 1). This is used for the contrastive loss to mine pairs of branches with the same tail node."""  # noqa: E501
@@ -576,85 +666,6 @@ class BranchDigraphModel(torch.nn.Module):
             return outputs
 
 
-@dataclass(frozen=True)
-class Lines:
-    edge_index: Tensor
-    edge_dir: Tensor
-    branch_nodes: Tensor
-    mask: Optional[Tensor] = None
-    whole_mask: Optional[Tensor] = None
-
-    @classmethod
-    def from_batch(cls, batch: BranchDigraphBatch):
-        return cls(edge_index=batch.edge_index, edge_dir=batch.edge_dir, branch_nodes=batch.branch_nodes)
-
-    def __bool__(self):
-        return self.edge_index.shape[1] > 0
-
-    def __len__(self):
-        return self.edge_index.shape[1]
-
-    def __getitem__(self, idx):
-        if self.whole_mask is None:
-            whole_mask = torch.zeros(self.edge_index.shape[1], dtype=torch.bool, device=self.edge_index.device)
-            whole_mask[idx] = True
-        else:
-            whole_mask = torch.zeros_like(self.whole_mask)
-            whole_mask[self.whole_mask][idx] = True
-        return Lines(
-            edge_index=self.edge_index[:, idx],
-            edge_dir=self.edge_dir[idx],
-            branch_nodes=self.branch_nodes,
-            mask=self.mask[idx] if self.mask is not None else None,
-            whole_mask=whole_mask,
-        )
-
-    @property
-    def n_lines(self) -> int:
-        """Number of lines"""
-        return self.edge_index.shape[1]
-
-    @property
-    def b0(self) -> Tensor:
-        """Integer tensor of shape (N_line,) containing the index of the source branch of each line"""
-        return self.edge_index[0]
-
-    @property
-    def b1(self) -> Tensor:
-        """Integer tensor of shape (N_line,) containing the index of the target branch of each line"""
-        return self.edge_index[1]
-
-    @property
-    def b0_dir(self) -> Tensor:
-        """Boolean tensor of shape (N_line,) indicating for each line the required direction of its source branch (True: from tip0 to tip1, False: from tip1 to tip0)"""  # noqa: E501
-        return self.edge_dir[:, 0]
-
-    @property
-    def b1_dir(self) -> Tensor:
-        """Boolean tensor of shape (N_line,) indicating for each line the required direction of its target branch (True: from tip0 to tip1, False: from tip1 to tip0)"""  # noqa: E501
-        return self.edge_dir[:, 1]
-
-    @property
-    def b1_node(self) -> Tensor:
-        """Integer tensor of shape (N_line, 2) containing the index of the tail node for each target branch."""
-        return torch.gather(self.branch_nodes[self.b1], 1, 1 - self.b1_dir[:, None].long()).squeeze()
-
-    @property
-    def edge_tip(self) -> Tensor:
-        """Tensor of shape (N_line, 2) containing for each line the indices of the tips of its source and target branches involved in the line, ordered from tip0 to tip1. For example, if a line links the tip0 of branch A to the tip1 of branch B, the corresponding edge_tip will be [0, 1]."""  # noqa: E501
-        return torch.stack([~self.edge_dir[:, 0], self.edge_dir[:, 1]], dim=-1).int()
-
-    @property
-    def tip0(self) -> Tensor:
-        """Boolean tensor of shape (N_line,) indicating for each line the tip indices of the source branches."""  # noqa: E501
-        return (~self.edge_dir[:, 0]).int()
-
-    @property
-    def tip1(self) -> Tensor:
-        """Boolean tensor of shape (N_line,) indicating for each line the tip indices of the target branches."""  # noqa: E501
-        return self.edge_dir[:, 1].int()
-
-
 ################################
 # === Classification Heads === #
 ################################
@@ -827,7 +838,7 @@ class Gatv2GCN(torch.nn.Module):
 ###########################
 # === Utils functions === #
 ###########################
-def _max_parent(lines: Lines, lines_score: Tensor, n_branch: int):
+def _max_parent(lines: DigraphLines, lines_score: Tensor, n_branch: int):
     """Retreive for each branch its parent with the maximum edge score, considering the provided valid edge and root assignments.
 
     Parameters

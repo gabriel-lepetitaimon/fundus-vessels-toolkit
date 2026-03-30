@@ -2145,7 +2145,9 @@ class VGraph:
             raise ValueError("geometrical_data_priority must be an integer or an iterable of integers.")
         return geometrical_data_priority
 
-    def transform(self, projection: FundusProjection, inplace=False) -> Self:
+    def transform(
+        self, projection: FundusProjection, *, warped_domain: Rect | Literal["full", "same"] = "full", inplace=False
+    ) -> Self:
         """Transform the graph using the given projection.
 
         Parameters
@@ -2153,16 +2155,22 @@ class VGraph:
         projection : FundusProjection
             The projection to apply to the graph.
 
+        warped_domain : Rect or 'full' or 'same', optional
+            The domain to use for the warped coordinates. If 'full' (by default), the full domain of the projection is used. If 'same', the same domain as the original coordinates is used. If a Rect is given, it is used as the domain for the warped coordinates.
+
+        inplace : bool, optional
+            If True, the graph is modified in place. Otherwise (by default), a modified copy of the graph is returned.
+
         Returns
         -------
         VGraph
             The transformed graph.
-        """
+        """  # noqa: E501
         if not inplace:
-            return self.copy().transform(projection, inplace=True)
+            return self.copy().transform(projection, warped_domain=warped_domain, inplace=True)
 
         for gdata in self._geometric_data:
-            gdata.transform(projection, inplace=True)
+            gdata.transform(projection, warped_domain=warped_domain, inplace=True)
         return self
 
     ####################################################################################################################

@@ -1,5 +1,6 @@
 from typing import Literal, Optional
 
+from pydantic import BaseModel
 import torch
 from pytorch_metric_learning import distances as pml_distances
 from pytorch_metric_learning import losses as pml_losses
@@ -158,14 +159,23 @@ class BranchDigraphMiner(pml_miners.BaseMiner):
         return mining_output
 
 
+class BranchContrastiveLossOpt(BaseModel):
+    contrastive_loss: bool = False
+    contrastive_loss_weight: float = 0.2
+    triplet_loss: bool = True
+    triplet_loss_weight: float = 2.0
+
+
 class BranchContrastiveLoss(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, opt: BranchContrastiveLossOpt = None):
         super().__init__()
+        if opt is None:
+            opt = BranchContrastiveLossOpt()
+        self.opt = opt
+
         dist = pml_distances.CosineSimilarity()
-        self.contrastive_loss = with_weight(pml_losses.CircleLoss(distance=dist), 0.2)
-        self.triplet_loss = with_weight(
-            pml_losses.TripletMarginLoss(distance=dist, swap=True, margin=0.15, smooth_loss=True), 2
-        )
+        self.contrastive_loss = pml_losses.CircleLoss(distance=dist)
+        self.triplet_loss = pml_losses.TripletMarginLoss(distance=dist, swap=True, margin=0.15, smooth_loss=True)
         self.pairs_miner = BranchDigraphMiner(triplet=False, same_tail_node=True)
         self.triplet_miner = BranchDigraphMiner(triplet=True, same_tail_node=True)
 
@@ -173,8 +183,16 @@ class BranchContrastiveLoss(torch.nn.Module):
         return super().__call__(out)
 
     def forward(self, out: BranchDigraphModel.Output) -> dict[str, Tensor]:
+        b_embedding = out.b1_embedding_gt_tail_tip()
         pairs = self.pairs_miner(out)
+        contrastive_loss = self.contrastive_loss(b_embedding, indices_tuple=pairs) * self.opt.contrastive_loss_weight
+
         triplets = self.triplet_miner(out)
-        contrastive_loss = self.contrastive_loss(out.b1_embedding_gt_tail_tip(), indices_tuple=pairs)
-        triplet_loss = self.triplet_loss(out.b1_embedding_gt_tail_tip(), indices_tuple=triplets)
-        return {"contr_loss": contrastive_loss, "triplet_loss": triplet_loss}
+        triplet_loss = self.triplet_loss(b_embedding, indices_tuple=triplets) * self.opt.triplet_loss_weight
+
+        loss = torch.zeros_like(contrastive_loss)
+        if self.opt.contrastive_loss:
+            loss = contrastive_loss
+        if self.opt.triplet_loss:
+            loss = triplet_loss + loss
+        return {"contr_loss": contrastive_loss, "triplet_loss": triplet_loss, "loss": loss}

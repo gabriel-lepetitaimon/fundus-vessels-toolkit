@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 import abc
-from typing import Dict, List, Literal, Mapping, Optional, Self, Tuple, Type
+from typing import Dict, List, Literal, Mapping, Optional, Self, Tuple, Type, overload
 
 import numpy as np
 import numpy.typing as npt
-
-from fundus_toolkits.utils.geometric import Point, Rect
 import torch
 
+from fundus_toolkits.utils.geometric import Point, Rect
+
 from ..utils import if_none
+from ..utils.cpp_extensions.fvt_cpp import inverse_displacement, vec_bilinear_interpolate
 from ..utils.numpy import GAUSSIAN_KERNEL_5x5, np_interp_bilinear
 from ..utils.safe_import import import_cv2
 from ..utils.typing import Float2DArray, Float3DArray
-from ..utils.cpp_extensions.fvt_cpp import inverse_displacement, vec_bilinear_interpolate
 
 
 def _np_short_str(arr: npt.NDArray[np.floating]) -> str:
@@ -127,7 +127,7 @@ class FundusProjection(abc.ABC):
         Returns
         -------
         T : Self
-            The inverted projection model: T
+            The inverted projection model: T = self^(-1)
         """
         return ProjectionInverse(self)
 
@@ -145,6 +145,12 @@ class FundusProjection(abc.ABC):
         (I.e. it doesn't provide an approximation for example using Newton algorithm).
         """
         return True
+
+    def is_identity(self) -> bool:
+        """
+        Whether this projection model is the identity projection.
+        """
+        return False
 
     @abc.abstractmethod
     def transform(self, src: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
@@ -442,6 +448,9 @@ class ProjectionInverse(FundusProjection):
     def invert(self) -> FundusProjection:
         return self.T
 
+    def is_identity(self) -> bool:
+        return self.T.is_identity()
+
     @property
     def is_exact(self) -> bool:
         return self.T.is_inverse_exact
@@ -467,8 +476,11 @@ class IdentityProjection(FundusProjection):
     def __str__(self) -> str:
         return "I"
 
+    def is_identity(self) -> bool:
+        return True
+
     def invert(self) -> Self:
-        return type(self)()
+        return self
 
     def compose(self, T1: FundusProjection) -> FundusProjection:
         return T1
@@ -537,6 +549,9 @@ class Translation(FundusProjection):
     def __str__(self) -> str:
         return f"Trans(t={_np_short_str(self.t)})"
 
+    def is_identity(self) -> bool:
+        return bool(np.all(self.t == 0))
+
     def invert(self) -> Self:
         return self.__class__(-self.t)
 
@@ -596,6 +611,9 @@ class FlipProjection(FundusProjection):
         if self.vertical:
             flips.append("V")
         return "Flip(" + ",".join(flips) + ")"
+
+    def is_identity(self) -> bool:
+        return not self.horizontal and not self.vertical
 
     def invert(self) -> Self:
         return self.__class__(self.center, self.horizontal, self.vertical)
@@ -663,6 +681,9 @@ class ResizeTranslateProjection(FundusProjection):
 
     def __str__(self) -> str:
         return f"ResizeTranslateProjection(r={self.r}, t={_np_short_str(self.t)})"
+
+    def is_identity(self) -> bool:
+        return self.r == 1 and bool(np.all(self.t == 0))
 
     def invert(self) -> Self:
         return self.__class__(1 / self.r, -self.t / self.r)
@@ -743,6 +764,9 @@ class AffineProjection(FundusProjection):
             return self.__class__(self.R @ T1.R, self.R @ T1.t + self.t)
         return super().compose(T1)
 
+    def is_identity(self) -> bool:
+        return bool(np.all(self.R == np.eye(2)) and np.all(self.t == 0))
+
     def invert(self) -> Self:
         X = np.concatenate((self.R, self.t[:, None]), axis=1)
         X = np.concatenate((X, [[0, 0, 1]]), axis=0)
@@ -754,6 +778,20 @@ class AffineProjection(FundusProjection):
         src = np.asarray(src)
         return (self.R @ src.T + self.t[:, None]).T
 
+    @overload
+    def warp[T: np.generic](
+        self,
+        src_img: npt.NDArray[T],
+        src_top_left: Point | tuple[int, int] = (0, 0),
+        warped_domain: Rect | Literal["full", "same"] = "full",
+    ) -> Tuple[npt.NDArray[T], Rect]: ...
+    @overload
+    def warp[T: np.generic](
+        self,
+        src_img: List[npt.NDArray[T]],
+        src_top_left: Point | tuple[int, int] = (0, 0),
+        warped_domain: Rect | Literal["full", "same"] = "full",
+    ) -> Tuple[List[npt.NDArray[T]], Rect]: ...
     def warp(
         self,
         src_img: npt.NDArray[np.uint8]
@@ -804,6 +842,9 @@ class QuadraticProjection(FundusProjection):
 
     def __str__(self) -> str:
         return f"Quadratic(Q={_np_short_str(self.Q)}, R={_np_short_str(self.R)}, t={_np_short_str(self.t)})"
+
+    def is_identity(self) -> bool:
+        return bool(np.all(self.Q == 0) and np.all(self.R == np.eye(2)) and np.all(self.t == 0))
 
     @property
     def is_inverse_exact(self) -> bool:

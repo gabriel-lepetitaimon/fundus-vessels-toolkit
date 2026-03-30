@@ -250,6 +250,19 @@ class VBranchDigraph(LineDigraph):
             self._branch_dir_p = sigmoid(dir_logit)
         return self._branch_dir_p
 
+    @branch_dir_p.setter
+    def branch_dir_p(self, p: Float1DArray | None):
+        if p is None:
+            self._branch_dir_p = self._branch_dir_logit = None
+        else:
+            if p.shape != (self.branch_count,):
+                raise AttributeError(
+                    f"Invalid shape for branch_dir_p: shape should be (branch_count={self.branch_count}), "
+                    f"but received {p.shape}."
+                )
+            self._branch_dir_p = p
+            self._branch_dir_logit = None
+
     @property
     def branch_dir_logit(self) -> Float1DArray | None:
         """Get the direction logit of each branch.
@@ -265,6 +278,19 @@ class VBranchDigraph(LineDigraph):
             dir_p = self._branch_dir_p + 1e-6  # avoid log(0)
             self._branch_dir_logit = np.log(dir_p) - np.log(1 - dir_p)
         return self._branch_dir_logit
+
+    @branch_dir_logit.setter
+    def branch_dir_logit(self, p: Float1DArray | None):
+        if p is None:
+            self._branch_dir_p = self._branch_dir_logit = None
+        else:
+            if p.shape != (self.branch_count,):
+                raise AttributeError(
+                    f"Invalid shape for branch_dir_logit: shape should be (branch_count={self.branch_count}), "
+                    f"but received {p.shape}."
+                )
+            self._branch_dir_logit = p
+            self._branch_dir_p = None
 
     @property
     def branch_dir(self) -> Bool1DArray | None:
@@ -311,6 +337,19 @@ class VBranchDigraph(LineDigraph):
             self._branch_fp_p = sigmoid(fp_logit)
         return self._branch_fp_p
 
+    @branch_fp_p.setter
+    def branch_fp_p(self, p: Float1DArray | None):
+        if p is None:
+            self._branch_fp_p = self._branch_fp_logit = None
+        else:
+            if p.shape != (self.branch_count,):
+                raise AttributeError(
+                    f"Invalid shape for branch_fp_p: shape should be (branch_count={self.branch_count}), "
+                    f"but received {p.shape}."
+                )
+            self._branch_fp_p = p
+            self._branch_fp_logit = None
+
     @property
     def branch_fp_logit(self) -> Float1DArray | None:
         """Get the false positive logit of each branch.
@@ -326,6 +365,19 @@ class VBranchDigraph(LineDigraph):
             fp_p += 1e-6  # avoid log(0)
             self._branch_fp_logit = np.log(fp_p) - np.log(1 - fp_p)
         return self._branch_fp_logit
+
+    @branch_fp_logit.setter
+    def branch_fp_logit(self, p: Float1DArray | None):
+        if p is None:
+            self._branch_fp_p = self._branch_fp_logit = None
+        else:
+            if p.shape != (self.branch_count,):
+                raise AttributeError(
+                    f"Invalid shape for branch_fp_logit: shape should be (branch_count={self.branch_count}), "
+                    f"but received {p.shape}."
+                )
+            self._branch_fp_logit = p
+            self._branch_fp_p = None
 
     def branch_fp(self) -> npt.NDArray[np.bool_]:
         """Get a mask of invalid branches.
@@ -358,6 +410,19 @@ class VBranchDigraph(LineDigraph):
             self._branch_av_p = sigmoid(av_logit)
         return self._branch_av_p
 
+    @branch_av_p.setter
+    def branch_av_p(self, p: Float1DArray | None):
+        if p is None:
+            self._branch_av_p = self._branch_av_logit = None
+        else:
+            if p.shape != (self.branch_count,):
+                raise AttributeError(
+                    f"Invalid shape for branch_av_p: shape should be (branch_count={self.branch_count}), "
+                    f"but received {p.shape}."
+                )
+            self._branch_av_p = p
+            self._branch_av_logit = None
+
     @property
     def branch_av_logit(self) -> Float1DArray | None:
         """Get the artery logit of each branch.
@@ -373,6 +438,19 @@ class VBranchDigraph(LineDigraph):
             av_p += 1e-6  # avoid log(0)
             self._branch_av_logit = np.log(av_p) - np.log(1 - av_p)
         return self._branch_av_logit
+
+    @branch_av_logit.setter
+    def branch_av_logit(self, p: Float1DArray | None):
+        if p is None:
+            self._branch_av_p = self._branch_av_logit = None
+        else:
+            if p.shape != (self.branch_count,):
+                raise AttributeError(
+                    f"Invalid shape for branch_av_logit: shape should be (branch_count={self.branch_count}), "
+                    f"but received {p.shape}."
+                )
+            self._branch_av_logit = p
+            self._branch_av_p = None
 
     def branch_av_class(self) -> Int1DArray | None:
         """Get the artery/vein class of each branch.
@@ -420,6 +498,11 @@ class VBranchDigraph(LineDigraph):
         """Check if the digraph has artery/vein class, false positive and direction information (i.e. if branch_av_p or branch_av_logit is not None, and if branch_fp_p or branch_fp_logit is not None, and if branch_dir_p or branch_dir_logit is not None)."""  # noqa: E501
         return _VBranchDigraphWithAllProba.check(instance)
 
+    @classmethod
+    def has_graph(cls, instance: Self) -> TypeGuard[_VBranchDigraphWithGraph]:
+        """Check if the digraph has a not null graph attribute."""
+        return _VBranchDigraphWithGraph.check(instance)
+
     # === DIGRAPH BUILDING ===
     @classmethod
     def from_graph(
@@ -433,7 +516,7 @@ class VBranchDigraph(LineDigraph):
         pos_tolerance=25,
         check: bool = True,
         split_for_reconnections: bool = True,
-    ) -> Self:
+    ) -> _VBranchDigraphWithGraph:
         """Create a BranchDigraph from a VGraph.
 
         Parameters
@@ -487,7 +570,7 @@ class VBranchDigraph(LineDigraph):
         digraph = cls(graph=graph, line_list=line_list)
         if check:
             digraph.check_lines(on_invalid="warn")
-        return digraph
+        return digraph  # type: ignore[return-value]
 
     def compute_p_from_gt(
         self,
@@ -989,6 +1072,21 @@ class VBranchDigraph(LineDigraph):
         return pd.DataFrame(data=data | data_p)
 
 
+class _VBranchDigraphWithGraph(VBranchDigraph):
+    """Utility class for type checker specifying VBranchDigraph with not null graph attribute.
+
+    This class is not meant to be instantiated!!!
+    """
+
+    @property
+    def graph(self) -> VGraph: ...
+
+    @classmethod
+    def check(cls, digraph: VBranchDigraph) -> TypeGuard[Self]:
+        """Check if the given digraph has a not null graph attribute."""
+        return digraph.graph is not None
+
+
 class _VBranchDigraphWithAVProba(VBranchDigraph):
     """Utility class for type checker specifying VBranchDigraph with not null branch_av_p and branch_fp_p attributes.
 
@@ -1259,93 +1357,6 @@ def prioritize_existing_branch(
             redirected_lines = digraph.search_lines([[b0, b0_tip, s, s_tip0], [s, 1 - s_tip0, b1, b1_tip]])
             line_opti[lines_lookup[distant_line_id]] = False
             line_opti[redirected_lines] = True
-
-
-########################################################################################################################
-#       === Edge Attribute Extractor ===
-########################################################################################################################
-class BaseEdgeAttrExtractor(Protocol):
-    def __call__(self, digraph: VBranchDigraph) -> npt.NDArray: ...  # type: ignore
-
-
-class EdgeAttrExtractor(BaseEdgeAttrExtractor):
-    def __init__(
-        self,
-        distance: Literal["scalar", "bins", None] = "bins",
-        angle: bool = True,
-        calibre: Literal["scalar", "bins", None] = None,
-        *,
-        distance_bins: Sequence[float] = (4, 16, 64, 254),
-        calibre_bins: Sequence[float] = (2, 4, 16, 32),
-    ):
-        assert distance in ["scalar", "bins", None], "distance must be either 'scalar', 'bins' or None"
-        assert calibre in ["scalar", "bins", None], "calibre must be either 'scalar', 'bins' or None'"
-
-        self.distance_bins = np.array(distance_bins)
-        self.calibre_bins = np.array(calibre_bins)
-        self.distance = distance
-        self.angle = angle
-        self.calibre = calibre
-
-    def __call__(self, digraph: VBranchDigraph) -> npt.NDArray:
-        lines = digraph.not_root_lines()
-        assert digraph.graph is not None, "The graph attribute of the digraph must be set to compute edge attributes"
-        geodata = digraph.graph.geometric_data()
-        attr = []
-
-        if self.distance is not None or self.angle:
-            b0_p = geodata.tip_coord(lines.b0, lines.b0_tip == 0)
-            b1_p = geodata.tip_coord(lines.b1, lines.b1_tip == 0)
-            b0b1 = b0_p - b1_p
-            b0b1_d = np.linalg.norm(b0b1, axis=1)
-
-        if self.distance == "scalar":
-            attr.append(b0b1_d[:, None])
-        elif self.distance == "bins":
-            attr.append(1 - np.clip(b0b1_d[:, None] / self.distance_bins, 0, 1))
-
-        if self.calibre is not None:
-            b0_calibre = geodata.tip_data(VBranchGeoData.Fields.TIPS_CALIBRE, lines.b0, lines.b0_tip == 0)
-            b1_calibre = geodata.tip_data(VBranchGeoData.Fields.TIPS_CALIBRE, lines.b1, lines.b1_tip == 0)
-            if self.calibre == "scalar":
-                attr.append(b0_calibre[:, None])
-                attr.append(b1_calibre[:, None])
-            elif self.calibre == "bins":
-                attr.append(1 - np.clip(b0_calibre[:, None] / self.calibre_bins, 0, 1))
-                attr.append(1 - np.clip(b1_calibre[:, None] / self.calibre_bins, 0, 1))
-
-        if self.angle:
-            b0_t = -geodata.tip_tangent(lines.b0, lines.b0_tip == 0)
-            b1_t = geodata.tip_tangent(lines.b1, lines.b1_tip == 0)
-            b0_b1_t = np.zeros_like(b0_t)
-            b0_b1_t[b0b1_d != 0, :] = b0b1[b0b1_d != 0] / b0b1_d[b0b1_d != 0, None]  # Avoid division by zero
-            attr += [
-                np.einsum("ij,ij->i", t1, t2)[:, None] for t1, t2 in [(b0_t, b0_b1_t), (b1_t, b0_b1_t), (b0_t, b1_t)]
-            ]
-
-        return np.hstack(attr)
-
-
-def branch_dist_tangent_extractor(digraph: VBranchDigraph) -> npt.NDArray[np.float64]:
-    assert digraph.graph is not None, "The graph attribute of the digraph must be set to compute edge attributes"
-
-    line_list = digraph.line_list
-    b0, b0_tip, b1, b1_tip = line_list[line_list[:, 0] != -1].T
-
-    b0_p = digraph.graph.geometric_data().tip_coord(b0, b0_tip == 0)
-    b1_p = digraph.graph.geometric_data().tip_coord(b1, b1_tip == 0)
-    b0b1 = b0_p - b1_p
-    b0b1_d = np.linalg.norm(b0b1, axis=1)
-
-    b0_t = -digraph.graph.geometric_data().tip_tangent(b0, b0_tip == 0)
-    b1_t = digraph.graph.geometric_data().tip_tangent(b1, b1_tip == 0)
-    b0_b1_t = np.zeros_like(b0_t)
-    b0_b1_t[b0b1_d != 0, :] = b0b1[b0b1_d != 0] / b0b1_d[b0b1_d != 0, None]  # Avoid division by zero
-
-    # Smooth one hot encoding of the distance b0->b1 in 4 bins:
-    dist_f = 1 - np.clip(b0b1_d[:, None] / np.array([4, 16, 64, 256]), 0, 1)
-    tan_f = [np.einsum("ij,ij->i", t1, t2)[:, None] for t1, t2 in [(b0_t, b0_b1_t), (b1_t, b0_b1_t), (b0_t, b1_t)]]
-    return np.hstack([dist_f] + tan_f)
 
 
 ########################################################################################################################
