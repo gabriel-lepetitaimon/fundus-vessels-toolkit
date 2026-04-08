@@ -161,8 +161,8 @@ def np_group_by(array: npt.NDArray, keys: npt.NDArray) -> list[tuple[npt.NDArray
 
     Returns
     -------
-    List[np.ndarray]
-        A list of arrays, each containing the elements of array corresponding to a unique key.
+    List[Tuple[np.ndarray, np.ndarray]]
+        A list of tuples, where each tuple contains a unique key and the corresponding elements of the array.
     """
     assert array.shape[0] == keys.shape[0], "array and keys must have the same length."
     unique_keys, inverse_indices = np.unique(keys, return_inverse=True)

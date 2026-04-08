@@ -3775,7 +3775,6 @@ class VGraph:
         from jppype.layers import LayerGraph
         from jppype.utils.color import colormap_by_name
 
-        from ..utils.bezier import BezierCubic
         from .vgeometric_data import VBranchGeoData
 
         if bspline is False:

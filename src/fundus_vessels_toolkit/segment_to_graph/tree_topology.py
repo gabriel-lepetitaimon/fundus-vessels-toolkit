@@ -13,6 +13,7 @@ from skimage.segmentation import expand_labels
 from fundus_toolkits import FundusData
 from fundus_toolkits.utils.geometric import Rect
 from fundus_vessels_toolkit.utils.cluster import reduce_clusters
+from fundus_vessels_toolkit.utils.data_io import load_numpy_dict, save_numpy_dict
 
 from ..utils.lookup_array import invert_complete_lookup
 from ..utils.math import gaussian_kernel2d
@@ -188,21 +189,24 @@ class TreeTopology:
                 return
 
         self = self.as_dense()
-        np.savez_compressed(
-            str(file_path),
+        data_dict: dict[str, Any] = dict(
             branch_map=self.branch_map,
             rank_map=self.rank_map,
             fuzzy_skeleton_map=self.fuzzy_skeleton_map,
         )
+        if self._tree is not None:
+            data_dict["tree"] = self._tree.save()
+        save_numpy_dict(data_dict, file_path, compress=True, on_exists=on_exists)
 
     @classmethod
-    def load(cls, path: str | Path, *, sparse: bool = False) -> Self:
+    def load(cls, path: str | Path, *, sparse: bool = False, tree: bool = True) -> Self:
         """Load the tree topology from a file."""
-        data = np.load(path)
+        data = load_numpy_dict(path)
         return cls(
             branch_map=data["branch_map"],
             rank_map=data["rank_map"],
             fuzzy_skeleton_map=data["fuzzy_skeleton_map"],
+            tree=VTree.load(data["tree"]) if tree and "tree" in data else None,
             sparse=sparse,
         )
 

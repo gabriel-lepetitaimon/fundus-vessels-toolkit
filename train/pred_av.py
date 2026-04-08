@@ -3,8 +3,8 @@ from pathlib import Path
 import tqdm
 
 from fundus_toolkits import FundusData
+from fundus_toolkits.utils.data_io import most_common_image_ext
 from fundus_vessels_toolkit.models import segment_av
-from fundus_vessels_toolkit.utils.data_io import most_common_image_ext
 
 
 def predict_av():

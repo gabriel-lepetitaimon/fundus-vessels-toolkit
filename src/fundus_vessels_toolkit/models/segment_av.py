@@ -194,7 +194,7 @@ def segment_av_model(model: SegmentAVModels = SegmentAVModel.MULTILABEL_FUNDUS) 
     torch.nn.Module
         The segmentation model.
     """
-    from .models_src.classify_av_models import AVBaseModel
+    from .classify_av.models import AVBaseModel
 
     model = SegmentAVModel(model)
     match model:

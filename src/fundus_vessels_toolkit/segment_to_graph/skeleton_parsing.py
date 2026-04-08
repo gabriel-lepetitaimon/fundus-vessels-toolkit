@@ -145,6 +145,7 @@ def skeleton_to_vgraph(
         max_spurs_length=max_spurs_length,
     )
     branch_list, nodes_yx, branches_curve = outs[1:4]
+    nodes_yx = nodes_yx.numpy()
     labels = outs[0]
 
     branch_list = branch_list.numpy()
@@ -161,7 +162,7 @@ def skeleton_to_vgraph(
         nodes_yx = np.delete(nodes_yx, orphan_nodes, axis=0)
 
     geo_data = VGeometricData(
-        nodes_coord=nodes_yx.numpy(),
+        nodes_coord=nodes_yx,
         branches_curve=[_.numpy() for _ in branches_curve],
         domain=labels.shape,
         fundus_data=fundus_data,
@@ -169,9 +170,9 @@ def skeleton_to_vgraph(
     if vessels is not None and clean_branches_tips > 0:
         tangents, calibres, boundaries = [], [], []
         for t in outs[-1]:
-            tangents.append(VBranchGeoData.TipsTangents(t[:, :2].numpy()))
-            calibres.append(VBranchGeoData.TipsScalar(t[:, 2].numpy()))
-            boundaries.append(VBranchGeoData.Tips2Points(t[:, 3:7].reshape(2, 2, 2).numpy()))
+            tangents.append(VBranchGeoData.Fields.TIPS_TANGENT.geo_type(t[:, :2].numpy()))
+            calibres.append(VBranchGeoData.Fields.TIPS_CALIBRE.geo_type(t[:, 2].numpy()))
+            boundaries.append(VBranchGeoData.Fields.TIPS_BOUNDARIES.geo_type(t[:, 3:7].reshape(2, 2, 2).numpy()))
         geo_data.set_branch_data(VBranchGeoData.Fields.TIPS_TANGENT, tangents)
         geo_data.set_branch_data(VBranchGeoData.Fields.TIPS_CALIBRE, calibres)
         geo_data.set_branch_data(VBranchGeoData.Fields.TIPS_BOUNDARIES, boundaries)

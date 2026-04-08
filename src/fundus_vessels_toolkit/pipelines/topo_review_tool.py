@@ -11,17 +11,17 @@ from jppype import Mosaic, vscode_theme
 
 from fundus_odmac_toolkit.models.segmentation import segment
 from fundus_toolkits import FundusData
-from fundus_vessels_toolkit.models import segment_av
-from fundus_vessels_toolkit.pipelines.avseg_to_tree import GNNAVSegToTree, NaiveAVSegToTree
-from fundus_vessels_toolkit.segment_to_graph.av_tree_parsing import naive_infer_roots
-from fundus_vessels_toolkit.segment_to_graph.graph_simplification import simplify_passing_nodes
-from fundus_vessels_toolkit.segment_to_graph.tree_simplification import disconnect_crossing
-from fundus_vessels_toolkit.segment_to_graph.tree_topology import TopologicalLabel, TreeTopology
-from fundus_vessels_toolkit.utils.cluster import reduce_clusters
-from fundus_vessels_toolkit.utils.data_io import most_common_image_ext
-from fundus_vessels_toolkit.utils.jppype import draw_tree
-from fundus_vessels_toolkit.vascular_data_objects.vgraph import NodeIndices
-from fundus_vessels_toolkit.vascular_data_objects.vtree import VTree, VTreeNode
+from fundus_toolkits.utils.data_io import most_common_image_ext
+
+from ..models import segment_av
+from ..pipelines.avseg_to_tree import GNNAVSegToTree, NaiveAVSegToTree
+from ..segment_to_graph.av_tree_parsing import naive_infer_roots
+from ..segment_to_graph.graph_simplification import simplify_passing_nodes
+from ..segment_to_graph.tree_simplification import disconnect_crossing
+from ..segment_to_graph.tree_topology import TopologicalLabel, TreeTopology
+from ..utils.jppype import draw_tree
+from ..vascular_data_objects.vgraph import NodeIndices
+from ..vascular_data_objects.vtree import VTree, VTreeNode
 
 
 @dataclass

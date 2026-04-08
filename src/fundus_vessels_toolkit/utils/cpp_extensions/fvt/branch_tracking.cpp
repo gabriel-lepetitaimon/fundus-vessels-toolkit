@@ -308,11 +308,10 @@ torch::Tensor draw_skeleton_labels(const std::vector<torch::Tensor>& branchCurve
         IntPoint prev = {curve[0][0], curve[0][1]};
         for (std::size_t i = 0; i < N; i++) {
             IntPoint p = {curve[i][0], curve[i][1]};
-            if (interpolate && !p.is_adjacent(prev)) {
+            if (interpolate && !p.is_adjacent(prev))
                 draw_line(prev, p, branchesLabels, b + 1, H, W);
-            } else {
+            else if (p.is_inside(H, W))
                 branchesLabels[p.y][p.x] = b + 1;
-            }
             prev = p;
         }
     }

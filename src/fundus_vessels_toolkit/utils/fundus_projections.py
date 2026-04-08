@@ -11,9 +11,8 @@ from fundus_toolkits.utils.geometric import Point, Rect
 
 from ..utils import if_none
 from ..utils.cpp_extensions.fvt_cpp import inverse_displacement, vec_bilinear_interpolate
-from ..utils.numpy import GAUSSIAN_KERNEL_5x5, np_interp_bilinear
+from ..utils.numpy import GAUSSIAN_KERNEL_5x5
 from ..utils.safe_import import import_cv2
-from ..utils.typing import Float2DArray, Float3DArray
 
 
 def _np_short_str(arr: npt.NDArray[np.floating]) -> str:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Optional, Self, TypeGuard, TypedDict
+from typing import Optional, Self, TypeGuard
 
 import numpy as np
 import numpy.typing as npt
@@ -10,32 +10,19 @@ from torch import Tensor
 from torch_geometric.data import Data as PygData
 from torch_geometric.typing import OptTensor
 
-from fundus_toolkits import AVLabel, FundusData
-from fundus_toolkits.utils.color import color_jitter
+from fundus_toolkits import FundusData
 from fundus_toolkits.utils.geometric import Point, Rect
-from fundus_toolkits.utils.image import read_image
-from fundus_vessels_toolkit.utils.tree import tree_connected_components
 
-from ...pipelines.avseg_to_tree import GNNAVSegToTree
-from ...segment_to_graph.graph_simplification import merge_nodes_by_distance
-from ...segment_to_graph.tree_topology import TopologicalLabel
 from ...segment_to_graph.vbranch_digraph import (
-    # BaseEdgeAttrExtractor,
-    # EdgeAttrExtractor,
     TreeTopology,
     VBranchDigraph,
     VGraph,
 )
 from ...utils import if_none
-from ...utils.data_io import most_common_image_ext
-from ...utils.fundus_projections import ResizeTranslateProjection
-from ...utils.numpy import np_group_by
-from ...utils.typing import Bool1DArray, Int1DArray
-from ...vascular_data_objects import VBranchGeoData, VTree
-from .data_augmentation import AugmentationOpts, deteriorate_graph, geometric_augment
-
-if TYPE_CHECKING:
-    from ...utils.jppype import Mosaic
+from ...utils.tree import tree_connected_components
+from ...vascular_data_objects import VBranchGeoData
+from ...vascular_data_objects.vgeometric_data import VGeometricData
+from .data_augmentation import AugmentationOpts, deteriorate_graph
 
 
 class BranchDigraphData(PygData):
@@ -51,11 +38,14 @@ class BranchDigraphData(PygData):
     vnode_count: int
     """Number of nodes in the vascular graph."""
 
+    vnode_coord: Tensor
+    """(y, x) coordinates of the vascular nodes as a tensor of shape (N, 2)."""
+
     branch_nodes: Tensor
     """Indices of the two tip nodes of each branch in the graph, as a tensor of shape (B, 2)."""
 
     branch_curves: Tensor
-    """List of the branch curves, each as a Nx2 tensor of (x, y) coordinates."""
+    """Branch curves with a constant N number of points, as a tensor of shape (B, N, 2)."""
 
     branch_root_candidates: Tensor
     """Valid vascular roots as a boolean tensor of shape (B, 2) indicating for each branch tip whether it is a valid root."""  # noqa: E501
@@ -120,6 +110,7 @@ class BranchDigraphData(PygData):
         od_yx: Tensor = None,  # type: ignore
         mac_yx: Tensor = None,  # type: ignore
         vnode_count: int = None,  # type: ignore
+        vnode_coord: Tensor = None,  # type: ignore
         branch_nodes: Tensor = None,  # type: ignore
         branch_curves: list[Tensor] = None,  # type: ignore
         branch_root_candidates: Tensor = None,  # type: ignore
@@ -185,6 +176,10 @@ class BranchDigraphData(PygData):
             assert mac_yx.shape == (2,), f"mac_yx must be of shape (2,) but got {mac_yx.shape}"
             assert isinstance(vnode_count, int) and vnode_count >= 0, (
                 f"node_count must be a non-negative integer but got {vnode_count}"
+            )
+
+            assert vnode_coord.shape == (vnode_count, 2), (
+                f"vnode_coord must be of shape ({vnode_count}, 2) but got {vnode_coord.shape}"
             )
 
             # --- Branch attributes ---
@@ -267,6 +262,7 @@ class BranchDigraphData(PygData):
             od_yx=od_yx,
             mac_yx=mac_yx,
             vnode_count=vnode_count,
+            vnode_coord=vnode_coord,
             name=name,
         )
         self.num_nodes = B
@@ -341,6 +337,7 @@ class BranchDigraphData(PygData):
             od_yx=torch.from_numpy(od_yx).float(),
             mac_yx=torch.from_numpy(mac_yx).float(),
             vnode_count=digraph.graph.node_count,
+            vnode_coord=torch.from_numpy(geodata.node_coord()).float(),
             edge_index=torch.from_numpy(digraph.b0b1[not_root]).T,
             edge_dir=torch.from_numpy(digraph.b0b1_dir[not_root]),
             branch_nodes=torch.from_numpy(digraph.graph.branch_list).int(),
@@ -426,10 +423,16 @@ class BranchDigraphData(PygData):
         """  # noqa: E501
         digraph = self.lines.to_digraph()
         if graph:
-            digraph.graph = VGraph(branch_list=self.branch_nodes.numpy(force=True))
-            digraph.graph.geometric_data().set_branch_curve(self.branch_curves.numpy(force=True))
+            geodata = VGeometricData(
+                nodes_coord=self.vnode_coord.numpy(force=True),
+                branches_curve=[curve.numpy(force=True) for curve in self.branch_curves],
+                domain=Rect.from_size(self.img.shape[-2:]),  # type: ignore
+            )
+            digraph.graph = VGraph(
+                branch_list=self.branch_nodes.numpy(force=True), geometric_data=geodata, check_integrity=True
+            )
         if BranchDigraphData.has_gt(self) and gt_proba is not False:
-            digraph.line_p = self.edge_p.numpy(force=True)
+            digraph.line_p = self.line_p.numpy(force=True)
             digraph.branch_fp_p = self.branch_fp_p.numpy(force=True)
             digraph.branch_av_p = self.branch_av_p.numpy(force=True)
             digraph.branch_dir_p = self.branch_dir_p.numpy(force=True)
@@ -453,6 +456,15 @@ class BranchDigraphData(PygData):
             edge_dir=torch.cat([self.edge_dir, root_dir], dim=0),
             branch_nodes=self.branch_nodes,
         )
+
+    @property
+    def line_p(self) -> Optional[Tensor]:
+        """Ground truth probability of each line (edge or root) being correct. For edge lines, the probability is given by the edge_p attribute of the data, while for root lines, the probability is given by the branch_root_p attribute of the target branch and tip of the root line."""  # noqa: E501
+        if self.edge_p is None or self.branch_root_p is None:
+            return None
+        root_branch, root_tip = torch.where(self.branch_root_candidates)
+        root_line_p = self.branch_root_p[root_branch, root_tip]
+        return torch.cat([self.edge_p, root_line_p], dim=0)
 
     @classmethod
     def has_gt(cls, instance: Self) -> TypeGuard[_BranchDigraphDataWithGT]:
@@ -478,7 +490,7 @@ class DigraphLines:
         line_list[:, 1] = self.b0_dir.numpy(force=True).astype(np.int64)
         line_list[:, 2] = self.b1.numpy(force=True)
         line_list[:, 3] = 1 - self.b1_dir.numpy(force=True)
-        return VBranchDigraph(line_list=line_list)
+        return VBranchDigraph(line_list=line_list, branch_count=self.branch_nodes.shape[0])
 
     def __bool__(self):
         return self.edge_index.shape[1] > 0
@@ -554,6 +566,7 @@ class _BranchDigraphDataWithGT(BranchDigraphData):
     """Utility class for typechecking to ensure that the data has ground truth probabilities."""
 
     edge_p: Tensor
+    line_p: Tensor
     branch_root_p: Tensor
     branch_fp_p: Tensor
     branch_av_p: Tensor

@@ -14,17 +14,6 @@ from torchmetrics import MetricCollection, Specificity
 from torchmetrics.classification import Accuracy, Precision, Recall
 
 import wandb
-from fundus_vessels_toolkit.models.branch_digraph_gnn.data import (
-    BranchDigraphBatch,
-    BranchDigraphData,
-    BranchDigraphDataset,
-)
-from fundus_vessels_toolkit.models.branch_digraph_gnn.losses import (
-    BranchContrastiveLoss,
-    BranchContrastiveLossOpt,
-    CrossEntropyLoss,
-)
-from fundus_vessels_toolkit.models.branch_digraph_gnn.model import BranchDigraphModel, BranchDigraphModelOpt
 from fundus_vessels_toolkit.models.metrics.tree import (
     MetricCollectionDict,
     ParentAcc,
@@ -34,6 +23,17 @@ from fundus_vessels_toolkit.models.metrics.tree import (
     RootSensitivity,
     RootSpecificity,
 )
+from fundus_vessels_toolkit.models.topology.data import (
+    BranchDigraphBatch,
+    BranchDigraphData,
+    BranchDigraphDataset,
+)
+from fundus_vessels_toolkit.models.topology.losses import (
+    BranchContrastiveLoss,
+    BranchContrastiveLossOpt,
+    CrossEntropyLoss,
+)
+from fundus_vessels_toolkit.models.topology.model import BranchDigraphModel, BranchDigraphModelOpt
 
 # torch.set_float32_matmul_precision("medium")
 torch.backends.cudnn.conv.fp32_precision = "tf32"  # type: ignore
