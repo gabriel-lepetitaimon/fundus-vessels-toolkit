@@ -4,7 +4,6 @@ from typing import Literal, Optional, Tuple
 
 import numpy as np
 import numpy.typing as npt
-from matplotlib.image import GAUSSIAN
 
 from ..utils.typing import Bool2DArray
 

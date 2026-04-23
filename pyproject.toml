@@ -8,8 +8,9 @@ authors = [
 description = """A bundle of tools to segment, classify, skeletonize fundus vascular tree."""
 readme = 'README.md'
 
-requires-python = '>=3.12'
 dependencies = [
+    'psutil',
+
     'numpy',
     'scikit-image',
     'scipy',
@@ -23,12 +24,14 @@ dependencies = [
     'torch>=2.0.0',
     'segmentation-models-pytorch',
     'torchmetrics',
-    'pytorch-metric-learning',
-]
+    'torch-geometric',
+
+    'git+https://github.com/LIV4D/fundus-toolkits-common.git',
+]requires-python = '>=3.12'
 
 [project.optional-dependencies]
 build = ['wheel', 'twine', 'ninja']
-train = ['pytorch-lightning']
+train = ['pytorch-lightning', 'wandb', 'pydantic', 'pytorch-metric-learning']
 dev = [
     'sphinx',
     'sphinx-rtd-theme', # Read the docs theme
