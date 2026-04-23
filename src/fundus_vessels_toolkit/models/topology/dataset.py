@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Iterable, Literal, Optional, Self, Sequence, o
 
 import numpy as np
 import tqdm
-from fundus_data_toolkit.functional import open_image
 from joblib import Parallel, delayed
 from numpy.random import MT19937, RandomState, SeedSequence
 from pydantic import BaseModel, Field, TypeAdapter
@@ -23,7 +22,6 @@ from pydantic.dataclasses import dataclass as pydantic_dataclass
 from skimage.morphology import binary_erosion, disk
 from torch_geometric.data import Dataset as PygDataset
 
-from fundus_odmac_toolkit.models.segmentation import segment
 from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.data_io import most_common_image_ext, overwrite_or_newer
 from fundus_toolkits.utils.geometric import Point, Rect
@@ -330,13 +328,15 @@ class SampleSource:
 
     def compute_od_mac(self, overwrite: Optional[bool | datetime] = None) -> Self:
         """Compute the optic disc and macula centers from the fundus image if they are not already provided."""
+        from fundus_odmac_toolkit.models.segmentation import segment as segment_od_mac
+        from fundus_data_toolkit.functional import open_image
 
         fundus = FundusData.empty_like(self.fundus)
 
         save_od = overwrite_or_newer(self.fundus, self.od, overwrite)
         save_mac = overwrite_or_newer(self.fundus, self.macula, overwrite)
         if save_od or save_mac:
-            od_mac = segment(open_image(self.fundus)).numpy(force=True).argmax(axis=0)  # type: ignore
+            od_mac = segment_od_mac(open_image(self.fundus)).numpy(force=True).argmax(axis=0)  # type: ignore
             fundus.update(od=od_mac == 1, macula=od_mac == 2, reshape_method="resize", inplace=True)
             assert fundus.od_center is not None and fundus.macula_center is not None
 
