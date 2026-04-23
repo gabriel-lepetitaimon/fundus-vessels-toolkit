@@ -124,8 +124,8 @@ std::vector<std::list<InterceptPoint>> intercept_curves(const std::vector<CurveY
                                                         const GraphAdjList& graph, const std::vector<IntPoint>& nodesYX,
                                                         const std::vector<IntPoint>& starts, const PointList& dirs,
                                                         float maxDistSqr, float startMinCosSim, float endMinCosSim,
-                                                        float maxSnapDistSqr, float maxSnapCosAngle,
-                                                        bool interpolateCurves = true);
+                                                        float minSnapDistSqr, float maxSnapDistSqr,
+                                                        float maxSnapCosAngle, bool interpolateCurves = true);
 
 /**************************************************************************************
  *              === BRANCH_FIXING.CPP ===

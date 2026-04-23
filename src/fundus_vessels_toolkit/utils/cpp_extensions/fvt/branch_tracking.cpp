@@ -352,6 +352,8 @@ torch::Tensor draw_skeleton_labels(const std::vector<torch::Tensor>& branchCurve
  * @param maxDistSqr The square of the maximum distance to consider.
  * @param startMinCosSim The minimum cosine similarity at the start point.
  * @param endMinCosSim The minimum cosine similarity at the end point.
+ * @param minSnapDistSqr The square of the minimum distance under which the intersection is automatically snapped to the
+ * closest curve tip regardless of the angle.
  * @param maxSnapDistSqr The square of the maximum distance under which the intersection snaps to the closest curve tip.
  * @param maxSnapCosAngle The cosine of the maximum angle under which the intersection snaps.
  * @return A tuple containing the index of the closest point on the curve, the squared distance to it, and the average
@@ -359,7 +361,8 @@ torch::Tensor draw_skeleton_labels(const std::vector<torch::Tensor>& branchCurve
  */
 std::tuple<std::size_t, int, float> _intercept_curve(const CurveYX& curve, const IntPoint& start, const Point& dir,
                                                      float maxDistSqr, float startMinCosSim, float endMinCosSim,
-                                                     float maxSnapDistSqr, float maxSnapCosAngle) {
+                                                     float minSnapDistSqr, float maxSnapDistSqr,
+                                                     float maxSnapCosAngle) {
     std::size_t closestP = curve.size();
     int closestDistSqr = maxDistSqr;
     float closestManhattanDist = std::numeric_limits<float>::max();
@@ -396,13 +399,15 @@ std::tuple<std::size_t, int, float> _intercept_curve(const CurveYX& curve, const
     if (closestP == curve.size()) return {closestP, -1, avgSqrDist};
 
     // Try to snap to the nearest curve tip
-    if (maxSnapDistSqr > 0 && closestP != 0 && closestP != curve.size() - 1) {
+    if ((maxSnapDistSqr > 0 || minSnapDistSqr > 0) && closestP != 0 && closestP != curve.size() - 1) {
         bool lastTip = closestP > curve.size() - closestP;
         const auto& tipP = lastTip ? curve.back() : curve.front();
         const auto& p = curve[closestP];
 
         // If the snapping tip is within the allowed distance and angle, snap to it
-        if ((p - tipP).squaredNorm() <= maxSnapDistSqr && (tipP - start).cosSim(p - start) >= maxSnapCosAngle)
+        const float sqrNorm = (p - tipP).squaredNorm();
+        if (sqrNorm <= minSnapDistSqr ||
+            (sqrNorm <= maxSnapDistSqr && (tipP - start).cosSim(p - start) >= maxSnapCosAngle))
             closestP = lastTip ? curve.size() - 1 : 0;
     }
     return {closestP, closestDistSqr, avgSqrDist};
@@ -415,10 +420,13 @@ struct InterceptIntermediateResults {
     float avgDistSqr;
 };
 
-std::vector<std::list<InterceptPoint>> intercept_curves(
-    const std::vector<CurveYX>& branchCurves, const std::vector<IntPair>& branchList, const GraphAdjList& graph,
-    const std::vector<IntPoint>& nodesYX, const std::vector<IntPoint>& starts, const PointList& dirs, float maxDistSqr,
-    float startMinCosSim, float endMinCosSim, float maxSnapDistSqr, float maxSnapCosAngle, bool interpolateCurves) {
+std::vector<std::list<InterceptPoint>> intercept_curves(const std::vector<CurveYX>& branchCurves,
+                                                        const std::vector<IntPair>& branchList,
+                                                        const GraphAdjList& graph, const std::vector<IntPoint>& nodesYX,
+                                                        const std::vector<IntPoint>& starts, const PointList& dirs,
+                                                        float maxDistSqr, float startMinCosSim, float endMinCosSim,
+                                                        float minSnapDistSqr, float maxSnapDistSqr,
+                                                        float maxSnapCosAngle, bool interpolateCurves) {
     // === INTERPOLATE CURVES ===
     std::vector<CurveYX> curves;
     std::vector<std::vector<int>> curvesIndices(branchCurves.size());
@@ -475,8 +483,9 @@ std::vector<std::list<InterceptPoint>> intercept_curves(
 
         // Find intercept points with each curve
         for (std::size_t curveID = 0; curveID < branchCurves.size(); curveID++) {
-            auto [pointID, distSqr, avgDistSqr] = _intercept_curve(curves[curveID], p, dir, maxDistSqr, startMinCosSim,
-                                                                   endMinCosSim, maxSnapDistSqr, maxSnapCosAngle);
+            auto [pointID, distSqr, avgDistSqr] =
+                _intercept_curve(curves[curveID], p, dir, maxDistSqr, startMinCosSim, endMinCosSim, minSnapDistSqr,
+                                 maxSnapDistSqr, maxSnapCosAngle);
             intercepts.emplace_back(InterceptIntermediateResults{curveID, pointID, distSqr, avgDistSqr});
         }
 

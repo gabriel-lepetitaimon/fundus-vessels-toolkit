@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import warnings
 from functools import cached_property
+from hmac import new
 from itertools import pairwise
 from typing import Literal, Optional, Protocol, Self, Sequence, TypeGuard, overload
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+from attr import dataclass
 from networkx import maximum_branching
+from sympy import N
 
 from ..utils.cluster import cluster_by_distance
 from ..utils.lookup_array import create_removal_lookup
@@ -134,12 +137,12 @@ class LineDigraph:
     def root_mask(self) -> npt.NDArray[np.bool_]:
         return self.line_list[:, 0] == -1
 
-    def search_lines(self, searched_lines: Int2DArrayLike) -> npt.NDArray[np.int_]:
+    def find_lines(self, lines: Optional[Int2DArrayLike] = None) -> npt.NDArray[np.int_]:
         """Search for lines in the directed graph.
 
         Parameters
         ----------
-        searched_lines : Int2DArrayLike
+        lines : Int2DArrayLike, optional
             A list of M lines to search for in the format (l0, l0_tip, l1, l1_tip).
 
         Returns
@@ -147,17 +150,60 @@ class LineDigraph:
         npt.NDArray[np.int_]
             An array of shape (M,) representing the first indices of the searched lines in the directed graph.
         """
-        searched_lines = np.asarray(searched_lines, dtype=np.int_)
-        if searched_lines.ndim == 1:
-            searched_lines = searched_lines[None, :]
+        lines = np.asarray(lines, dtype=np.int_)
+        if lines.ndim == 1:
+            lines = lines[None, :]
 
-        lines_ids = np.full(len(searched_lines), -1, dtype=np.int_)
-        for i, line in enumerate(searched_lines):
+        lines_ids = np.full(len(lines), -1, dtype=np.int_)
+        for i, line in enumerate(lines):
             match = np.argwhere(np.all(self.line_list == line, axis=1)).flatten()
             if len(match) > 0:
                 lines_ids[i] = match[0]
 
         return lines_ids
+
+    def search_lines(
+        self,
+        *,
+        b: Optional[Int1DArrayLike] = None,
+        b0: Optional[Int1DArrayLike] = None,
+        b1: Optional[Int1DArrayLike] = None,
+    ) -> Bool1DArray:
+        """Search for lines in the directed graph based on their b0 and b1 indices.
+
+        Parameters
+        ----------
+        b : Int1DArrayLike, optional
+            A list of branch indices to search for in the b0 and b1 columns.
+
+        b0 : Int1DArrayLike, optional
+            A list of branch indices to search for in the b0 column.
+
+        b1 : Int1DArrayLike, optional
+            A list of branch indices to search for in the b1 column.
+
+        Returns
+        -------
+        npt.NDArray[np.bool_]
+            A boolean array of shape (M,) indicating which lines match the search criteria.
+        """
+
+        if b0 is not None or b1 is not None:
+            concerned_lines = np.ones(len(self.line_list), dtype=bool)
+            if b0 is not None:
+                b0 = np.asarray(b0, dtype=np.int_)
+                concerned_lines &= np.isin(self.b0, b0)
+            if b1 is not None:
+                b1 = np.asarray(b1, dtype=np.int_)
+                concerned_lines &= np.isin(self.b1, b1)
+        else:
+            concerned_lines = np.zeros(len(self.line_list), dtype=bool)
+
+        if b is not None:
+            b = np.asarray(b, dtype=np.int_)
+            concerned_lines |= np.isin(self.b0b1, b).any(axis=1)
+
+        return concerned_lines
 
 
 class VBranchDigraph(LineDigraph):
@@ -844,8 +890,8 @@ class VBranchDigraph(LineDigraph):
         max_lines[argsort[first_idx]] = True
         return max_lines
 
-    def solve_optimal_arboresence(
-        self, *, remove_missing_branch=False, detect_major_av_error=False
+    def solve_optimal_arborescence(
+        self, *, remove_missing_branch=False, detect_major_av_error=False, method: DigraphSolver = "approx"
     ) -> tuple[Indices, Bool1DArray]:
         """Compute the optimal arborescence of the directed graph. Missing branches are ignored in the optimization and can optionally be removed from the output.
 
@@ -898,12 +944,17 @@ class VBranchDigraph(LineDigraph):
                 branch_dir = self.branch_dir_p > 0.5
             return branch_parents, branch_dir
 
-        branch_parents, branch_dir = solve_line_digraph_approx(
-            line_list=line_list,
-            line_p=line_p,
-            branch_dir_p=dir_p,
-            ignore_branch_dir_in_MSA=dir_p is None,
-        )
+        if method == "exact":
+            branch_parents, branch_dir = solve_line_digraph_a_star(
+                line_list=line_list, line_p=line_p, branch_dir_p=dir_p
+            )
+        elif method == "approx":
+            branch_parents, branch_dir = solve_line_digraph_approx(
+                line_list=line_list,
+                line_p=line_p,
+                branch_dir_p=dir_p,
+                ignore_branch_dir_in_MSA=dir_p is None,
+            )
 
         if detect_major_av_error and VBranchDigraph.has_fp_av_p(self):
             av_local = 2 - self.branch_av_class()[~fp_branch]
@@ -996,7 +1047,7 @@ class VBranchDigraph(LineDigraph):
 
         return tree
 
-    def optimize_tree(self, keep_missing_branch: bool = False) -> VTree:
+    def optimize_tree(self, keep_missing_branch: bool = False, method: DigraphSolver = "approx") -> VTree:
         """Resolve the directed graph into an arborescence (a directed tree).
 
         Returns
@@ -1005,7 +1056,7 @@ class VBranchDigraph(LineDigraph):
             The tree representation of the directed graph.
         """
         # === Solve Optimal Arborescence ===
-        branch_parents, branch_dir = self.solve_optimal_arboresence()
+        branch_parents, branch_dir = self.solve_optimal_arborescence(method=method)
         return self.compute_tree_from_arborescence(branch_parents, branch_dir, keep_missing_branch=keep_missing_branch)
 
     # === UTILS ===
@@ -1155,6 +1206,7 @@ class _VBranchDigraphWithAllProba(_VBranchDigraphWithAVProba):
     @branch_dir_logit.setter
     def branch_dir_logit(self, value: Float1DArray): ...  # type: ignore
 
+    @property
     def branch_dir(self) -> Bool1DArray: ...  # type: ignore
 
     def line_dir_p(self) -> Float1DArray: ...
@@ -1376,7 +1428,7 @@ def prioritize_existing_branch(
 
             s = shortcut_id
             s_tip0 = 0 if shortcut_dir else 1
-            redirected_lines = digraph.search_lines([[b0, b0_tip, s, s_tip0], [s, 1 - s_tip0, b1, b1_tip]])
+            redirected_lines = digraph.find_lines([[b0, b0_tip, s, s_tip0], [s, 1 - s_tip0, b1, b1_tip]])
             line_opti[lines_lookup[distant_line_id]] = False
             line_opti[redirected_lines] = True
 
@@ -1384,6 +1436,9 @@ def prioritize_existing_branch(
 ########################################################################################################################
 #       === DIGRAPH SOLVING UTILS ===
 ########################################################################################################################
+type DigraphSolver = Literal["exact", "approx"]
+
+
 def solve_line_digraph_approx(
     line_list: npt.NDArray[np.int_] | LineDigraph,
     line_p: npt.NDArray[np.float64],
@@ -1480,7 +1535,7 @@ def solve_line_digraph_approx(
                 root_b = abs(root_B) - 1
                 root_tip = 0 if root_B > 0 else 1
                 p = branch_dir_p[root_b] if root_tip == 1 else 1 - branch_dir_p[root_b]
-                lines = line_digraph.search_lines([-1, 0, root_b, root_tip])
+                lines = line_digraph.find_lines([-1, 0, root_b, root_tip])
                 if len(lines):
                     p += lines.argmax()
                 digraph.add_edge(
@@ -1538,7 +1593,7 @@ def solve_line_digraph_approx(
 def solve_line_digraph_a_star(
     line_list: npt.NDArray[np.int_] | LineDigraph,
     line_p: npt.NDArray[np.float64],
-    branch_dir_p: npt.NDArray[np.float64],
+    branch_dir_p: npt.NDArray[np.float64] | None = None,
 ) -> tuple[npt.NDArray[np.int_], npt.NDArray[np.bool_]]:
     """Resolve the directed graph into an arborescence (a directed tree).
 
@@ -1561,44 +1616,170 @@ def solve_line_digraph_a_star(
     """  # noqa: E501
     import heapq
 
-    B = branch_dir_p.shape[0]
+    B = branch_dir_p.shape[0] if branch_dir_p is not None else 0
 
     lines = LineDigraph(line_list) if isinstance(line_list, np.ndarray) else line_list
-    branch_dir_p = branch_dir_p / 2
-    total_line_p = line_p + branch_dir_p[lines.b1] + branch_dir_p[np.where(lines.root_mask, lines.b1, lines.b0)]
+    total_line_p = line_p.copy()
 
-    # === Compute minimal but invalid arborescence ===
-    line_argsort = np.argsort(total_line_p)[::-1]
-    B1 = (lines.b1[line_argsort] + 1) * np.where(lines.b1_dir[line_argsort], 1, -1)
-    B1_sorted = B1[line_argsort]
-    min_lines = np.unique((lines.b1 + B * lines.b1_dir)[line_argsort], return_index=True)[1].reshape((2, B))
-    min_p = total_line_p[min_lines]
-    min_dir = min_p[0] >= min_p[1]
-    min_lines[:, ~min_dir] = min_lines[::-1, ~min_dir]
-    min_p[:, ~min_dir] = min_p[::-1, ~min_dir]
+    if branch_dir_p is not None:
+        b0_dir_p, b1_dir_p = branch_dir_p[lines.b0], branch_dir_p[lines.b1]
+        b0_dir_p = np.where(lines.b0_dir, b0_dir_p, 1 - b0_dir_p)
+        b1_dir_p = np.where(lines.b1_dir, b1_dir_p, 1 - b1_dir_p)
+        total_line_p += np.where(lines.b0 != -1, 0.5 * (b0_dir_p + b1_dir_p), b1_dir_p)
 
-    dir_diff = min_p[0] - min_p[1]
-    assert np.all(dir_diff >= 0)
+    class Lines:
+        def __init__(self, line_ids: Int1DArrayLike):
+            self.line_ids = np.asarray(line_ids, dtype=np.int_)
 
-    branch_priority = np.argsort(dir_diff)[::-1]
+        def __len__(self):
+            return len(self.line_ids)
 
-    # === Constraint check ===
-    def invalid_branches(line_ids: npt.NDArray[np.int_]) -> Bool1DArray:
-        b_invalid = np.zeros((B,), dtype=bool)
-        l = lines[line_ids]
-        b_parent = np.empty(B, dtype=np.int_)
-        b_parent[l.b1] = l.b0
-        b_dir = np.empty(B, dtype=bool)
-        b_dir[l.b1] = l.b1_dir
+        def __getitem__(self, key):
+            return lines[self.line_ids[key]]
 
-        for cycle in find_cycles(b_parent):
-            b_invalid[cycle] = True
+        @property
+        def p(self):
+            return total_line_p[self.line_ids]
 
-        invalid_lines = l[l.b0_dir != b_dir[l.b0]]
-        if len(invalid_lines):
-            b_invalid[invalid_lines.b0] = True
-            b_invalid[invalid_lines.b1] = True
+        @property
+        def b0(self):
+            return lines.b0[self.line_ids]
 
-        return b_invalid
+        @property
+        def b1(self):
+            return lines.b1[self.line_ids]
+
+        @property
+        def b1_dir(self):
+            return lines.b1_dir[self.line_ids]
+
+        @property
+        def b0_dir(self):
+            return lines.b0_dir[self.line_ids]
+
+        def sort_by_p(self, inplace=True):
+            lines = self if inplace else Lines(self.line_ids)
+            sorted_ids = np.argsort(self.p)[::-1]
+            lines.line_ids = lines.line_ids[sorted_ids]
+            return lines
+
+    LINES_BY_BRANCH = [Lines(np.where(lines.b1 == b)[0]).sort_by_p() for b in range(B)]
+
+    class SearchState:
+        def __init__(self, branch: Int1DArray, branch_line_id: Int1DArray, p: float):
+            self.branch = branch
+            self.branch_line_id = branch_line_id
+            self.p = p
+
+        def __lt__(self, other: Self) -> bool:
+            return self.p > other.p
+
+        def __eq__(self, other: Self) -> bool:
+            return self.p == other.p and self.branch == other.branch and self.branch_line_id == other.branch_line_id
+
+        @property
+        def lines(self) -> Lines:
+            branch_line_id = np.zeros((B,), dtype=np.int_)
+            branch_line_id[self.branch] = self.branch_line_id
+            return Lines([LINES_BY_BRANCH[b].line_ids[i] for b, i in enumerate(branch_line_id)])
+
+        def recompute_p(self):
+            self.p = self.lines.p.sum()
+
+        @property
+        def branch_parents(self):
+            b_parent = -np.ones(B, dtype=np.int_)
+            b_parent[self.lines.b1] = self.lines.b0
+            return b_parent
+
+        @property
+        def branch_dir(self):
+            b_dir = np.empty(B, dtype=bool)
+            b_dir[self.lines.b1] = self.lines.b1_dir
+            return b_dir
+
+        def conflicting_branches(self) -> Int1DArray:
+            b_invalid = np.zeros((B,), dtype=bool)
+            invalid_lines = self.lines[self.lines.b0_dir != self.branch_dir[self.lines.b0]]
+            if len(invalid_lines):
+                b_invalid[invalid_lines.b0] = True
+                b_invalid[invalid_lines.b1] = True
+            b_dir_invalid = np.where(b_invalid)[0]
+
+            cycles = find_cycles(self.branch_parents)
+            for cycle in cycles:
+                b_invalid[cycle] = True
+
+            print(f"--- Conflicts: {b_invalid.sum()}")
+            print(f"\t Branch dir: {b_dir_invalid}")
+            print(f"\t Cycles: {cycles}")
+
+            return np.where(b_invalid)[0]
+
+        def next_states(self, branch_to_iter: Int1DArray) -> list[Self]:
+            next_states = []
+            new_branch = np.setdiff1d(branch_to_iter, self.branch)
+            if len(new_branch) != 0:
+                insert_i = np.searchsorted(self.branch, new_branch)
+                branch = np.insert(self.branch, insert_i, new_branch)
+                base_branch_line_id = np.insert(self.branch_line_id, insert_i, 0)
+            else:
+                branch = self.branch
+                base_branch_line_id = self.branch_line_id
+
+            assert np.all(branch == np.unique(branch)), "Branches should be sorted after insertion"
+
+            for i in np.searchsorted(branch, branch_to_iter):
+                b = branch[i]
+                b_id = base_branch_line_id[i] + 1
+                if b_id >= len(LINES_BY_BRANCH[b]):
+                    continue
+                branch_line_id = base_branch_line_id.copy()
+                branch_line_id[i] = b_id
+                p_diff = float(LINES_BY_BRANCH[b].p[b_id] - LINES_BY_BRANCH[b].p[b_id - 1])
+                next_states += [SearchState(branch=branch, branch_line_id=branch_line_id, p=self.p + p_diff)]
+            return next_states
 
     # === A* search ===
+    initial_state = SearchState(branch=np.empty((0,), dtype=np.int_), branch_line_id=np.empty((0,), dtype=np.int_), p=0)
+    initial_state.recompute_p()
+
+    states_cache: dict[tuple[int, ...], set[tuple[int, ...]]] = {}
+
+    heap = [initial_state]
+    heapq.heapify(heap)
+    step_count = 0
+
+    print(f"Initial state p={initial_state.p:.4f}")
+    print(" ".join(f"{b}:{p}" for b, p in enumerate(initial_state.branch_parents)))
+
+    while heap:
+        best = heapq.heappop(heap)
+        parent_diff = np.where(best.branch_parents != initial_state.branch_parents)[0]
+        parent_diff = " ".join(f"{b}:{best.branch_parents[b]}" for b in parent_diff)
+        print(f"Step {step_count} p={best.p:.4f} | {parent_diff}")
+        conflicts = best.conflicting_branches()
+        print("")
+        if len(conflicts) == 0:
+            break
+
+        next_states = best.next_states(branch_to_iter=conflicts)
+
+        for next_state in next_states:
+            next_line_id, next_branch = next_state.branch_line_id, next_state.branch
+            short_branch = next_branch[next_line_id != 0]
+            state = states_cache.setdefault(tuple(short_branch), set())
+            next_state_line_id = tuple(next_line_id[next_line_id != 0])
+            if next_state_line_id not in state:
+                state.add(next_state_line_id)
+                heapq.heappush(heap, next_state)
+
+        step_count += 1
+        if len(heap) > 1e5 or step_count > 5000:
+            raise RuntimeError("A* search is diverging, too many states in the heap.")
+    else:
+        raise RuntimeError("A* search failed to find a solution.")
+
+    optimal_state = best
+    print(f"A* search explored {len(states_cache)} states to find the optimal tree with p={optimal_state.p:.4f}")
+    return optimal_state.branch_parents, optimal_state.branch_dir

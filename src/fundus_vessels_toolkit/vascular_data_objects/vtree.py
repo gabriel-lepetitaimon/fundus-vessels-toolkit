@@ -877,6 +877,7 @@ class VTree(VGraph):
         depth = 0
         while active_branches.size > 0 and (max_depth is None or depth < max_depth):
             active_branches = self.branch_tree[active_branches]
+            active_branches = active_branches[active_branches != -1]
             ancestors.append(active_branches)
             depth += 1
         if len(ancestors) == 0:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Optional, Self, TypeGuard
+from typing import Literal, Optional, Self, TypeGuard, overload
 
 import numpy as np
 import numpy.typing as npt
@@ -14,6 +14,7 @@ from fundus_toolkits import FundusData
 from fundus_toolkits.utils.geometric import Point, Rect
 
 from ...segment_to_graph.vbranch_digraph import (
+    _VBranchDigraphWithAVProba,
     TreeTopology,
     VBranchDigraph,
     VGraph,
@@ -234,8 +235,13 @@ class BranchDigraphData(PygData):
                 if C == 1:
                     curves_[i, :] = curve[0]
                 else:
-                    indices = torch.linspace(0, C - 1, 20).round().long()
-                    curves_[i] = curve[indices]
+                    # Bilinear resampling of curve index
+                    idx = torch.linspace(0, C - 1, 20)
+                    low_idx = torch.floor(idx).long()
+                    high_idx = torch.minimum(low_idx + 1, torch.tensor(C - 1))
+                    alpha = (idx - low_idx).unsqueeze(1)
+                    curves_[i] = (1 - alpha) * curve[low_idx] + alpha * curve[high_idx]
+
             pos = torch.stack(pos, dim=0)
         else:
             B = 0
@@ -281,6 +287,10 @@ class BranchDigraphData(PygData):
         else:
             return 0
 
+    @property
+    def branch_count(self) -> int:
+        return self.branch_nodes.shape[0]
+
     @classmethod
     def from_branch_digraph(
         cls,
@@ -297,8 +307,10 @@ class BranchDigraphData(PygData):
             fundus_img = torch.from_numpy(fundus_img)
 
         not_root = ~digraph.root_mask
-        geodata = digraph.graph.geometric_data()
-        branch_curves = [torch.from_numpy(curve).float() for curve in geodata.branch_curve(fill_with_nodes=True)]
+        geodata = digraph.graph.geometric_data().copy()
+        branch_curves = [
+            torch.from_numpy(curve).float() for curve in geodata.branch_curve(fill_with_nodes=True, min_length=2)
+        ]
 
         branch_tip_pos = geodata.tip_coord()
         branch_tip_tan = geodata.tip_tangent() if geodata.has_branch_data(VBranchGeoData.Fields.TIPS_TANGENT) else None
@@ -350,6 +362,7 @@ class BranchDigraphData(PygData):
             name=name,
         )
 
+    @overload
     @classmethod
     def from_graph(
         cls,
@@ -357,11 +370,39 @@ class BranchDigraphData(PygData):
         fundus: FundusData | npt.NDArray,
         gt_topology: Optional[tuple[TreeTopology, TreeTopology]] = None,
         *,
+        return_digraph: Literal[False] = False,
         augment: bool | AugmentationOpts = False,
         name: Optional[str] = None,
         od_center: Optional[Point] = None,
         mac_center: Optional[Point] = None,
-    ) -> Self:
+    ) -> Self: ...
+    @overload
+    @classmethod
+    def from_graph(
+        cls,
+        graph: VGraph,
+        fundus: FundusData | npt.NDArray,
+        gt_topology: Optional[tuple[TreeTopology, TreeTopology]] = None,
+        *,
+        return_digraph: Literal[True],
+        augment: bool | AugmentationOpts = False,
+        name: Optional[str] = None,
+        od_center: Optional[Point] = None,
+        mac_center: Optional[Point] = None,
+    ) -> tuple[Self, VBranchDigraph]: ...
+    @classmethod
+    def from_graph(
+        cls,
+        graph: VGraph,
+        fundus: FundusData | npt.NDArray,
+        gt_topology: Optional[tuple[TreeTopology, TreeTopology]] = None,
+        *,
+        return_digraph: bool = False,
+        augment: bool | AugmentationOpts = False,
+        name: Optional[str] = None,
+        od_center: Optional[Point] = None,
+        mac_center: Optional[Point] = None,
+    ) -> Self | tuple[Self, VBranchDigraph]:
         """Alternative constructor to create a BranchDigraphData from a VGraph and a fundus image. Note that this method will not be able to fill all the fields of the data, especially those related to the ground truth probabilities and the branch curves, which are not stored in the VGraph."""  # noqa: E501
         augment_opts = AugmentationOpts.parse(augment)
         if augment_opts.deteriorate_graph:
@@ -393,20 +434,26 @@ class BranchDigraphData(PygData):
         if augment_opts.geometric:
             t = augment_opts.generate_transform(shape=fundus_shape)
             branch_digraph.graph.transform(t, warped_domain="same", inplace=True)
-            fundus_img, _ = t.warp(fundus_img, warped_domain="same")
+            fundus_img, _ = t.warp(fundus_img.transpose((1, 2, 0)), warped_domain="same")
+            fundus_img = fundus_img.transpose((2, 0, 1))
             od_yx, mac_yx = t.transform(np.array([od_center, mac_center]))
         else:
             od_yx, mac_yx = od_center.numpy(), mac_center.numpy()
 
-        return cls.from_branch_digraph(
+        data = cls.from_branch_digraph(
             digraph=branch_digraph,
             fundus_img=fundus_img,
             od_yx=od_yx,
             mac_yx=mac_yx,
             name=if_none(name, "graph_based_sample"),
         )
+        return (data, branch_digraph) if return_digraph else data
 
-    def to_branch_digraph(self, graph: bool = False, gt_proba: Optional[bool] = None) -> VBranchDigraph:
+    @overload
+    def to_digraph(self, *, graph: bool = False, gt_proba: Literal[True]) -> _VBranchDigraphWithAVProba: ...
+    @overload
+    def to_digraph(self, *, graph: bool = False, gt_proba: Optional[Literal[False]] = None) -> VBranchDigraph: ...
+    def to_digraph(self, *, graph: bool = False, gt_proba: Optional[bool] = None) -> VBranchDigraph:
         """Convert the data back to a VBranchDigraph.
 
         Parameters

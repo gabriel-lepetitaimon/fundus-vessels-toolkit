@@ -373,8 +373,8 @@ std::list<std::size_t> discontiguous_index(const torch::Tensor& curveYX) {
 std::vector<torch::Tensor> compute_intercepts(const std::vector<torch::Tensor>& branchCurvesTensor,
                                               const torch::Tensor& branchListTensor, const torch::Tensor& nodesYXTensor,
                                               const torch::Tensor& startsTensor, const torch::Tensor& dirsTensor,
-                                              float maxDist, float startMaxAngle, float endMaxAngle, float maxSnapDist,
-                                              float maxSnapAngle, bool interpolateCurves = true) {
+                                              float maxDist, float startMaxAngle, float endMaxAngle, float minSnapDist,
+                                              float maxSnapDist, float maxSnapAngle, bool interpolateCurves = true) {
     const std::vector<CurveYX>& branchCurves = tensors_to_curves(branchCurvesTensor);
     const std::vector<IntPair>& branchList = tensor_to_vectorIntPair(branchListTensor);
     const GraphAdjList& graph = edge_list_to_adjlist(branchList);
@@ -382,9 +382,10 @@ std::vector<torch::Tensor> compute_intercepts(const std::vector<torch::Tensor>& 
     const std::vector<IntPoint>& starts = tensor_to_curve(startsTensor);
     const PointList& dirs = tensor_to_pointList(dirsTensor);
 
-    const auto& interceptPoints = intercept_curves(
-        branchCurves, branchList, graph, nodesYX, starts, dirs, maxDist * maxDist, cos(deg2rad(startMaxAngle)),
-        cos(deg2rad(endMaxAngle)), maxSnapDist * maxSnapDist, cos(deg2rad(maxSnapAngle)), interpolateCurves);
+    const auto& interceptPoints =
+        intercept_curves(branchCurves, branchList, graph, nodesYX, starts, dirs, maxDist * maxDist,
+                         cos(deg2rad(startMaxAngle)), cos(deg2rad(endMaxAngle)), minSnapDist * minSnapDist,
+                         maxSnapDist * maxSnapDist, cos(deg2rad(maxSnapAngle)), interpolateCurves);
 
     std::vector<torch::Tensor> interceptTensors;
     interceptTensors.reserve(nodesYX.size());

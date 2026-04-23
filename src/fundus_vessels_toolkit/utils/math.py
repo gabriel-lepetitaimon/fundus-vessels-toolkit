@@ -3,6 +3,7 @@ from typing import Dict, Literal, Tuple, overload
 
 import numpy as np
 import numpy.typing as npt
+from scipy.special import expit
 
 
 def ensure_superior_multiple(x, m=32):
@@ -334,9 +335,7 @@ def nearest_point_on_segment(
 
 def sigmoid(x, antisymmetric=False):
     with np.errstate(over="raise"):
-        if antisymmetric:
-            return 2 / (1 + np.exp(-x)) - 1
-        return 1 / (1 + np.exp(-x))
+        return expit(x) * 2 - 1 if antisymmetric else expit(x)
 
 
 def softmax(x, axis=None):

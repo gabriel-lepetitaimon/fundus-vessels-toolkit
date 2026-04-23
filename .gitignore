@@ -10,7 +10,7 @@
 **/.ipynb_checkpoints/
 **/__pycache__/
 **/tmp/
-
+**/*.tar.gz
 # Distribution / packaging
 /build/
 **/*.egg-info

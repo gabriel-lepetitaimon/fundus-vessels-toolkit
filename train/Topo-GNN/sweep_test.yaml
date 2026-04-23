@@ -1,9 +1,0 @@
-program: train.py  # The script to run
-method: bayes     # Search method: grid, random, or bayes
-metric:
-  name: val_loss
-  goal: minimize   # Goal: minimize or maximize
-parameters:
-  learning_rate:
-    min: 0.0001
-    max: 0.1

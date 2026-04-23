@@ -485,19 +485,40 @@ class VGeometricData:
             )
 
     @overload
-    def branch_curve(self, ids: int, *, fill_with_nodes=False) -> npt.NDArray[np.int_]: ...
+    def branch_curve(
+        self,
+        ids: int,
+        *,
+        fill_with_nodes=False,
+        min_length=1,
+    ) -> npt.NDArray[np.int_]: ...
     @overload
     def branch_curve(
-        self, ids: Optional[npt.NDArray[np.int_]] = None, *, fill_with_nodes=False
+        self,
+        ids: Optional[npt.NDArray[np.int_]] = None,
+        *,
+        fill_with_nodes=False,
+        min_length=1,
     ) -> list[npt.NDArray[np.int_]]: ...
     def branch_curve(
-        self, ids: Optional[int | npt.NDArray[np.int_]] = None, *, fill_with_nodes=False
+        self,
+        ids: Optional[int | npt.NDArray[np.int_]] = None,
+        *,
+        fill_with_nodes=False,
+        min_length=1,
     ) -> npt.NDArray[np.int_] | list[npt.NDArray[np.int_]]:
         """Return the coordinates of the pixels that compose the branches of the graph.
 
         Parameters
         ----------
         ids : Optional[int | np.ndarray], optional
+            The id of the branch(es) whose curve is requested. If None (by default), the function returns the curves of all branches.
+
+        fill_with_nodes : bool, optional
+            If True, the curve is filled with the coordinates of the nodes of the branch if the curve is not available. By default False.
+
+        min_length : int, optional
+            The minimum length of the curve to be considered as valid. If the curve is shorter than this length, it is considered as not available and the function returns an empty array or the nodes coordinates if ``fill_with_nodes`` is True.
 
         Returns
         -------
@@ -520,7 +541,7 @@ class VGeometricData:
         if isinstance(ids, np.ndarray):
             curves = [if_none(self._branch_curve[i], EMPTY_CURVE) for i in ids]
             if fill_with_nodes:
-                curves = [from_node(i) if len(c) == 0 else c for i, c in zip(ids, curves, strict=True)]
+                curves = [from_node(i) if len(c) < min_length else c for i, c in zip(ids, curves, strict=True)]
             return curves[0] if is_single else curves
 
         else:

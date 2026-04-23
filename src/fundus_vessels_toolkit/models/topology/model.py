@@ -27,12 +27,6 @@ from .data import BranchDigraphBatch, BranchDigraphData, DigraphLines
 from .positionnal_embedding import APE
 
 
-class HardwareConfig(BaseModel):
-    device: Literal["cuda", "cpu"] = Field(default="cuda")
-    n_workers: int = Field(default=4)
-    compile: bool = Field(default=True)
-
-
 class BranchDigraphModelOpt(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True)
 
@@ -87,10 +81,10 @@ class BranchDigraphModelOpt(BaseModel):
 
 
 class BranchDigraphModel(torch.nn.Module):
-    def __init__(self, opt: BranchDigraphModelOpt, hardware_config: Optional[HardwareConfig] = None):
+    def __init__(self, opt: BranchDigraphModelOpt, compile: bool = False, **kwargs):
         super().__init__()
         self.opt = opt
-        self.hardware_config = hardware_config if hardware_config is not None else HardwareConfig()
+        self.compile = compile
 
         # --- Model components ---
         self.img_feature_extractor = self.create_img_feature_extractor(opt)
@@ -101,12 +95,13 @@ class BranchDigraphModel(torch.nn.Module):
         else:
             self.absolute_pos_encoding = None
 
-        if self.hardware_config.compile:
-            self.img_feature_extractor = torch.compile(self.img_feature_extractor)
-            self.gnn = torch.compile(self.gnn, dynamic=True)
-
         # --- Cache variables ---
         self._tip_sample_decay = None
+
+    def configure_model(self):
+        if self.compile:
+            self.img_feature_extractor = torch.compile(self.img_feature_extractor)
+            self.gnn = torch.compile(self.gnn, dynamic=True)
 
     @classmethod
     def create_img_feature_extractor(cls, opt: BranchDigraphModelOpt) -> nn.Module:
@@ -529,7 +524,7 @@ class BranchDigraphModel(torch.nn.Module):
             """  # noqa: E501
             digraph = self.to_digraph()
             try:
-                opti_parent, opti_dir = digraph.solve_optimal_arboresence(detect_major_av_error=False)
+                opti_parent, opti_dir = digraph.solve_optimal_arborescence(detect_major_av_error=False)
             except Exception as e:
                 print(f"Error solving optimal arborescence for batch {self.names}: {e}")
                 digraph.check_lines("warn", branch_mask=~digraph.branch_fp())

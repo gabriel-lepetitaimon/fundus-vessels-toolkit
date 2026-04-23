@@ -1,0 +1,35 @@
+program: train.py  # The script to run
+method: bayes     # Search method: grid, random, or bayes
+metric:
+  name: val_tree-parent-acc
+  goal: maximize   # Goal: minimize or maximize
+early_terminate:
+  type: hyperband
+  min_iter: 2    # Minimum iterations before a run can be terminated
+  max_iter: 12    # Minimum iterations before a run can be terminated
+  eta: 3         # The reduction factor (determines bracket spacing)
+  s: 5
+  strict: true
+
+
+parameters:
+  # === SWEEP ===
+  lr:
+    distribution: log_uniform
+    min: 0.0001
+    max: 0.1
+  batch_size:
+    values: [3, 6, 12]
+
+  # === STATIC ===
+  training_set:
+    value: ["FundusAV", "HRF", "LES-AV", "GAVE-train", "MAPLES-DR"]
+  dataset:
+    value:
+        graph_version: {"fvt": 0.7, "gt": 0.3}
+  test_version:
+    value: "fvt"
+  epoch:
+    value: 240
+
+

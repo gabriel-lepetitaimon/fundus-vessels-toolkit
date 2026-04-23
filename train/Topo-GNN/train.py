@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime
-from pathlib import Path
+import math
+from typing import Literal, NotRequired, TypedDict
 
+import psutil
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
+from lightning_fabric.plugins.precision.precision import _PRECISION_INPUT_STR
 from pydantic import BaseModel, ConfigDict, Field
 from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
@@ -26,8 +28,8 @@ from fundus_vessels_toolkit.models.metrics.tree import (
 from fundus_vessels_toolkit.models.topology.data import (
     BranchDigraphBatch,
     BranchDigraphData,
-    BranchDigraphDataset,
 )
+from fundus_vessels_toolkit.models.topology.dataset import BranchDigraphDataset, BranchDigraphDatasetConfig
 from fundus_vessels_toolkit.models.topology.losses import (
     BranchContrastiveLoss,
     BranchContrastiveLossOpt,
@@ -36,76 +38,27 @@ from fundus_vessels_toolkit.models.topology.losses import (
 from fundus_vessels_toolkit.models.topology.model import BranchDigraphModel, BranchDigraphModelOpt
 
 # torch.set_float32_matmul_precision("medium")
+torch.backends.fp32_precision = "ieee"  # type: ignore
+torch.backends.cuda.matmul.fp32_precision = "ieee"
+torch.backends.cudnn.fp32_precision = "ieee"  # type: ignore
 torch.backends.cudnn.conv.fp32_precision = "tf32"  # type: ignore
-torch.backends.cuda.matmul.fp32_precision = "tf32"
 
 
-def train():
-    wandb.init(project="GNN-topo-test")
-
-    config = DigraphGNNTrainerConfig.model_validate(dict(wandb.config))
-    config_dict = config.model_dump()
-
-    # === DATASET ===
-    PATH = [
-        Path("/run/media/gaby/GREY SSD/PostDoc/DATA/Fundus/" + folder)
-        for folder in ["GAVE-train", "MAPLES-DR", "Fundus-AV", "LES-AV", "INSPIRE"]
-    ]
-    RAW = [path / "1-images" for path in PATH]
-    AV = [path / "2-av-pred_CLEMENT" for path in PATH]
-    TOPO = [path / "3-topo" for path in PATH]
-    dataset = BranchDigraphDataset.load_from_dirs(
-        RAW,
-        TOPO,
-        av_dir=AV,
-        resize_to=1024,
-        root=str(Path(__file__).parent / "tmp/DATA2"),
-        overwrite=False,
-        ignore_recent=datetime(2026, 3, 8),
-    )
-    train_set, val_set, test_set = dataset.split_loaders(train_ratio=0.7, val_ratio=0.15)
-    train_loader = PyGDataLoader(
-        train_set,
-        batch_size=3,
-        shuffle=True,
-        num_workers=6,
-        persistent_workers=True,
-    )
-    val_loader = PyGDataLoader(val_set, batch_size=6, num_workers=2)
-
-    # Setup the logger and trainer
-    wandb_logger = WandbLogger(log_model=True)
-    model = DigraphGNNTrainer(config_dict, n_step_per_epoch=len(train_loader))
-
-    checkpoints: list[Callback] = [ModelCheckpoint(monitor="val_tree-parent-acc", mode="max")]
-
-    trainer = L.Trainer(
-        max_epochs=config.epoch,
-        logger=wandb_logger,
-        enable_progress_bar=True,
-        check_val_every_n_epoch=20,
-        accumulate_grad_batches=2,
-        # gradient_clip_val=0.5,
-        # gradient_clip_algorithm="value",
-        # num_sanity_val_steps=0,
-        callbacks=checkpoints,
-        precision="bf16-mixed",
-    )
-
-    trainer.fit(model, train_loader, val_loader)
-
-    test_loader = PyGDataLoader(test_set, batch_size=6, num_workers=2)
-    trainer.test(model, dataloaders=[test_loader], ckpt_path="best")
-
-    # Finish the run
-    wandb.finish()
+type TrainingSets = Literal["FundusAV", "HRF", "LES-AV", "MAPLES-DR", "DRIVE_train", "GAVE-train", "INSPIRE"]
 
 
 class DigraphGNNTrainerConfig(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True)
 
+    dataset: BranchDigraphDatasetConfig = Field(default_factory=BranchDigraphDatasetConfig)
     model: BranchDigraphModelOpt = Field(default_factory=BranchDigraphModelOpt)
     contrastive_loss: BranchContrastiveLossOpt = Field(default_factory=BranchContrastiveLossOpt)
+
+    training_set: str | list[TrainingSets] | None = Field(default=None)
+    """Training set(s) to use. Can be a single dataset name, a list of dataset names, or None to use all datasets."""
+
+    test_version: str | None = Field(default=None)
+    """Version of the test set to use. If None, the same version as the training set will be used."""
 
     epoch: int = 160
     """Maximum number of training epochs."""
@@ -113,15 +66,124 @@ class DigraphGNNTrainerConfig(BaseModel):
     lr: float = 1e-2
     """Learning rate."""
 
+    batch_size: int = 3
+    """Batch size for training."""
+
+
+class HardwareConfig(BaseModel):
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
+    def model_post_init(self, __context):
+        cpu_count = psutil.cpu_count(logical=False) or 1
+        if self.train_num_workers < 0:
+            self.train_num_workers = max(0, cpu_count + self.train_num_workers + 1)
+        if self.test_num_workers < 0:
+            self.test_num_workers = max(0, cpu_count + self.test_num_workers + 1)
+
+    max_batch_size: int = 3
+    """Maximum batch size for training. If the batch_size in the config is larger than this, gradient accumulation will be used."""  # noqa: E501
+
+    train_num_workers: int = -2
+    """Number of workers for the training data loader."""
+
+    test_batch_size: int = 6
+    """Batch size for validation and testing."""
+
+    test_num_workers: int = -2
+    """Number of workers for the validation and testing data loader."""
+
+    compile: bool = True
+    """Whether to compile the model with torch.compile()."""
+
+    precision: _PRECISION_INPUT_STR = "bf16-mixed"
+    """Precision for training. Can be one of the following: "64-true", "32-true", "16-true", "16-mixed", "bf16-true", "bf16-mixed", "transformer-engine", "transformer-engine-float16"."""  # noqa: E501
+
+    def batch_size_grad_acc(self, batch_size: int) -> tuple[int, int]:
+        """Calculate the actual batch size and the number of gradient accumulation steps based on the given batch size and the maximum batch size."""  # noqa: E501
+        if batch_size <= self.max_batch_size:
+            return (batch_size, 1)
+        else:
+            grad_acc_steps = math.ceil(batch_size / self.max_batch_size)
+            actual_batch_size = int(round(batch_size / grad_acc_steps))
+            return (actual_batch_size, grad_acc_steps)
+
+
+def train(config=None, hdw_cfg=None):
+    wandb.init(project="GNN-topo-test", config=config)
+
+    cfg = DigraphGNNTrainerConfig.model_validate(dict(wandb.config))
+    cfg_dict = cfg.model_dump()
+
+    if hdw_cfg is None:
+        hdw_cfg = HardwareConfig()
+    else:
+        hdw_cfg = HardwareConfig.model_validate(hdw_cfg)
+
+    # === DATASET ===
+    dataset = BranchDigraphDataset("ALL_DATA_bundle.tar.gz", cfg=cfg.dataset)
+    train_set, val_set, test_set = dataset.split_sets(train_ratio=0.7, val_ratio=0.15)
+
+    if cfg.training_set is not None:
+        train_set = train_set.select_dataset(cfg.training_set)
+    if cfg.test_version is not None:
+        val_set.cfg.graph_version = cfg.test_version
+        test_set.cfg.graph_version = cfg.test_version
+
+    batch_size, grad_acc = hdw_cfg.batch_size_grad_acc(cfg.batch_size)
+
+    train_loader = PyGDataLoader(
+        train_set.preload(with_image=False),
+        shuffle=True,
+        num_workers=hdw_cfg.train_num_workers,
+        persistent_workers=True,
+        batch_size=batch_size,
+    )
+    val_loader = PyGDataLoader(
+        val_set.preload(with_image=False),
+        batch_size=hdw_cfg.test_batch_size,
+        num_workers=hdw_cfg.test_num_workers,
+    )
+
+    # Setup the logger and trainer
+    wandb_logger = WandbLogger(log_model=True)
+    model = DigraphGNNTrainer(cfg_dict, compile=hdw_cfg.compile, n_step_per_epoch=len(train_loader))
+
+    checkpoints: list[Callback] = [ModelCheckpoint(monitor="val_tree-parent-acc", mode="max")]
+
+    trainer = L.Trainer(
+        max_epochs=cfg.epoch,
+        logger=wandb_logger,
+        enable_progress_bar=True,
+        check_val_every_n_epoch=20,
+        accumulate_grad_batches=grad_acc,
+        # gradient_clip_val=0.5,
+        # gradient_clip_algorithm="value",
+        # num_sanity_val_steps=0,
+        callbacks=checkpoints,
+        precision=hdw_cfg.precision,
+    )
+
+    trainer.fit(model, train_loader, val_loader)
+
+    test_loaders = {
+        k: PyGDataLoader(v, batch_size=hdw_cfg.test_batch_size, num_workers=hdw_cfg.test_num_workers)
+        for k, v in test_set.split_by_dataset().items()
+    }
+    model._test_dataloaders_names = list(test_loaders.keys())
+    trainer.test(model, dataloaders=test_loaders, ckpt_path="best")
+
+    # Finish the run
+    wandb.finish()
+
 
 class DigraphGNNTrainer(L.LightningModule):
-    def __init__(self, config: DigraphGNNTrainerConfig | dict, n_step_per_epoch: int = 64):
+    def __init__(self, config: DigraphGNNTrainerConfig | dict, compile: bool = False, n_step_per_epoch: int = 64):
         super().__init__()
         self.save_hyperparameters()
         self.config = DigraphGNNTrainerConfig.model_validate(config)
         self.n_step_per_epoch = n_step_per_epoch
 
-        self.model = BranchDigraphModel(self.config.model)
+        self.model = BranchDigraphModel(self.config.model, compile=compile)
 
         # === LOSSES ===
         self.fp_bce_loss = nn.BCEWithLogitsLoss()
@@ -136,6 +198,7 @@ class DigraphGNNTrainer(L.LightningModule):
         self.val_preds = {}
         self.test_metrics = self.metrics_collection(opti_tree=True)
         self.test_preds = {}
+        self._test_dataloaders_names: list[str] | None = None
 
     def metrics_collection(self, opti_tree=True) -> MetricCollectionDict:
         collection = {
@@ -297,13 +360,17 @@ class DigraphGNNTrainer(L.LightningModule):
         self.val_preds = {}
         self.val_metrics.reset()
 
-    def test_step(self, batch, batch_idx):
+    def test_step(self, batch, batch_idx, dataloader_idx=0):
         model_out = self(batch)
         losses = self.losses(model_out)
+        if self._test_dataloaders_names is not None:
+            prefix = "test_" + self._test_dataloaders_names[dataloader_idx] + "_"
+        else:
+            prefix = f"test{dataloader_idx}_"
         self.log_dict(
-            {"test_" + k: loss for k, loss in losses.items()}, batch_size=batch.num_graphs, on_step=False, on_epoch=True
+            {prefix + k: loss for k, loss in losses.items()}, batch_size=batch.num_graphs, on_step=False, on_epoch=True
         )
-        test_metrics = self.update_metrics_collection(self.test_metrics, model_out, prefix="test_")
+        test_metrics = self.update_metrics_collection(self.test_metrics, model_out, prefix=prefix)
         self.log_dict(test_metrics, batch_size=batch.num_graphs, on_step=False, on_epoch=True)
 
         self.update_preds(self.test_preds, model_out)
@@ -317,10 +384,15 @@ class DigraphGNNTrainer(L.LightningModule):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.config.lr)
         # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer, max_lr=self.config.lr, epochs=self.config.epoch, steps_per_epoch=54
+            optimizer, max_lr=self.config.lr, epochs=self.config.epoch, steps_per_epoch=self.n_step_per_epoch
         )
         return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "monitor": "train_loss"}}
 
 
 if __name__ == "__main__":
     train()
+
+
+class _BatchSizeGradAccType(TypedDict):
+    batch_size: int
+    accumulate_grad_batches: NotRequired[int]

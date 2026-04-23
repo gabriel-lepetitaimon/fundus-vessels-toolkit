@@ -656,6 +656,7 @@ def find_reconnection_candidates(
     end_max_angle: Optional[float] = None,
     snap_max_distance: float = 30,
     snap_max_angle: float = 30,
+    snap_min_distance: float = 3,
     interpolate_curve: bool = True,
     ignore_endpoints: Optional[NodeIndicesLike] = None,
     endpoint_ids: Optional[NodeIndicesLike | IntPairArrayLike] = None,
@@ -688,6 +689,9 @@ def find_reconnection_candidates(
 
     snap_max_angle: float
         The maximum angle between the ray direction and the branch tangent at a branch tip to consider snapping the intercept to this tip.
+
+    snap_min_distance: float
+        The minimum distance between a point of intercept and a branch tip under which the intercept is automatically snapped to this tip regardless of the angle.
 
     interpolate_curve: bool
         If True, the branch curves are interpolated according to the graph topology to fill gaps in the skeleton map.
@@ -750,6 +754,7 @@ def find_reconnection_candidates(
         max_angle=max_angle,
         end_max_angle=end_max_angle,
         snap_max_distance=snap_max_distance,
+        snap_min_distance=snap_min_distance,
         snap_max_angle=snap_max_angle,
         interpolate_curve=interpolate_curve,
         branch_ids=branch_ids,
@@ -901,6 +906,7 @@ def find_branch_intercepts(
     max_angle: float = 30,
     end_max_angle: Optional[float] = None,
     snap_max_distance: float = 30,
+    snap_min_distance: float = 3,
     snap_max_angle: float = 30,
     interpolate_curve: bool = True,
 ) -> List[npt.NDArray[np.int_]]:
@@ -936,6 +942,9 @@ def find_branch_intercepts(
 
     snap_max_distance: float
         The maximum distance between a point of intercept and a branch tip to consider snapping the intercept to this tip.
+
+    snap_min_distance: float
+        The minimum distance between a point of intercept and a branch tip under which the intercept is automatically snapped to this tip regardless of the angle.
 
     snap_max_angle: float
         The maximum angle between the ray direction and the branch tangent at a branch tip to consider snapping the intercept to this tip.
@@ -974,6 +983,7 @@ def find_branch_intercepts(
         maxDist=max_distance,
         startMaxAngle=max_angle,
         endMaxAngle=end_max_angle,
+        minSnapDist=snap_min_distance,
         maxSnapDist=snap_max_distance,
         maxSnapAngle=snap_max_angle,
         interpolateCurves=interpolate_curve,
