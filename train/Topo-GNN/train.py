@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Literal, NotRequired, TypedDict
 
 import psutil
@@ -16,6 +17,7 @@ from torchmetrics import MetricCollection, Specificity
 from torchmetrics.classification import Accuracy, Precision, Recall
 
 import wandb
+import yaml
 from fundus_vessels_toolkit.models.metrics.tree import (
     MetricCollectionDict,
     ParentAcc,
@@ -115,7 +117,15 @@ def train(config=None, hdw_cfg=None):
     cfg_dict = cfg.model_dump()
 
     if hdw_cfg is None:
-        hdw_cfg = HardwareConfig()
+        if Path("hardware_cfg.yaml").exists():
+            try:
+                with open("hardware_cfg.yaml", "r") as f:
+                    hdw_cfg = HardwareConfig.model_validate(yaml.safe_load(f))
+            except Exception as e:
+                print(f"Error loading hardware config: {e}. Using default hardware config.")
+                hdw_cfg = HardwareConfig()
+        else:
+            hdw_cfg = HardwareConfig()
     else:
         hdw_cfg = HardwareConfig.model_validate(hdw_cfg)
 

@@ -15,7 +15,7 @@ early_terminate:
 parameters:
   # === SWEEP ===
   lr:
-    distribution: log_uniform
+    distribution: log_uniform_values
     min: 0.0001
     max: 0.1
   batch_size:
