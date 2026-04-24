@@ -8,6 +8,7 @@ authors = [
 description = """A bundle of tools to segment, classify, skeletonize fundus vascular tree."""
 readme = 'README.md'
 
+requires-python = '>=3.12'
 dependencies = [
     'psutil',
 
@@ -26,8 +27,9 @@ dependencies = [
     'torchmetrics',
     'torch-geometric',
 
-    'git+https://github.com/LIV4D/fundus-toolkits-common.git',
-]requires-python = '>=3.12'
+    'fundus-toolkits-common @ git+https://github.com/LIV4D/fundus-toolkits-common.git',
+]
+
 
 [project.optional-dependencies]
 build = ['wheel', 'twine', 'ninja']
