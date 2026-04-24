@@ -72,6 +72,11 @@ class DigraphGNNTrainerConfig(BaseModel):
     """Batch size for training."""
 
 
+class _GPU_Specs(TypedDict):
+    accelerator: NotRequired[Literal["gpu"]]
+    devices: NotRequired[int | list[int]]
+
+
 class HardwareConfig(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True)
 
@@ -81,6 +86,12 @@ class HardwareConfig(BaseModel):
             self.train_num_workers = max(0, cpu_count + self.train_num_workers + 1)
         if self.test_num_workers < 0:
             self.test_num_workers = max(0, cpu_count + self.test_num_workers + 1)
+
+    def gpu_specs(self) -> _GPU_Specs:
+        specs: _GPU_Specs = {"accelerator": "gpu"}
+        if self.gpu is not None:
+            specs["devices"] = self.gpu
+        return specs
 
     max_batch_size: int = 3
     """Maximum batch size for training. If the batch_size in the config is larger than this, gradient accumulation will be used."""  # noqa: E501
@@ -99,6 +110,9 @@ class HardwareConfig(BaseModel):
 
     precision: _PRECISION_INPUT_STR = "bf16-mixed"
     """Precision for training. Can be one of the following: "64-true", "32-true", "16-true", "16-mixed", "bf16-true", "bf16-mixed", "transformer-engine", "transformer-engine-float16"."""  # noqa: E501
+
+    gpu: int | list[int] | None = None
+    """GPU device index to use. If None, the default GPU will be used."""
 
     def batch_size_grad_acc(self, batch_size: int) -> tuple[int, int]:
         """Calculate the actual batch size and the number of gradient accumulation steps based on the given batch size and the maximum batch size."""  # noqa: E501
@@ -172,6 +186,7 @@ def train(config=None, hdw_cfg=None):
         # num_sanity_val_steps=0,
         callbacks=checkpoints,
         precision=hdw_cfg.precision,
+        **hdw_cfg.gpu_specs(),
     )
 
     trainer.fit(model, train_loader, val_loader)
@@ -370,8 +385,8 @@ class DigraphGNNTrainer(L.LightningModule):
         self.logger.experiment.log(  # type: ignore
             {
                 "val_agg": self.trainer.callback_metrics["val_tree-parent-acc"]
-                         * self.trainer.callback_metrics["val_av-acc"]
-                         * self.trainer.callback_metrics["val_dir-acc"],
+                * self.trainer.callback_metrics["val_av-acc"]
+                * self.trainer.callback_metrics["val_dir-acc"],
                 "running_lr": self.trainer.optimizers[0].param_groups[0]["lr"],
                 "epoch": self.trainer.current_epoch,
                 "val_pred": self.val_preds["table"],
