@@ -123,7 +123,7 @@ def parametrize_branches(vgraph: VGraph, fundus_data: Optional[FundusData] = Non
 
     if fundus_data is not None:
         mid_yx = np.array(vgraph.geometric_data().branch_midpoint(df.index.to_numpy()))
-        macula_center = fundus_data.infered_macula_center()
+        macula_center = fundus_data.inferred_macula_center()
         if macula_center is not None:
             df.insert(4, "dist_macula", macula_center.distance(mid_yx))
         if fundus_data.od_center is not None:

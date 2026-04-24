@@ -96,7 +96,7 @@ def build_line_digraph(
     edge_first_tip = []
     edge_probs = []
 
-    macula_yx = fundus_data.infered_macula_center()
+    macula_yx = fundus_data.inferred_macula_center()
     od_yx = fundus_data.od_center
     assert od_yx is not None, "The optic disc center is not defined."
 

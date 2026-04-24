@@ -3,6 +3,8 @@
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional
+from warnings import catch_warnings
+import warnings
 
 import cv2
 import numpy as np
@@ -27,13 +29,13 @@ def circular_mirror_pixel_and_mask(
 
     mirrored_image = img.copy()
     # === Image black strips ===
-    img_mask = np.where(img[..., 0] > 0.1)
-    min_y, max_y = np.min(img_mask[0]) + d, np.max(img_mask[0]) - d
+    img_mask = np.where(img[..., 0] > (20 / 255))
+    # min_y, max_y = np.min(img_mask[0]) + d, np.max(img_mask[0]) - d
     min_x, max_x = np.min(img_mask[1]) + d, np.max(img_mask[1]) - d
 
     # Flat mirror around strips
-    mirrored_image[:min_y] = mirrored_image[2 * min_y - 1 : min_y - 1 : -1]
-    mirrored_image[max_y:] = mirrored_image[max_y : 2 * max_y - h : -1]
+    # mirrored_image[:min_y] = mirrored_image[2 * min_y - 1 : min_y - 1 : -1]
+    # mirrored_image[max_y:] = mirrored_image[max_y : 2 * max_y - h : -1]
     mirrored_image[:, :min_x] = mirrored_image[:, 2 * min_x - 1 : min_x - 1 : -1]
     mirrored_image[:, max_x:] = mirrored_image[:, max_x : 2 * max_x - w : -1]
 
@@ -57,8 +59,8 @@ def circular_mirror_pixel_and_mask(
 
     # === MASK ===
     mask = r_squared_norm < 1
-    mask[:min_y] = False
-    mask[max_y - d :] = False
+    # mask[:min_y] = False
+    # mask[max_y - d :] = False
     mask[:, : max_x + d] = False
     mask[:, max_x - d :] = False
     return mirrored_image, mask
@@ -124,7 +126,10 @@ def vascx_segment_av(
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     prepost_process = vascx_prepost_processing()
-    net = vascx_model(device)
+
+    with catch_warnings():
+        warnings.filterwarnings("ignore")
+        net = vascx_model(device)
 
     x, preprocessing_info = prepost_process.preprocess(fundus, device=device)
     y = net(*x)

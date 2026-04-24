@@ -15,6 +15,8 @@ from skimage.morphology import binary_erosion, disk
 from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.geometric import Point
 
+from fundus_vessels_toolkit.segment_to_graph.vbranch_digraph import VBranchDigraph
+
 from ..segment_to_graph.graph_simplification import GraphSimplifyArg, ReconnectEndpointsArg
 from ..utils import if_none
 from ..vascular_data_objects import VGraph, VTree
@@ -225,10 +227,18 @@ class GNNAVSegToTree(AVSegToTree):
         segToGraph: SegToGraph
             The SegToGraph instance to use for the segmentation to graph step.
         """
+        from ..models.topology.model import BranchDigraphModel
 
         super(AVSegToTree, self).__init__()
         self.segToGraph = if_none(segToGraph, MINIMAL_FUNDUS_SEG_TO_GRAPH)
         self.av_attr = "av"
+        root = Path(__file__).parent.parent.parent.parent
+        # checkpoint = torch.load(root / "train/Topo-GNN/GNN-Topo-v1/c2kx8j5h/checkpoints/epoch=239-step=8880.ckpt")
+        checkpoint = torch.load(root / "train/Topo-GNN/GNN-Topo-v1/ft6svpfg/checkpoints/epoch=179-step=3420.ckpt")
+
+        model = BranchDigraphModel(checkpoint["hyper_parameters"]["config"]["model"])
+        model.load_state_dict({k[6:]: v for k, v in checkpoint["state_dict"].items() if k.startswith("model.")})
+        self.model = model.cuda().eval()
 
     def __call__(
         self,
@@ -242,8 +252,8 @@ class GNNAVSegToTree(AVSegToTree):
         if fundus.od_center is None or fundus.od_center.is_nan():
             raise NotImplementedError("Parsing tree of image without optic disc is not implemented.")
         graph = self.to_vgraph(fundus, simplify=True)
-        lines_digraph_info = self.build_line_digraph(graph, fundus, inplace=True)
-        tree = self.resolve_digraph_to_vtree(*lines_digraph_info)
+        line_digraph = self.build_line_digraph(graph, fundus, inplace=True)
+        tree = line_digraph.optimize_tree()
         return self.split_av_tree(tree)
 
     # --- Intermediate steps ---
@@ -267,35 +277,15 @@ class GNNAVSegToTree(AVSegToTree):
             inplace=inplace,
         )
 
-    def build_line_digraph(
-        self, graph: VGraph, fundus_data: FundusData, inplace: bool = False
-    ) -> Tuple[
-        VGraph,
-        npt.NDArray[np.int_],
-        npt.NDArray[np.int_],
-        npt.NDArray[np.float64],
-        npt.NDArray[np.int_],
-        npt.NDArray[np.float64],
-    ]:
-        from ..segment_to_graph.digraph_heuristic_solver import build_line_digraph
+    def build_line_digraph(self, graph: VGraph, fundus_data: FundusData, inplace: bool = False) -> VBranchDigraph:
+        from ..models.topology.data import BranchDigraphData
 
-        return build_line_digraph(graph, fundus_data, av_attr=self.av_attr, inplace=inplace)
-
-    def resolve_digraph_to_vtree(
-        self,
-        vgraph: VGraph,
-        line_list: npt.NDArray[np.int_],
-        line_tips: npt.NDArray[np.int_],
-        line_probability: npt.NDArray[np.float64],
-        line_through_node: npt.NDArray[np.int_],
-        branches_dir_p: npt.NDArray[np.float64],
-    ) -> VTree:
-        from ..segment_to_graph.digraph_heuristic_solver import resolve_digraph_to_vtree
-
-        vtree = resolve_digraph_to_vtree(
-            vgraph, line_list, line_tips, line_probability, line_through_node, branches_dir_p
-        )
-        return vtree
+        sample, digraph = BranchDigraphData.from_graph(graph, fundus_data, return_digraph=True)
+        with torch.no_grad():
+            out = self.model(sample.cuda())
+        pred_digraph = out.to_digraph()
+        pred_digraph.graph = digraph.graph
+        return pred_digraph
 
     def split_av_tree(self, tree: VTree) -> Tuple[VTree, VTree]:
         from ..segment_to_graph.av_tree_parsing import split_av_graph_by_subtree

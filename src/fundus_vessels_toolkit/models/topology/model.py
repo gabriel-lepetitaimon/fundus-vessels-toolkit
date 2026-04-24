@@ -81,10 +81,10 @@ class BranchDigraphModelOpt(BaseModel):
 
 
 class BranchDigraphModel(torch.nn.Module):
-    def __init__(self, opt: BranchDigraphModelOpt, compile: bool = False, **kwargs):
+    def __init__(self, opt: BranchDigraphModelOpt | dict, compile: bool = False, **kwargs):
         super().__init__()
-        self.opt = opt
-        self.compile = compile
+        self.opt = opt = BranchDigraphModelOpt.model_validate(opt)
+        self._compile = compile
 
         # --- Model components ---
         self.img_feature_extractor = self.create_img_feature_extractor(opt)
@@ -99,7 +99,7 @@ class BranchDigraphModel(torch.nn.Module):
         self._tip_sample_decay = None
 
     def configure_model(self):
-        if self.compile:
+        if self._compile:
             self.img_feature_extractor = torch.compile(self.img_feature_extractor)
             self.gnn = torch.compile(self.gnn, dynamic=True)
 

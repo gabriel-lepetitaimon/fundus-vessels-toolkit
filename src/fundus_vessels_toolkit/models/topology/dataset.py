@@ -888,6 +888,7 @@ class BranchDigraphDataset(PygDataset):
         *,
         version: Optional[str] = None,
         gt_digraph: Optional[VBranchDigraph] = None,
+        branch_label: bool = False,
     ) -> tuple[Mosaic, VTree]:
         from ...utils.jppype import AV_COLORS, Mosaic, draw_tree, draw_trees
 
@@ -907,28 +908,71 @@ class BranchDigraphDataset(PygDataset):
             background=sample.fundus.image,
         )
 
+        B = len(parent_pred)
+
         # Draw GT tree
         solved_tree = gt_digraph.optimize_tree(keep_missing_branch=True)
-        draw_tree(solved_tree, view=m[0], branch_color="subtree", bspline_dir=True)
+        draw_tree(
+            solved_tree,
+            view=m[0],
+            branch_color="subtree",
+            bspline_dir=True,
+            interactive=True,
+        )
 
         # Draw Predicted tree
         tree = gt_digraph.compute_tree_from_arborescence(parent_pred, dir_pred, fp_pred, keep_missing_branch=True)
         branch_dir_cmap = {}
         for b in range(gt_digraph.branch_count):
-            branch_dir_cmap[b] = "#8be938" if tree.branch_dirs(b) == gt_digraph.branch_dir[b] else "#f58c22"
+            if tree.branch_dirs(b) != gt_digraph.branch_dir[b] and not gt_digraph.branch_fp()[b]:
+                branch_dir_cmap[b] = "#d2ff1d"
         for b in range(gt_digraph.branch_count, tree.branch_count):
             branch_dir_cmap[b] = AV_COLORS[AVLabel.BKG]
         if av_pred is not None:
-            branch_cmap = {i: AV_COLORS[AVLabel.ART] if av else AV_COLORS[AVLabel.VEI] for i, av in enumerate(av_pred)}
+            color_legend = {
+                (True, True): AV_COLORS[AVLabel.ART],
+                (False, False): AV_COLORS[AVLabel.VEI],
+                (True, False): "#fc249b",
+                (False, True): "#1c94e3",
+            }
+            branch_cmap = {
+                i: color_legend[(av, gt_digraph.graph.branch(i).attr["av"] == 1)] for i, av in enumerate(av_pred)
+            }
             if fp_pred is not None:
                 for i in np.where(fp_pred)[0]:
                     branch_cmap[i] = AV_COLORS[AVLabel.BKG]
+            for i in range(B, tree.branch_count):
+                if tree.branch_tree[i] >= 0:
+                    branch_cmap[i] = branch_cmap[tree.branch_tree[i]]
+                else:
+                    branch_cmap[i] = AV_COLORS[AVLabel.BKG]
+        node_cmap = {}
+        for node in tree.nodes():
+            if node.out_degree <= 0:
+                node_cmap[node.id] = branch_cmap[node.incoming_branch_ids[0]] if node.in_degree != 0 else "grey"
+            else:
+                for b in node.outgoing_branch_ids:
+                    if b >= B or gt_digraph.branch_fp()[b] or (fp_pred is not None and fp_pred[b]):
+                        continue
+                    parent = tree.branch_tree[b]
+                    while parent >= B:
+                        parent = tree.branch_tree[parent]
+                    gt_parent = solved_tree.branch_tree[b]
+                    while gt_parent >= B:
+                        gt_parent = solved_tree.branch_tree[gt_parent]
+                    if gt_parent != parent:
+                        node_cmap[node.id] = "#d2ff1d"
+                        break
+                else:
+                    node_cmap[node.id] = branch_cmap[node.outgoing_branch_ids[0]]
+
         draw_tree(
             tree,
             view=m[1],
             branch_color=branch_cmap,
-            edge_labels=True,
+            edge_labels=branch_label,
             node_labels=False,
+            node_cmap=node_cmap,
             interactive=True,
             bspline_dir=branch_dir_cmap,
         )

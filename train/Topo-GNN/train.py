@@ -133,8 +133,9 @@ def train(config=None, hdw_cfg=None):
     dataset = BranchDigraphDataset("ALL_DATA_bundle.tar.gz", cfg=cfg.dataset)
     train_set, val_set, test_set = dataset.split_sets(train_ratio=0.7, val_ratio=0.15)
 
-    if cfg.training_set is not None:
+    if cfg.training_set is not None and cfg.training_set:
         train_set = train_set.select_dataset(cfg.training_set)
+        val_set = val_set.select_dataset(cfg.training_set)
     if cfg.test_version is not None:
         val_set.cfg.graph_version = cfg.test_version
         test_set.cfg.graph_version = cfg.test_version
@@ -366,6 +367,13 @@ class DigraphGNNTrainer(L.LightningModule):
         self.update_preds(self.val_preds, model_out)
 
     def on_validation_end(self) -> None:
+        self.logger.experiment.log(  # type: ignore
+            {
+                "val_agg": self.trainer.callback_metrics["val_tree-parent-acc"]
+                * self.trainer.callback_metrics["val_av-acc"]
+                * self.trainer.callback_metrics["val_dir-acc"]
+            }
+        )
         self.logger.experiment.log({"val_pred": self.val_preds["table"]})  # type: ignore
         self.val_preds = {}
         self.val_metrics.reset()
@@ -374,11 +382,15 @@ class DigraphGNNTrainer(L.LightningModule):
         model_out = self(batch)
         losses = self.losses(model_out)
         if self._test_dataloaders_names is not None:
-            prefix = "test_" + self._test_dataloaders_names[dataloader_idx] + "_"
+            suffix = "/" + self._test_dataloaders_names[dataloader_idx] + "_"
         else:
-            prefix = f"test{dataloader_idx}_"
+            suffix = ""
         self.log_dict(
-            {prefix + k: loss for k, loss in losses.items()}, batch_size=batch.num_graphs, on_step=False, on_epoch=True
+            {"test_" + k + suffix: loss for k, loss in losses.items()},
+            batch_size=batch.num_graphs,
+            on_step=False,
+            on_epoch=True,
+            add_dataloader_idx=self._test_dataloaders_names is not None,
         )
         test_metrics = self.update_metrics_collection(self.test_metrics, model_out, prefix=prefix)
         self.log_dict(test_metrics, batch_size=batch.num_graphs, on_step=False, on_epoch=True)

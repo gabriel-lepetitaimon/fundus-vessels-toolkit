@@ -414,17 +414,18 @@ class BranchDigraphData(PygData):
 
         if isinstance(fundus, FundusData):
             fundus_img = fundus.image
-            if od_center is None and fundus.has_macula:
+            if od_center is None and fundus.has_od_center:
                 od_center = fundus.od_center
             if mac_center is None:
-                mac_center = fundus.infered_macula_center()
+                mac_center = fundus.inferred_macula_center()
         else:
             fundus_img = fundus
         fundus_shape = (fundus_img.shape[1], fundus_img.shape[2])
 
         if od_center is None:
             od_center = Point.from_tuple(fundus_shape) // 2
-            mac_center = Point(fundus_shape[0] // 2, fundus_shape[1])  # Dummy position on the right of the OD
+            if mac_center is None:
+                mac_center = Point(fundus_shape[0] // 2, fundus_shape[1])  # Dummy position on the right of the OD
         elif mac_center is None:
             if od_center.x < fundus_shape[1] // 2:
                 mac_center = Point(od_center.y, od_center.x + fundus_shape[1] // 2)

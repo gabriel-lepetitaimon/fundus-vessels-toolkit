@@ -31,7 +31,7 @@ class TransformerGCNOpt(BaseModel):
     dropout: float = Field(default=0.1, ge=0.0, le=1.0)
     """Dropout rate to apply after convolution layers that have the "-DropOut" suffix in the architecture string."""
 
-    bipolar_node: bool = Field(default=False)
+    bipolar_node: bool = Field(default=True)
     """Whether to use bipolar nodes extending the state of every node with two additional feature vectors representing their two poles. If True, the model will use BipolarTransformerConv layers and the output dimension will be split between nodes and poles features."""  # noqa: E501
 
     total_out_features: int = Field(default=512, ge=1)

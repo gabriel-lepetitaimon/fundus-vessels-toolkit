@@ -92,17 +92,18 @@ class RoPE(torch.nn.Module):
         else:
             raise ValueError(f"Unknown support pattern: {self.support_pattern}")
 
-    def get_freqs_cis(self, theta, n_embd, n_heads, ctx_size) -> Tensor:
-        head_dim = n_embd // n_heads
-        i = torch.arange(head_dim // 2)
-        thetas = theta ** (-2 * i / head_dim)  # head_dim // 2
-        pos = torch.arange(ctx_size)  # pos
-        freqs = torch.outer(pos, thetas)  # pos, head_dim // 2
-        return torch.complex(torch.cos(freqs), torch.sin(freqs))
+    # def get_freqs_cis(self, theta, n_embd, n_heads, ctx_size) -> Tensor:
+    #     head_dim = n_embd // n_heads
+    #     i = torch.arange(head_dim // 2)
+    #     thetas = theta ** (-2 * i / head_dim)  # head_dim // 2
+    #     pos = torch.arange(ctx_size)  # pos
+    #     freqs = torch.outer(pos, thetas)  # pos, head_dim // 2
+    #     return torch.complex(torch.cos(freqs), torch.sin(freqs))
 
     def compute_freqs_from_pos(self, pos: Tensor) -> Tensor:
+        COMPLEX_IMPLEMENTATION = pos.dtype != torch.bfloat16
         freqs = pos @ self.freqs_support.T  # [n_pos, 2] @ [2, head_dim // 2] -> [n_pos, head_dim // 2]
-        if freqs.dtype == torch.bfloat16:  # Complex computation is not implemented for bfloat16
+        if not COMPLEX_IMPLEMENTATION:  # Complex computation is not implemented for bfloat16
             return torch.stack([torch.cos(freqs), torch.sin(freqs)], dim=0)  # [2, n_pos, head_dim // 2]
         else:
             return torch.complex(torch.cos(freqs), torch.sin(freqs))  # [n_pos, head_dim // 2]
@@ -133,11 +134,13 @@ class RoPE(torch.nn.Module):
         assert head_dim == self.head_dim, f"Input head dim ({head_dim}) should be {self.head_dim}"
         x = x.reshape(n_pos, n_heads, half, 2)
 
-        if pos.shape == (n_pos, half):
+        COMPLEX_IMPLEMENTATION = pos.dtype != torch.bfloat16
+
+        if pos.shape == ((n_pos, half) if COMPLEX_IMPLEMENTATION else (2, n_pos, half)):
             freqs = pos
         else:
             freqs = self.compute_freqs_from_pos(pos)
-        if freqs.dtype == torch.bfloat16:  # Complex computation is not implemented for bfloat16
+        if not COMPLEX_IMPLEMENTATION:  # Complex computation is not implemented for bfloat16
             cos, sin = freqs[0], freqs[1]  # [n_pos, head_dim // 2]
             v = torch.stack([cos, -sin, sin, cos], dim=-1).view(n_pos, 1, half, 2, 2)
             x_real = torch.sum(v * x.view(n_pos, n_heads, half, 1, 2), dim=-1)  # n_pos, n_heads, half, 2

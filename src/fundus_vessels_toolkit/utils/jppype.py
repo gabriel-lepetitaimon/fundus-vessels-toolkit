@@ -1,4 +1,4 @@
-from typing import Dict, Literal, Optional, Sequence, Tuple
+from typing import Callable, Dict, Literal, Optional, Sequence, Tuple
 
 import matplotlib
 import numpy as np
@@ -50,6 +50,9 @@ def subgraph_colormap(x):
     return cmap[x % len(cmap)]
 
 
+_InteractiveCallback = Callable[[int], None]
+
+
 def draw_tree(
     tree: VTree,
     view: View2D | View2dGroup,
@@ -59,9 +62,12 @@ def draw_tree(
     node_labels=False,
     edge: Literal["bspline", "line", "skeleton", "skeleton-dot"] = "bspline",
     branch_color: Literal["av", "rank", "subtree"] | dict[int, str] = "rank",
+    node_cmap: Optional[dict[int, str]] = None,
     bspline_dir: bool | dict[int, str] = False,
-    interactive: bool = False,
+    interactive: bool | _InteractiveCallback = False,
 ) -> LayerGraph:
+    from fundus_toolkits.utils.color import darken_hex, lighten_hex
+
     bsplines = []
     layer = tree.jppype_layer(
         edge_map=edge.startswith("skeleton"),
@@ -98,31 +104,42 @@ def draw_tree(
 
             left, right = p - tan.rotate(np.pi / 4), p - tan.rotate(-np.pi / 4)
             arrow_path = f" M {left.x:.2f} {left.y:.2f} L {p.x:.2f} {p.y:.2f} L {right.x:.2f} {right.y:.2f}"
-            if bspline_dir is True:
+            if bspline_dir is True or i not in bspline_dir:
                 layer._edges_path[i] = path + arrow_path
+                if bspline_dir is not True:
+                    layer._edges_path += [""]
             else:
                 layer._edges_path += [arrow_path]
 
-    if artery is None:
-        if "av" in tree.node_attr:
-            layer.nodes_cmap = tree.node_attr["av"].fillna(0).map(AV_COLORS).to_dict()
+    main_color = AV_COLORS[AVLabel.UNK]
+    if node_cmap is None:
+        if artery is None:
+            if "av" in tree.node_attr:
+                node_cmap = tree.node_attr["av"].fillna(0).map(AV_COLORS).to_dict()
+            else:
+                node_cmap = {i: AV_COLORS[AVLabel.UNK] for i in range(tree.node_count)}
         else:
-            layer.nodes_cmap = AV_COLORS[AVLabel.UNK]
-        main_color = AV_COLORS[AVLabel.UNK]
-    else:
-        if artery is True:
-            root_color = "#7a1a1a"
-            leaf_color = "#da7676"
-            label = AVLabel.ART
-        elif artery is False:
-            root_color = "#1a1a7a"
-            leaf_color = "#7676da"
-            label = AVLabel.VEI
-        main_color = AV_COLORS[label]
-        nodes_color = pd.Series(main_color, index=tree.node_attr.index)
-        nodes_color[tree.root_nodes_ids()] = root_color
-        nodes_color[tree.leaf_nodes_ids()] = leaf_color
-        layer.nodes_cmap = nodes_color.to_dict()
+            if artery is True:
+                node_cmap = {i: AV_COLORS[AVLabel.ART] for i in range(tree.node_count)}
+                main_color = AV_COLORS[AVLabel.ART]
+                root_color = "#7a1a1a"
+                leaf_color = "#da7676"
+            elif artery is False:
+                main_color = AV_COLORS[AVLabel.VEI]
+                node_cmap = {i: AV_COLORS[AVLabel.VEI] for i in range(tree.node_count)}
+                root_color = "#1a1a7a"
+                leaf_color = "#7676da"
+            else:
+                node_cmap = {i: main_color for i in range(tree.node_count)}
+
+        # nodes_color = pd.Series(main_color, index=tree.node_attr.index)
+        # nodes_color[tree.root_nodes_ids()] = root_color
+        # nodes_color[tree.leaf_nodes_ids()] = leaf_color
+    for node_id in tree.root_nodes_ids():
+        node_cmap[node_id] = darken_hex(node_cmap.get(node_id, main_color), 0.3)
+    for node_id in tree.leaf_nodes_ids():
+        node_cmap[node_id] = lighten_hex(node_cmap.get(node_id, main_color), 0.3)
+    layer.nodes_cmap = node_cmap
 
     if branch_color == "rank" and "rank" in tree.node_attr:
         MAX_RANK = 4
@@ -143,11 +160,11 @@ def draw_tree(
         edge_cmap = {b: main_color for b in range(B)}
 
     if isinstance(bspline_dir, dict) and edge == "bspline":
-        dir_cmap = {b + B: bspline_dir.get(b, c) for b, c in enumerate(edge_cmap)}
+        dir_cmap = {b + B: bspline_dir.get(b, c) for b, c in enumerate(edge_cmap.values())}
         edge_cmap |= dir_cmap
     layer.edges_cmap = edge_cmap
 
-    if interactive:
+    if interactive is not False:
 
         def recolor(color, highlight: Literal["dim", "parent", "self", "child"]):
             hsv = Color(color).convert("hsv")
@@ -158,7 +175,8 @@ def draw_tree(
                 hsv[1] = hsv[1] * 0.95
                 hsv[2] = hsv[2] * 0.9
             elif highlight == "self":
-                hsv[1] = max(hsv[1] * 1.15, 1)
+                # hsv[1] = max(hsv[1] * 1.15, 1)
+                pass
             elif highlight == "child":
                 # hsv[1] = hsv[1] * 0.95
                 hsv[2] = max(hsv[2] * 1.15, 1)
@@ -178,6 +196,8 @@ def draw_tree(
 
             if dist > 20 or event["button"] == 2:
                 layer.edges_cmap = {b - 1: color if b > 0 else "#777777" for b, color in cmap_cache.items()}
+                if callable(interactive):
+                    interactive(-1)
                 return
 
             topo: list[Literal["dim", "parent", "self", "child"]] = ["dim"] * tree.branch_count
@@ -195,6 +215,9 @@ def draw_tree(
             }
             _last_cmap = layer.edges_cmap
 
+            if callable(interactive):
+                interactive(branch_id)
+
         (view.views[0] if isinstance(view, View2dGroup) else view).on_click(handle_click)
 
     view[name] = layer
@@ -209,6 +232,7 @@ def draw_trees(
     edge: Literal["bspline", "line", "skeleton"] = "bspline",
     branch_color: Literal["av", "rank", "subtree"] = "rank",
     bspline_dir: bool = False,
+    interactive: bool = False,
 ) -> None:
     """
     Draw a vessel tree on a given view.
@@ -230,6 +254,7 @@ def draw_trees(
         edge=edge,
         branch_color=branch_color,
         bspline_dir=bspline_dir,
+        interactive=interactive,
     )
     draw_tree(
         trees[1],
@@ -241,6 +266,7 @@ def draw_trees(
         edge=edge,
         branch_color=branch_color,
         bspline_dir=bspline_dir,
+        interactive=interactive,
     )
 
 

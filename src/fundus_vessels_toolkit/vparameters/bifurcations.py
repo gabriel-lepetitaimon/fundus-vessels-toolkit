@@ -243,7 +243,7 @@ def parametrize_bifurcations(
             return df
 
         bifurcations_yx = np.stack(bifurcations_yx)
-        macula_center = fundus_data.infered_macula_center()
+        macula_center = fundus_data.inferred_macula_center()
         if macula_center is not None:
             df.insert(4, "dist_macula", macula_center.distance(bifurcations_yx))
         if fundus_data.od_center is not None:

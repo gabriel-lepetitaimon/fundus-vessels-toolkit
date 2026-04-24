@@ -547,7 +547,7 @@ def simplify_passing_nodes[T: VGraph](
 
         geo_data = graph.geometric_data()
         t = np.stack([geo_data.tip_tangent(b, d) for b, d in zip(incident_branches, idirs, strict=True)])
-        cos = np.sum(t[:, 1, :] * -t[:, 0, :], axis=1)  # Dot product between the two tangents
+        cos = np.sum(t[:, 1, :] * t[:, 0, :], axis=1)  # Dot product between the two tangents
         fuseable_nodes = cos <= np.cos(np.deg2rad(min_angle))
 
         unknown_t = np.isin(incident_branches, geo_data.branch_with_unknown_curve())
