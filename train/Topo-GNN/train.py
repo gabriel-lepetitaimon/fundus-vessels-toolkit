@@ -8,6 +8,7 @@ import psutil
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
+import yaml
 from lightning_fabric.plugins.precision.precision import _PRECISION_INPUT_STR
 from pydantic import BaseModel, ConfigDict, Field
 from pytorch_lightning.callbacks import Callback, ModelCheckpoint
@@ -17,7 +18,6 @@ from torchmetrics import MetricCollection, Specificity
 from torchmetrics.classification import Accuracy, Precision, Recall
 
 import wandb
-import yaml
 from fundus_vessels_toolkit.models.metrics.tree import (
     MetricCollectionDict,
     ParentAcc,
@@ -68,7 +68,7 @@ class DigraphGNNTrainerConfig(BaseModel):
     lr: float = 1e-2
     """Learning rate."""
 
-    batch_size: int = 3
+    batch_size: int = 12
     """Batch size for training."""
 
 
@@ -93,7 +93,7 @@ class HardwareConfig(BaseModel):
             specs["devices"] = self.gpu
         return specs
 
-    max_batch_size: int = 3
+    max_batch_size: int = 4
     """Maximum batch size for training. If the batch_size in the config is larger than this, gradient accumulation will be used."""  # noqa: E501
 
     train_num_workers: int = -2
@@ -381,19 +381,20 @@ class DigraphGNNTrainer(L.LightningModule):
 
         self.update_preds(self.val_preds, model_out)
 
+    def on_validation_epoch_end(self) -> None:
+        metrics = self.val_metrics.compute()
+        self.log("val_agg", metrics["tree"]["-parent-acc"] * metrics["av"]["-acc"] * metrics["dir"]["-acc"])
+        self.val_metrics.reset()
+
     def on_validation_end(self) -> None:
         self.logger.experiment.log(  # type: ignore
             {
-                "val_agg": self.trainer.callback_metrics["val_tree-parent-acc"]
-                * self.trainer.callback_metrics["val_av-acc"]
-                * self.trainer.callback_metrics["val_dir-acc"],
                 "running_lr": self.trainer.optimizers[0].param_groups[0]["lr"],
                 "epoch": self.trainer.current_epoch,
                 "val_pred": self.val_preds["table"],
             }
         )
         self.val_preds = {}
-        self.val_metrics.reset()
 
     def test_step(self, batch, batch_idx, dataloader_idx=0):
         model_out = self(batch)

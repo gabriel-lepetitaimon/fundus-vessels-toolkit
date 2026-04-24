@@ -11,6 +11,9 @@ from torchmetrics import Metric
 class MetricCollectionDict(nn.ModuleDict):
     _modules: dict[str, Metric]  # type: ignore[assignment]
 
+    def compute(self) -> dict[str, Tensor]:
+        return {name: metric.compute() for name, metric in self.items()}
+
     def reset(self):
         for metric in self.values():
             metric.reset()
