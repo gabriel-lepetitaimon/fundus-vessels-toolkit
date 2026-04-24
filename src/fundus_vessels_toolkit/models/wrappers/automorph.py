@@ -12,7 +12,7 @@ from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.models.generic_inference import fundus_inference
 from fundus_toolkits.models.pre_postprocessing import DeviceLikeType, basic_fundus_pre_postprocessing
 
-DEFAULT_AUTOMORPH_PATH = Path(__file__).parent.parent.parent.parent / "AutoMorph"
+DEFAULT_AUTOMORPH_PATH = Path(__file__).parent.parent.parent.parent.parent.parent / "AutoMorph"
 
 
 @lru_cache(1)

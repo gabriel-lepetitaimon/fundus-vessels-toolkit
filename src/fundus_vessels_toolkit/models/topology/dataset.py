@@ -14,6 +14,7 @@ from types import EllipsisType
 from typing import TYPE_CHECKING, Iterable, Literal, Optional, Self, Sequence, overload
 
 import numpy as np
+from scipy.__config__ import show
 import tqdm
 from joblib import Parallel, delayed
 from numpy.random import MT19937, RandomState, SeedSequence
@@ -886,6 +887,7 @@ class BranchDigraphDataset(PygDataset):
         fp_pred: Optional[Bool1DArray] = None,
         av_pred: Optional[Bool1DArray] = None,
         *,
+        show_gt_graph: bool = True,
         version: Optional[str] = None,
         gt_digraph: Optional[VBranchDigraph] = None,
         branch_label: bool = False,
@@ -902,8 +904,9 @@ class BranchDigraphDataset(PygDataset):
         assert VBranchDigraph.has_all_p(gt_digraph)
 
         m = Mosaic(
-            3,
-            cols_titles=[f"GT Tree: {sample.name}", "Predicted Tree", "Reference Topology"],
+            3 if show_gt_graph else 2,
+            cols_titles=[f"Reference Topology: {sample.name}", "Predicted Tree"]
+            + (["GT Tree"] if show_gt_graph else []),
             cell_height=700,
             background=sample.fundus.image,
         )
@@ -912,13 +915,14 @@ class BranchDigraphDataset(PygDataset):
 
         # Draw GT tree
         solved_tree = gt_digraph.optimize_tree(keep_missing_branch=True)
-        draw_tree(
-            solved_tree,
-            view=m[0],
-            branch_color="subtree",
-            bspline_dir=True,
-            interactive=True,
-        )
+        if show_gt_graph:
+            draw_tree(
+                solved_tree,
+                view=m[2],
+                branch_color="subtree",
+                bspline_dir=True,
+                interactive=True,
+            )
 
         # Draw Predicted tree
         tree = gt_digraph.compute_tree_from_arborescence(parent_pred, dir_pred, fp_pred, keep_missing_branch=True)
@@ -930,14 +934,14 @@ class BranchDigraphDataset(PygDataset):
             branch_dir_cmap[b] = AV_COLORS[AVLabel.BKG]
         if av_pred is not None:
             color_legend = {
-                (True, True): AV_COLORS[AVLabel.ART],
-                (False, False): AV_COLORS[AVLabel.VEI],
-                (True, False): "#fc249b",
-                (False, True): "#1c94e3",
+                (True, 1): AV_COLORS[AVLabel.ART],
+                (False, 2): AV_COLORS[AVLabel.VEI],
+                (True, 2): "#fc249b",
+                (False, 1): "#1c94e3",
+                (True, 0): "white",
+                (False, 0): "white",
             }
-            branch_cmap = {
-                i: color_legend[(av, gt_digraph.graph.branch(i).attr["av"] == 1)] for i, av in enumerate(av_pred)
-            }
+            branch_cmap = {i: color_legend[(av, gt_digraph.branch_av_class()[i])] for i, av in enumerate(av_pred)}
             if fp_pred is not None:
                 for i in np.where(fp_pred)[0]:
                     branch_cmap[i] = AV_COLORS[AVLabel.BKG]
@@ -978,8 +982,8 @@ class BranchDigraphDataset(PygDataset):
         )
 
         topo_map = TreeTopology.av_overlay(sample.fundus.image, *sample.target_topologies)
-        m[2].add_image(topo_map, name="background")
-        draw_trees((sample.art_topology.tree, sample.vei_topology.tree), view=m[2], bspline_dir=True)
+        m[0].add_image(topo_map, name="background")
+        draw_trees((sample.art_topology.tree, sample.vei_topology.tree), view=m[0], bspline_dir=True)
 
         return m, tree
 

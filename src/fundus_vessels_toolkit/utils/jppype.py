@@ -206,9 +206,6 @@ def draw_tree(
                 topo[b] = "parent"
             for b in tree.branch_successors(branch_id, max_depth=None):
                 topo[b] = "child"
-            with open("debug_topo.txt", "w") as f:
-                for b in range(tree.branch_count):
-                    f.write(f"{b}: {topo[b]}\n")
             layer.edges_cmap = {
                 b - 1: recolor(color, topo[b - 1]) if 0 <= b - 1 < tree.branch_count else color
                 for b, color in cmap_cache.items()

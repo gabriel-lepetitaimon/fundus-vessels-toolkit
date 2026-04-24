@@ -39,7 +39,7 @@ from fundus_vessels_toolkit.models.topology.losses import (
 )
 from fundus_vessels_toolkit.models.topology.model import BranchDigraphModel, BranchDigraphModelOpt
 
-# torch.set_float32_matmul_precision("medium")
+torch.set_float32_matmul_precision("medium")
 torch.backends.fp32_precision = "ieee"  # type: ignore
 torch.backends.cuda.matmul.fp32_precision = "ieee"
 torch.backends.cudnn.fp32_precision = "ieee"  # type: ignore
@@ -159,7 +159,7 @@ def train(config=None, hdw_cfg=None):
     wandb_logger = WandbLogger(log_model=True)
     model = DigraphGNNTrainer(cfg_dict, compile=hdw_cfg.compile, n_step_per_epoch=len(train_loader))
 
-    checkpoints: list[Callback] = [ModelCheckpoint(monitor="val_tree-parent-acc", mode="max")]
+    checkpoints: list[Callback] = [ModelCheckpoint(monitor="val_agg", mode="max", save_weights_only=True)]
 
     trainer = L.Trainer(
         max_epochs=cfg.epoch,
@@ -261,7 +261,7 @@ class DigraphGNNTrainer(L.LightningModule):
         return MetricCollectionDict(collection)
 
     def update_metrics_collection(
-        self, metrics: MetricCollectionDict, batched_out: BranchDigraphModel.Output, prefix=""
+        self, metrics: MetricCollectionDict, batched_out: BranchDigraphModel.Output, prefix="", suffix=""
     ):
         metric_values = dict()
 
@@ -291,7 +291,7 @@ class DigraphGNNTrainer(L.LightningModule):
                 metric_values["avOpti"] = metrics["avOpti"](opti_av_p, out.gt_av_p[tp_mask] > 0.5)
 
         # Flatten metric values dict
-        metric_values = {prefix + k1 + k2: v for k1, group in metric_values.items() for k2, v in group.items()}
+        metric_values = {prefix + k1 + k2 + suffix: v for k1, group in metric_values.items() for k2, v in group.items()}
         return metric_values
 
     def update_preds(self, preds_dict: dict, batched_out: BranchDigraphModel.Output, optimal=False):
@@ -370,11 +370,13 @@ class DigraphGNNTrainer(L.LightningModule):
         self.logger.experiment.log(  # type: ignore
             {
                 "val_agg": self.trainer.callback_metrics["val_tree-parent-acc"]
-                * self.trainer.callback_metrics["val_av-acc"]
-                * self.trainer.callback_metrics["val_dir-acc"]
+                         * self.trainer.callback_metrics["val_av-acc"]
+                         * self.trainer.callback_metrics["val_dir-acc"],
+                "running_lr": self.trainer.optimizers[0].param_groups[0]["lr"],
+                "epoch": self.trainer.current_epoch,
+                "val_pred": self.val_preds["table"],
             }
         )
-        self.logger.experiment.log({"val_pred": self.val_preds["table"]})  # type: ignore
         self.val_preds = {}
         self.val_metrics.reset()
 
@@ -392,7 +394,7 @@ class DigraphGNNTrainer(L.LightningModule):
             on_epoch=True,
             add_dataloader_idx=self._test_dataloaders_names is not None,
         )
-        test_metrics = self.update_metrics_collection(self.test_metrics, model_out, prefix=prefix)
+        test_metrics = self.update_metrics_collection(self.test_metrics, model_out, prefix="test_", suffix=suffix)
         self.log_dict(test_metrics, batch_size=batch.num_graphs, on_step=False, on_epoch=True)
 
         self.update_preds(self.test_preds, model_out)

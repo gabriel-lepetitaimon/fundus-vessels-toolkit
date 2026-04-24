@@ -83,7 +83,12 @@ def vascx_prepost_processing(standard_resolution: int = 1024):
             assert img.shape[0] == img.shape[1], "Expected square images"
             img_256 = cv2.resize(img, (256, 256), interpolation=cv2.INTER_LINEAR)
             radius = 128
-            img_mirrored, mask = circular_mirror_pixel_and_mask(img_256, radius=radius)
+            try:
+                img_mirrored, mask = circular_mirror_pixel_and_mask(img_256, radius=radius)
+            except Exception as e:
+                img_mirrored = img_256
+                mask = np.ones(img_256.shape[:2], dtype=bool)
+                warnings.warn(f"Failed to apply circular mirror pixel and mask: {e}")
             blur_256 = gaussian_filter(img_mirrored, (0.05 * radius, 0.05 * radius, 0))
             blur = cv2.resize(blur_256, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
             mask = cv2.resize(mask.astype(np.float32), (img.shape[1], img.shape[0])) > 0.5

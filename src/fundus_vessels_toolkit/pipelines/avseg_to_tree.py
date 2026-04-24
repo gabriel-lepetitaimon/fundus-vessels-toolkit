@@ -234,7 +234,8 @@ class GNNAVSegToTree(AVSegToTree):
         self.av_attr = "av"
         root = Path(__file__).parent.parent.parent.parent
         # checkpoint = torch.load(root / "train/Topo-GNN/GNN-Topo-v1/c2kx8j5h/checkpoints/epoch=239-step=8880.ckpt")
-        checkpoint = torch.load(root / "train/Topo-GNN/GNN-Topo-v1/ft6svpfg/checkpoints/epoch=179-step=3420.ckpt")
+        # checkpoint = torch.load(root / "train/Topo-GNN/GNN-Topo-v1/ft6svpfg/checkpoints/epoch=179-step=3420.ckpt")
+        checkpoint = torch.load(root / "train/Topo-GNN/GNN-Topo-v1/96dxz1ex/checkpoints/epoch=99-step=1900.ckpt")
 
         model = BranchDigraphModel(checkpoint["hyper_parameters"]["config"]["model"])
         model.load_state_dict({k[6:]: v for k, v in checkpoint["state_dict"].items() if k.startswith("model.")})
