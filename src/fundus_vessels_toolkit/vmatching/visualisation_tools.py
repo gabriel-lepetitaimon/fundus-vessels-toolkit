@@ -53,9 +53,9 @@ def inspect_matching(
     if matching_gt is not None:
         # Sort the junctions to match the ground truth
         matching_gt = np.asarray(matching_gt, dtype=int)
-        assert (
-            matching_gt.ndim == 2 and matching_gt.shape[0] == 2
-        ), "Invalid ground truth matching: shape should be (2, N)"
+        assert matching_gt.ndim == 2 and matching_gt.shape[0] == 2, (
+            "Invalid ground truth matching: shape should be (2, N)"
+        )
         N_gt_match = len(matching_gt[0])
         src_gt, dst_gt = matching_gt
         src_reorder = complete_lookup(src_gt, N_src - 1)
@@ -76,7 +76,7 @@ def inspect_matching(
     if dst_features is not None:
         dst_features.set_index(invert_complete_lookup(dst_reorder), inplace=True)
     src_nodes_id, dst_nodes_id = np.arange(N_src), np.arange(N_dst)
-    nodes_similarity[src_reorder][:, dst_reorder] = nodes_similarity
+    nodes_similarity = nodes_similarity[src_reorder][:, dst_reorder]
 
     if matching_gt is None:
         true_match = np.arange(N_match)
@@ -213,7 +213,7 @@ def inspect_matching(
     # === EVALUATION ===
     if matching_gt is not None:
         TP = len(true_match)
-        print(f"Precision: {TP} / {N_gt_match} = {TP/N_gt_match:.0%} \n" f"Recall: {TP} / {N_match} = {TP/N_match:.0%}")
+        print(f"Precision: {TP} / {N_gt_match} = {TP / N_gt_match:.0%} \nRecall: {TP} / {N_match} = {TP / N_match:.0%}")
 
 
 def inspect_registration(

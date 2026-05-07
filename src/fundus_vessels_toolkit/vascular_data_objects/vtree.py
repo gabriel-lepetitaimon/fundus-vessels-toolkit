@@ -1541,7 +1541,7 @@ class VTree(VGraph):
     ####################################################################################################################
     #  === TREE MANIPULATION ===
     ####################################################################################################################
-    def reindex_branches(self, indices: Int1DArray | Mapping[int, int], inverse_lookup=False) -> VTree:
+    def reindex_branches(self, indices: Int1DArrayLike | Mapping[int, int], inverse_lookup=False) -> VTree:
         """Reindex the branches of the tree.
 
         Parameters
@@ -1576,7 +1576,9 @@ class VTree(VGraph):
         self._branch_tree = indices[self.branch_tree + 1]
         return self
 
-    def reindex_nodes(self, indices: Int1DArray | Mapping[int, int], *, inverse_lookup=False, inplace=False) -> VTree:
+    def reindex_nodes(
+        self, indices: Int1DArrayLike | Mapping[int, int], *, inverse_lookup=False, inplace=False
+    ) -> VTree:
         """Reindex the nodes of the tree.
 
         Parameters

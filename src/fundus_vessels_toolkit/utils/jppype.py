@@ -66,6 +66,8 @@ def draw_tree(
     bspline_dir: bool | dict[int, str] = False,
     interactive: bool | _InteractiveCallback = False,
 ) -> LayerGraph:
+    from jppype.utils.geometric import Rect as JPPRect
+
     from fundus_toolkits.utils.color import darken_hex, lighten_hex
 
     bsplines = []
@@ -151,7 +153,8 @@ def draw_tree(
         edge_gradient = [edge_gradient[x].convert("srgb").to_string(hex=True) for x in range(MAX_RANK)]
         edges_rank = tree.node_attr["rank"][tree.branch_head()].clip(1, MAX_RANK) - 1
         edge_cmap = {b: edge_gradient[x] for b, x in enumerate(edges_rank)}
-
+    elif branch_color == "av" and "av" in tree.branch_attr:
+        edge_cmap = tree.branch_attr["av"].fillna(0).map(AV_COLORS).to_dict()
     elif branch_color == "subtree":
         edge_cmap = pd.Series(tree.subtrees_branch_labels()).map(subgraph_colormap).to_dict()
     elif isinstance(branch_color, dict):
@@ -218,6 +221,7 @@ def draw_tree(
         (view.views[0] if isinstance(view, View2dGroup) else view).on_click(handle_click)
 
     view[name] = layer
+    view[name].domain = JPPRect(*tree.geometric_data().domain.to_int())
     return layer
 
 

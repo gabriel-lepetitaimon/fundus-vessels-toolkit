@@ -140,6 +140,10 @@ Point Point::sqr() const { return Point(y * y, x * x); }
 double Point::max() const { return std::max(y, x); }
 double Point::min() const { return std::min(y, x); }
 double Point::angle() const { return atan2(y, x); }
+double Point::pos_angle() const {
+    const double angle = atan2(y, x);
+    return angle >= 0 ? angle : angle + 2 * M_PI;
+}
 double Point::angle(const Point& p) const { return atan2(cross(p), dot(p)); }
 /// @brief Rotate the point by an angle in radians. Positive rotation is
 /// clockwise.
@@ -491,15 +495,6 @@ PointList tensor_to_pointList(const torch::Tensor& tensor) {
 Scalars tensor_to_scalars(const torch::Tensor& tensor) {
     auto accessor = tensor.accessor<float, 1>();
     Scalars vec;
-    vec.reserve(tensor.size(0));
-    for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) vec.push_back(accessor[i]);
-    return vec;
-}
-
-template <typename T>
-std::vector<T> tensor_to_vector(const torch::Tensor& tensor) {
-    auto accessor = tensor.accessor<T, 1>();
-    std::vector<T> vec;
     vec.reserve(tensor.size(0));
     for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) vec.push_back(accessor[i]);
     return vec;

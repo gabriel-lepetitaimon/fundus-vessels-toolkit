@@ -9,7 +9,7 @@ from fundus_vessels_toolkit.models import segment_av
 
 def predict_av():
     # === DATASET ===
-    PATH = Path("/run/media/gaby/GREY SSD/PostDoc/DATA/Fundus/LES-AV")
+    PATH = Path("/run/media/gaby/GREY SSD/PostDoc/DATA/Fundus/Registration/FIRE/")
     RAW = PATH / "1-images"
     OUT = PATH / "2-av-pred_CLEMENT"
     imgs = sorted(RAW.glob(f"*{most_common_image_ext(RAW)}"))

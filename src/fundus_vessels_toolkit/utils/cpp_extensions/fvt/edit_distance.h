@@ -6,29 +6,31 @@
 using IncidentBranchesMatch = std::vector<std::vector<torch::Tensor>>;  // [N1][N2][{b1, b2}]
 
 struct IncidentBranchesData {
-    const Tensor4DAcc<float> angle_features_1;
-    const Tensor4DAcc<float> angle_features_2;
+    const Tensor3DAcc<float> dot_features_1;
+    const Tensor3DAcc<float> dot_features_2;
     const Tensor3DAcc<float> scalar_features_1;
     const Tensor3DAcc<float> scalar_features_2;
     const Tensor1DAcc<float> scalar_features_std;
     const Tensor3DAcc<float> branch_uvector_1;
     const Tensor3DAcc<float> branch_uvector_2;
     const bool uvectors_available;
+    const int angle_dot_features;
 };
 
 std::tuple<torch::Tensor, IncidentBranchesMatch, torch::Tensor> nodes_similarity(
-    torch::Tensor matchable_nodes, torch::Tensor angle_features_1, torch::Tensor angle_features_2,
+    torch::Tensor matchable_nodes, torch::Tensor dot_features_1, torch::Tensor dot_features_2,
     torch::Tensor scalar_features_1, torch::Tensor scalar_features_2, torch::Tensor scalar_features_std,
     torch::Tensor n_branches_1, torch::Tensor n_branches_2, torch::Tensor branch_uvector_1,
-    torch::Tensor branch_uvector_2, bool rotation_invariant);
+    torch::Tensor branch_uvector_2, bool rotation_invariant, int angle_dot_features = 0);
 
 std::tuple<float, std::vector<UIntPair>, uint> node_similarity(uint n1, uint n2, uint B1, uint B2,
                                                                const IncidentBranchesData& data,
                                                                bool rotation_invariant);
 
 std::tuple<float, std::vector<UIntPair>, uint> djikstra_optimal_branch_matching(
-    uint B1, uint B2, std::function<float(uint, uint, const UIntPair&)> eval_match_cost,
-    std::vector<UIntPair> initial_pairs = {{0, 0}}, const bool are_match_cost_independent_of_ini_pairs = true);
+    std::vector<uint> B1_order, std::vector<uint> B2_order,
+    std::function<float(uint, uint, const UIntPair&)> eval_match_cost, std::vector<UIntPair> initial_pairs = {{0, 0}},
+    const bool are_match_cost_independent_of_ini_pairs = true);
 
 // === Djikstra Utility structures ===
 namespace BranchMatching {
@@ -72,6 +74,9 @@ float inline astar_lower_bound(const DjikstraStep& step, uint B1, uint B2) {
  ************************************************************************************************/
 
 std::array<torch::Tensor, 2> shortest_secondary_path(const torch::Tensor& edge_list, const torch::Tensor& primary_nodes,
-                                                     const torch::Tensor& secondary_nodes);
+                                                     const std::size_t n_nodes, bool directed_edge = false);
+
+std::vector<std::list<int>> backtrack_edges(const torch::Tensor& backtrack_edge_node,
+                                            const torch::Tensor& src_dst_nodes, const torch::Tensor& primary_nodes);
 
 #endif  // EDIT_DISTANCE_H

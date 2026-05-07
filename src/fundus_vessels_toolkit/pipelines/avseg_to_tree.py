@@ -139,6 +139,7 @@ class AVSegToTree(AVSegToTreeBase):
             split_av_branch=True,
             av_attr=self.av_attr,
             propagate_labels=propagate_labels,
+            discard_joint_branch_geometry=False,
             inplace=inplace,
         )
 

@@ -9,72 +9,83 @@ from ..torch import autocast_torch
 
 @autocast_torch
 def incident_branches_similarity(
-    angle_features_1: torch.Tensor,
-    angle_features_2: torch.Tensor,
-    scalar_features_1: torch.Tensor,
-    scalar_features_2: torch.Tensor,
-    scalar_features_std: torch.Tensor,
-    n_incident_branches_1: torch.Tensor,
-    n_incident_branches_2: torch.Tensor,
+    dot_features_1: torch.Tensor,
+    dot_features_2: torch.Tensor,
+    l2_features_1: torch.Tensor,
+    l2_features_2: torch.Tensor,
+    l2_features_std: torch.Tensor,
+    n_adjacent_branches_1: torch.Tensor,
+    n_adjacent_branches_2: torch.Tensor,
     branch_uvector_1: Optional[torch.Tensor] = None,
     branch_uvector_2: Optional[torch.Tensor] = None,
     matchable_nodes: Optional[torch.Tensor] = None,  # noqa: F821
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, list[list[torch.Tensor]], torch.Tensor]:
     """
-    Computes the similarity between two sets of nodes.
+    Computes the similarity between two sets of nodes N1 and N2 which have at most B1 and B2 adjacent branches respectively.
+    The similarity score is derived from features describing each node's adjacent branches. Those features are compared either by their dot product or by their L2 distances.
 
     Parameters
     ----------
-    cos_features_1 : torch.Tensor
-        Tensor of shape (N1, B, F, 2) containing F angular features of the first set of nodes N1.
+    dot_features_1 : torch.Tensor
+        Dot product features of N1 as a float tensor of shape (N1, B1, F_dot).
 
-    cos_features_2 : torch.Tensor
-        Tensor of shape (N2, B, F, 2) containing F angular features of the second set of nodes N2.
+    dot_features_2 : torch.Tensor
+        Dot product features of N2 as a float tensor of shape (N2, B2, F_dot).
 
-    L2_features_1 : torch.Tensor
-        Tensor of shape (N1, B, F) containing F L2 features of the first set of nodes N1.
+    l2_features_1 : torch.Tensor
+        L2 features of N1 a float tensor of shape (N1, B1, F_l2).
 
-    L2_features_2 : torch.Tensor
-        Tensor of shape (N2, B, F) containing F L2 features of the second set of nodes N2.
+    l2_features_2 : torch.Tensor
+        L2 features of N2 as a float tensor of shape (N2, B2, F_l2).
 
-    L2_features_std : torch.Tensor
-        Tensor of shape (N1, B, F) containing the standard deviation of the L2 features of the first set of nodes N1.
+    l2_features_std : torch.Tensor
+        Standard deviation of the L2 features as a float tensor of shape (F_l2).
+
+    n_adjacent_branches_1 : torch.Tensor
+        Tensor of shape (N1,) containing the number of adjacent branches for each node of N1. The maximum number of branches must be equal to B1.
+
+    n_adjacent_branches_2 : torch.Tensor
+        Tensor of shape (N2,) containing the number of adjacent branches for each node of N2. The maximum number of branches must be equal to B2.
 
     branch_uvector_1 : torch.Tensor, optional
-        Tensor of shape (N1, B, 2) containing the direction of the incident branches seen from their corresponding node.
-        If a branch direction is pointing towards +/-15° the branch may be matched with the first or the last branch of the other node.
+        The direction with which the adjacent branches are emerging from the node as float tensor of shape(N1, B1, 2).
 
     branch_uvector_2 : torch.Tensor, optional
-        Tensor of shape (N2, B, 2) containing the direction of the incident branches seen from their corresponding node.
+        The direction with which the adjacent branches are emerging from the node as float tensor of shape(N2, B2, 2).
 
     matchable_nodes : torch.Tensor, optional
-        Tensor of shape (N1, N2) containing the matchable nodes. If None, all nodes are matchable. By default None.
+        The combination of matchable nodes as a boolean tensor of shape (N1, N2). If None (by default), all nodes are considered matchable.
 
     Returns
     -------
-    torch.Tensor
-        The similarity matrix of shape (n_nodes1, n_nodes2).
+    similarity: torch.Tensor
+        The similarity matrix of shape (N1, N2).
 
-    torch.Tensor
+    matches: list[list[torch.Tensor]]
+        The best branch matches for each pair of matchable nodes. matches[i][j] is a tensor of shape (M, 2) where M is the number of matched branches between node i of N1 and node j of N2. Each row of matches[i][j] contains the indices of the matched branches in N1 and N2 respectively.
+
+    n_iter: torch.Tensor
+        The number of iterations of the A* branch matching algorithm for each pair of matchable nodes as a tensor of shape (N1, N2).
     """  # noqa: E501
 
     if matchable_nodes is None:
-        N1, N2 = angle_features_1.shape[0], angle_features_2.shape[0]
+        N1, N2 = dot_features_1.shape[0], dot_features_2.shape[0]
         matchable_nodes = torch.ones(N1, N2, dtype=torch.bool)
 
     empty = torch.empty([])
     sim, branches_matches, n_iter = nodes_similarity_cpp(
         matchable_nodes.cpu().bool(),
-        angle_features_1.cpu().float(),
-        angle_features_2.cpu().float(),
-        scalar_features_1.cpu().float(),
-        scalar_features_2.cpu().float(),
-        scalar_features_std.cpu().float(),
-        n_incident_branches_1.cpu().int(),
-        n_incident_branches_2.cpu().int(),
+        dot_features_1.cpu().float(),
+        dot_features_2.cpu().float(),
+        l2_features_1.cpu().float(),
+        l2_features_2.cpu().float(),
+        l2_features_std.cpu().float(),
+        n_adjacent_branches_1.cpu().int(),
+        n_adjacent_branches_2.cpu().int(),
         empty if branch_uvector_1 is None else branch_uvector_1.cpu().float(),
         empty if branch_uvector_2 is None else branch_uvector_2.cpu().float(),
         False,
+        0,
     )
     return sim, branches_matches, n_iter
 
@@ -91,6 +102,7 @@ def incident_branches_similarity_rotation_invariant(
     branch_uvector_1: torch.Tensor,
     branch_uvector_2: torch.Tensor,
     matchable_nodes: Optional[torch.Tensor],
+    angle_dot_features: int = 0,
 ) -> torch.Tensor:
     """
     Computes the similarity between two sets of nodes.

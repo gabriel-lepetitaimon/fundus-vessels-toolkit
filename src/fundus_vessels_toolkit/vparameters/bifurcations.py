@@ -255,6 +255,7 @@ def parametrize_bifurcations(
                 df.insert(4, "norm_coord_x", norm_coord[:, 1])
                 df.insert(4, "norm_coord_y", norm_coord[:, 0])
                 df.insert(4, "norm_dist_od", norm_dist_od)
+        df.insert(4, "dist_center", (Point(*fundus_data.shape) / 2).distance(bifurcations_yx))
 
     return df
 

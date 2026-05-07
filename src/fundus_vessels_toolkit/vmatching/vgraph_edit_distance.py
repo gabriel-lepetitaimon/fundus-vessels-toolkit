@@ -1,15 +1,53 @@
-from typing import Tuple
+from typing import Optional
 
 import numpy as np
+import torch
 
-from ..utils.cpp_extensions.fvt_cpp import shortest_secondary_path as cpp_shortest_path
+from ..utils.cpp_extensions.fvt_cpp import backtrack_edges as backtrack_edges_cpp
+from ..utils.cpp_extensions.fvt_cpp import shortest_secondary_path as shortest_sec_path_cpp
+from ..utils.torch import autocast_torch
+from ..utils.typing import Int2DArray, IntPairArray, IntPairMap
 from ..vascular_data_objects.vgraph import VGraph
 from .node_matching import match_nodes_by_distance
 
 
+@autocast_torch
+def shortest_secondary_path(
+    edge_list: torch.Tensor,
+    primary_nodes: torch.Tensor,
+    n_nodes: Optional[int] = None,
+    directed_edge: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute shortest path between every primary nodes without going through other primary nodes.
+
+    Parameters
+    ----------
+    edge_list : torch.Tensor
+        The edge list of the graph as a 2D tensor of shape (E, 2) where E is the number of edges in the graph. Each row contains the index of the two nodes connected by the edge.
+    primary_nodes : torch.Tensor
+        The nodes in the graph that are considered primary.
+    n_nodes : Optional[int], optional
+        The total number of nodes in the graph. If None (by default), it is inferred from the edge list.
+
+    directed_edge : bool, optional
+        If True, the edges in the edge list are considered as directed.
+
+    Returns
+    -------
+    dist: torch.Tensor
+        The distance matrix between primary nodes as an integer matrix of shape (nP, nP) where nP is the number of primary nodes. If no path exists between two primary nodes, the corresponding entry in the matrix is -1.
+
+    backtrack: torch.Tensor
+        The backtrack matrix as an integer tensor of shape (nP, N, 2) where nP is the number of primary nodes and N the total number of nodes in the graph. For each pair (p, n) the matrix contains the index of the edge and the index of the next node on the path from the node n to the primary node p. If no path exists between the two nodes, the matrix contains (-1, -1).
+    """  # noqa: E501
+    if n_nodes is None:
+        n_nodes = int(edge_list.max()) + 1
+    return shortest_sec_path_cpp(edge_list.cpu().int(), primary_nodes.cpu().int(), n_nodes, directed_edge)
+
+
 def shortest_unmatched_path(
-    adj_list1: np.ndarray, adj_list2: np.ndarray, matched_nodes: int
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    adj_list1: IntPairArray, adj_list2: IntPairArray, matched_nodes: int
+) -> tuple[Int2DArray, Int2DArray, IntPairMap, IntPairMap]:
     """Compute the shortest path connecting unmatched nodes to matched nodes, without using matched nodes.
     This function perform the same operation individually on the two graphs.
 
@@ -38,48 +76,47 @@ def shortest_unmatched_path(
     primary_nodes = np.arange(matched_nodes)
 
     nb_node1 = adj_list1.max() + 1
-    dist1, backtrack1 = cpp_shortest_path(adj_list1, primary_nodes, np.arange(matched_nodes, nb_node1))
+    dist1, backtrack1 = shortest_secondary_path(adj_list1, primary_nodes, np.arange(matched_nodes, nb_node1))
 
     nb_node2 = adj_list2.max() + 1
-    dist2, backtrack2 = cpp_shortest_path(adj_list2, primary_nodes, np.arange(matched_nodes, nb_node2))
+    dist2, backtrack2 = shortest_secondary_path(adj_list2, primary_nodes, np.arange(matched_nodes, nb_node2))
 
     return dist1, dist2, backtrack1, backtrack2
 
 
-def backtrack_edges(from_node: int, to_primary_node: int, backtrack: np.ndarray) -> list[int]:
-    """Compute the list of edges between two nodes based on the backtrack matrix.
+@autocast_torch
+def backtrack_edges(
+    src_dst_nodes: torch.Tensor, backtrack: torch.Tensor, primary_nodes: torch.Tensor
+) -> list[list[int]]:
+    """Compute the list of edges between pair of nodes based on the backtrack matrix.
 
     Parameters
     ----------
-    from_node :
-        Index of the starting node.
+    src_dst_nodes : torch.Tensor
+        The source and destination nodes as a 2D tensor of shape (P, 2) where P is the number of pairs of nodes.
 
-    to_primary_node :
-        Index of the ending node. The ending node must be a primary node, ie its index must be lower than backtrack.shape[0].
+        The first element of each pair must be a primary node index according to the first dimension of the backtrack matrix, the second element can be any node index according to the second dimension of the backtrack matrix.
 
     backtrack :
-        The backtrack matrix as returned by shortest_unmatched_path. The matrix must be of shape (N, m, 2) with N<m where N is the number of primary (or matched) nodes and m the total number of nodes in the graph.
-        For each pair (N, m) the matrix contains the index of the edge and the index of the next node on the path from the node m to the primary node N. If no path exists between the two nodes, the matrix contains (-1, -1).
+        The backtrack matrix as returned by shortest_unmatched_path. The matrix must be of shape (nP, N, 2) with nP<N where nP is the number of primary (or matched) nodes and N the total number of nodes in the graph.
 
 
     Returns
     -------
-    list[int]
-        The list of edges between the two nodes. If no path exists between the two nodes, returns an empty list.
+    list[list[int]]
+        A list of P lists of edge indices corresponding to the path between the source and destination nodes. If no path exists between the two nodes, the corresponding list is empty.
     """  # noqa: E501
-    edges = []
-    backtrack = backtrack[to_primary_node]
-    node = from_node
-
-    if backtrack[node, 1] == -1:
-        return []
-
-    while node != to_primary_node:
-        next_edge, next_node = backtrack[node]
-        edges.append(next_edge)
-        node = next_node
-
-    return edges
+    assert backtrack.dim() == 3, "Backtrack matrix must be of shape (nP, N, 2)"
+    nP, N, _ = backtrack.shape
+    assert src_dst_nodes.dim() == 2 and src_dst_nodes.size(1) == 2, "src_dst_nodes must be of shape (P, 2)"
+    assert primary_nodes.shape == (nP,), "primary_nodes must be of shape (nP,)"
+    assert torch.all(src_dst_nodes[:, 0] < nP), (
+        "The first element of each pair in src_dst_nodes must be a primary node index according to the first dimension of the backtrack matrix"  # noqa: E501
+    )
+    assert torch.all(src_dst_nodes[:, 1] < N), (
+        "The second element of each pair in src_dst_nodes must be a node index according to the second dimension of the backtrack matrix"  # noqa: E501
+    )
+    return backtrack_edges_cpp(backtrack.cpu().int(), src_dst_nodes.cpu().int(), primary_nodes.cpu().int())
 
 
 def label_edge_diff(graph_pred, graph_true, n_match):
@@ -103,7 +140,7 @@ def label_edge_diff(graph_pred, graph_true, n_match):
     pred_edge_labels[edge_id_pred[valid_edges]] = 1
     #  - Split edges (single branch in true, multiple branch in pred)
     fused_pred_edge = np.concatenate(
-        [backtrack_edges(*e, backtrack=backtrack_pred) for e in zip(*split_edges, strict=True)]
+        backtrack_edges(split_edges, backtrack=backtrack_pred, primary_nodes=np.arange(n_match))
     )
     pred_edge_labels[fused_pred_edge] = 2
     #  - Fused edges (multiple branch in true, single branch in pred)
@@ -116,7 +153,7 @@ def label_edge_diff(graph_pred, graph_true, n_match):
     true_edge_labels[edge_id_true[valid_edges]] = 1
     #  - Fused edges (multiple branch in true, single branch in pred)
     fused_true_edge = np.concatenate(
-        [backtrack_edges(*e, backtrack=backtrack_true) for e in zip(*fused_edges, strict=True)]
+        backtrack_edges(fused_edges, backtrack=backtrack_true, primary_nodes=np.arange(n_match))
     )
     true_edge_labels[fused_true_edge] = 2
     #  - Split edges (single branch in true, multiple branch in pred)
@@ -197,10 +234,16 @@ def naive_edit_distance(
     unique_branches2[branches_id2[connected_matched_nodes]] = 0
 
     #  Remove branches that connect matched nodes
-    edges = [backtrack_edges(*e, backtrack=backtrack1) for e in zip(*connected_unmatched_nodes1, strict=True)]
+    edges = [
+        backtrack_edges(*e, backtrack=backtrack1, primary_nodes=np.arange(nb_match))
+        for e in zip(*connected_unmatched_nodes1, strict=True)
+    ]
     if len(edges) > 0:
         unique_branches1[np.concatenate(edges)] = 0
-    edges = [backtrack_edges(*e, backtrack=backtrack2) for e in zip(*connected_unmatched_nodes1, strict=True)]
+    edges = [
+        backtrack_edges(*e, backtrack=backtrack2, primary_nodes=np.arange(nb_match))
+        for e in zip(*connected_unmatched_nodes1, strict=True)
+    ]
     if len(edges) > 0:
         unique_branches2[np.concatenate(edges)] = 0
 

@@ -90,6 +90,6 @@ section-order = [
 "steered_cnn" = ["steered_cnn"]
 
 [tool.pytest.ini_options]
-addopts = "--doctest-modules src/fundus_vessels_toolkit --doctest-ignore-import-errors --doctest-report ndiff"
-testpaths = ["test"]
+addopts = "--doctest-modules src/fundus_vessels_toolkit --doctest-report ndiff -v"
+testpaths = ["tests"]
 doctest_optionflags = ["NORMALIZE_WHITESPACE", "ELLIPSIS"]

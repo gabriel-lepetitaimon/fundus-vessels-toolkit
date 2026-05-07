@@ -1,4 +1,5 @@
 from __future__ import annotations
+from types import ClassMethodDescriptorType
 
 __all__ = ["VGraph"]
 
@@ -44,12 +45,17 @@ from ..utils.pandas import DFSetterAccessor
 from ..utils.typing import (
     Bool1DArray,
     Float1DArrayLike,
+    FloatPairArray,
+    FloatPairArrayLike,
     Indices,
     IndicesLike,
     Int1DArray,
     Int1DArrayLike,
+    IntPairArray,
     IntPairArrayLike,
     PointArrayLike,
+    as_float_pairs,
+    as_int_pairs,
 )
 from .vbranch_geodata import T_VBranchGeoData, VBranchGeoDescriptor
 from .vgeometric_data import VBranchGeoData, VBranchGeoDataKey, VGeometricData
@@ -482,10 +488,11 @@ class VGraph:
             If the input data does not match the expected shapes.
         """  # noqa: E501
         # === Check and store branches list ===
-        branch_list = np.asarray(branch_list, dtype=np.int_)
-        assert branch_list.ndim == 2 and branch_list.shape[1] == 2, (
-            "branch_list must be a 2D array of shape (B, 2) where B is the number of branches"
-        )
+        try:
+            branch_list = as_int_pairs(branch_list)
+        except Exception as e:
+            raise ValueError(f"Invalid branch_list: {e}.") from None
+
         self._branch_list = branch_list
         B = branch_list.shape[0]
 
@@ -570,7 +577,7 @@ class VGraph:
             # Check that each node has a distinct position
             if (np.diff(gdata._nodes_coord[np.lexsort(gdata._nodes_coord.T)], axis=0) == 0).all(axis=1).any():
                 warnings.warn("The geometric data contains duplicated nodes coordinates.", stacklevel=stack_level + 1)
-
+            gdata.check_integrity(on_error=on_error)
             branches_idx.update(gdata.branch_ids)
             nodes_idx.update(gdata.node_ids)
 
@@ -936,7 +943,7 @@ class VGraph:
         return self._node_count == 0
 
     @property
-    def branch_list(self) -> Indices:
+    def branch_list(self) -> IntPairArray:
         """The list of branches in the graph as a 2D array of shape (B, 2) where B is the number of branches. Each row contains the indices of the nodes connected by each branch.
 
         Examples
@@ -946,7 +953,7 @@ class VGraph:
                [1, 2],
                [2, 0]])
         """  # noqa: E501
-        return self._branch_list
+        return self._branch_list  # type: ignore
 
     def geometric_data(self, id: Optional[int | VGeometricData] = None) -> VGeometricData:
         """The geometric data associated with the graph.
@@ -1543,7 +1550,7 @@ class VGraph:
             else:
                 return np.sum(self._branch_list.flatten()[None, :] == nodes_id[:, None], axis=1)
         else:
-            node_count = np.bincount(self._branch_list.flatten(), minlength=self.node_count)
+            node_count: Int1DArray = np.bincount(self._branch_list.flatten(), minlength=self.node_count)  # type: ignore
             if count_loop_branches_once:
                 loop_nodes, loops_count = np.unique(
                     self._branch_list[self._branch_list[:, 0] == self._branch_list[:, 1], 0], return_counts=True
@@ -1743,7 +1750,7 @@ class VGraph:
 
         """  # noqa: E501
         mask = np.bincount(self._branch_list.flatten(), minlength=self.node_count) > 1
-        return mask if as_mask else np.argwhere(mask).flatten()
+        return mask if as_mask else np.argwhere(mask).flatten()  # type: ignore
 
     @overload
     def passing_nodes(self, *, as_mask: Literal[False] = False, exclude_loop: bool = True) -> Indices: ...
@@ -1845,7 +1852,7 @@ class VGraph:
         incident_branches: npt.NDArray = first_two_index_of(self._branch_list.flatten(), passing_nodes)  # type: ignore
         branch_index = incident_branches // 2
         if return_branch_direction:
-            branch_dirs = incident_branches < self._branch_list.shape[0]
+            branch_dirs: Bool1DArray = incident_branches < self._branch_list.shape[0]  # type: ignore
             return passing_nodes, branch_index, branch_dirs
         else:
             return passing_nodes, branch_index
@@ -2077,7 +2084,7 @@ class VGraph:
             components = [cc for cc in components if np.any(np.isin(cc, node))]
         return sorted(components, key=lambda x: len(x), reverse=True)
 
-    def subgraph_branch_labels(self) -> npt.NDArray[np.int_]:
+    def subgraph_branch_labels(self) -> Int1DArray:
         """Compute the subgraph labels of each branch in the graph.
 
         Returns
@@ -2105,7 +2112,7 @@ class VGraph:
     ####################################################################################################################
     #  === COMBINE GEOMETRIC DATA ===
     ####################################################################################################################
-    def node_coord(self) -> npt.NDArray[np.float64]:
+    def node_coord(self) -> FloatPairArray:
         """Compute the coordinates of the nodes in the graph (averaged from all geometric data).
 
         Returns
@@ -2218,7 +2225,45 @@ class VGraph:
 
         return self
 
-    def reindex_nodes(self, indices: Int1DArray | Mapping[int, int], *, inverse_lookup=False, inplace=False) -> Self:
+    @classmethod
+    def cat(cls, graphs: Iterable[VGraph]) -> Self:
+        """Concatenate several graphs together.
+
+        Parameters
+        ----------
+        graphs : Iterable[VGraph]
+            The graphs to concatenate.
+
+        inplace : bool, optional
+            If True, the graph is modified in place. Otherwise (by default), a modified copy of the graph is returned.
+
+        Returns
+        -------
+        VGraph
+            The concatenated graph.
+
+        Examples
+        --------
+        >>> graph1 = VGraph.parse("A1➔B1➔C1")
+        >>> graph2 = VGraph.parse("A2➔B2")
+        >>> graph3 = VGraph.parse("A3➔B3➔C3")
+        >>> VGraph.cat([graph1, graph2, graph3]).print_graph()
+        'A1➔B1➔C1 ; A2➔B2 ; A3➔B3➔C3'
+
+        """
+        if not graphs:
+            return cls.empty()
+
+        iterator = iter(graphs)
+        g0 = next(iterator).copy()
+
+        for graph in iterator:
+            g0.append(graph, inplace=True)
+        return g0
+
+    def reindex_nodes(
+        self, indices: Int1DArrayLike | Mapping[int, int], *, inverse_lookup=False, inplace=False
+    ) -> Self:
         """Reindex the nodes of the graph.
 
         Parameters
@@ -2282,7 +2327,7 @@ class VGraph:
                 branch_ref._node_ids = indices[branch_ref._node_ids]
         return graph
 
-    def reindex_branches(self, indices: Int1DArray | Mapping[int, int], inverse_lookup=False) -> Self:
+    def reindex_branches(self, indices: Int1DArrayLike | Mapping[int, int], inverse_lookup=False) -> Self:
         """Reindex the branches of the graph.
 
         Parameters
@@ -2908,7 +2953,7 @@ class VGraph:
         return graph
 
     # --- Nodes edition ---
-    def add_nodes(self, coord: npt.NDArray[np.float32], inplace=False) -> npt.NDArray[np.int32]:
+    def add_nodes(self, coord: FloatPairArrayLike, inplace=False) -> npt.NDArray[np.int32]:
         """Add a new node to the graph.
 
         Parameters
@@ -2924,11 +2969,11 @@ class VGraph:
         npt.NDArray[np.int32]
             The ID of the new node as a 1D array of shape (N,).
         """
-        coord = np.asarray(coord, dtype=np.float32)
-        if coord.ndim == 1:
-            coord = coord[None, :]
-        assert coord.ndim == 2 and coord.shape[1] == 2, "coord must be a 2D array of shape (N, 2)."
-        N = coord.shape[0]
+        coord_: FloatPairArray = as_float_pairs(coord)
+        if coord_.ndim == 1:
+            coord_ = coord_[None, :]  # type: ignore
+        assert coord_.ndim == 2 and coord_.shape[1] == 2, "coord_ must be a 2D array of shape (N, 2)."
+        N = coord_.shape[0]
 
         graph = self.copy() if not inplace else self
         new_nodes = np.arange(graph._node_count, graph._node_count + N)
@@ -2939,7 +2984,7 @@ class VGraph:
 
         # Update geometric data
         for gdata in graph._geometric_data:
-            gdata._append_nodes(coord)
+            gdata._append_nodes(coord_)
 
         return new_nodes
 
@@ -3774,6 +3819,7 @@ class VGraph:
     ):
         from jppype.layers import LayerGraph
         from jppype.utils.color import colormap_by_name
+        from jppype.utils.geometric import Rect as JPPRect
 
         from .vgeometric_data import VBranchGeoData
 
@@ -3785,11 +3831,10 @@ class VGraph:
             boundaries = None
 
         geodata = self.geometric_data()
-        domain = geodata.domain
 
         layer = LayerGraph(
             self._branch_list,
-            geodata.node_coord() - np.array(domain.top_left)[None, :],
+            geodata.node_coord(),
             geodata.skeleton_label_map(
                 calibre_attr=boundaries,
                 only_tip=boundaries_only_tip,

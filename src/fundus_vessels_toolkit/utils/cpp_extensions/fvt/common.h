@@ -171,6 +171,7 @@ struct Point {
     Point rot90() const;
     Point rot270() const;
     double angle() const;
+    double pos_angle() const;
     double angle(const Point& p) const;
     Point rotate(double angle) const;
     Point rotate(const Point& u) const;
@@ -409,13 +410,20 @@ std::vector<torch::Tensor> vectors_to_tensors(const std::vector<std::vector<T>>&
     return tensors;
 }
 
+template <typename T>
+std::vector<T> tensor_to_vector(const torch::Tensor& tensor) {
+    auto accessor = tensor.accessor<T, 1>();
+    std::vector<T> vec;
+    vec.reserve(tensor.size(0));
+    for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) vec.push_back(accessor[i]);
+    return vec;
+}
+
 CurveYX tensor_to_curve(const torch::Tensor& tensor, bool reverse = false);
 std::vector<CurveYX> tensors_to_curves(const std::vector<torch::Tensor>& tensors);
 std::vector<IntPair> tensor_to_vectorIntPair(const torch::Tensor& tensor);
 PointList tensor_to_pointList(const torch::Tensor& tensor);
 Scalars tensor_to_scalars(const torch::Tensor& tensor);
-template <typename T>
-std::vector<T> tensor_to_vector(const torch::Tensor& tensor);
 
 /*******************************************************************************************************************
  *             === GRAPH ===

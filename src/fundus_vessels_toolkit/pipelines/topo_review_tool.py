@@ -9,9 +9,10 @@ from fundus_data_toolkit.functional import open_image
 from ipywidgets import HTML, Button, GridBox, Label, Layout
 from jppype import Mosaic, vscode_theme
 
-from fundus_odmac_toolkit.models.segmentation import segment
-from fundus_toolkits import FundusData
+from fundus_odmac_toolkit import segment_od_mac
+from fundus_toolkits import FundusData, Rect
 from fundus_toolkits.utils.data_io import most_common_image_ext
+from fundus_vessels_toolkit.utils.fundus_projections import ResizeTranslateProjection
 
 from ..models import segment_av
 from ..pipelines.avseg_to_tree import GNNAVSegToTree, NaiveAVSegToTree
@@ -76,6 +77,8 @@ class ReviewTool:
         av_path: Path,
         save_path: Path,
         index: int | str | None = None,
+        od_path: Optional[Path] = None,
+        macula_path: Optional[Path] = None,
         *,
         raw_ext: Optional[str] = None,
         av_ext: Optional[str] = None,
@@ -86,6 +89,8 @@ class ReviewTool:
         self.raw_path = Path(raw_path)
         self.av_path = Path(av_path)
         self.save_path = Path(save_path)
+        self.od_path = Path(od_path) if od_path is not None else None
+        self.macula_path = Path(macula_path) if macula_path is not None else None
         if raw_ext is None:
             self.raw_ext = most_common_image_ext(self.raw_path)
         else:
@@ -103,7 +108,7 @@ class ReviewTool:
         self.img_names = sorted(list(img_names))
         self.current_index = 0
         self.av2tree = av2tree or NaiveAVSegToTree(mask_optic_disc=False)
-        self.av2tree_pred = GNNAVSegToTree()
+        self.av2tree_pred = NaiveAVSegToTree(mask_optic_disc=False)
 
         self.mosaic = Mosaic((2, 3), rows_titles=["Art", "Vei"], cell_height=height // 2)
         self.mosaic[0, 1].on_click(partial(self.handle_click, artery=True))
@@ -218,18 +223,32 @@ class ReviewTool:
         self.label.value = f"{img_name} ({index + 1}/{len(self.img_names)})"
 
         fundus = FundusData(image=self.raw_path / (img_name + self.raw_ext))
-        od_mac = segment(open_image(self.raw_path / (img_name + self.raw_ext))).numpy(force=True).argmax(axis=0)
-        fundus = fundus.update(od=od_mac == 1, macula=od_mac == 2, reshape_method="resize")
+        if self.od_path is None or self.macula_path is None:
+            segment_od_mac(fundus)
+        if self.od_path is not None and (self.od_path / f"{img_name}.png").exists():
+            fundus.update(od=self.od_path / f"{img_name}.png", inplace=True)
+        if self.macula_path is not None and (self.macula_path / f"{img_name}.png").exists():
+            fundus.update(macula=self.macula_path / f"{img_name}.png", inplace=True)
+        if fundus.shape[0] > 1500:
+            r = 1500 / fundus.shape[0]
+            fundus = fundus.resize(r)
+            self.fundus_scale_factor = r
+        else:
+            self.fundus_scale_factor = 1
 
-        fundus_pred = fundus.copy()
-        segment_av(fundus_pred)
-        self.trees_from_av_pred = self.av2tree(fundus_pred)
+        # fundus_pred = fundus.copy()
+        # segment_av(fundus_pred)
 
         try:
-            fundus = fundus.update(av=FundusData.load_av(self.av_path / (img_name + self.av_ext), ensure_valid_av=True))
+            fundus = fundus.update(
+                av=FundusData.load_av(self.av_path / (img_name + self.av_ext), ensure_valid_av=True),
+                reshape_method="resize",
+            )
             self._has_av_gt = True
         except ValueError:
-            vessels = FundusData.load_vessels(self.av_path / (img_name + self.av_ext))
+            vessels = FundusData.load_vessels(
+                self.av_path / (img_name + self.av_ext), target_shape=fundus.shape, reshape_method="resize"
+            )
             av = segment_av(fundus.image, ignore_segmentation=True)
             av *= vessels
             fundus = fundus.update(av=av)
@@ -237,19 +256,14 @@ class ReviewTool:
         self.trees_from_av = (self.av2tree if self._has_av_gt else self.av2tree_pred)(fundus)
         self._fundus = fundus
 
+        self.trees_from_av_pred = self.av2tree_pred(fundus)
+
         # Draw fundus
         self.mosaic[0, 0].add_image(fundus.image, name="fundus")
-        self.mosaic[1, 0].add_image(fundus.image, name="fundus")
+        fundus.draw(view=self.mosaic[1, 0])
+        # self.mosaic[1, 0].add_image(fundus.image, name="fundus")
         self.mosaic[0, 1].add_image(fundus.image, name="fundus")
         self.mosaic[1, 1].add_image(fundus.image, name="fundus")
-
-        COLORS = {
-            1: "coral",
-            2: "cornflowerblue",
-            3: "darkorchid",
-            4: "gray",
-        }
-        self.mosaic[1, 0].add_label(fundus.av, "AV", opacity=0.5, colormap=COLORS)
 
         # Load or compute trees
         self.load_saved_trees(draw=False)
@@ -260,7 +274,11 @@ class ReviewTool:
         art_file = self.save_path / f"{self.img_name}_art.npz"
         vei_file = self.save_path / f"{self.img_name}_vei.npz"
         if art_file.exists() and vei_file.exists():
-            trees = VTree.load(art_file), VTree.load(vei_file)
+            trees: tuple[VTree, VTree] = VTree.load(art_file), VTree.load(vei_file)
+            transform = ResizeTranslateProjection(s=self.fundus_scale_factor)
+            trees = tuple(tree.transform(transform) for tree in trees)  # type: ignore
+            for tree in trees:
+                tree.geometric_data()._domain = Rect.from_size(self.fundus.shape)
             self.reset_annotation_states(trees, infer_force_roots=True)
             self.save_btn.disabled = True
         else:
@@ -284,9 +302,13 @@ class ReviewTool:
         if sanity_check:
             art_file = art_file.with_suffix(".tmp.npz")
             vei_file = vei_file.with_suffix(".tmp.npz")
+        trees = self.trees
+        if self.fundus_scale_factor != 1:
+            transform = ResizeTranslateProjection(s=1 / self.fundus_scale_factor)
+            trees = [tree.transform(transform) for tree in self.trees]
 
-        self.trees[0].save(art_file)
-        self.trees[1].save(vei_file)
+        trees[0].save(art_file)
+        trees[1].save(vei_file)
 
         if sanity_check:
             try:
@@ -336,10 +358,10 @@ class ReviewTool:
     def draw_trees(self, which: Literal["artery", "vein", "both"] = "both"):
         if which in ("artery", "both"):
             draw_tree(self.trees[0], view=self.mosaic[0, 1], artery=True, bspline_dir=True)
-            draw_tree(self.trees[0], name="art", view=self.mosaic[1, 0], artery=True)
+            draw_tree(self.trees[0], name="art", view=self.mosaic[1, 0], artery=True, interactive=True)
         if which in ("vein", "both"):
             draw_tree(self.trees[1], view=self.mosaic[1, 1], artery=False, bspline_dir=True)
-            draw_tree(self.trees[1], name="vein", view=self.mosaic[1, 0], artery=False)
+            draw_tree(self.trees[1], name="vein", view=self.mosaic[1, 0], artery=False, interactive=True)
 
         for i, tree in enumerate(self.trees):
             if (which == "vein" and i == 0) or (which == "artery" and i == 1):

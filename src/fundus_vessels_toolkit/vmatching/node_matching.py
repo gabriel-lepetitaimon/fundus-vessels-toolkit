@@ -6,11 +6,21 @@ import numpy as np
 import pandas as pd
 from pygmtools.linear_solvers import hungarian
 
+from fundus_vessels_toolkit.utils.typing import (
+    Bool2DArray,
+    Float1DArray,
+    Int1DArray,
+    IntPairArray,
+    IntPairArrayLike,
+    as_int_pairs,
+)
+from fundus_vessels_toolkit.vascular_data_objects.vtree import VTree
+
 from ..utils.fundus_projections import AffineProjection, FundusProjection, QuadraticProjection, ransac_fit_projection
 from ..utils.graph.matching import ensure_consistent_matches, euclidien_matching, incident_branches_similarity
 from ..utils.lookup_array import complete_lookup, invert_lookup
 from ..vascular_data_objects import VGraph
-from .descriptor import NodeFeaturesCallback, junction_incident_branches_descriptor
+from .descriptor import NodeFeaturesCallback, junction_adjacent_branches_descriptor
 
 
 ########################################################################################################################
@@ -78,8 +88,8 @@ def match_nodes_by_distance(
 def ransac_refine_node_matching(
     fix_graph: VGraph,
     moving_graph: VGraph,
-    matched_nodes: Iterable[Iterable[int]] | np.ndarray,
-    matches_probability: Optional[np.ndarray] = None,
+    matched_nodes: IntPairArrayLike,
+    matches_probability: Optional[Float1DArray] = None,
     *,
     reindex_graphs=False,
     return_mean_error: Literal[False] = False,
@@ -89,8 +99,8 @@ def ransac_refine_node_matching(
 def ransac_refine_node_matching(
     fix_graph: VGraph,
     moving_graph: VGraph,
-    matched_nodes: Iterable[Iterable[int]] | np.ndarray,
-    matches_probability: Optional[np.ndarray] = None,
+    matched_nodes: IntPairArrayLike,
+    matches_probability: Optional[Float1DArray] = None,
     *,
     reindex_graphs=False,
     return_mean_error: Literal[True],
@@ -99,8 +109,8 @@ def ransac_refine_node_matching(
 def ransac_refine_node_matching(
     fix_graph: VGraph,
     moving_graph: VGraph,
-    matched_nodes: Iterable[Iterable[int]] | np.ndarray,
-    matches_probability: Optional[np.ndarray] = None,
+    matched_nodes: IntPairArrayLike,
+    matches_probability: Optional[Float1DArray] = None,
     *,
     reindex_graphs=False,
     return_mean_error=False,
@@ -145,10 +155,9 @@ def ransac_refine_node_matching(
 
     """  # noqa: E501
     try:
-        matched_nodes = np.asarray(matched_nodes)
-        assert matched_nodes.ndim == 2 and matched_nodes.shape[0] == 2
-    except Exception:
-        raise ValueError("matched_nodes must be a tuple of two arrays or an array of shape (2, N)") from None
+        matched_nodes = as_int_pairs(matched_nodes)
+    except Exception as e:
+        raise ValueError(f"Invalid matched_nodes format: {e}") from None
     fix_matched_nodes, mov_matched_nodes = matched_nodes
 
     fix_yx = fix_graph.node_coord()[fix_matched_nodes]
@@ -238,7 +247,7 @@ class NodeSimilarityEstimator(ABC):
 
     def _check_matchable(
         self, vgraph1: VGraph, vgraph2: VGraph, matchable: Optional[MatchableArg] = None
-    ) -> np.ndarray:
+    ) -> tuple[Bool2DArray | None, Int1DArray | None, Int1DArray | None]:
         if matchable is None:
             return None, None, None
         elif isinstance(matchable, tuple):
@@ -268,16 +277,17 @@ class NodeSimilarityEstimator(ABC):
             if m is not None:
                 assert m.dtype == bool and m.shape == (len(n1), len(n2)), "matchable[2] must be a boolean array"
             return m, n1, n2
+
         elif isinstance(matchable, np.ndarray):
             assert matchable.dtype == bool and matchable.shape == (
                 vgraph1.node_count,
                 vgraph2.node_count,
             ), "matchable must be a boolean array of shape (N1,N2)"
-            n1_mask = ~np.any(matchable, axis=0)
-            n2_mask = ~np.any(matchable, axis=1)
-            n1 = np.argwhere(n1_mask)[0]
-            n2 = np.argwhere(n2_mask)[0]
-            return matchable[n1_mask, n2_mask], n1, n2
+            n1_mask = np.any(matchable, axis=1)
+            n2_mask = np.any(matchable, axis=0)
+            n1 = np.where(n1_mask)[0]
+            n2 = np.where(n2_mask)[0]
+            return matchable[n1_mask, :][:, n2_mask], n1, n2
         raise ValueError("matchable must be a tuple of two arrays or a boolean array")
 
     def branch_matching_available(self) -> bool:
@@ -306,7 +316,7 @@ class NodeSimilarityEstimator(ABC):
         if ctx is not None:
             ctx["similarity"] = similarity
         min_weight1, min_weight2 = self.min_weight(vgraph1, vgraph2, n1, n2)
-        matches = np.where(hungarian(similarity, unmatch1=min_weight1, unmatch2=min_weight2))
+        matches = np.where(hungarian(similarity))  # , unmatch1=min_weight1, unmatch2=min_weight2))
         if ctx is not None:
             ctx["matches"] = matches
             ctx["matches_similarity"] = similarity[matches]
@@ -376,7 +386,7 @@ class JunctionSimilarity(NodeSimilarityEstimator):
         self.N_max_branches = N_max_branches
 
     def _check_matchable(
-        self, vgraph1: VGraph, vgraph2: VGraph, matchable: np.ndarray | Tuple[np.ndarray] | None = None
+        self, vgraph1: VGraph, vgraph2: VGraph, matchable: Optional[MatchableArg] = None
     ) -> np.ndarray:
         if matchable is None:
             matchable = (vgraph1.node_degree() > 2, vgraph2.node_degree() > 2)
@@ -387,7 +397,7 @@ class JunctionSimilarity(NodeSimilarityEstimator):
         self,
         vgraph1: VGraph,
         vgraph2: VGraph,
-        matchable: Optional[np.ndarray | Tuple[np.ndarray, np.ndarray]] = None,
+        matchable: Optional[MatchableArg] = None,
         ctx: Optional[dict] = None,
     ) -> np.ndarray:
         matchable, n1, n2 = self._check_matchable(vgraph1, vgraph2, matchable)
@@ -403,6 +413,8 @@ class JunctionSimilarity(NodeSimilarityEstimator):
         B2 = np.asarray([len(_) for _ in branch2], dtype=int)
 
         if self.optimal_partial_incident_matching:
+            ang_f1 = ang_f1.reshape(ang_f1.shape[:2] + (-1,))
+            ang_f2 = ang_f2.reshape(ang_f2.shape[:2] + (-1,))
             sim, branches_match, n_iter = incident_branches_similarity(
                 ang_f1, ang_f2, scal_f1, scal_f2, scal_std, B1, B2, u1, u2, matchable_nodes=matchable
             )
@@ -468,7 +480,7 @@ class JunctionSimilarity(NodeSimilarityEstimator):
             The standard deviation of the scalar features as an array of shape (F_scalar,).
 
         """  # noqa: E501
-        ang_f1, scal_f1, branch1, u1, scal_std = junction_incident_branches_descriptor(
+        ang_f1, scal_f1, branch1, u1, scal_std = junction_adjacent_branches_descriptor(
             vgraph,
             junctions_id=nodes_id,
             N_max_branches=self.N_max_branches,
@@ -519,7 +531,7 @@ def match_junctions(
     similarity_estimator: Optional[NodeSimilarityEstimator] = None,
     reindex: bool = False,
     match_branches: bool = False,
-):
+) -> IntPairArray:
     """
     Match nodes from two graphs based on the features computed by the features_function.
 
@@ -652,13 +664,14 @@ def match_junctions_simple(
     """  # noqa: E501
     if features is None:
         features = functools.partial(
-            junction_incident_branches_descriptor,
+            junction_adjacent_branches_descriptor,
             return_junctions_id=True,
             return_incident_branches_id=True,
             return_incident_branches_u=False,
             return_scalar_features_std=False,
             N_max_branches=4,
-        )
+        )  # type: ignore
+    assert callable(features), "features must be a callable function"
 
     cos_f1, l2_f1, junction_id1, incident_branches1 = features(vgraph1)
     cos_f2, l2_f2, junction_id2, incident_branches2 = features(vgraph2)
@@ -707,8 +720,8 @@ def match_junctions_simple(
 def match_junctions_by_exact_incident_branches(
     vgraph1: VGraph, vgraph2: VGraph, *, reindex_nodes=False, reindex_branches=False
 ):
-    cos_f1, l2_f1, junction_id1, incident_branches1 = junction_incident_branches_descriptor(vgraph1)
-    cos_f2, l2_f2, junction_id2, incident_branches2 = junction_incident_branches_descriptor(vgraph2)
+    cos_f1, l2_f1, junction_id1, incident_branches1 = junction_adjacent_branches_descriptor(vgraph1)
+    cos_f2, l2_f2, junction_id2, incident_branches2 = junction_adjacent_branches_descriptor(vgraph2)
     n1 = len(junction_id1)
     n2 = len(junction_id2)
 

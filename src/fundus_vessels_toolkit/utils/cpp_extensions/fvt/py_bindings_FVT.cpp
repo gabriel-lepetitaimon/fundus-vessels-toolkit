@@ -763,6 +763,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // === EditDistance.h ===
     m.def("shortest_secondary_path", &shortest_secondary_path, "Compute the shortest path between two sets of nodes.");
+    m.def("backtrack_edges", &backtrack_edges, "Backtrack the edges in the graph.");
     m.def("nodes_similarity", &nodes_similarity, "Compute the similarity between two sets of nodes.");
 
     // === graph.h ===

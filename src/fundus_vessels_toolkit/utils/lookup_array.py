@@ -4,7 +4,7 @@ from typing import Dict, Literal, Mapping, Optional, Tuple, TypeVar, overload
 import numpy as np
 import numpy.typing as npt
 
-from fundus_vessels_toolkit.utils.typing import Int1DArray
+from fundus_vessels_toolkit.utils.typing import Int1DArray, Int1DArrayLike, as_int_1d
 
 from .binary_mask import index_to_mask
 
@@ -58,7 +58,7 @@ def apply_lookup(
 
 def lookup_from_mapping(
     mapping: Mapping[int, int] | Tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]], lookup_length: int
-) -> npt.NDArray[np.int_]:
+) -> Int1DArray:
     """
     Create a lookup table from a mapping.
 
@@ -131,12 +131,11 @@ def apply_lookup_on_coordinates(points_coord, lookup: np.ndarray | None, weight:
     return points_coord.T
 
 
-def complete_lookup(lookup: Int1DArray, max_index: int, assume_valid=False) -> npt.NDArray[np.int_]:
+def complete_lookup(lookup: Int1DArrayLike, max_index: int, assume_valid=False) -> Int1DArray:
     """
     Complete a lookup table to have a full range of indices from 0 to max_index.
     """
-    lookup = np.asarray(lookup, dtype=int)
-    assert lookup.ndim == 1, f"lookup must be a 1D array. Got {lookup.ndim} dimensions."
+    lookup = as_int_1d(lookup)
     if len(lookup) == 0:
         warnings.warn("The lookup table is empty.", stacklevel=2)
         return np.arange(max_index + 1)
@@ -152,9 +151,9 @@ def complete_lookup(lookup: Int1DArray, max_index: int, assume_valid=False) -> n
             raise ValueError("The lookup table contains values greater than or equal to max_index.")
         if np.any(lookup_counts > 1):
             raise ValueError("The lookup table contains duplicate values.")
-    if lookup.shape[0] < max_index:
+    if lookup.shape[0] <= max_index:
         lookup = np.concatenate((lookup, np.setdiff1d(np.arange(max_index + 1), lookup)))
-    return lookup
+    return lookup  # type: ignore
 
 
 @overload
@@ -166,7 +165,7 @@ def create_removal_lookup(
     add_empty: Literal["increment", "no increment", True, False] = False,
     invert: bool = False,
     return_inverse: Literal[False] = False,
-) -> npt.NDArray[np.int_]: ...
+) -> Int1DArray: ...
 @overload
 def create_removal_lookup(
     removed_mask: npt.ArrayLike,
@@ -176,7 +175,7 @@ def create_removal_lookup(
     add_empty: Literal["increment", "no increment", True, False] = False,
     invert: bool = False,
     return_inverse: Literal[True],
-) -> tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]: ...
+) -> tuple[Int1DArray, Int1DArray]: ...
 def create_removal_lookup(
     removed_mask: npt.ArrayLike,
     *,
@@ -185,7 +184,7 @@ def create_removal_lookup(
     add_empty: Literal["increment", "no increment", True, False] = False,
     invert: bool = False,
     return_inverse: bool = False,
-) -> npt.NDArray[np.int_] | tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]:
+) -> Int1DArray | tuple[Int1DArray, Int1DArray]:
     """Create a lookup table to reorder index after having removed elements from an array.
 
     Parameters
@@ -259,16 +258,16 @@ def create_removal_lookup(
                 inverse = np.concatenate(([-1], inverse))
             else:
                 inverse = np.concatenate(([0], inverse + 1))
-            return lookup, inverse
-        return lookup
+            return lookup, inverse  # type: ignore
+        return lookup  # type: ignore
     else:
         lookup = np.cumsum(~removed_mask) - 1
         if replace_value is not None:
             lookup[removed_mask] = replace_value
-        return (lookup, np.arange(length)[~removed_mask]) if return_inverse else lookup
+        return (lookup, np.arange(length)[~removed_mask]) if return_inverse else lookup  # type: ignore
 
 
-def invert_lookup(lookup: npt.NDArray[np.int_], max_index: Optional[int] = None) -> npt.NDArray[np.int_]:
+def invert_lookup(lookup: Int1DArray, max_index: Optional[int] = None) -> Int1DArray:
     """
     Invert a lookup array. The lookup array must be a 1D array of integers. The output array is a 1D array of length
     max(lookup) + 1. Any -1 index is considered as deleted.
@@ -280,7 +279,7 @@ def invert_lookup(lookup: npt.NDArray[np.int_], max_index: Optional[int] = None)
 
     out = np.full(max_index + 2, -1, dtype=lookup.dtype)
     out[lookup] = np.arange(len(lookup), dtype=lookup.dtype)
-    return out[:-1]
+    return out[:-1]  # type: ignore
 
     # Slower version:
     # unique_id, inverse = np.unique(lookup, return_index=True)
@@ -309,7 +308,7 @@ def invert_lookup_legacy(lookup):
     return np.array([np.array(s[0], dtype=np.int64) for s in splits])
 
 
-def invert_complete_lookup(lookup: npt.NDArray[np.int_]) -> npt.NDArray[np.int_]:
+def invert_complete_lookup(lookup: Int1DArray) -> Int1DArray:
     """
     Invert a complete lookup array. The lookup array must be a 1D array of unique integers.
     max(lookup) + 1. The output array[i] contains the list of indices of lookup where lookup[index] == i.

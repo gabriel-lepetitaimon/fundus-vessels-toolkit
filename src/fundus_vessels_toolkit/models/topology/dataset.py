@@ -14,7 +14,6 @@ from types import EllipsisType
 from typing import TYPE_CHECKING, Iterable, Literal, Optional, Self, Sequence, overload
 
 import numpy as np
-from scipy.__config__ import show
 import tqdm
 from joblib import Parallel, delayed
 from numpy.random import MT19937, RandomState, SeedSequence
