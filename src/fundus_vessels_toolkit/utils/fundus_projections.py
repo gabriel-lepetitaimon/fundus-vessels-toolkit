@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import abc
-from typing import Literal, Mapping, Optional, Self, Type, overload
+import copy
+from functools import partial
+from logging import warning
+from typing import Any, Literal, Mapping, Optional, Self, Type, overload
+import warnings
 
 import numpy as np
 import numpy.typing as npt
 import torch
+from scipy.optimize import least_squares as scipy_least_squares
 
 from fundus_toolkits.utils.geometric import Point, Rect
 from fundus_vessels_toolkit.utils.typing import (
@@ -116,6 +121,11 @@ class FundusProjection(abc.ABC):
 
         raise ValueError("projection must be a projection model or a dictionary of projection models")
 
+    def __eq__(self, value: object) -> bool:
+        if not isinstance(value, FundusProjection):
+            return False
+        return (self.invert() @ value).is_identity()
+
     def compose(self, T1: FundusProjection) -> FundusProjection:
         """
         Composes this projection model with another one.
@@ -179,6 +189,9 @@ class FundusProjection(abc.ABC):
         Whether this projection model is the identity projection.
         """
         return False
+
+    def __call__(self, src: FloatPairArrayLike) -> FloatPairArray:
+        return self.transform(src)
 
     @abc.abstractmethod
     def transform(self, src: FloatPairArrayLike) -> FloatPairArray:
@@ -280,9 +293,12 @@ class FundusProjection(abc.ABC):
         error : Float1DArray | float
             The quadratic error of each point or the mean error if ``mean`` is True.
         """
+        errors = self._quadratic_error(src, dst)
+        return np.mean(errors) if mean else errors  # type: ignore
+
+    def _quadratic_error(self, src: FloatPairArrayLike, dst: FloatPairArrayLike) -> FloatPairArray:
         src, dst = as_float_pairs(src), as_float_pairs(dst)
-        errors = np.sum((dst - self.transform(src)) ** 2, axis=1)
-        return np.mean(errors) if mean else errors
+        return np.sum((dst - self.transform(src)) ** 2, axis=1)
 
     def warp[DTYPE: np.uint8 | np.float32](
         self,
@@ -523,6 +539,11 @@ class IdentityProjection(FundusProjection):
     def invert(self) -> Self:
         return self
 
+    def __eq__(self, value: object) -> bool:
+        if not isinstance(value, FundusProjection):
+            return False
+        return value.is_identity()
+
     def compose(self, T1: FundusProjection) -> FundusProjection:
         return T1
 
@@ -544,17 +565,22 @@ class IdentityProjection(FundusProjection):
 
 
 class AffineProjection(FundusProjection):
-    def __init__(self, R: npt.NDArray[np.floating], t: npt.NDArray[np.floating]) -> None:
-        assert R.shape == (2, 2) and t.shape == (2,), "R must be a 2x2 matrix and t must be a 2D vector"
-        self.R = R.astype(np.float64)
+    def __init__(self, H: npt.NDArray[np.floating], t: npt.NDArray[np.floating]) -> None:
+        assert H.shape == (2, 2) and t.shape == (2,), "H must be a 2x2 matrix and t must be a 2D vector"
+        self.H = H.astype(np.float64)
         self.t = t.astype(np.float64)
         super().__init__()
 
     def __repr__(self) -> str:
-        return f"AffineProjection(R={self.R}, t={self.t})"
+        return f"AffineProjection(H={self.H}, t={self.t})"
 
     def __str__(self) -> str:
-        return f"Affine(R={_np_short_str(self.R)}, t={_np_short_str(self.t)})"
+        return f"Affine(H={_np_short_str(self.H)}, t={_np_short_str(self.t)})"
+
+    def __eq__(self, value: object) -> bool:
+        if not isinstance(value, AffineProjection):
+            return False
+        return np.allclose(self.H, value.H) and np.allclose(self.t, value.t)
 
     @staticmethod
     def rotate(theta: float, center: FloatPairLike = (0, 0)) -> AffineProjection:
@@ -613,7 +639,7 @@ class AffineProjection(FundusProjection):
     def compose(self, T1: FundusProjection) -> FundusProjection: ...
     def compose(self, T1: FundusProjection) -> FundusProjection:
         if isinstance(T1, AffineProjection):
-            return AffineProjection(T1.R @ self.R, T1.R @ self.t + T1.t)
+            return AffineProjection(T1.H @ self.H, T1.H @ self.t + T1.t)
         return super().compose(T1)
 
     @overload
@@ -624,7 +650,7 @@ class AffineProjection(FundusProjection):
         return T1.compose(self)
 
     def is_identity(self) -> bool:
-        return bool(np.allclose(self.R, np.eye(2)) and np.allclose(self.t, 0))
+        return bool(np.allclose(self.H, np.eye(2)) and np.allclose(self.t, 0))
 
     def invert(self) -> AffineProjection:
         """
@@ -645,16 +671,16 @@ class AffineProjection(FundusProjection):
         True
         """
         cv2 = import_cv2()
-        M = np.concatenate((self.R, self.t[:, None]), axis=1)
+        M = np.concatenate((self.H, self.t[:, None]), axis=1)
         M = cv2.invertAffineTransform(M)
-        return AffineProjection(R=M[:2, :2], t=M[:2, 2])
+        return AffineProjection(H=M[:2, :2], t=M[:2, 2])  # type: ignore
 
     def transform(self, src: FloatPairArrayLike) -> FloatPairArray:
-        return as_float_pairs(src) @ self.R.T + self.t[None, :]  # type: ignore
+        return as_float_pairs(src) @ self.H.T + self.t[None, :]  # type: ignore
 
     @property
     def M(self):
-        return np.concatenate((self.R, self.t[:, None]), axis=1)
+        return np.concatenate((self.H, self.t[:, None]), axis=1)
 
     def warp[DTYPE: np.uint8 | np.float32](
         self,
@@ -688,7 +714,7 @@ class FlipProjection(AffineProjection):
         self.vertical = vertical
         self.center = center
         super().__init__(
-            R=np.diag([1 - 2 * vertical, 1 - 2 * horizontal]),
+            H=np.diag([1 - 2 * vertical, 1 - 2 * horizontal]),
             t=np.array([2 * vertical * center[0], 2 * horizontal * center[1]]),
         )
 
@@ -802,7 +828,6 @@ class SimilarityTransform(AffineProjection):
         R = SimilarityTransform.rotation_scale_matrix(r, s)
         t = dst_barycenter - src_barycenter @ R.T
         mse = np.sum((dst - src @ R.T - t) ** 2, axis=1).mean()
-        print(mse)
         return cls(s, r, t), mse
 
     def __repr__(self) -> str:
@@ -1056,28 +1081,56 @@ class RadialToRadial(FundusProjection):
     where ``p_flat`` are points in a flat coordinate system, center is the coordinate of the optical center of the fundus image, k is the radial distortion coefficient and ``p_observed`` are the points distorted by the lens of the camera, the lens of the eye and the spherical shape of the eye, namely the points as observed in the fundus image.
 
     This projection flatten the input coordinates, applies a homography and then applies the radial distortion again. It can be used to model the transformation between two fundus images with different optical centers and/or different radial distortions.
+
+    Example
+    -------
+    >>> T = RadialToRadial(center_src=(100, 100), k_src=1e-6, center_dst=(120, 80), k_dst=2e-6, H=np.array([[1, 0.1], [0.1, 1]]), t=np.array([10, -5]))
+    >>> src = np.array([[100, 100], [150, 100], [100, 150]])
+    >>> dst = T.transform(src)
+    >>> np.allclose(T.invert().transform(dst), src)
+    True
     """  # noqa: E501
+
+    center_src: FloatPair
+    center_dst: FloatPair
+    H: Float2DArray
+    t: FloatPair
+    k_src: float
+    k_dst: float
 
     def __init__(
         self,
         center_src: FloatPairLike,
-        k_src: float,
         center_dst: FloatPairLike,
-        k_dst: float,
         H: Optional[Float2DArrayLike] = None,
         t: Optional[FloatPairLike] = None,
+        k_src: float = 0,
+        k_dst: float = 0,
     ) -> None:
         self.center_src = as_float_pair(center_src)
         self.k_src = k_src
         self.center_dst = as_float_pair(center_dst)
         self.k_dst = k_dst
+        if abs(k_dst) > self.k_bound(self.center_dst):
+            warnings.warn(
+                "k_dst is too large and may cause numerical instability."
+                f"It should be less than {self.k_bound(self.center_dst)}",
+                stacklevel=2,
+            )
+        if abs(k_src) > self.k_bound(self.center_src):
+            warnings.warn(
+                "k_src is too large and may cause numerical instability."
+                f"It should be less than {self.k_bound(self.center_src)}",
+                stacklevel=2,
+            )
+
         if H is not None:
             H = as_float_2d(H)
             assert H.shape == (2, 2), "H must be a 2x2 matrix"
             self.H = H
         else:
-            self.H = np.eye(2)
-        self.t = as_float_pair(t) if t is not None else np.zeros((2,))
+            self.H = np.eye(2)  # type: ignore
+        self.t = as_float_pair(t) if t is not None else np.zeros((2,))  # type: ignore
         super().__init__()
 
     def __repr__(self) -> str:
@@ -1085,6 +1138,18 @@ class RadialToRadial(FundusProjection):
 
     def __str__(self) -> str:
         return f"RadialToRadial(center_src={_np_short_str(self.center_src)}, k_src={self.k_src}, center_dst={_np_short_str(self.center_dst)}, k_dst={self.k_dst}, H={_np_short_str(self.H)}, t={_np_short_str(self.t)})"  # noqa: E501
+
+    def __eq__(self, value: object) -> bool:
+        if not isinstance(value, RadialToRadial):
+            return False
+        return bool(
+            np.allclose(self.center_src, value.center_src)
+            and np.allclose(self.center_dst, value.center_dst)
+            and np.allclose(self.H, value.H)
+            and np.allclose(self.t, value.t)
+            and np.isclose(self.k_src, value.k_src)
+            and np.isclose(self.k_dst, value.k_dst)
+        )
 
     def is_identity(self) -> bool:
         return bool(self.k_src == self.k_dst == 0 and np.allclose(self.H, np.eye(2)) and np.allclose(self.t, 0))
@@ -1103,21 +1168,158 @@ class RadialToRadial(FundusProjection):
 
     def transform(self, src: FloatPairArrayLike) -> FloatPairArray:
         src = as_float_pairs(src)
-        r_src = np.sum((src - self.center_src) ** 2, axis=1, keepdims=True)
-        src_flat = (src - self.center_src) / (1 + self.k_src * r_src)
+        src_centered = src - self.center_src
+        r_src_sqr = np.square(src_centered).sum(axis=1, keepdims=True)
+        src_flat = src_centered / (1 + self.k_src * r_src_sqr)
         dst_flat = src_flat @ self.H.T + self.t
-        r_dst = np.sum((dst_flat - self.center_dst) ** 2, axis=1, keepdims=True)
-        dst = dst_flat * (1 + self.k_dst * r_dst)
+        r_dst_flat = np.linalg.norm(dst_flat, axis=1, keepdims=True)
+        r_dst = self.r_flat_to_spheric(r_dst_flat, self.k_dst)
+        dst = dst_flat * (1 + self.k_dst * np.square(r_dst))
         return dst + self.center_dst
 
-    def transform_inverse(self, dst: FloatPairArrayLike) -> FloatPairArray:
-        dst = as_float_pairs(dst)
-        r_dst = np.sum((dst - self.center_dst) ** 2, axis=1, keepdims=True)
-        dst_flat = (dst - self.center_dst) / (1 + self.k_dst * r_dst)
-        src_flat = (dst_flat - self.t) @ np.linalg.inv(self.H).T
-        r_src = np.sum((src_flat - self.center_src) ** 2, axis=1, keepdims=True)
-        src = src_flat * (1 + self.k_src * r_src)
-        return src + self.center_src
+    def compose(self, T1: FundusProjection) -> FundusProjection:
+        if isinstance(T1, RadialToRadial) and self.k_dst == 0 and T1.k_src == 0:
+            # Composable only if this projection has no dst radial distortion and T1 as no src radial distortion
+            H = T1.H @ self.H
+            dC = self.center_dst - T1.center_src
+            t = T1.H @ (self.t + dC) + T1.t
+            return RadialToRadial(
+                center_src=self.center_src, k_src=self.k_src, center_dst=T1.center_dst, k_dst=T1.k_dst, H=H, t=t
+            )
+        return super().compose(T1)
+
+    def split_spheric_projections(self) -> tuple[RadialToRadial, RadialToRadial]:
+        """Splits this projection into two projections: one from the source to a flat coordinate system and one from the flat coordinate system to the destination.
+
+        Returns
+        -------
+        tuple[RadialToRadial, RadialToRadial]
+            The two projections: (src_to_flat, flat_to_dst)
+
+        Example
+        -------
+        >>> T = RadialToRadial(center_src=(100, 100), k_src=1e-6, center_dst=(120, 80), k_dst=2e-6, H=np.array([[1, 0.1], [0.1, 1]]), t=np.array([10, -5]))
+        >>> T1, T2 = T.split_spheric_projections()
+        >>> T1.compose(T2.invert()) == T
+        True
+
+        """  # noqa: E501
+        src_to_flat = RadialToRadial(
+            center_src=self.center_src,
+            k_src=self.k_src,
+            center_dst=np.zeros(2),
+            k_dst=0,
+            H=self.H,
+            t=self.t,
+        )
+        dst_to_flat = RadialToRadial(
+            center_src=self.center_dst,
+            k_src=self.k_dst,
+            center_dst=np.zeros(2),
+            k_dst=0,
+            H=np.eye(2),  # type: ignore
+            t=np.zeros(2),  # type: ignore
+        )
+        return src_to_flat, dst_to_flat
+
+    @staticmethod
+    def _deformation_error(
+        H: Float2DArray,
+        t: FloatPair,
+        k_src: float,
+        k_dst: float,
+        src_centered: FloatPairArray,
+        dst_centered: FloatPairArray,
+        r_src_sqr: FloatPairArray,
+        r_dst_sqr: FloatPairArray,
+    ) -> FloatPairArray:
+        src_flat = src_centered / (1 + k_src * r_src_sqr[:, None])
+        dst_flat = dst_centered / (1 + k_dst * r_dst_sqr[:, None])
+        return np.linalg.norm(src_flat @ H.T + t - dst_flat, axis=1)
+
+    @staticmethod
+    def linear_estimator_H_t(
+        src_centered: FloatPairArray,
+        dst_centered: FloatPairArray,
+        r_src_sqr: Float2DArray,
+        r_dst_sqr: Float2DArray,
+        k_src: float,
+        k_dst: float,
+    ) -> tuple[Float2DArray, FloatPair]:
+        N = src_centered.shape[0]
+        src_flat = src_centered / (1 + k_src * r_src_sqr[:, None])
+        dst_flat = dst_centered / (1 + k_dst * r_dst_sqr[:, None])
+        X = np.linalg.lstsq(np.concatenate([src_flat, np.ones((N, 1))], axis=1), dst_flat, rcond=None)[0]
+        return X[:2, :2].T, X[2]  # type: ignore
+
+    @staticmethod
+    def linear_estimator_k(
+        src_centered: FloatPairArray,
+        dst_centered: FloatPairArray,
+        r_src_sqr: Float2DArray,
+        r_dst_sqr: Float2DArray,
+        H: Float2DArray,
+        t: FloatPair,
+    ) -> tuple[float, float]:
+        p1, p2 = src_centered, dst_centered
+        r1_sqr, r2_sqr = r_src_sqr[:, None], r_dst_sqr[:, None]
+
+        M12y, M12x = (r1_sqr * r2_sqr * t).T  # (r1_sqr * r2_sqr * -t).T
+        M1y, M1x = (r1_sqr * (t - p2)).T  # (r1_sqr * (p2 - t)).T
+        H_p1 = p1 @ H.T + t
+        M2y, M2x = (r2_sqr * H_p1).T
+        M0y, M0x = (p2 - H_p1).T
+        A = np.stack([M1x / M12x - M1y / M12y, M2x / M12x - M2y / M12y], axis=1)
+        b = M0x / M12x - M0y / M12y
+        k1, k2 = np.linalg.lstsq(A, b)[0]
+        return k1, k2
+
+    @staticmethod
+    def linear_estimator_k_H_t(
+        src_centered: FloatPairArray,
+        dst_centered: FloatPairArray,
+        r_src_sqr: Float2DArray,
+        r_dst_sqr: Float2DArray,
+    ) -> tuple[float, float, Float2DArray, FloatPair]:
+        N = src_centered.shape[0]
+        p1, p2 = src_centered, dst_centered
+        r1_sqr, r2_sqr = r_src_sqr, r_dst_sqr
+
+        r1_r2_sqr = r1_sqr * r2_sqr
+        p1y, p1x = p1.T
+        p2y, p2x = p2.T
+
+        # Ay = [r1_r2_sqr, r1_sqr, r1_sqr * p2y, r2_sqr, -r2_sqr * p1y, -r2_sqr * p1x, -p1y, -p1x, np.ones(N)]
+        # Ax = [r1_r2_sqr, r1_sqr, r1_sqr * p2x, r2_sqr, -r2_sqr * p1x, -r2_sqr * p1y, -p1x, -p1y, np.ones(N)]
+        # by, bx = -p2.T
+        #     k1 k2 t  , k1 t  ,       k1     ,  k2 t ,        k2 h11 H             ,      H    ,    t
+        Ay = [r1_r2_sqr, r1_sqr, -r1_sqr * p2y, r2_sqr, r2_sqr * p1y, r2_sqr * p1x, p1y, p1x, np.ones(N)]
+        Ax = [r1_r2_sqr, r1_sqr, -r1_sqr * p2x, r2_sqr, r2_sqr * p1x, r2_sqr * p1y, p1x, p1y, np.ones(N)]
+        by, bx = p2.T
+        k1k2ty, k1ty, k1_, k2ty, k2h11, k2h12, h11, h12, ty = np.linalg.lstsq(np.stack(Ay, axis=1), by)[0]
+        k1k2tx, k1tx, k1, k2tx, k2h22, k2h21, h22, h21, tx = np.linalg.lstsq(np.stack(Ax, axis=1), bx)[0]
+        k2 = k2h11 / h11
+        H = np.array([[h11, h12], [h21, h22]])
+        t = np.array([ty, tx])
+        return k1, k2, H, t  # type: ignore
+
+    @staticmethod
+    def r_flat_to_spheric(r_flat: Float2DArrayLike, k: float) -> Float2DArray:
+        r_flat = as_float_2d(r_flat)
+        return r_flat if k == 0 else (1 - np.sqrt(1 - 4 * k * r_flat**2)) / (2 * k * r_flat)  # type: ignore
+
+    @staticmethod
+    def k_bound(C):
+        return 0.2 / (1 + np.sum(C**2))
+
+    def clip_k(self, k_src: float, k_dst: float, same_k: bool = False) -> tuple[float, float]:
+        k_bound_src = self.k_bound(self.center_src)
+        k_bound_dst = self.k_bound(self.center_dst)
+        k_src_clipped = np.clip(k_src, -k_bound_src, k_bound_src)
+        k_dst_clipped = np.clip(k_dst, -k_bound_dst, k_bound_dst)
+        if same_k:
+            k_src_clipped = k_dst_clipped = (k_src_clipped + k_dst_clipped) / 2
+        return k_src_clipped, k_dst_clipped
 
     @classmethod
     def fit(
@@ -1128,8 +1330,110 @@ class RadialToRadial(FundusProjection):
         center_src: Optional[FloatPairLike] = None,
         center_dst: Optional[FloatPairLike] = None,
         same_k: bool = False,
+        verbose: bool = False,
+        max_iter: int = 50,
+        tol: float = 0.01,
+        rel_tol: float = 0.01,
     ) -> tuple[Self, float]:
-        raise NotImplementedError("Fitting a RadialToRadial projection is not implemented yet")
+        """
+        Fits the radial projection model to the given source and destination points.
+
+        Parameters
+        ----------
+        src : FloatPairArrayLike
+            The source points coordinates (N x 2) where N is the number of points.
+        dst : FloatPairArrayLike
+            The destination points coordinates (N x 2) where N is the number of points.
+        center_src : Optional[FloatPairLike], optional
+            The center of the radial distortion in the source image. If None (by default), it is set to the mean of the source points.
+        center_dst : Optional[FloatPairLike], optional
+            The center of the radial distortion in the destination image. If None (by default), it is set to the mean of the destination points.
+        same_k : bool, optional
+            Whether to constrain the radial distortion coefficients of the source and destination images to be the same. Default is False.
+
+        Returns
+        -------
+        Self
+            The fitted RadialToRadial projection model.
+
+        float
+            The mean squared error of the fitted model on the given points.
+
+        Example
+        -------
+        >>> T_true = RadialToRadial(center_src=(100, 100), center_dst=(120, 80), H=np.array([[1, 0.1], [0.1, 1]]), t=np.array([10, -5]), k_src=0, k_dst=0)
+        >>> src = np.random.rand(100, 2) * 200
+        >>> dst = T_true.transform(src) + np.random.randn(100, 2)
+        >>> T_fitted, mse = RadialToRadial.fit(src, dst, center_src=(100,100), center_dst=(120,80))
+        >>> T_fitted == T_true
+        True
+
+        """  # noqa: E501
+
+        src = as_float_pairs(src)
+        dst = as_float_pairs(dst)
+        C_src = as_float_pair(center_src) if center_src is not None else np.mean(src, axis=0)
+        C_dst = as_float_pair(center_dst) if center_dst is not None else np.mean(dst, axis=0)
+
+        src_centered: FloatPairArray = src - C_src  # type: ignore
+        dst_centered: FloatPairArray = dst - C_dst  # type: ignore
+        r_src_sqr = np.square(src_centered).sum(axis=1)
+        r_dst_sqr = np.square(dst_centered).sum(axis=1)
+
+        k_src, k_dst, H, t = cls.linear_estimator_k_H_t(src_centered, dst_centered, r_src_sqr, r_dst_sqr)
+        T = cls(center_src=C_src, center_dst=C_dst, H=H, t=t)
+        T.k_src, T.k_dst = T.clip_k(k_src, k_dst, same_k=same_k)
+
+        def opti_k(k):
+            k_src, k_dst = k
+            return cls._deformation_error(T.H, T.t, k_src, k_dst, src_centered, dst_centered, r_src_sqr, r_dst_sqr)
+
+        lm_optimizer = partial(scipy_least_squares, method="lm")
+
+        err = cls._deformation_error(H, t, k_src, k_dst, src_centered, dst_centered, r_src_sqr, r_dst_sqr)
+        best_err = np.square(err).mean()
+        best_i = 0
+        bestT = copy.copy(T)
+        last_err = np.inf
+        for i in range(max_iter):
+            # Optimize H and t with fixed k
+            T.H, T.t = T.linear_estimator_H_t(src_centered, dst_centered, r_src_sqr, r_dst_sqr, T.k_src, T.k_dst)
+
+            # Optimize k_src and k_dst with fixed H and t
+            k = T.linear_estimator_k(src_centered, dst_centered, r_src_sqr, r_dst_sqr, T.H, T.t)
+            k_optimizer = lm_optimizer(opti_k, x0=k)
+            T.k_src, T.k_dst = T.clip_k(*k_optimizer.x, same_k=same_k)
+            err = k_optimizer.cost
+
+            if err < best_err:
+                best_err = err
+                best_i = i
+                bestT = copy.copy(T)
+
+            if err < tol and (last_err - err) / last_err < rel_tol:
+                break
+            last_err = err
+        else:
+            if verbose:
+                print("Warning: RadialToRadial.fit did not converge")
+        if verbose:
+            print(f"RadialToRadial.fit converged in {best_i} iterations with error {best_err}")
+
+        def opti_k_H_t(k_Ht):
+            k_src, k_dst = k_Ht[:2]
+            H, t = k_Ht[2:6].reshape(2, 2), k_Ht[6:]
+            return cls._deformation_error(H, t, k_src, k_dst, src_centered, dst_centered, r_src_sqr, r_dst_sqr)
+
+        T = copy.copy(bestT)
+        k_Ht = np.concatenate([[T.k_src, T.k_dst], T.H.flatten(), T.t])
+        final_optimizer = lm_optimizer(opti_k_H_t, x0=k_Ht)
+        T.k_src, T.k_dst = T.clip_k(*final_optimizer.x[:2], same_k=same_k)
+        T.H, T.t = final_optimizer.x[2:6].reshape(2, 2), final_optimizer.x[6:]
+        if final_optimizer.cost > best_err:
+            if verbose:
+                print("Warning: RadialToRadial.fit final optimization did not improve the error")
+            T = bestT
+        return T, T.quadratic_error(src, dst, mean=True)
 
 
 class QuadraticProjection(FundusProjection):
@@ -1137,29 +1441,34 @@ class QuadraticProjection(FundusProjection):
     A quadratic projection model that maps points from a source to a destination using a quadratic transformation.
 
     The transformation is defined as:
-        dst = [Q, R, t] @ [src.y², src.x², src.x*src.y, src.y, src.x, 1].T
+        dst = [Q, H, t] @ [src.y², src.x², src.x*src.y, src.y, src.x, 1].T
 
     """
 
-    def __init__(self, Q: Float2DArrayLike, R: Float2DArrayLike, t: FloatPairLike) -> None:
-        Q, R, t = as_float_2d(Q), as_float_2d(R), as_float_pairs(t)
-        assert Q.shape == (2, 3) and R.shape == (2, 2) and t.shape == (2,), (
-            "Q must be a 2x3 matrix, R must be a 2x2 matrix and t must be a 2D vector"
+    def __init__(self, Q: Float2DArrayLike, H: Float2DArrayLike, t: FloatPairLike) -> None:
+        Q, H, t = as_float_2d(Q), as_float_2d(H), as_float_pairs(t)
+        assert Q.shape == (2, 3) and H.shape == (2, 2) and t.shape == (2,), (
+            "Q must be a 2x3 matrix, H must be a 2x2 matrix and t must be a 2D vector"
         )
         self.Q = Q
-        self.R = R
+        self.H = H
         self.t = t
         self._inverse_transform: Literal[False] | None | QuadraticProjection = False
         super().__init__()
 
     def __repr__(self) -> str:
-        return f"QuadraticProjection(Q={self.Q}, R={self.R}, t={self.t})"
+        return f"QuadraticProjection(Q={self.Q}, H={self.H}, t={self.t})"
 
     def __str__(self) -> str:
-        return f"Quadratic(Q={_np_short_str(self.Q)}, R={_np_short_str(self.R)}, t={_np_short_str(self.t)})"
+        return f"Quadratic(Q={_np_short_str(self.Q)}, H={_np_short_str(self.H)}, t={_np_short_str(self.t)})"
+
+    def __eq__(self, value: object) -> bool:
+        if not isinstance(value, QuadraticProjection):
+            return False
+        return bool(np.allclose(self.Q, value.Q) and np.allclose(self.H, value.H) and np.allclose(self.t, value.t))
 
     def is_identity(self) -> bool:
-        return bool(np.all(self.Q == 0) and np.all(self.R == np.eye(2)) and np.all(self.t == 0))
+        return bool(np.all(self.Q == 0) and np.all(self.H == np.eye(2)) and np.all(self.t == 0))
 
     @property
     def is_inverse_exact(self) -> bool:
@@ -1184,11 +1493,11 @@ class QuadraticProjection(FundusProjection):
         src = as_float_pairs(src)
         src_y, src_x = src[:, 0], src[:, 1]
         src_yy_xx_yx = np.stack((src_y**2, src_x**2, src_x * src_y), axis=1)
-        return (self.Q @ src_yy_xx_yx.T + self.R @ src.T + self.t[:, None]).T  # type: ignore
+        return (self.Q @ src_yy_xx_yx.T + self.H @ src.T + self.t[:, None]).T  # type: ignore
 
     def jacobian(self, src: FloatPairArrayLike) -> FloatPairArray:
         src = as_float_pairs(src)
-        return self.R[None, :, :] + (self.Q[None, :, 2, None] + 2 * self.Q[None, :, :2]) * src[:, None, :]  # type: ignore
+        return self.H[None, :, :] + (self.Q[None, :, 2, None] + 2 * self.Q[None, :, :2]) * src[:, None, :]  # type: ignore
 
     def _eval_inverse_transform(self) -> QuadraticProjection | None:
         # Sample points to estimate the inverse transformation
@@ -1200,7 +1509,7 @@ class QuadraticProjection(FundusProjection):
 
     def transform_inverse_newton(self, dst: FloatPairArray) -> FloatPairArray:
         # initial guess using only the affine part
-        x = AffineProjection(self.R, self.t).transform_inverse(dst)
+        x = AffineProjection(self.H, self.t).transform_inverse(dst)
 
         NITERS = 20
         TOL = 1
@@ -1242,6 +1551,11 @@ class ElasticProjection(FundusProjection):
 
     def __str__(self) -> str:
         return "Elastic"
+
+    def __eq__(self, value: object) -> bool:
+        if not isinstance(value, ElasticProjection):
+            return False
+        return bool(np.allclose(self.displacement, value.displacement) and self.reversed == value.reversed)
 
     @classmethod
     def random(

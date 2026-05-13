@@ -205,27 +205,45 @@ IntPoint track_nearest_edge(const IntPoint& start, const Point& direction, const
  * @param p The point to which the distance should be computed.
  * @param start The start index of the search.
  * @param end The end index of the search.
- * @param findFirstLocalMinimum If true, the search stops at the first local
- * minimum.
+ * @param mode If true, the search bisects the curve until finding a local minimum. If false, every pixels of the
+ * curve is checked and the global minimum is returned.
  *
  * @return A tuple containing the index of the closest pixel and the distance to
  * the point.
  */
 std::tuple<int, float> find_closest_pixel(const CurveYX& curve, const Point& p, int start, int end,
-                                          bool findFirstLocalMinimum) {
+                                          SearchStrategy strategy) {
     if (start == end) return {start, distance(curve[start], p)};
-
+    if (strategy == SearchStrategy::LastLocalMinimum) std::swap(start, end);
     const int inc = (start < end) ? 1 : -1;
-    std::tuple<int, float> min_point = {0, distance(curve[start], p)};
-    for (int i = start + inc; i != end; i += inc) {
-        float dist = distance(curve[i], p);
-        if (dist <= std::get<1>(min_point)) {
-            min_point = {i, dist};
-        } else if (findFirstLocalMinimum) {
-            break;
+    std::tuple<int, float> min_point = {0, distanceSqr(curve[start], p)};
+    if (strategy == SearchStrategy::Bisection) {
+        int left = start, right = end;
+        double dist_left = distanceSqr(curve[left], p), dist_right = distanceSqr(curve[right], p);
+        while (left != right) {
+            int mid = left + ((right - left) / 2);
+            float dist_mid = distanceSqr(curve[mid], p);
+            if (dist_mid < std::get<1>(min_point)) {
+                min_point = {mid, dist_mid};
+            }
+            if (dist_left < dist_right) {
+                right = mid;
+                dist_right = dist_mid;
+            } else {
+                left = mid + inc;
+                dist_left = dist_mid;
+            }
+        }
+    } else {
+        for (int i = start + inc; i != end; i += inc) {
+            float dist = distanceSqr(curve[i], p);
+            if (dist <= std::get<1>(min_point))
+                min_point = {i, dist};
+            else if (strategy != SearchStrategy::GlobalMinimum)
+                break;
         }
     }
-    return min_point;
+    return {std::get<0>(min_point), std::sqrt(std::get<1>(min_point))};
 }
 
 std::pair<torch::Tensor, torch::Tensor> find_closest_branches(const torch::Tensor& branch_labels,
@@ -344,20 +362,21 @@ torch::Tensor draw_skeleton_labels(const std::vector<torch::Tensor>& branchCurve
 }
 
 /**
- * @brief Find the intersection point of a curve within a cone defined by a point, a direction and a thecosine of the
- * angle.
+ * @brief Find the intersection point of a curve within a cone defined by a point, a direction and a thecosine of
+ * the angle.
  * @param curve The curve to intersect with. Warning: Assume the curve is non-empty!
  * @param start The starting point of the line.
  * @param dir The direction of the cone bisector.
  * @param maxDistSqr The square of the maximum distance to consider.
  * @param startMinCosSim The minimum cosine similarity at the start point.
  * @param endMinCosSim The minimum cosine similarity at the end point.
- * @param minSnapDistSqr The square of the minimum distance under which the intersection is automatically snapped to the
- * closest curve tip regardless of the angle.
- * @param maxSnapDistSqr The square of the maximum distance under which the intersection snaps to the closest curve tip.
+ * @param minSnapDistSqr The square of the minimum distance under which the intersection is automatically snapped to
+ * the closest curve tip regardless of the angle.
+ * @param maxSnapDistSqr The square of the maximum distance under which the intersection snaps to the closest curve
+ * tip.
  * @param maxSnapCosAngle The cosine of the maximum angle under which the intersection snaps.
- * @return A tuple containing the index of the closest point on the curve, the squared distance to it, and the average
- * square distance to every point on the curve.
+ * @return A tuple containing the index of the closest point on the curve, the squared distance to it, and the
+ * average square distance to every point on the curve.
  */
 std::tuple<std::size_t, int, float> _intercept_curve(const CurveYX& curve, const IntPoint& start, const Point& dir,
                                                      float maxDistSqr, float startMinCosSim, float endMinCosSim,
@@ -382,8 +401,8 @@ std::tuple<std::size_t, int, float> _intercept_curve(const CurveYX& curve, const
         const float minCosSimAtDist = startMinCosSim * (1 - a) + endMinCosSim * a;
         if (cosSim < minCosSimAtDist) continue;
 
-        // Check if the point is closer regarding the manhattan Dist (to favor points aligned with the cone bisector)
-        // const float sin = sqrt(1 - cosSim * cosSim);
+        // Check if the point is closer regarding the manhattan Dist (to favor points aligned with the cone
+        // bisector) const float sin = sqrt(1 - cosSim * cosSim);
         const float manhattanDist = (2 - cosSim * cosSim) * dist;  // Equivalent to dist * (|sin| + |cos|)
         if (manhattanDist > closestManhattanDist) continue;
 

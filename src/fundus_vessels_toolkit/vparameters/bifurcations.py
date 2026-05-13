@@ -1,5 +1,5 @@
 import warnings
-from typing import Dict, List, NamedTuple, Optional, Tuple
+from typing import Dict, List, Literal, NamedTuple, Optional, Tuple, overload
 
 import numpy as np
 import numpy.typing as npt
@@ -13,7 +13,11 @@ from ..utils.math import modulo_pi
 from ..vascular_data_objects import VBranchGeoData, VGeometricData, VTree
 
 
-def bifurcations_biomarkers(d0, d1, d2, θ1, θ2, *, as_dict=True) -> Dict[str, float] | List[float]:
+@overload
+def bifurcations_biomarkers(d0, d1, d2, θ1, θ2, *, as_dict: Literal[True] = True) -> dict[str, float]: ...
+@overload
+def bifurcations_biomarkers(d0, d1, d2, θ1, θ2, *, as_dict: Literal[False] = False) -> List[float]: ...
+def bifurcations_biomarkers(d0, d1, d2, θ1, θ2, *, as_dict: bool = True) -> Dict[str, float] | List[float]:
     """
     Compute bifurcation biomarkers from the calibres and angles of its branches.
 
@@ -61,6 +65,9 @@ def bifurcations_biomarkers(d0, d1, d2, θ1, θ2, *, as_dict=True) -> Dict[str, 
         optimality_dev,
         junctional_exponent_dev,
     ]
+
+
+BIFURCATIONS_BIOMARKERS: list[str] = list(bifurcations_biomarkers(*((1,) * 5), as_dict=True).keys())
 
 
 def parametrize_bifurcations(
@@ -255,6 +262,8 @@ def parametrize_bifurcations(
                 df.insert(4, "norm_coord_x", norm_coord[:, 1])
                 df.insert(4, "norm_coord_y", norm_coord[:, 0])
                 df.insert(4, "norm_dist_od", norm_dist_od)
+                df.insert(4, "x", bifurcations_yx[:, 1])
+                df.insert(4, "y", bifurcations_yx[:, 0])
         df.insert(4, "dist_center", (Point(*fundus_data.shape) / 2).distance(bifurcations_yx))
 
     return df

@@ -5,6 +5,7 @@
 #include "disjoint_set.h"
 #include "edit_distance.h"
 #include "graph.h"
+#include "graph_matching.h"
 #include "rasterize_topo.h"
 #include "ray_iterators.h"
 #include "skeleton.h"
@@ -764,6 +765,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // === EditDistance.h ===
     m.def("shortest_secondary_path", &shortest_secondary_path, "Compute the shortest path between two sets of nodes.");
     m.def("backtrack_edges", &backtrack_edges, "Backtrack the edges in the graph.");
+
+    // === graph_matching.h ===
     m.def("nodes_similarity", &nodes_similarity, "Compute the similarity between two sets of nodes.");
 
     // === graph.h ===

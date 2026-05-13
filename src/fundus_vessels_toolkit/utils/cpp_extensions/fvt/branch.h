@@ -82,8 +82,9 @@ std::vector<CurveYX> track_branches(const torch::Tensor& branch_labels, const to
 IntPoint track_nearest_edge(const IntPoint& start, const Point& direction, const Tensor2DAcc<bool>& segmentation,
                             int max_distance = 40);
 
+enum class SearchStrategy { GlobalMinimum, FirstLocalMinimum, LastLocalMinimum, Bisection };
 std::tuple<int, float> find_closest_pixel(const CurveYX& curve, const Point& p, int start, int end,
-                                          bool findFirstLocalMinimum = false);
+                                          SearchStrategy strategy = SearchStrategy::GlobalMinimum);
 
 std::pair<torch::Tensor, torch::Tensor> find_closest_branches(const torch::Tensor& branch_labels,
                                                               const torch::Tensor& points,

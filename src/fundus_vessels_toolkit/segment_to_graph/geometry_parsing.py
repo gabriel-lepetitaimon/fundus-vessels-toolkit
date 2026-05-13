@@ -129,6 +129,47 @@ def populate_geometry(
     return vgraph
 
 
+def refine_geometry(
+    graph: VGraph,
+    *,
+    center_junctions: bool = True,
+    snap_leaf_nodes: bool = True,
+    refresh_tips: bool = False,
+    inplace: bool = False,
+) -> VGraph:
+    """Refine the geometry of the graph by centering the junction nodes and snapping the leaf nodes to the tips.
+
+    Parameters
+    ----------
+    graph : VGraph
+        The graph to refine the geometry of.
+    center_junctions : bool, optional
+        If True, the junction nodes are centered, by default True.
+    snap_leaf_nodes : bool, optional
+        If True, the leaf nodes are snapped to the tips, by default True.
+    inplace : bool, optional
+        If True, the graph is modified in place, by default False.
+
+    Returns
+    -------
+    VGraph
+        The graph with the refined geometry.
+    """
+    if not inplace:
+        graph = graph.copy()
+
+    if center_junctions:
+        graph = center_junction_nodes(graph, inplace=True)
+
+    if snap_leaf_nodes:
+        graph = snap_leaf_nodes_to_tips(graph, inplace=True)
+
+    if refresh_tips:
+        derive_tips_geometry_from_curve_geometry(graph, inplace=True)
+
+    return graph
+
+
 def bsplines_from_curves(vgraph: VGraph, bspline_target_error: float = 2) -> list[BSpline]:
     """Compute the B-Spline representation of the branches from their curves.
     Parameters
@@ -416,3 +457,5 @@ def snap_leaf_nodes_to_tips(graph: VGraph, *, inplace: bool = False) -> VGraph:
 
         new_coord = curve[0 if node.adjacent_branches_first_node[0] else -1]
         geodata.set_node_coord(new_coord, node.id, graph_index=False)
+
+    return graph

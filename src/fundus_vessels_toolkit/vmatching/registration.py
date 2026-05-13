@@ -9,10 +9,9 @@ import numpy as np
 from pygmtools.linear_solvers import hungarian
 from scipy.ndimage import distance_transform_edt
 
-from fundus_toolkits import FundusData, Rect
-from fundus_vessels_toolkit.segment_to_graph.graph_simplification import simplify_passing_nodes
-from fundus_vessels_toolkit.vmatching.vgraph_edit_distance import backtrack_edges, shortest_secondary_path
+from fundus_toolkits import FundusData, Point, Rect
 
+from ..segment_to_graph.graph_simplification import simplify_passing_nodes
 from ..utils.fundus_projections import (
     AffineProjection,
     FundusProjection,
@@ -27,6 +26,7 @@ from ..utils.typing import Bool2DArray, FloatPairArray, Int1DArray, IntPairArray
 from ..vascular_data_objects import VGraph
 from ..vascular_data_objects.vtree import VTree
 from ..vmatching.descriptor import junction_adjacent_branches_descriptor, tree_node_histogram
+from ..vmatching.vgraph_edit_distance import backtrack_edges, shortest_secondary_path
 from .node_matching import match_junctions, ransac_refine_node_matching
 
 if TYPE_CHECKING:
@@ -268,13 +268,11 @@ class TreeRegistrationResult:
     tree2: VTree
     fundus1: FundusData
     fundus2: FundusData
-    roi1: Bool2DArray
-    roi2: Bool2DArray
     T12: FundusProjection
     node_match: IntPairArray
     branch_match: dict[tuple[int], tuple[int]]
 
-    def inspect(self, common_tree: bool = False, *, height=600) -> Mosaic:
+    def inspect(self, common_tree: bool = False, *, label: bool = True, height=600) -> Mosaic:
         from jppype.utils.color import colormap_by_name
 
         from ..utils.jppype import Mosaic, draw_tree
@@ -289,8 +287,10 @@ class TreeRegistrationResult:
         cmap = colormap_by_name("catppuccin-latte")
         domain = Rect.from_size(self.fundus1.shape)  # type: ignore
         full_domain = (domain | self.T12.transform_domain(domain)).to_int()
-        fundus1 = self.fundus1.image.transpose((1, 2, 0)) * (0.5 * self.roi1[:, :, None] + 0.5)
-        fundus2 = self.fundus2.image.transpose((1, 2, 0)) * (0.5 * self.roi2[:, :, None] + 0.5)
+
+        roi1, roi2 = fundus_roi_overlap(self.fundus1, self.fundus2, self.T12, extend_roi=75)
+        fundus1 = self.fundus1.image.transpose((1, 2, 0)) * (0.5 * roi1[:, :, None] + 0.5)
+        fundus2 = self.fundus2.image.transpose((1, 2, 0)) * (0.5 * roi2[:, :, None] + 0.5)
 
         m[0].domain = full_domain
         m[0].add_image(self.T12.warp(fundus1, warped_domain=full_domain)[0], "fundus").domain = full_domain
@@ -310,11 +310,11 @@ class TreeRegistrationResult:
         # tree1.add_nodes([self.fundus1.od_center, self.fundus1.macula_center], inplace=True)
         # tree2.add_nodes([self.fundus2.od_center, self.fundus2.macula_center], inplace=True)
         tree1.transform(self.T12, inplace=True)
-        layer1 = draw_tree(tree1, view=m[0], node_labels=True, edge_labels=True)
+        layer1 = draw_tree(tree1, view=m[0], node_labels=label, edge_labels=label)
         layer1.nodes_cmap = {None: cmap} | {n: "#555555" for n in range(N, len(tree1.node_attr))}
         layer1.nodes_labels = {i: str(i) for i in range(N)}
 
-        layer2 = draw_tree(tree2, view=m[1], branch_color="av", node_labels=True, edge_labels=True)
+        layer2 = draw_tree(tree2, view=m[1], branch_color="av", node_labels=label, edge_labels=label)
         layer2.nodes_cmap = {None: cmap} | {n: "#555555" for n in range(N, len(tree2.node_attr))}
         layer2.nodes_labels = {i: str(i) for i in range(N)}
 
@@ -328,9 +328,9 @@ class TreeRegistrationResult:
                 branch_labels2[b] = str(i + 1) + ("abcdefgh"[i2] if len(b2s) > 1 else "")
                 branch_cmap2[int(b)] = cmap[i % len(cmap)]
         layer1.edges_cmap = {None: "#555555"} | branch_cmap1
-        # layer1.edges_labels = branch_labels1
+        layer1.edges_labels = branch_labels1
         layer2.edges_cmap = {None: "#555555"} | branch_cmap2
-        # layer2.edges_labels = branch_labels2
+        layer2.edges_labels = branch_labels2
 
         return m
 
@@ -364,16 +364,19 @@ class TreeRegistrationResult:
 
         return tuple(out_trees) + tuple(out_branch_match)  # type: ignore
 
-    def refine_transform(self, same_k: bool = False) -> tuple[FundusProjection, float]:
+    def refine_transform(self, same_k: bool = False, verbose=False) -> tuple[FundusProjection, float]:
+        # TODO: use matched branch curvatures roots as additional matching points to refine the transformation
+        # TODO: visualisation FundusProjection.draw_grid(domain: Rect, subdivision: int | tuple(int, int), resolution: float) -> tuple[Bool2DArray, Rect]
         src = self.tree1.node_coord()[self.node_match[:, 0]]
         dst = self.tree2.node_coord()[self.node_match[:, 1]]
-        return AffineProjection.fit(src, dst)
+        # return AffineProjection.fit(src, dst)
         return RadialToRadial.fit(
             src=src,
             dst=dst,
             center_src=np.array(self.fundus1.shape) / 2,
             center_dst=np.array(self.fundus2.shape) / 2,
             same_k=same_k,
+            verbose=verbose,
         )
 
 
@@ -386,23 +389,24 @@ def naive_register_trees(
     # === 1. Estimate transformation and  ROI Overlap ===
     # TODO: extend the following method to work with the tree structure only
     T12, error = od_macula_registration(fundus1, fundus2, only_translation=None)
-    roi1, roi2 = fundus_roi_overlap(fundus1, fundus2, T12, extend_roi=75)
+    # roi1, roi2 = fundus_roi_overlap(fundus1, fundus2, T12, extend_roi=75)
 
     # Exclude the OD from the ROI to avoid registering the junctions inside
-    roi1 &= ~(distance_transform_edt(fundus1.od) > fundus1.od_diameter * 0.15)
-    roi2 &= ~(distance_transform_edt(fundus2.od) > fundus2.od_diameter * 0.15)
+    # roi1 &= ~(distance_transform_edt(fundus1.od) > fundus1.od_diameter * 0.15)
+    # roi2 &= ~(distance_transform_edt(fundus2.od) > fundus2.od_diameter * 0.15)
 
     # === 2. Find candidates for bifurcations matching ===
-    def get_bifurcations(tree, roi) -> tuple[Int1DArray, FloatPairArray]:
+    def get_bifurcations(tree, T: FundusProjection, fundus: FundusData) -> tuple[Int1DArray, FloatPairArray]:
         """Get the bifurcations of the tree that are in the ROI as well as their coordinates."""
         biff = np.where((tree.node_outdegree() > 1) & (tree.node_indegree() == 1))[0]
         biff_yx = tree.geometric_data().node_coord(biff).astype(np.int_)
-        biff_in_roi = roi[*biff_yx.T]
+        biff_r = np.linalg.norm(T.transform(biff_yx) - (Point(*fundus.shape) / 2).numpy(), axis=1)
+        biff_in_roi = biff_r < (fundus.shape[0] / 2 + fundus.od_diameter * 0.15)
         return biff[biff_in_roi], biff_yx[biff_in_roi]  # type: ignore
 
     # Find matching candidates for bifurcations based on their distance after transformation
-    biff1, biff1_yx = get_bifurcations(tree1, roi1)
-    biff2, biff2_yx = get_bifurcations(tree2, roi2)
+    biff1, biff1_yx = get_bifurcations(tree1, T12, fundus2)
+    biff2, biff2_yx = get_bifurcations(tree2, T12.invert(), fundus1)
     B1, B2 = len(biff1), len(biff2)
     dist = np.linalg.norm(T12.transform(biff1_yx)[:, None, :] - biff2_yx[None, :, :], axis=2)
     match_candidates = np.argwhere(dist < match_max_distance)
@@ -462,8 +466,6 @@ def naive_register_trees(
         tree2=tree2,
         fundus1=fundus1,
         fundus2=fundus2,
-        roi1=roi1,
-        roi2=roi2,
         T12=T12,
         node_match=node_match,
         branch_match=branch_match,

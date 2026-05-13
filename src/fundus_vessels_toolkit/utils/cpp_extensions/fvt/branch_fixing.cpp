@@ -203,7 +203,8 @@ std::vector<std::tuple<int, Vector, float, IntPoint, IntPoint>> clean_branch_ske
                     if (id == branchID) continue;
                     const CurveYX& otherCurve = branchCurves[id];
                     auto [otherStart, otherEnd] = get_branch_start_end(id, forward);
-                    auto const [closest_p, dist] = find_closest_pixel(otherCurve, bound, otherStart, otherEnd, true);
+                    auto const [closest_p, dist] =
+                        find_closest_pixel(otherCurve, bound, otherStart, otherEnd, SearchStrategy::FirstLocalMinimum);
                     if (dist < distToCurrentBranch) return false;
                 }
                 return true;
