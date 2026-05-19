@@ -6,6 +6,7 @@
 #include "edit_distance.h"
 #include "graph.h"
 #include "graph_matching.h"
+#include "metrics.h"
 #include "rasterize_topo.h"
 #include "ray_iterators.h"
 #include "skeleton.h"
@@ -548,6 +549,22 @@ void first_two_index_of(const torch::Tensor& tensor, const torch::Tensor& elemen
     for (auto e : elements_left) out_acc[e[0]][1] = -1;
 }
 
+std::vector<torch::Tensor> split_by(const torch::Tensor& tensor, const torch::Tensor& keys, int N = -1) {
+    auto const& key_acc = keys.accessor<int, 1>();
+    auto const& value_acc = tensor.accessor<int, 1>();
+    if (N == -1) N = keys.max().item<int>() + 1;
+
+    std::vector<std::list<uint64_t>> out(N);
+
+    for (int i = 0; i < keys.size(0); i++) {
+        int k = key_acc[i];
+        if (k < 0 || k >= N) continue;
+        out[k].push_back(value_acc[i]);
+    }
+
+    return vectors_to_tensors(out);
+}
+
 void branch_tips_connectivity_matrix(const torch::Tensor& branch_list, int N_nodes, torch::Tensor& out,
                                      bool erase_opposite_tips) {
     auto const& branch_list_acc = branch_list.accessor<int, 2>();
@@ -621,7 +638,7 @@ torch::Tensor terminal_tips(const torch::Tensor& branch_list, std::size_t N_node
     if (branch_subgraph.numel() == 0) {
         // If no subgraph ids are provided, consider all branches belong to the same subgraph
         const auto& tips = terminal_nodes(tensor_to_vectorIntPair(branch_list), N_nodes);
-        return vector_to_tensor(tips, torch::kInt);
+        return vector_to_tensor(tips);
     }
 
     TORCH_CHECK_VALUE(branch_subgraph.ndimension() == 2, "The branch_subgraph tensor must have shape (B).");
@@ -657,7 +674,7 @@ torch::Tensor terminal_tips(const torch::Tensor& branch_list, std::size_t N_node
             if (tips_mask[b][tip]) tips.emplace_back(std::array<int, 3>{branch_list_acc[b][tip], b, tip});
         }
     }
-    return vector_to_tensor(tips, torch::kInt);
+    return vector_to_tensor(tips);
 }
 
 void facing_tips(const torch::Tensor& tips_yx, const torch::Tensor& tips_tan, float max_distance, float max_angle,
@@ -748,6 +765,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("first_two_index_of", &first_two_index_of,
           "Find the first and second index of a set of elements in a tensor.");
     m.def("first_index_of", &first_index_of, "Find the first index of a set of elements in a tensor.");
+    m.def("split_by", &split_by, "Split a tensor by a set of keys.");
     m.def("branch_tips_connectivity_matrix", &branch_tips_connectivity_matrix,
           "Compute the branch tips connectivity matrix.");
     m.def("facing_tips", &facing_tips, "Find facing branch tips.");
@@ -773,6 +791,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("maximum_weighted_independent_set", &maximum_weighted_independent_set,
           "Compute the maximum weighted independent set.");
     m.def("node_accessible_from_root", &node_accessible_from_root, "Compute the nodes accessible from a root node.");
+
+    // === metrics.h ===
+    m.def("valid_path_ratio", &valid_path_ratio, "Compute the valid path ratio between two skeletons.");
+    m.def("shortest_skeleton_path_length", &shortest_skeleton_path_length,
+          "Compute the shortest path length between pixels in a skeleton.");
 
     // === rasterize_topo.h ===
     m.def("rasterize_topology", &rasterize_topology, "Rasterize the topology of a set of branches.");

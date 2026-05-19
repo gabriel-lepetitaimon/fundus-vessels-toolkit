@@ -147,6 +147,26 @@ def np_find_sorted(keys: npt.NDArray, array: npt.NDArray, assume_keys_sorted=Fal
             return np.concatenate([(-1,) * k0, id, (-1,) * (len(keys) - k1)])
 
 
+def np_split_by(array: npt.NDArray, keys: npt.NDArray) -> list[npt.NDArray]:
+    """
+    Split an array into sub-arrays based on keys.
+
+    Parameters
+    ----------
+    array:
+        The array to split.
+    keys:
+        The keys to split by. Must be the same length as array.
+    Returns
+    -------
+    List[np.ndarray]:
+        A list of sub-arrays, where each sub-array contains the elements of array corresponding to a unique key in keys.
+    """
+    assert array.shape[0] == keys.shape[0], "array and keys must have the same length."
+    unique_keys, inverse_indices = np.unique(keys, return_inverse=True)
+    return [array[inverse_indices == i] for i in range(len(unique_keys))]
+
+
 def np_group_by(array: npt.NDArray, keys: npt.NDArray) -> list[tuple[npt.NDArray, npt.NDArray]]:
     """
     Group the elements of an array by keys.

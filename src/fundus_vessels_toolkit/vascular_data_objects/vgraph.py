@@ -2172,12 +2172,13 @@ class VGraph:
         VGraph
             The transformed graph.
         """  # noqa: E501
-        if not inplace:
-            return self.copy().transform(projection, warped_domain=warped_domain, inplace=True)
+        graph = self if inplace else self.copy()
+        if projection.is_identity():
+            return graph
 
-        for gdata in self._geometric_data:
+        for gdata in graph._geometric_data:
             gdata.transform(projection, warped_domain=warped_domain, inplace=True)
-        return self
+        return graph
 
     ####################################################################################################################
     #  === GRAPH MANIPULATION ===
@@ -3831,13 +3832,16 @@ class VGraph:
             boundaries = None
 
         geodata = self.geometric_data()
-
+        if boundaries is not None:
+            calibre = "tip" if only_tip else False
+        else:
+            calibre = False
         layer = LayerGraph(
             self._branch_list,
             geodata.node_coord(),
             geodata.skeleton_label_map(
-                calibre_attr=boundaries,
-                only_tip=boundaries_only_tip,
+                calibre=calibre,
+                boundaries_attr=boundaries,
                 connect_nodes=interpolate,
                 interpolate=interpolate,
             ),

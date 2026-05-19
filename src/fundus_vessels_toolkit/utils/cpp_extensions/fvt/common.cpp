@@ -324,87 +324,6 @@ std::vector<int> quantize_triband(const std::vector<float>& x, float low, float 
  *             === TORCH ===
  *******************************************************************************************************************/
 // === FROM_VECTOR ===
-torch::Tensor vector_to_tensor(const std::vector<int>& vec, std::size_t first, std::size_t last) {
-    if (last == 0) last = vec.size();
-    torch::Tensor tensor = torch::empty({(long)(last - first)}, torch::kInt32);
-    auto accessor = tensor.accessor<int, 1>();
-    for (auto i = first; i < last; i++) accessor[i - first] = vec[i];
-    return tensor;
-}
-
-torch::Tensor vector_to_tensor(const std::vector<float>& vec, std::size_t first, std::size_t last) {
-    if (last == 0) last = vec.size();
-    torch::Tensor tensor = torch::empty({(long)(last - first)}, torch::kFloat32);
-    auto accessor = tensor.accessor<float, 1>();
-    for (auto i = first; i < last; i++) accessor[i - first] = vec[i];
-    return tensor;
-}
-
-torch::Tensor vector_to_tensor(const std::vector<double>& vec, std::size_t first, std::size_t last) {
-    if (last == 0) last = vec.size();
-    torch::Tensor tensor = torch::empty({(long)(last - first)}, torch::kFloat64);
-    auto accessor = tensor.accessor<double, 1>();
-    for (auto i = first; i < last; i++) accessor[i - first] = vec[i];
-    return tensor;
-}
-
-torch::Tensor vector_to_tensor(const std::vector<std::size_t>& vec, std::size_t first, std::size_t last) {
-    if (last == 0) last = vec.size();
-    torch::Tensor tensor = torch::empty({(long)(last - first)}, torch::kInt64);
-    auto accessor = tensor.accessor<int64_t, 1>();
-    for (auto i = first; i < last; i++) accessor[i - first] = vec[i];
-    return tensor;
-}
-
-torch::Tensor vector_to_tensor(const std::vector<IntPair>& vec, std::size_t first, std::size_t last) {
-    if (last == 0) last = vec.size();
-    torch::Tensor tensor = torch::empty({(long)(last - first), 2}, torch::kInt32);
-    auto accessor = tensor.accessor<int, 2>();
-    for (auto i = first; i < last; i++) {
-        accessor[i - first][0] = vec[i][0];
-        accessor[i - first][1] = vec[i][1];
-    }
-    return tensor;
-}
-
-torch::Tensor vector_to_tensor(const std::vector<UIntPair>& vec, std::size_t first, std::size_t last) {
-    if (last == 0) last = vec.size();
-    torch::Tensor tensor = torch::empty({(long)(last - first), 2}, torch::kInt32);
-    auto accessor = tensor.accessor<int, 2>();
-    for (auto i = first; i < last; i++) {
-        accessor[i - first][0] = vec[i][0];
-        accessor[i - first][1] = vec[i][1];
-    }
-    return tensor;
-}
-
-torch::Tensor vector_to_tensor(const std::vector<FloatPair>& vec, std::size_t first, std::size_t last) {
-    if (last == 0) last = vec.size();
-    torch::Tensor tensor = torch::empty({(long)(last - first), 2}, torch::kFloat32);
-    auto accessor = tensor.accessor<float, 2>();
-    for (auto i = first; i < last; i++) {
-        accessor[i - first][0] = vec[i][0];
-        accessor[i - first][1] = vec[i][1];
-    }
-    return tensor;
-}
-torch::Tensor vector_to_tensor(const std::vector<std::array<uint64_t, 2>>& vec, std::size_t first, std::size_t last) {
-    return vector_to_tensor(vec, torch::kUInt64, first, last);
-}
-
-torch::Tensor vector_to_tensor(const std::vector<std::array<IntPair, 2>>& vec, std::size_t first, std::size_t last) {
-    if (last == 0) last = vec.size();
-    torch::Tensor tensor = torch::empty({(long)(last - first), 2, 2}, torch::kInt32);
-    auto accessor = tensor.accessor<int, 3>();
-    for (auto i = first; i < last; i++) {
-        accessor[i - first][0][0] = vec[i][0][0];
-        accessor[i - first][0][1] = vec[i][0][1];
-        accessor[i - first][1][0] = vec[i][1][0];
-        accessor[i - first][1][1] = vec[i][1][1];
-    }
-    return tensor;
-}
-
 torch::Tensor vector_to_tensor(const std::vector<Point>& vec, std::size_t first, std::size_t last) {
     if (last == 0) last = vec.size();
     torch::Tensor tensor = torch::empty({(long)(last - first), 2}, torch::kDouble);
@@ -436,6 +355,19 @@ torch::Tensor vector_to_tensor(const std::vector<std::array<IntPoint, 2>>& vec, 
         accessor[i - first][0][1] = vec[i][0].x;
         accessor[i - first][1][0] = vec[i][1].y;
         accessor[i - first][1][1] = vec[i][1].x;
+    }
+    return tensor;
+}
+
+torch::Tensor vector_to_tensor(const std::vector<std::array<IntPair, 2>>& vec, std::size_t first, std::size_t last) {
+    if (last == 0) last = vec.size();
+    torch::Tensor tensor = torch::empty({(long)(last - first), 2, 2}, torch::kInt32);
+    auto accessor = tensor.accessor<int, 3>();
+    for (auto i = first; i < last; i++) {
+        accessor[i - first][0][0] = vec[i][0][0];
+        accessor[i - first][0][1] = vec[i][0][1];
+        accessor[i - first][1][0] = vec[i][1][0];
+        accessor[i - first][1][1] = vec[i][1][1];
     }
     return tensor;
 }
@@ -542,7 +474,7 @@ GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N, bool
     return graph;
 }
 
-GraphAdjList edge_list_to_adjlist(const EdgeList& edges, int N, bool directed) {
+GraphAdjList edge_list_to_adjlist(const EdgeList& edges, int N, bool directed, bool keep_orientation) {
     if (N < 0) {
         N = 0;
         for (const Edge& e : edges) N = std::max(N, std::max(e.start, e.end));
@@ -552,12 +484,17 @@ GraphAdjList edge_list_to_adjlist(const EdgeList& edges, int N, bool directed) {
     GraphAdjList graph(N);
     for (const Edge& e : edges) {
         graph[e.start].insert(e);
-        if (!directed) graph[e.end].insert(e);
+        if (!directed) {
+            if (keep_orientation)
+                graph[e.end].insert(e);
+            else
+                graph[e.end].insert(Edge(e.end, e.start, e.id));
+        }
     }
     return graph;
 }
 
-GraphAdjList edge_list_to_adjlist(const Tensor2DAcc<int>& edges, int N, bool directed) {
+GraphAdjList edge_list_to_adjlist(const Tensor2DAcc<int>& edges, int N, bool directed, bool keep_orientation) {
     const std::size_t E = (std::size_t)edges.size(0);
     if (N < 0) {
         N = 0;
@@ -570,7 +507,12 @@ GraphAdjList edge_list_to_adjlist(const Tensor2DAcc<int>& edges, int N, bool dir
     for (std::size_t j = 0; j < E; j++) {
         const Edge edge(edges[j][0], edges[j][1], i);
         graph[edge.start].insert(edge);
-        if (!directed) graph[edge.end].insert(edge);
+        if (!directed) {
+            if (keep_orientation)
+                graph[edge.end].insert(edge);
+            else
+                graph[edge.end].insert(Edge(edges[j][1], edges[j][0], i));
+        }
         i++;
     }
     return graph;

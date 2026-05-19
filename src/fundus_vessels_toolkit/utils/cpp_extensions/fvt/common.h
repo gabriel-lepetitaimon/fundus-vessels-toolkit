@@ -362,39 +362,24 @@ inline std::size_t matrix_index(const std::array<uint, N>& index, std::array<std
 /*******************************************************************************************************************
  *             === TORCH ===
  *******************************************************************************************************************/
-
-torch::Tensor vector_to_tensor(const std::vector<int>& vec, std::size_t first = 0, std::size_t last = 0);
-torch::Tensor vector_to_tensor(const std::vector<float>& vec, std::size_t first = 0, std::size_t last = 0);
-torch::Tensor vector_to_tensor(const std::vector<double>& vec, std::size_t first = 0, std::size_t last = 0);
-torch::Tensor vector_to_tensor(const std::vector<std::size_t>& vec, std::size_t first = 0, std::size_t last = 0);
-torch::Tensor vector_to_tensor(const std::vector<Point>& vec, std::size_t first = 0, std::size_t last = 0);
-torch::Tensor vector_to_tensor(const std::vector<IntPoint>& vec, std::size_t first = 0, std::size_t last = 0);
-torch::Tensor vector_to_tensor(const std::vector<IntPair>& vec, std::size_t first = 0, std::size_t last = 0);
-torch::Tensor vector_to_tensor(const std::vector<UIntPair>& vec, std::size_t first = 0, std::size_t last = 0);
-torch::Tensor vector_to_tensor(const std::vector<FloatPair>& vec, std::size_t first = 0, std::size_t last = 0);
-torch::Tensor vector_to_tensor(const std::vector<std::vector<IntPair>>& vec, std::size_t first = 0,
-                               std::size_t last = 0);
-torch::Tensor vector_to_tensor(const IntPointPairs& vec, std::size_t first = 0, std::size_t last = 0);
-
-torch::Tensor remove_rows(const torch::Tensor& tensor, std::vector<int> rows);
+template <typename T>
+at::ScalarType dtype() {
+    return at::typeMetaToScalarType(caffe2::TypeMeta::Make<T>());
+}
 
 template <typename T>
-torch::Tensor vector_to_tensor(const std::vector<T>& vec, c10::ScalarType dtype, std::size_t first = 0,
-                               std::size_t last = 0) {
+torch::Tensor vector_to_tensor(const std::vector<T>& vec, std::size_t first = 0, std::size_t last = 0) {
     if (last == 0) last = vec.size();
-    torch::Tensor tensor = torch::empty({(long)(last - first)}, dtype);
+    torch::Tensor tensor = torch::empty({(long)(last - first)}, dtype<T>());
     auto accessor = tensor.accessor<T, 1>();
-    for (auto i = first; i < last; i++) {
-        accessor[i - first] = vec[i];
-    }
+    for (auto i = first; i < last; i++) accessor[i - first] = vec[i];
     return tensor;
 }
 
 template <typename T, std::size_t N>
-torch::Tensor vector_to_tensor(const std::vector<std::array<T, N>>& vec, c10::ScalarType dtype, std::size_t first = 0,
-                               std::size_t last = 0) {
+torch::Tensor vector_to_tensor(const std::vector<std::array<T, N>>& vec, std::size_t first = 0, std::size_t last = 0) {
     if (last == 0) last = vec.size();
-    torch::Tensor tensor = torch::empty({(long)(last - first), (long)N}, dtype);
+    torch::Tensor tensor = torch::empty({(long)(last - first), (long)N}, dtype<T>());
     auto accessor = tensor.accessor<T, 2>();
     for (auto i = first; i < last; i++) {
         for (std::size_t j = 0; j < N; j++) accessor[i - first][j] = vec[i][j];
@@ -403,7 +388,31 @@ torch::Tensor vector_to_tensor(const std::vector<std::array<T, N>>& vec, c10::Sc
 }
 
 template <typename T>
+torch::Tensor vector_to_tensor(const std::list<T>& vec) {
+    torch::Tensor tensor = torch::empty({(long)vec.size()}, dtype<T>());
+    auto accessor = tensor.accessor<T, 1>();
+    std::size_t i = 0;
+    for (const auto& v : vec) accessor[i++] = v;
+    return tensor;
+}
+
+torch::Tensor vector_to_tensor(const std::vector<Point>& vec, std::size_t first = 0, std::size_t last = 0);
+torch::Tensor vector_to_tensor(const std::vector<IntPoint>& vec, std::size_t first = 0, std::size_t last = 0);
+torch::Tensor vector_to_tensor(const std::vector<std::vector<IntPair>>& vec, std::size_t first = 0,
+                               std::size_t last = 0);
+torch::Tensor vector_to_tensor(const IntPointPairs& vec, std::size_t first = 0, std::size_t last = 0);
+
+torch::Tensor remove_rows(const torch::Tensor& tensor, std::vector<int> rows);
+
+template <typename T>
 std::vector<torch::Tensor> vectors_to_tensors(const std::vector<std::vector<T>>& vec) {
+    std::vector<torch::Tensor> tensors;
+    tensors.reserve(vec.size());
+    for (const auto& v : vec) tensors.push_back(vector_to_tensor(v));
+    return tensors;
+}
+template <typename T>
+std::vector<torch::Tensor> vectors_to_tensors(const std::vector<std::list<T>>& vec) {
     std::vector<torch::Tensor> tensors;
     tensors.reserve(vec.size());
     for (const auto& v : vec) tensors.push_back(vector_to_tensor(v));
@@ -470,8 +479,10 @@ using Hierarchy = std::vector<HierarchyEdge>;
  */
 GraphAdjList edge_list_to_adjlist(const std::vector<IntPair>& edges, int N = -1, bool directed = false,
                                   bool keep_orientation = true);
-GraphAdjList edge_list_to_adjlist(const EdgeList& edges, int N = -1, bool directed = false);
-GraphAdjList edge_list_to_adjlist(const Tensor2DAcc<int>& edges, int N = -1, bool directed = false);
+GraphAdjList edge_list_to_adjlist(const EdgeList& edges, int N = -1, bool directed = false,
+                                  bool keep_orientation = true);
+GraphAdjList edge_list_to_adjlist(const Tensor2DAcc<int>& edges, int N = -1, bool directed = false,
+                                  bool keep_orientation = true);
 std::tuple<Hierarchy, int> edge_list_to_hierarchy(const Tensor2DAcc<int>& edges, const Tensor1DAcc<int>& edges_parent,
                                                   const Tensor1DAcc<bool>& edge_dir);
 AdjList graph_adjlist_to_edge_adjlist(const GraphAdjList& adjlist, int N = -1);

@@ -19,12 +19,10 @@ parameters:
     min: 0.005
     max: 0.05
   dataset:
-    values:
-      - {graph_version: fvt}
-      - {graph_version: {}}
   training_set:
     values: 
       - ["FundusAV", "HRF", "LES-AV", "GAVE-train", "MAPLES-DR"]
+      - ["FundusAV", "GAVE-train"]
       - null
 
   # === STATIC ===

@@ -124,9 +124,8 @@ std::array<torch::Tensor, 5> read_branches_topology(const std::vector<torch::Ten
         }
     }
 
-    return {vector_to_tensor(branch_labels, torch::kUInt64), vector_to_tensor(branch_dir, torch::kFloat32),
-            vector_to_tensor(branch_plausibility, torch::kFloat32), vector_to_tensor(tips_label, torch::kUInt64),
-            vector_to_tensor(tips_rank, torch::kFloat32)};
+    return {vector_to_tensor(branch_labels), vector_to_tensor(branch_dir), vector_to_tensor(branch_plausibility),
+            vector_to_tensor(tips_label), vector_to_tensor(tips_rank)};
 }
 
 std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 2>> read_branch_topology(

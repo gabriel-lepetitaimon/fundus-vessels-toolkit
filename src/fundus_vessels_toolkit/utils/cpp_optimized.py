@@ -1,4 +1,6 @@
 from ast import List
+from enum import auto
+
 import numpy as np
 import torch
 
@@ -37,3 +39,9 @@ def discontiguous_index(curve) -> list[int]:
     curve = curve.cpu().int()
     out = fvt_cpp.discontiguous_index(curve)
     return out
+
+
+@autocast_torch
+def split_by(array, key, n=-1):
+    assert array.shape == key.shape and array.ndim == 1, "Only 1D arrays of the same shape are supported"
+    return fvt_cpp.split_by(array.cpu().int(), key.cpu().int(), int(n))

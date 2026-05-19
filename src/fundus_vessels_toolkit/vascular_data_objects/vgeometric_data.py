@@ -843,11 +843,14 @@ class VGeometricData:
     ####################################################################################################################
     def skeleton_label_map(
         self,
-        calibre_attr=None,
-        only_tip=False,
+        skeleton: bool = True,
+        boundaries: bool = False,
+        calibre: bool | Literal["tip"] = False,
+        *,
+        boundaries_attr=None,
         connect_nodes: bool = False,
         interpolate: bool = False,
-    ) -> npt.NDArray[np.int_]:
+    ) -> Int2DArray:
         """Return a label map of the branches.
 
         Returns
@@ -859,24 +862,25 @@ class VGeometricData:
 
         from ..utils.cpp_extensions.fvt_cpp import draw_skeleton_labels
 
-        domain_shape = self.domain.size
+        domain_shape = self.domain.shape
         top_left = np.array([self.domain.top, self.domain.left])
         curves = [torch.from_numpy(c - top_left).int() for c in self.branch_curve()]
         branch_label_map = np.zeros(domain_shape, dtype=np.int32)
-        if connect_nodes:
-            nodes_coord = torch.from_numpy(self.node_coord(graph_index=False) - top_left).int()
-            branch_list = torch.from_numpy(self.parent_graph.branch_list).int()
-        else:
-            nodes_coord = torch.empty(0, 2, dtype=torch.int)
-            branch_list = torch.empty(0, 2, dtype=torch.int)
-        branch_label_map = torch.from_numpy(branch_label_map).int()
-        draw_skeleton_labels(curves, branch_label_map, nodes_coord, branch_list, interpolate)
-        branch_label_map = branch_label_map.numpy()
 
-        if calibre_attr is not None:
+        if skeleton:
+            if connect_nodes:
+                nodes_coord = torch.from_numpy(self.node_coord(graph_index=False) - top_left).int()
+                branch_list = torch.from_numpy(self.parent_graph.branch_list).int()
+            else:
+                nodes_coord = torch.empty(0, 2, dtype=torch.int)
+                branch_list = torch.empty(0, 2, dtype=torch.int)
+            branch_label_map_torch = torch.from_numpy(branch_label_map)
+            draw_skeleton_labels(curves, branch_label_map_torch, nodes_coord, branch_list, interpolate)
+
+        if boundaries or calibre:
             from skimage.draw import line
 
-            if calibre_attr is True:
+            if boundaries_attr is None:
                 try:
                     calibre_desc = self._fetch_branch_data_descriptor(VBranchGeoData.Fields.BOUNDARIES)
                 except KeyError:
@@ -885,30 +889,41 @@ class VGeometricData:
                     except KeyError:
                         raise KeyError("No calibre attribute found.") from None
             else:
-                calibre_desc = self._fetch_branch_data_descriptor(calibre_attr)
+                calibre_desc = self._fetch_branch_data_descriptor(boundaries_attr)
             assert issubclass(calibre_desc.geo_type, (VBranchGeoData.TipsData, VBranchGeoData.Curve)), (
                 f"Invalid attribute for boundaries of branches tips: {calibre_desc.name}."
             )
-            boundaries = self.branch_data(calibre_desc)
+            boundaries_data = self.branch_data(calibre_desc)
 
-            lines = []
-            for branch_id, tip_boundaries in zip(self.branch_ids, boundaries, strict=True):
-                if isinstance(tip_boundaries, VBranchGeoData.TipsData):
-                    for boundL, boundR in tip_boundaries.data.astype(np.int_):
-                        lines += [(Point(*boundL), Point(*boundR), branch_id + 1)]
-                elif isinstance(tip_boundaries, VBranchGeoData.Curve):
-                    bounds = tip_boundaries.data.astype(np.int_)
-                    if bounds.shape[0] == 0:
-                        continue
-                    for boundL, boundR in [bounds[0]] if only_tip else bounds[::4]:
-                        lines += [(Point(*boundL), Point(*boundR), branch_id + 1)]
-                    lines += [(Point(*bounds[-1, 0]), Point(*bounds[-1, 1]), branch_id + 1)]
+            if calibre:
+                only_tip = calibre == "tip"
+                lines = []
+                for branch_id, b_bound_data in zip(self.branch_ids, boundaries_data, strict=True):
+                    if isinstance(b_bound_data, VBranchGeoData.TipsData):
+                        for boundL, boundR in b_bound_data.data.astype(np.int_):
+                            lines += [(Point(*boundL), Point(*boundR), branch_id + 1)]
+                    elif isinstance(b_bound_data, VBranchGeoData.Curve):
+                        bounds_lr = b_bound_data.data.astype(np.int_)
+                        if bounds_lr.shape[0] == 0:
+                            continue
+                        for boundL, boundR in [bounds_lr[0]] if only_tip else bounds_lr[::4]:
+                            lines += [(Point(*boundL), Point(*boundR), branch_id + 1)]
+                        lines += [(Point(*bounds_lr[-1, 0]), Point(*bounds_lr[-1, 1]), branch_id + 1)]
 
-            for p0, p1, color in lines:
-                if p0 != p1 and p0 in self.domain and p1 in self.domain:
-                    branch_label_map[line(*p0, *p1)] = color
+                for p0, p1, color in lines:
+                    if p0 != p1 and p0 in self.domain and p1 in self.domain:
+                        branch_label_map[line(*p0, *p1)] = color
 
-        return branch_label_map
+            if boundaries:
+                bounds_lr = [_.data.astype(np.int32) for _ in boundaries_data if _.data.size > 0]
+                bounds_l = [torch.from_numpy(bound[:, 0]) for bound in bounds_lr]
+                bounds_r = [torch.from_numpy(bound[:, 1]) for bound in bounds_lr]
+                empty = torch.empty(0, 2, dtype=torch.int)
+                branch_label_map_torch = torch.from_numpy(branch_label_map)
+                draw_skeleton_labels(bounds_l, branch_label_map_torch, empty, empty, interpolate)
+                draw_skeleton_labels(bounds_r, branch_label_map_torch, empty, empty, interpolate)
+
+        return branch_label_map  # type: ignore
 
     @overload
     def branch_arc_length(self, graph_ids: int, fast_approximation=True) -> float: ...

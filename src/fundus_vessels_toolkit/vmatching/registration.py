@@ -272,55 +272,79 @@ class TreeRegistrationResult:
     node_match: IntPairArray
     branch_match: dict[tuple[int], tuple[int]]
 
-    def inspect(self, common_tree: bool = False, *, label: bool = True, height=600) -> Mosaic:
+    def inspect(
+        self,
+        common_tree: bool = False,
+        *,
+        split_spheric_projection: bool = True,
+        label: bool = True,
+        height=600,
+        draw_deformation_grid: bool = False,
+        draw_boundaries: bool = False,
+    ) -> Mosaic:
+        import time
+
         from jppype.utils.color import colormap_by_name
 
         from ..utils.jppype import Mosaic, draw_tree
 
-        m = Mosaic(2, cell_height=height)
+        t0 = time.perf_counter()
 
-        node_match1: Int1DArray
-        node_match2: Int1DArray
-        node_match1, node_match2 = self.node_match.T  # type: ignore
+        m = Mosaic(2, cell_height=height)
+        cmap = colormap_by_name("catppuccin-latte")
         N = len(self.node_match)
 
-        cmap = colormap_by_name("catppuccin-latte")
-        domain = Rect.from_size(self.fundus1.shape)  # type: ignore
-        full_domain = (domain | self.T12.transform_domain(domain)).to_int()
+        if isinstance(self.T12, RadialToRadial) and split_spheric_projection:
+            T12, T21 = self.T12.split_spheric_projections()
+        else:
+            T12 = self.T12
+            T21 = IdentityProjection()
+        domain1 = T12.transform_domain(Rect.from_size(self.fundus1.shape))
+        domain2 = T21.transform_domain(Rect.from_size(self.fundus2.shape))
+        full_domain = domain1 | domain2
 
+        # === DRAW FUNDUS ===
+        print(f"({(t1 := time.perf_counter()) - t0:.2f}s) drawing fundus...")
         roi1, roi2 = fundus_roi_overlap(self.fundus1, self.fundus2, self.T12, extend_roi=75)
         fundus1 = self.fundus1.image.transpose((1, 2, 0)) * (0.5 * roi1[:, :, None] + 0.5)
         fundus2 = self.fundus2.image.transpose((1, 2, 0)) * (0.5 * roi2[:, :, None] + 0.5)
-
+        print(f"   warp ROI done in ({(t2 := time.perf_counter()) - t1:.2f}s)")
         m[0].domain = full_domain
-        m[0].add_image(self.T12.warp(fundus1, warped_domain=full_domain)[0], "fundus").domain = full_domain
+        m[0].add_image(T12.warp(fundus1, warped_domain=full_domain)[0], "fundus").domain = full_domain
         m[1].domain = full_domain
-        m[1].add_image(IdentityProjection().warp(fundus2, warped_domain=full_domain)[0], "fundus").domain = full_domain
+        m[1].add_image(T21.warp(fundus2, warped_domain=full_domain)[0], "fundus").domain = full_domain
+        print(f"   warp fundus done in ({time.perf_counter() - t2:.2f}s)")
 
+        # === DRAW TREES ===
         if common_tree:
             tree1, tree2, branch_match1, branch_match2 = self.common_tree()
             branch_match1 = np.split(np.arange(tree1.branch_count), np.unique(branch_match1, return_index=True)[1])
             branch_match2 = np.split(np.arange(tree2.branch_count), np.unique(branch_match2, return_index=True)[1])
         else:
+            node_match1: Int1DArray
+            node_match2: Int1DArray
+            node_match1, node_match2 = self.node_match.T  # type: ignore
+
             tree1 = self.tree1.reindex_nodes(node_match1, inverse_lookup=True)
             tree2 = self.tree2.reindex_nodes(node_match2, inverse_lookup=True)
             branch_match1 = self.branch_match.keys()
             branch_match2 = self.branch_match.values()
 
-        # tree1.add_nodes([self.fundus1.od_center, self.fundus1.macula_center], inplace=True)
-        # tree2.add_nodes([self.fundus2.od_center, self.fundus2.macula_center], inplace=True)
-        tree1.transform(self.T12, inplace=True)
+        print(f"({(t3 := time.perf_counter()) - t0:.2f}s) drawing trees...")
+        tree1.transform(T12, inplace=True)
         layer1 = draw_tree(tree1, view=m[0], node_labels=label, edge_labels=label)
         layer1.nodes_cmap = {None: cmap} | {n: "#555555" for n in range(N, len(tree1.node_attr))}
         layer1.nodes_labels = {i: str(i) for i in range(N)}
 
+        tree2.transform(T21, inplace=True)
         layer2 = draw_tree(tree2, view=m[1], branch_color="av", node_labels=label, edge_labels=label)
         layer2.nodes_cmap = {None: cmap} | {n: "#555555" for n in range(N, len(tree2.node_attr))}
         layer2.nodes_labels = {i: str(i) for i in range(N)}
+        print(f"   warp trees done in ({(t4 := time.perf_counter()) - t3:.2f}s)")
 
         branch_labels1, branch_cmap1 = {}, {}
         branch_labels2, branch_cmap2 = {}, {}
-        for i, (b1s, b2s) in enumerate(zip(branch_match1, branch_match2, strict=True)):
+        for i, (b1s, b2s) in enumerate(zip(branch_match1, branch_match2, strict=False)):
             for i1, b in enumerate(b1s):
                 branch_labels1[b] = str(i + 1) + ("abcdefgh"[i1] if len(b1s) > 1 else "")
                 branch_cmap1[int(b)] = cmap[i % len(cmap)]
@@ -331,6 +355,27 @@ class TreeRegistrationResult:
         layer1.edges_labels = branch_labels1
         layer2.edges_cmap = {None: "#555555"} | branch_cmap2
         layer2.edges_labels = branch_labels2
+
+        # === DRAW GRID ===
+        if draw_deformation_grid:
+            print(f"({(t5 := time.perf_counter()) - t0:.2f}s) drawing grid...")
+            grid, grid_domain = T12.draw_grid(Rect.from_size(self.fundus1.shape))
+            m[0].add_label(grid * 1, "deformation_grid", "white", opacity=0.5).domain = grid_domain
+            if not T21.is_identity():
+                grid, grid_domain = T21.draw_grid(Rect.from_size(self.fundus2.shape))
+                m[1].add_label(grid * 1, "deformation_grid", "white", opacity=0.5).domain = grid_domain
+            print(f"   warp grid done in ({time.perf_counter() - t5:.2f}s)")
+
+        # === DRAW BOUNDARIES ===
+        if draw_boundaries:
+            print(f"({(t6 := time.perf_counter()) - t0:.2f}s) drawing boundaries...")
+            bound1 = tree1.geometric_data().skeleton_label_map(skeleton=False, boundaries=True, interpolate=True) > 0
+            bound2 = tree2.geometric_data().skeleton_label_map(skeleton=False, boundaries=True, interpolate=True) > 0
+            bound = 1 * full_domain.crop_pad_image(bound1, -domain1.top_left)
+            bound += 2 * full_domain.crop_pad_image(bound2, -domain2.top_left)
+            m[0].add_label(bound, "boundaries", {1: "green", 2: "red", 3: "white"}, opacity=0.8).domain = full_domain
+            m[1].add_label(bound, "boundaries", {2: "green", 1: "red", 3: "white"}, opacity=0.8).domain = full_domain
+            print(f"   draw boundaries done in ({time.perf_counter() - t6:.2f}s)")
 
         return m
 

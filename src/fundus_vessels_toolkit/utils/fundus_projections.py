@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import abc
 import copy
-from functools import partial
-from logging import warning
-from typing import Any, Literal, Mapping, Optional, Self, Type, overload
 import warnings
+from functools import partial
+from typing import Literal, Mapping, Optional, Self, Type, overload
 
 import numpy as np
 import numpy.typing as npt
@@ -14,6 +13,7 @@ from scipy.optimize import least_squares as scipy_least_squares
 
 from fundus_toolkits.utils.geometric import Point, Rect
 from fundus_vessels_toolkit.utils.typing import (
+    Bool2DArray,
     Float1DArray,
     Float2DArray,
     Float2DArrayLike,
@@ -418,6 +418,74 @@ class FundusProjection(abc.ABC):
         src_region_domain = self.inverse_transform_domain(warped_domain)  # & src_domain
         src_region = src_region_domain.crop_pad_image(src_img, origin=src_origin, channel_last=True)
         return warped_domain, src_region, src_region_domain
+
+    def draw_grid(
+        self,
+        domain: Rect,
+        subdivision: Optional[int | tuple[int, int]] = None,
+        subsampling: int = 1,
+        inverse: bool = False,
+    ) -> tuple[Bool2DArray, Rect]:
+        """
+        Draws a grid on a domain using this projection model.
+
+        Parameters
+        ----------
+        domain : Rect
+            The domain to draw the grid on.
+
+        subdivision : int | tuple[int, int]
+            The number of subdivisions of the grid. If an integer is provided, it is used for both dimensions. If None, set the subdivision to approximately have a grid line every 100 pixels in the original domain.
+
+        subsampling : int
+            The subsampling factor to apply to the grid. The grid is drawn on a subsampled version of the domain and then upsampled back to the original resolution. This can be used to speed up the drawing of the grid.
+
+        inverse : bool
+            Whether to draw the grid using the inverse of this projection model. By default False.
+
+        Returns
+        -------
+        grid : Bool2DArray
+            A boolean array where True values correspond to the grid lines.
+
+        grid_domain : Rect
+            The domain of the grid.
+        """  # noqa: E501
+        if isinstance(subdivision, int):
+            subdivision = (subdivision, subdivision)
+        elif subdivision is None:
+            subdivision = (int(max(1, domain.w // 100)), int(max(1, domain.h // 100)))
+        assert isinstance(subdivision, tuple) and len(subdivision) == 2, (
+            "subdivision must be an int or a tuple of two ints"
+        )
+        assert subdivision[0] > 0 and subdivision[1] > 0, "subdivision must be positive"
+
+        sub_y = np.linspace(domain.top, domain.bottom, subdivision[0] + 2)
+        h_line = np.arange(subsampling, sub_y[1] - sub_y[0], subsampling)
+        h_line = np.concatenate([sub_y] + [h_line + sub_y[i] for i in range(len(sub_y))])
+
+        sub_x = np.linspace(domain.left, domain.right, subdivision[1] + 2)
+        v_line = np.arange(subsampling, sub_x[1] - sub_x[0], subsampling)
+        v_line = np.concatenate([sub_x] + [v_line + sub_x[i] for i in range(len(sub_x))])
+
+        grid_yx = []
+        for y in sub_y:
+            grid_yx.append(np.column_stack((np.full_like(v_line, y), v_line)))
+        for x in sub_x:
+            grid_yx.append(np.column_stack((h_line, np.full_like(h_line, x))))
+        grid_yx = np.concatenate(grid_yx, axis=0)
+
+        if not inverse:
+            grid_yx = self.transform(grid_yx)
+        else:
+            grid_yx = self.transform_inverse(grid_yx)
+        domain = Rect.from_points(tuple(np.amin(grid_yx, axis=0)), tuple(np.amax(grid_yx, axis=0))).to_int()
+        grid_yx -= domain.top_left.numpy()
+        grid_yx = np.round(grid_yx).astype(int)
+
+        grid: Bool2DArray = np.zeros(domain.pad(0, 0, 1, 1).shape, dtype=bool)
+        grid[*grid_yx.T] = True
+        return grid, domain
 
 
 class ProjectionComposition(FundusProjection):
@@ -1306,7 +1374,13 @@ class RadialToRadial(FundusProjection):
     @staticmethod
     def r_flat_to_spheric(r_flat: Float2DArrayLike, k: float) -> Float2DArray:
         r_flat = as_float_2d(r_flat)
-        return r_flat if k == 0 else (1 - np.sqrt(1 - 4 * k * r_flat**2)) / (2 * k * r_flat)  # type: ignore
+        if k == 0:
+            return r_flat
+        r_spheric: Float2DArray = np.zeros_like(r_flat)
+        mask = r_flat > 0
+        r_flat = r_flat[mask]
+        r_spheric[mask] = (1 - np.sqrt(1 - 4 * k * r_flat**2)) / (2 * k * r_flat)
+        return r_spheric
 
     @staticmethod
     def k_bound(C):
