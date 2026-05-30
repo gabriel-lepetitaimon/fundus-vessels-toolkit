@@ -12,17 +12,30 @@ from skimage.segmentation import expand_labels
 
 from fundus_toolkits import FundusData
 from fundus_toolkits.utils.geometric import Rect
-from fundus_vessels_toolkit.utils.cluster import reduce_clusters
-from fundus_vessels_toolkit.utils.data_io import load_numpy_dict, save_numpy_dict
+from fundus_toolkits.utils.typing import Bool1DArray, Int1DArray
 
+from ..utils.cluster import reduce_clusters
+from ..utils.data_io import load_numpy_dict, save_numpy_dict
 from ..utils.lookup_array import invert_complete_lookup
 from ..utils.math import gaussian_kernel2d
 from ..utils.numpy import Sparse2DAccessor, binary_sparse_conv2d, bit_invert
 from ..utils.rasterization import draw_lines, rasterize_line, rasterize_topology
-from ..utils.typing import Bool1DArray, Int1DArray
 from ..vascular_data_objects.vbranch_geodata import VBranchGeoData
 from ..vascular_data_objects.vgraph import VGraph
 from ..vascular_data_objects.vtree import VTree, VTreeBranch
+
+
+def transfer_topology(src_art: VTree, src_vei: VTree, dst: VGraph) -> tuple[VTree, VTree]:
+    from .vbranch_digraph import VBranchDigraph
+
+    art_topo = TreeTopology.from_tree(src_art, expand_labels_by=4)
+    vei_topo = TreeTopology.from_tree(src_vei, expand_labels_by=4)
+    dst_digraph = VBranchDigraph.from_graph(dst)
+    dst_digraph.compute_p_from_gt(art_topo, vei_topo)
+    tree = dst_digraph.optimize_tree(keep_missing_branch=True, assign_av="subtree")
+    art_tree = tree.subtree(tree.branch_attr["av"] == 1)
+    vei_tree = tree.subtree(tree.branch_attr["av"] == 2)
+    return art_tree, vei_tree
 
 
 ########################################################################################################################

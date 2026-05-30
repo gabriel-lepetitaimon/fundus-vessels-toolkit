@@ -26,11 +26,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from ..utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
-from ..utils.lookup_array import add_empty_to_lookup, complete_lookup, invert_complete_lookup, lookup_from_mapping
-from ..utils.numpy import array_is_equal
-from ..utils.tree import find_cycles, has_cycle, tree_distance
-from ..utils.typing import (
+from fundus_toolkits.utils.typing import (
     Bool1DArray,
     Bool1DArrayLike,
     Float1DArrayLike,
@@ -40,6 +36,11 @@ from ..utils.typing import (
     IntPairArrayLike,
     PointArrayLike,
 )
+
+from ..utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
+from ..utils.lookup_array import add_empty_to_lookup, complete_lookup, invert_complete_lookup, lookup_from_mapping
+from ..utils.numpy import array_is_equal
+from ..utils.tree import find_cycles, has_cycle, tree_distance
 from .vgeometric_data import VBranchGeoDataKey, VGeometricData
 from .vgraph import (
     BranchIndex,

@@ -3,14 +3,13 @@ from typing import Iterable, Optional, Tuple
 import numpy as np
 import numpy.typing as npt
 
+from fundus_toolkits.transform import Transform
 from fundus_toolkits.utils.geometric import Rect
-
-from ..utils.fundus_projections import FundusProjection
 
 
 def stitch_images(
     images: Iterable[npt.NDArray[np.float32]],
-    transforms: Iterable[FundusProjection | None],
+    transforms: Iterable[Transform | None],
     masks: Optional[Iterable[npt.NDArray[np.float32]] | None] = None,
     max_size: Optional[Tuple[int, int]] = (3000, 3000),
     return_stitch_domain: bool = False,
@@ -60,7 +59,7 @@ def stitch_images(
 
     # Get the size of the stitched image
     warped_rects = []
-    transforms = [FundusProjection.identity() if T is None else T for T in transforms]
+    transforms = [Transform.identity() if T is None else T for T in transforms]
     for img, T in zip(images, transforms, strict=True):
         src_domain = Rect.from_size(img.shape[:2])
         warped_rects.append(T.transform_domain(src_domain))

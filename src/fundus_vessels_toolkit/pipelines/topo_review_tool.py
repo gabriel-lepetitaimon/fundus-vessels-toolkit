@@ -5,21 +5,22 @@ from pathlib import Path
 from typing import List, Literal, Optional, overload
 
 import numpy as np
-from fundus_data_toolkit.functional import open_image
 from ipywidgets import HTML, Button, GridBox, Label, Layout
 from jppype import Mosaic, vscode_theme
 
 from fundus_odmac_toolkit import segment_od_mac
 from fundus_toolkits import FundusData, Rect
+from fundus_toolkits.transform import ResizeTranslation
 from fundus_toolkits.utils.data_io import most_common_image_ext
-from fundus_vessels_toolkit.utils.fundus_projections import ResizeTranslateProjection
+from fundus_vessels_toolkit.vascular_data_objects.fundus_data import AVLabel
+from fundus_vessels_toolkit.vmatching.registration import naive_register_trees
 
 from ..models import segment_av
 from ..pipelines.avseg_to_tree import GNNAVSegToTree, NaiveAVSegToTree
 from ..segment_to_graph.av_tree_parsing import naive_infer_roots
 from ..segment_to_graph.graph_simplification import simplify_passing_nodes
 from ..segment_to_graph.tree_simplification import disconnect_crossing
-from ..segment_to_graph.tree_topology import TopologicalLabel, TreeTopology
+from ..segment_to_graph.tree_topology import TopologicalLabel, TreeTopology, transfer_topology
 from ..utils.jppype import draw_tree
 from ..vascular_data_objects.vgraph import NodeIndices
 from ..vascular_data_objects.vtree import VTree, VTreeNode
@@ -222,37 +223,7 @@ class ReviewTool:
         self.current_index = index
         self.label.value = f"{img_name} ({index + 1}/{len(self.img_names)})"
 
-        fundus = FundusData(image=self.raw_path / (img_name + self.raw_ext))
-        if self.od_path is None or self.macula_path is None:
-            segment_od_mac(fundus)
-        if self.od_path is not None and (self.od_path / f"{img_name}.png").exists():
-            fundus.update(od=self.od_path / f"{img_name}.png", inplace=True)
-        if self.macula_path is not None and (self.macula_path / f"{img_name}.png").exists():
-            fundus.update(macula=self.macula_path / f"{img_name}.png", inplace=True)
-        if fundus.shape[0] > 1500:
-            r = 1500 / fundus.shape[0]
-            fundus = fundus.resize(r)
-            self.fundus_scale_factor = r
-        else:
-            self.fundus_scale_factor = 1
-
-        # fundus_pred = fundus.copy()
-        # segment_av(fundus_pred)
-
-        try:
-            fundus = fundus.update(
-                av=FundusData.load_av(self.av_path / (img_name + self.av_ext), ensure_valid_av=True),
-                reshape_method="resize",
-            )
-            self._has_av_gt = True
-        except ValueError:
-            vessels = FundusData.load_vessels(
-                self.av_path / (img_name + self.av_ext), target_shape=fundus.shape, reshape_method="resize"
-            )
-            av = segment_av(fundus.image, ignore_segmentation=True)
-            av *= vessels
-            fundus = fundus.update(av=av)
-            self._has_av_gt = False
+        fundus, self.fundus_scale_factor, self._has_av_gt = self.load_fundus(index)
         self.trees_from_av = (self.av2tree if self._has_av_gt else self.av2tree_pred)(fundus)
         self._fundus = fundus
 
@@ -271,17 +242,11 @@ class ReviewTool:
         self.draw_trees()
 
     def load_saved_trees(self, draw=True) -> tuple[VTree, VTree]:
-        art_file = self.save_path / f"{self.img_name}_art.npz"
-        vei_file = self.save_path / f"{self.img_name}_vei.npz"
-        if art_file.exists() and vei_file.exists():
-            trees: tuple[VTree, VTree] = VTree.load(art_file), VTree.load(vei_file)
-            transform = ResizeTranslateProjection(s=self.fundus_scale_factor)
-            trees = tuple(tree.transform(transform) for tree in trees)  # type: ignore
-            for tree in trees:
-                tree.geometric_data()._domain = Rect.from_size(self.fundus.shape)
+        try:
+            trees = self.load_trees(self.img_name)
             self.reset_annotation_states(trees, infer_force_roots=True)
             self.save_btn.disabled = True
-        else:
+        except ValueError:
             print(f"Saved trees not found for image {self.img_name}. Loading from AV map.")
             trees = self.load_trees_from_av(draw=False)
         if draw:
@@ -296,6 +261,50 @@ class ReviewTool:
             self.draw_trees()
         return (a_tree, v_tree)
 
+    def load_fundus(self, id: int | str) -> tuple[FundusData, float, bool]:
+        img_name = self.img_names[id] if isinstance(id, int) else id
+        fundus = FundusData(image=self.raw_path / (img_name + self.raw_ext))
+        if self.od_path is None or self.macula_path is None:
+            segment_od_mac(fundus)
+        if self.od_path is not None and (self.od_path / f"{img_name}.png").exists():
+            fundus.update(od=self.od_path / f"{img_name}.png", inplace=True)
+        if self.macula_path is not None and (self.macula_path / f"{img_name}.png").exists():
+            fundus.update(macula=self.macula_path / f"{img_name}.png", inplace=True)
+        if fundus.shape[0] > 1500:
+            r = 1500 / fundus.shape[0]
+            fundus = fundus.resize(r)
+            scale_factor = r
+        else:
+            scale_factor = 1
+
+        try:
+            fundus = fundus.update(
+                av=FundusData.load_av(self.av_path / (img_name + self.av_ext), ensure_valid_av=True),
+                reshape_method="resize",
+            )
+            return fundus, scale_factor, True
+        except ValueError:
+            vessels = FundusData.load_vessels(
+                self.av_path / (img_name + self.av_ext), target_shape=fundus.shape, reshape_method="resize"
+            )
+            av = segment_av(fundus.image, ignore_segmentation=True)
+            av *= vessels
+            fundus = fundus.update(av=av)
+            return fundus, scale_factor, False
+
+    def load_trees(self, id: int | str) -> tuple[VTree, VTree]:
+        img_name = self.img_names[id] if isinstance(id, int) else id
+        art_file = self.save_path / f"{img_name}_art.npz"
+        vei_file = self.save_path / f"{img_name}_vei.npz"
+        if not art_file.exists() or not vei_file.exists():
+            raise ValueError(f"Saved trees not found for image {img_name}.")
+        trees: tuple[VTree, VTree] = VTree.load(art_file), VTree.load(vei_file)
+        transform = ResizeTranslation(s=self.fundus_scale_factor)
+        trees = tuple(tree.transform(transform) for tree in trees)  # type: ignore
+        for tree in trees:
+            tree.geometric_data()._domain = Rect.from_size(self.fundus.shape)
+        return trees
+
     def save_trees(self, sanity_check=True):
         art_file = self.save_path / f"{self.img_name}_art.npz"
         vei_file = self.save_path / f"{self.img_name}_vei.npz"
@@ -304,7 +313,7 @@ class ReviewTool:
             vei_file = vei_file.with_suffix(".tmp.npz")
         trees = self.trees
         if self.fundus_scale_factor != 1:
-            transform = ResizeTranslateProjection(s=1 / self.fundus_scale_factor)
+            transform = ResizeTranslation(s=1 / self.fundus_scale_factor)
             trees = [tree.transform(transform) for tree in self.trees]
 
         trees[0].save(art_file)
@@ -714,6 +723,22 @@ class ReviewTool:
         event = self.debug_info["event"]
         artery = self.debug_info["artery"]
         self.handle_click(event, artery)
+
+    def transfer_topology(self, id: int | str):
+        ref_trees = self.load_trees(id)
+        ref_fundus, _, _ = self.load_fundus(id)
+        trees = self.trees
+        ref_trees[0].node_attr["av"] = AVLabel.ART
+        ref_trees[1].node_attr["av"] = AVLabel.VEI
+        ref_tree = ref_trees[0].append(ref_trees[1])
+        graph = trees[0].append(trees[1])
+        return naive_register_trees(ref_tree, graph, ref_fundus, self.fundus)
+        T12, _ = reg.refine_transform()
+        ref_trees = tuple(tree.transform(T12) for tree in ref_trees)
+        art_tree, vei_tree = transfer_topology(ref_trees[0], ref_trees[1], graph)
+        self._push_annotation_state()
+        self.state.trees = (art_tree, vei_tree)
+        self.draw_trees()
 
     ##########################################################################
     # === BUTTON INTERACTIONS ===

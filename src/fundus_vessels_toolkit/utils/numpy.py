@@ -5,7 +5,7 @@ from typing import Literal, Optional, Tuple
 import numpy as np
 import numpy.typing as npt
 
-from ..utils.typing import Bool2DArray
+from fundus_toolkits.utils.typing import Bool2DArray
 
 
 def readonly(arr: npt.NDArray) -> npt.NDArray:

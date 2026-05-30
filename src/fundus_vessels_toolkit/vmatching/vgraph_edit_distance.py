@@ -3,10 +3,11 @@ from typing import Optional
 import numpy as np
 import torch
 
+from fundus_toolkits.utils.typing import Int2DArray, IntPairArray, IntPairMap
+
 from ..utils.cpp_extensions.fvt_cpp import backtrack_edges as backtrack_edges_cpp
 from ..utils.cpp_extensions.fvt_cpp import shortest_secondary_path as shortest_sec_path_cpp
 from ..utils.torch import autocast_torch
-from ..utils.typing import Int2DArray, IntPairArray, IntPairMap
 from ..vascular_data_objects.vgraph import VGraph
 from .node_matching import match_nodes_by_distance
 

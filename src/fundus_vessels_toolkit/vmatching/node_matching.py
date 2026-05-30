@@ -1,12 +1,13 @@
 import functools
 from abc import ABC, abstractmethod
-from typing import Iterable, List, Literal, Mapping, Optional, Tuple, Type, TypeAlias, overload
+from typing import List, Literal, Mapping, Optional, Tuple, Type, TypeAlias, overload
 
 import numpy as np
 import pandas as pd
 from pygmtools.linear_solvers import hungarian
 
-from fundus_vessels_toolkit.utils.typing import (
+from fundus_toolkits.transform import QuadraticTransform, Transform, ransac_fit_projection
+from fundus_toolkits.utils.typing import (
     Bool2DArray,
     Float1DArray,
     Int1DArray,
@@ -14,12 +15,10 @@ from fundus_vessels_toolkit.utils.typing import (
     IntPairArrayLike,
     as_int_pairs,
 )
-from fundus_vessels_toolkit.vascular_data_objects.vtree import VTree
 
-from ..utils.fundus_projections import AffineProjection, FundusProjection, QuadraticProjection, ransac_fit_projection
 from ..utils.graph.matching import ensure_consistent_matches, euclidien_matching, incident_branches_similarity
 from ..utils.lookup_array import complete_lookup, invert_lookup
-from ..vascular_data_objects import VGraph
+from ..vascular_data_objects import VGraph, VTree
 from .descriptor import NodeFeaturesCallback, junction_adjacent_branches_descriptor
 
 
@@ -93,8 +92,8 @@ def ransac_refine_node_matching(
     *,
     reindex_graphs=False,
     return_mean_error: Literal[False] = False,
-    final_projection: Optional[Type[FundusProjection] | Mapping[int, Type[FundusProjection]]] = None,
-) -> Tuple[FundusProjection, np.ndarray]: ...
+    final_projection: Optional[Type[Transform] | Mapping[int, Type[Transform]]] = None,
+) -> Tuple[Transform, np.ndarray]: ...
 @overload
 def ransac_refine_node_matching(
     fix_graph: VGraph,
@@ -104,8 +103,8 @@ def ransac_refine_node_matching(
     *,
     reindex_graphs=False,
     return_mean_error: Literal[True],
-    final_projection: Optional[Type[FundusProjection] | Mapping[int, Type[FundusProjection]]] = None,
-) -> Tuple[FundusProjection, np.ndarray, float]: ...
+    final_projection: Optional[Type[Transform] | Mapping[int, Type[Transform]]] = None,
+) -> Tuple[Transform, np.ndarray, float]: ...
 def ransac_refine_node_matching(
     fix_graph: VGraph,
     moving_graph: VGraph,
@@ -114,8 +113,8 @@ def ransac_refine_node_matching(
     *,
     reindex_graphs=False,
     return_mean_error=False,
-    final_projection: Optional[Type[FundusProjection] | Mapping[int, Type[FundusProjection]]] = None,
-) -> Tuple[FundusProjection, np.ndarray, float] | Tuple[FundusProjection, np.ndarray]:
+    final_projection: Optional[Type[Transform] | Mapping[int, Type[Transform]]] = None,
+) -> Tuple[Transform, np.ndarray, float] | Tuple[Transform, np.ndarray]:
     """
     Refine the node matching using the RANSAC algorithm and the nodes coordinates to estimate the geometrical transformation between the two graphs.
 
@@ -164,7 +163,7 @@ def ransac_refine_node_matching(
     mov_yx = moving_graph.node_coord()[mov_matched_nodes]
 
     if final_projection is None:
-        final_projection = {12: QuadraticProjection}
+        final_projection = {12: QuadraticTransform}
 
     T, mean_error, valid_nodes = ransac_fit_projection(
         fix_yx,

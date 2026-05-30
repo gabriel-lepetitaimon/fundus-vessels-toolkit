@@ -27,22 +27,9 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+from fundus_toolkits.transform import Transform
 from fundus_toolkits.utils.geometric import Point, Rect
-
-from ..utils.bezier import BSpline
-from ..utils.cluster import reduce_chains, reduce_clusters
-from ..utils.cpp_optimized import first_index_of, first_two_index_of
-from ..utils.data_io import NumpyDict, load_numpy_dict, pandas_to_numpy_dict, save_numpy_dict
-from ..utils.fundus_projections import FundusProjection
-from ..utils.lookup_array import (
-    add_empty_to_lookup,
-    complete_lookup,
-    create_removal_lookup,
-    invert_complete_lookup,
-    lookup_from_mapping,
-)
-from ..utils.pandas import DFSetterAccessor
-from ..utils.typing import (
+from fundus_toolkits.utils.typing import (
     Bool1DArray,
     Float1DArrayLike,
     FloatPairArray,
@@ -57,6 +44,19 @@ from ..utils.typing import (
     as_float_pairs,
     as_int_pairs,
 )
+
+from ..utils.bezier import BSpline
+from ..utils.cluster import reduce_chains, reduce_clusters
+from ..utils.cpp_optimized import first_index_of, first_two_index_of
+from ..utils.data_io import NumpyDict, load_numpy_dict, pandas_to_numpy_dict, save_numpy_dict
+from ..utils.lookup_array import (
+    add_empty_to_lookup,
+    complete_lookup,
+    create_removal_lookup,
+    invert_complete_lookup,
+    lookup_from_mapping,
+)
+from ..utils.pandas import DFSetterAccessor
 from .vbranch_geodata import T_VBranchGeoData, VBranchGeoDescriptor
 from .vgeometric_data import VBranchGeoData, VBranchGeoDataKey, VGeometricData
 
@@ -2152,7 +2152,7 @@ class VGraph:
         return geometrical_data_priority
 
     def transform(
-        self, projection: FundusProjection, *, warped_domain: Rect | Literal["full", "same"] = "full", inplace=False
+        self, projection: Transform, *, warped_domain: Rect | Literal["full", "same"] = "full", inplace=False
     ) -> Self:
         """Transform the graph using the given projection.
 

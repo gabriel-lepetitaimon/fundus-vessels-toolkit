@@ -17,14 +17,16 @@ import numpy as np
 import tqdm
 from joblib import Parallel, delayed
 from numpy.random import MT19937, RandomState, SeedSequence
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 from skimage.morphology import binary_erosion, disk
 from torch_geometric.data import Dataset as PygDataset
 
 from fundus_toolkits import AVLabel, FundusData
+from fundus_toolkits.transform import ResizeTranslation
 from fundus_toolkits.utils.data_io import most_common_image_ext, overwrite_or_newer
 from fundus_toolkits.utils.geometric import Point, Rect
+from fundus_toolkits.utils.typing import Bool1DArray, Int1DArray, Int1DArrayLike
 
 from ...pipelines.avseg_to_tree import AVSegToTreeBase, GNNAVSegToTree
 from ...segment_to_graph.graph_simplification import merge_nodes_by_distance
@@ -34,9 +36,7 @@ from ...segment_to_graph.vbranch_digraph import (
     VGraph,
 )
 from ...utils import if_none
-from ...utils.fundus_projections import ResizeTranslateProjection
 from ...utils.numpy import np_group_by
-from ...utils.typing import Bool1DArray, Int1DArray, Int1DArrayLike
 from ...vascular_data_objects import VBranchGeoData, VTree
 from .data import BranchDigraphData
 from .data_augmentation import AugmentationOpts
@@ -404,9 +404,9 @@ class SampleSource:
             r = resize_to / roi.w
             fundus = fundus.resize(r)
 
-        transform: Optional[ResizeTranslateProjection] = None
+        transform: Optional[ResizeTranslation] = None
         if roi is not None and r is not None:
-            transform = ResizeTranslateProjection(r, -roi.top_left.numpy() * r)
+            transform = ResizeTranslation(r, -roi.top_left.numpy() * r)
 
         if overwrite_or_newer(self.fundus, output_paths.fundus, overwrite):
             fundus.write_image(image=output_paths.fundus, on_exists="overwrite")
@@ -495,7 +495,25 @@ class SampleSource:
 
 
 class BranchDigraphDatasetConfig(BaseModel):
+    """Dataset configuration.
+
+    - graph_version : str | dict[str, float]
+        Version of the graph to use as input.
+    - preload : bool | "without-image"
+        In RAM preloading configuration.
+    - augment : bool | AugmentationOpts
+        Data augmentation configuration.
+    - verbose : bool
+        Whether to print progress bars and other informational messages during dataset loading and processing.
+    """
+
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
     graph_version: str | dict[str, float] = Field(default_factory=dict)
+    """Version of the graph to use as input.
+    If a string is provided, it should be one of the keys in the graphes dict of the samples, and the corresponding graph will be used for all samples.
+    If a dict is provided, it should map graph version names to weights, and the corresponding graphs will be loaded and merged with the specified weights for each sample. If a version name in the dict is not found in a sample, that sample will be skipped with a warning.
+    """  # noqa: E501
     preload: bool | Literal["without-image"] = Field(default=False)
     augment: bool | AugmentationOpts = Field(default=False)
     verbose: bool = Field(default=True)

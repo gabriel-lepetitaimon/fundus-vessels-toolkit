@@ -11,19 +11,9 @@ import numpy as np
 import numpy.typing as npt
 
 from fundus_toolkits import FundusData
+from fundus_toolkits.transform import Transform, Translation
 from fundus_toolkits.utils.geometric import Point, Rect
-from fundus_vessels_toolkit.utils import if_none
-from fundus_vessels_toolkit.utils.cpp_optimized import discontiguous_index
-from fundus_vessels_toolkit.utils.math import nearest_point_on_segment
-from fundus_vessels_toolkit.utils.rasterization import rasterize_line
-
-from ..utils.bezier import BSpline
-from ..utils.cluster import remove_consecutive_duplicates
-from ..utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
-from ..utils.fundus_projections import FundusProjection, Translation
-from ..utils.lookup_array import invert_lookup, reorder_array
-from ..utils.numpy import array_is_equal, array_list_is_equal, as_1d_array, np_find_sorted, readonly
-from ..utils.typing import (
+from fundus_toolkits.utils.typing import (
     Bool1DArrayLike,
     Float1DArray,
     Float2DArray,
@@ -35,6 +25,16 @@ from ..utils.typing import (
     Int2DArray,
     PointArrayLike,
 )
+
+from ..utils import if_none
+from ..utils.bezier import BSpline
+from ..utils.cluster import remove_consecutive_duplicates
+from ..utils.cpp_optimized import discontiguous_index
+from ..utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
+from ..utils.lookup_array import invert_lookup, reorder_array
+from ..utils.math import nearest_point_on_segment
+from ..utils.numpy import array_is_equal, array_list_is_equal, as_1d_array, np_find_sorted, readonly
+from ..utils.rasterization import rasterize_line
 from .vbranch_geodata import (
     BranchGeoDataEditContext,
     T_VBranchGeoData,
@@ -2264,7 +2264,7 @@ class VGeometricData:
 
     def transform(
         self,
-        projection: FundusProjection,
+        projection: Transform,
         *,
         warped_domain: Rect | Literal["full", "same"] = "full",
         inplace: bool = False,

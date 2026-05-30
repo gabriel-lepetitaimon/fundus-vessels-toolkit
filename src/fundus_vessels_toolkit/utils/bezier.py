@@ -7,11 +7,11 @@ import numpy as np
 import numpy.typing as npt
 import torch
 
+from fundus_toolkits.transform import Transform
 from fundus_toolkits.utils.geometric import Point
-from fundus_vessels_toolkit.utils.numpy import as_1d_array
-from fundus_vessels_toolkit.utils.typing import Float1DArray, Int2DArray
+from fundus_toolkits.utils.typing import Float1DArray, Int2DArray
 
-from ..utils.fundus_projections import FundusProjection
+from ..utils.numpy import as_1d_array
 from .graph.measures import curve_tangent
 from .math import intercept_segment
 from .torch import autocast_torch
@@ -714,7 +714,7 @@ class BSpline(tuple[BezierCubic, ...]):
                 bezier_cubics.extend(bezier.split(0.5))
         return BSpline(bezier_cubics)
 
-    def transform(self, projection: FundusProjection, *, round_p: bool = False) -> Self:
+    def transform(self, projection: Transform, *, round_p: bool = False) -> Self:
         bspline_data = self.to_array().reshape(-1, 2)
         bspline_data = projection.transform(bspline_data).reshape(-1, 4, 2)
         if round_p:

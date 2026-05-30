@@ -1,16 +1,10 @@
 from dataclasses import dataclass
-from re import split
 from typing import Optional, Protocol, Tuple
 
 import numpy as np
 
 from fundus_toolkits.utils.geometric import Point
-
-from fundus_vessels_toolkit.vascular_data_objects.fundus_data import AVLabel
-from fundus_vessels_toolkit.vascular_data_objects.vtree import VTree
-
-from ..utils.bezier import BezierCubic, BSpline
-from ..utils.typing import (
+from fundus_toolkits.utils.typing import (
     Float1DArray,
     Float2DArray,
     FloatPairArray,
@@ -19,6 +13,10 @@ from ..utils.typing import (
     Indices,
     Int1DArray,
 )
+from fundus_vessels_toolkit.vascular_data_objects.fundus_data import AVLabel
+from fundus_vessels_toolkit.vascular_data_objects.vtree import VTree
+
+from ..utils.bezier import BezierCubic, BSpline
 from ..vascular_data_objects import VBranchGeoData, VGraph
 
 

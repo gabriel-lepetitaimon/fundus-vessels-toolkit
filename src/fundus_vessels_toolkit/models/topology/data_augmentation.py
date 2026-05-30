@@ -10,13 +10,13 @@ from fundus_toolkits.utils.geometric import Rect
 
 from ...segment_to_graph.graph_simplification import remove_orphan_nodes, simplify_passing_nodes
 from ...segment_to_graph.vbranch_digraph import VBranchDigraph
-from ...utils.fundus_projections import (
-    AffineProjection,
-    ElasticProjection,
-    FlipProjection,
-    FundusProjection,
-    IdentityProjection,
-    ProjectionComposition,
+from fundus_toolkits.transform import (
+    AffineTransform,
+    ElasticTransform,
+    FlipTransform,
+    Transform,
+    IdentityTransform,
+    TransformComposition,
 )
 from ...vascular_data_objects import VBranchGeoData, VGraph, VGraphBranch, VTree
 
@@ -76,6 +76,13 @@ class DeteriorationOpts(BaseModel):
 
 
 class ElasticOpts(BaseModel):
+    """
+    Options for elastic deformation.
+
+    - displacement_std: Standard deviation of the displacement in pixels.
+    - smoothing_size: Size of the Gaussian kernel for smoothing the displacement field.
+    """
+
     model_config = ConfigDict(use_attribute_docstrings=True)
 
     displacement_std: float = Field(default=80.0)
@@ -86,10 +93,10 @@ class ElasticOpts(BaseModel):
 
     def generate_projection(
         self, shape: tuple[int, int], rng: Optional[np.random.Generator] = None
-    ) -> ElasticProjection:
+    ) -> ElasticTransform:
         if rng is None:
             rng = np.random.default_rng()
-        return ElasticProjection.random(
+        return ElasticTransform.random(
             shape, displacement_std=self.displacement_std, smoothing_size=self.smoothing_size
         )
 
@@ -103,16 +110,14 @@ class RotationOpts(BaseModel):
     max_angle: float = Field(default=30.0)
     """Maximum absolute angle in degrees to apply rotation"""
 
-    def generate_projection(
-        self, shape: tuple[int, int], rng: Optional[np.random.Generator] = None
-    ) -> AffineProjection:
+    def generate_projection(self, shape: tuple[int, int], rng: Optional[np.random.Generator] = None) -> AffineTransform:
         if rng is None:
             rng = np.random.default_rng()
         center = shape[0] // 2, shape[1] // 2
         angle = rng.uniform(self.min_angle, self.max_angle)
         if rng.random() < 0.5:
             angle = -angle
-        return AffineProjection.rotate(angle, center)
+        return AffineTransform.rotate(angle, center)
 
 
 class AugmentationOpts(BaseModel):
@@ -146,21 +151,21 @@ class AugmentationOpts(BaseModel):
     def deterioration_opts(self) -> DeteriorationOpts:
         return self.deteriorate_graph if isinstance(self.deteriorate_graph, DeteriorationOpts) else DeteriorationOpts()
 
-    def generate_transform(self, shape: tuple[int, int], rng: Optional[np.random.Generator] = None) -> FundusProjection:
+    def generate_transform(self, shape: tuple[int, int], rng: Optional[np.random.Generator] = None) -> Transform:
         if rng is None:
             rng = np.random.default_rng()
         center = shape[0] // 2, shape[1] // 2
 
-        transforms: list[FundusProjection] = []
+        transforms: list[Transform] = []
         if self.horizontal_flip and rng.random() < 0.5:
-            transforms.append(FlipProjection(center=center, horizontal=True))
+            transforms.append(FlipTransform(center=center, horizontal=True))
         if self.rotate:
             transforms.append(self.rotation_opts.generate_projection(shape, rng=rng))
         if self.elastic:
             transforms.append(self.elastic_opts.generate_projection(shape, rng=rng))
         if len(transforms) == 0:
-            return IdentityProjection()
-        return ProjectionComposition(*transforms)
+            return IdentityTransform()
+        return TransformComposition(*transforms)
 
     @classmethod
     def parse(cls, data: Self | bool) -> Self:

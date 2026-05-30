@@ -5,10 +5,10 @@ import numpy.typing as npt
 import pandas as pd
 
 from fundus_toolkits import FundusData
+from fundus_toolkits.utils.typing import Bool2DArrayLike
 
 from ..utils.bezier import BSpline
 from ..utils.math import quantified_roots
-from ..utils.typing import Bool2DArrayLike
 from ..vascular_data_objects import VBranchGeoData, VGeometricData, VGraph
 
 

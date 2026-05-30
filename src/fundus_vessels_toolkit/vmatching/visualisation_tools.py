@@ -7,7 +7,8 @@ from ipywidgets import HTML, GridBox, Layout
 from jppype.utils.color import colormap_by_name
 from plotly import graph_objects as go
 
-from ..utils.fundus_projections import FundusProjection
+from fundus_toolkits.transform import Transform
+
 from ..utils.jppype import Mosaic
 from ..utils.lookup_array import complete_lookup, invert_complete_lookup
 from ..vascular_data_objects import VGraph
@@ -219,7 +220,7 @@ def inspect_matching(
 def inspect_registration(
     fix_graph: VGraph,
     moving_graph: VGraph,
-    transform: FundusProjection,
+    transform: Transform,
     raw1: np.ndarray,
     raw2: np.ndarray,
     mask1: Optional[np.ndarray] = None,

@@ -37,9 +37,10 @@ from fundus_vessels_toolkit.models.topology.losses import (
     BranchContrastiveLossOpt,
     CrossEntropyLoss,
 )
-from fundus_vessels_toolkit.models.topology.model import BranchDigraphModel, BranchDigraphModelOpt
+from fundus_vessels_toolkit.models.topology.model import BranchDigraphModel, BranchDigraphModelCfg
+from fundus_vessels_toolkit.utils.nnet.optuna import FloatHyperParam, IntHyperParam
 
-torch.set_float32_matmul_precision("medium")
+# torch.set_float32_matmul_precision("medium")
 torch.backends.fp32_precision = "ieee"  # type: ignore
 torch.backends.cuda.matmul.fp32_precision = "ieee"
 torch.backends.cudnn.fp32_precision = "ieee"  # type: ignore
@@ -53,22 +54,22 @@ class DigraphGNNTrainerConfig(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True)
 
     dataset: BranchDigraphDatasetConfig = Field(default_factory=BranchDigraphDatasetConfig)
-    model: BranchDigraphModelOpt = Field(default_factory=BranchDigraphModelOpt)
+    model: BranchDigraphModelCfg = Field(default_factory=BranchDigraphModelCfg)
     contrastive_loss: BranchContrastiveLossOpt = Field(default_factory=BranchContrastiveLossOpt)
 
-    training_set: str | list[TrainingSets] | None = Field(default=None)
+    training_set: TrainingSets | list[TrainingSets] | None = Field(default=None)
     """Training set(s) to use. Can be a single dataset name, a list of dataset names, or None to use all datasets."""
 
     test_version: str | None = Field(default=None)
     """Version of the test set to use. If None, the same version as the training set will be used."""
 
-    epoch: int = 160
+    epoch: IntHyperParam = 160
     """Maximum number of training epochs."""
 
-    lr: float = 1e-2
+    lr: FloatHyperParam = 1e-2
     """Learning rate."""
 
-    batch_size: int = 12
+    batch_size: IntHyperParam = 12
     """Batch size for training."""
 
 

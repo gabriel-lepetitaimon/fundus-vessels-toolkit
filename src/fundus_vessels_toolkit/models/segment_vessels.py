@@ -94,7 +94,7 @@ def segment_vessels(
     # --- Convert probabilities to labels ---
     y_pred = y_proba.argmax(-3) if y_proba.shape[-3] > 1 else (y_proba > 0.5).squeeze(-3)
 
-    return y_pred
+    return y_pred > 0
 
 
 # @overload

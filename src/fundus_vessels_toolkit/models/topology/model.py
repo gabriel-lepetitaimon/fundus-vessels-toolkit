@@ -27,7 +27,7 @@ from .data import BranchDigraphBatch, BranchDigraphData, DigraphLines
 from .positionnal_embedding import APE
 
 
-class BranchDigraphModelOpt(BaseModel):
+class BranchDigraphModelCfg(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True)
 
     gcn: TransformerGCNOpt = Field(default_factory=TransformerGCNOpt)
@@ -81,9 +81,9 @@ class BranchDigraphModelOpt(BaseModel):
 
 
 class BranchDigraphModel(torch.nn.Module):
-    def __init__(self, opt: BranchDigraphModelOpt | dict, compile: bool = False, **kwargs):
+    def __init__(self, opt: BranchDigraphModelCfg | dict, compile: bool = False, **kwargs):
         super().__init__()
-        self.opt = opt = BranchDigraphModelOpt.model_validate(opt)
+        self.opt = opt = BranchDigraphModelCfg.model_validate(opt)
         self._compile = compile
 
         # --- Model components ---
@@ -104,7 +104,7 @@ class BranchDigraphModel(torch.nn.Module):
             self.gnn = torch.compile(self.gnn, dynamic=True)
 
     @classmethod
-    def create_img_feature_extractor(cls, opt: BranchDigraphModelOpt) -> nn.Module:
+    def create_img_feature_extractor(cls, opt: BranchDigraphModelCfg) -> nn.Module:
         match opt.img_feature_extractor:
             case "efficientnet_v2_s":
                 return BranchFeaturesEfficientNetV2S()
@@ -112,7 +112,7 @@ class BranchDigraphModel(torch.nn.Module):
                 raise ValueError(f"Unsupported image feature extractor: {opt.img_feature_extractor}")
 
     @classmethod
-    def img_feature_extractor_channels(cls, opt: BranchDigraphModelOpt) -> int:
+    def img_feature_extractor_channels(cls, opt: BranchDigraphModelCfg) -> int:
         match opt.img_feature_extractor:
             case "efficientnet_v2_s":
                 return BranchFeaturesEfficientNetV2S.N_FEATURES
@@ -120,12 +120,12 @@ class BranchDigraphModel(torch.nn.Module):
                 raise ValueError(f"Unsupported image feature extractor: {opt.img_feature_extractor}")
 
     @classmethod
-    def create_gnn(cls, opt: BranchDigraphModelOpt) -> TransformerGCN:
+    def create_gnn(cls, opt: BranchDigraphModelCfg) -> TransformerGCN:
         n_in = cls.img_feature_extractor_channels(opt) * (3 if opt.gcn.bipolar_node else 2)
         return TransformerGCN(n_in=n_in, edge_attr_dim=opt.edge_attr.n_edge_attr, opt=opt.gcn)
 
     @classmethod
-    def create_classif_head(cls, opt: BranchDigraphModelOpt) -> nn.Module:
+    def create_classif_head(cls, opt: BranchDigraphModelCfg) -> nn.Module:
         if not opt.gcn.bipolar_node:
             return SimpleClassifHead(opt.gcn.n_out, opt.branch_embedding_dim, oriented_affinity=opt.oriented_affinity)
         else:
@@ -203,7 +203,7 @@ class BranchDigraphModel(torch.nn.Module):
             return torch.stack([torch.cat(f, dim=-1) for f in (features_branch,) + features_tip], dim=1)  # (B, 3, F)
 
     @classmethod
-    def extract_edge_attr(cls, data: BranchDigraphBatch, opt: BranchDigraphModelOpt.EdgeAttr) -> Tensor:
+    def extract_edge_attr(cls, data: BranchDigraphBatch, opt: BranchDigraphModelCfg.EdgeAttr) -> Tensor:
         lines = data.edge_lines
         device = data.edge_index.device
 

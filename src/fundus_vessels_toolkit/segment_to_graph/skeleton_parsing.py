@@ -298,6 +298,4 @@ def detect_skeleton_nodes(
     """  # noqa: E501
     if debug:
         return detect_skeleton_nodes_debug_cpp(skeleton_map)
-    skeleton_rank = detect_skeleton_nodes_cpp(skeleton_map.cpu().bool(), fix_hollow, remove_endpoint_branches)
-    rank_lookup = torch.tensor([0, 3, 1, 2, 2, 2], dtype=torch.uint8)
-    return rank_lookup[skeleton_rank]
+    return detect_skeleton_nodes_cpp(skeleton_map.cpu().bool(), fix_hollow, remove_endpoint_branches, False)

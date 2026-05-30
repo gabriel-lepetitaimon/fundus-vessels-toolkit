@@ -20,14 +20,14 @@ import numpy as np
 import numpy.typing as npt
 
 from fundus_toolkits.utils.geometric import distance_matrix
-from fundus_vessels_toolkit.utils.typing import IntPairArrayLike
-from fundus_vessels_toolkit.vascular_data_objects.vgraph import BranchIndicesLike, NodeIndicesLike
+from fundus_toolkits.utils.typing import IntPairArrayLike
 
 from ..utils import if_none
 from ..utils.cluster import cluster_by_distance, iterative_reduce_clusters, reduce_clusters
 from ..utils.dataclass import UpdateableDataclass
 from ..utils.lookup_array import create_removal_lookup
 from ..vascular_data_objects import VBranchGeoData, VGraph
+from ..vascular_data_objects.vgraph import BranchIndicesLike, NodeIndicesLike
 from .geometry_parsing import derive_tips_geometry_from_curve_geometry
 
 

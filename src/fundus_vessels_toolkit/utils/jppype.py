@@ -113,7 +113,7 @@ def draw_tree(
             else:
                 layer._edges_path += [arrow_path]
 
-    main_color = AV_COLORS[AVLabel.UNK]
+    main_color = "#777777"
     if node_cmap is None:
         if artery is None:
             if "av" in tree.node_attr:
@@ -138,9 +138,9 @@ def draw_tree(
         # nodes_color[tree.root_nodes_ids()] = root_color
         # nodes_color[tree.leaf_nodes_ids()] = leaf_color
     for node_id in tree.root_nodes_ids():
-        node_cmap[node_id] = darken_hex(node_cmap.get(node_id, main_color), 0.3)
+        node_cmap[int(node_id)] = darken_hex(node_cmap.get(node_id, main_color), 0.3)
     for node_id in tree.leaf_nodes_ids():
-        node_cmap[node_id] = lighten_hex(node_cmap.get(node_id, main_color), 0.3)
+        node_cmap[int(node_id)] = lighten_hex(node_cmap.get(node_id, main_color), 0.3)
     layer.nodes_cmap = node_cmap
 
     if branch_color == "rank" and "rank" in tree.node_attr:
@@ -232,6 +232,7 @@ def draw_trees(
     node_labels=False,
     edge: Literal["bspline", "line", "skeleton"] = "bspline",
     branch_color: Literal["av", "rank", "subtree"] = "rank",
+    node_cmap: Optional[dict[int, str]] = None,
     bspline_dir: bool = False,
     interactive: bool = False,
 ) -> None:
@@ -253,6 +254,7 @@ def draw_trees(
         edge_labels=edge_labels,
         node_labels=node_labels,
         edge=edge,
+        node_cmap=node_cmap,
         branch_color=branch_color,
         bspline_dir=bspline_dir,
         interactive=interactive,
@@ -265,6 +267,7 @@ def draw_trees(
         edge_labels=edge_labels,
         node_labels=node_labels,
         edge=edge,
+        node_cmap=node_cmap,
         branch_color=branch_color,
         bspline_dir=bspline_dir,
         interactive=interactive,
@@ -280,6 +283,7 @@ def draw_graph(
     av_attr: Optional[str] = None,
     edge_labels: bool = False,
     node_labels: bool = False,
+    name: str = "vessel_graph",
 ) -> None:
     """
     Draw a vessel graph on a given view.
@@ -328,4 +332,4 @@ def draw_graph(
         branch_color[None] = "grey"
         layer.edges_cmap = branch_color
 
-    view["vessel_graph"] = layer
+    view[name] = layer

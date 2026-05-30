@@ -6,13 +6,12 @@ import numpy.typing as npt
 
 from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.geometric import Point
-from fundus_vessels_toolkit.utils.typing import Bool1DArray, Indices
-from fundus_vessels_toolkit.vascular_data_objects.vgraph import BranchIndicesLike, NodeIndicesLike
+from fundus_toolkits.utils.typing import Bool1DArray, Indices
 
 from ..pipelines.seg_to_graph import SegToGraph
 from ..utils.cluster import cluster_by_distance, reduce_clusters
 from ..utils.math import extract_splits, quantized_higher
-from ..vascular_data_objects import VBranchGeoData, VGraph, VTree
+from ..vascular_data_objects import BranchIndicesLike, NodeIndicesLike, VBranchGeoData, VGraph, VTree
 from .graph_simplification import simplify_passing_nodes
 
 

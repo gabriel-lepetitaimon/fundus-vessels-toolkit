@@ -90,8 +90,10 @@ std::array<torch::Tensor, 6> shortest_skeleton_path_length(torch::Tensor& skelet
     const float INF = std::numeric_limits<float>::infinity();
 
     // === Parse graph from skeleton ===
-    const auto [edge_list, curves, node_yx] = parse_skeleton_to_graph(skeleton);
-    for (const auto& yx : node_yx) skeleton[yx.y][yx.x] = 0;  // remove nodes from skeleton to get clean branches
+    torch::Tensor skel = detect_skeleton_nodes(skeleton != 0);
+    const auto [edge_list, curves, node_yx] = parse_skeleton_to_graph(skel);
+    auto skel_acc = skeleton.accessor<int32_t, 2>();
+    for (const auto& yx : node_yx) skel_acc[yx.y][yx.x] = 0;  // remove nodes from skeleton to get clean branches
 
     std::size_t P = 0, B = curves.size(), N = node_yx.size();
     for (auto& curve : curves) P += curve.size();
@@ -111,16 +113,31 @@ std::array<torch::Tensor, 6> shortest_skeleton_path_length(torch::Tensor& skelet
     for (std::size_t b = 0, p = 0; b < B; b++) {
         const auto& curve = curves[b];
         float& length = branch_len_acc[b];
-        for (std::size_t i = 1; i < curve.size(); i++, p++) {
+        for (std::size_t i = 0; i < curve.size(); ++i) {
             const auto& yx = curve[i];
+            auto& skel_p = skel_acc[yx.y][yx.x];
+            if ((i == 0 || i == curve.size() - 1) && skel_p > 0) {
+                // if node pixel already belongs to a branch, skip it
+                if (i == 0) length += distance(yx, curve[i + 1]);
+                P--;
+                continue;
+            }
+
+            skel_p = p + 1;
             p_yx_acc[p][0] = yx.y;
             p_yx_acc[p][1] = yx.x;
-            skeleton[yx.y][yx.x] = p;  // assign pixel to id p
             p_pos_acc[p] = length;
             p_branch_acc[p] = b;
-            length += distance(yx, curve[i - 1]);
+
+            p++;
+            if (i < curve.size() - 1) length += distance(yx, curve[i + 1]);
         }
     }
+
+    p_yx = p_yx.slice(0, 0, (long)P);
+    p_branch = p_branch.slice(0, 0, (long)P);
+    p_pos = p_pos.slice(0, 0, (long)P);
+    branch_len = branch_len.slice(0, 0, (long)B);
 
     // === Shortest path between branches ===
     torch::Tensor shortest_node_path = torch::full({(long)N, (long)N}, INF, torch::kFloat32);

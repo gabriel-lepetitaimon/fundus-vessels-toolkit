@@ -2,21 +2,28 @@ from __future__ import annotations
 
 import warnings
 from functools import cached_property
-from hmac import new
 from itertools import pairwise
-from typing import Literal, Optional, Protocol, Self, Sequence, TypeGuard, overload
+from typing import Literal, Optional, Self, TypeGuard, overload
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from attr import dataclass
 from networkx import maximum_branching
-from sympy import N
+
+from fundus_toolkits.utils.typing import (
+    Bool1DArray,
+    Float1DArray,
+    Indices,
+    IndicesLike,
+    Int1DArray,
+    Int1DArrayLike,
+    Int2DArrayLike,
+)
 
 from ..utils.cluster import cluster_by_distance
 from ..utils.lookup_array import create_removal_lookup
 from ..utils.math import gaussian, sigmoid, softmax
-from ..utils.numpy import np_first_true, np_group_by, np_groupby_argmax, np_groupby_mean
+from ..utils.numpy import np_first_true, np_group_by, np_groupby_mean
 from ..utils.tree import (
     accessible_from_root,
     find_cycles,
@@ -25,7 +32,6 @@ from ..utils.tree import (
     tree_distance,
     tree_node_rank,
 )
-from ..utils.typing import Bool1DArray, Float1DArray, Indices, IndicesLike, Int1DArray, Int1DArrayLike, Int2DArrayLike
 from ..vascular_data_objects import VBranchGeoData, VGraph
 from ..vascular_data_objects.fundus_data import AVLabel
 from ..vascular_data_objects.vtree import VTree
@@ -429,7 +435,7 @@ class VBranchDigraph(LineDigraph):
             self._branch_fp_logit = p
             self._branch_fp_p = None
 
-    def branch_fp(self) -> npt.NDArray[np.bool_]:
+    def branch_fp(self) -> Bool1DArray:
         """Get a mask of invalid branches.
 
         Returns
@@ -438,9 +444,9 @@ class VBranchDigraph(LineDigraph):
             An array of shape (B,) representing whether each branch is invalid.
         """
         if (fp_p := self._branch_fp_p) is not None:
-            return fp_p > 0.5
+            return fp_p > 0.5  # type: ignore
         elif (fp_logit := self._branch_fp_logit) is not None:
-            return fp_logit > 0
+            return fp_logit > 0  # type: ignore
         else:
             return np.zeros(self.branch_count, dtype=bool)
 
@@ -458,7 +464,7 @@ class VBranchDigraph(LineDigraph):
             if (av_logit := self._branch_av_logit) is None:
                 return None
             self._branch_av_p = sigmoid(av_logit)
-        return self._branch_av_p
+        return self._branch_av_p.astype(np.float64)
 
     @branch_av_p.setter
     def branch_av_p(self, p: Float1DArray | None):
@@ -485,9 +491,12 @@ class VBranchDigraph(LineDigraph):
         if self._branch_av_logit is None:
             if (av_p := self._branch_av_p) is None:
                 return None
-            av_p += 1e-6  # avoid log(0)
+            if av_p.dtype == np.bool_:
+                return av_p.astype(np.float64) * 2 - 1  # convert boolean to logit (False -> -1, True -> 1)
+            else:
+                av_p = np.clip(av_p, 1e-6, 1 - 1e-6)  # avoid log(0)
             self._branch_av_logit = np.log(av_p) - np.log(1 - av_p)
-        return self._branch_av_logit
+        return self._branch_av_logit  # type: ignore
 
     @branch_av_logit.setter
     def branch_av_logit(self, p: Float1DArray | None):
@@ -682,7 +691,7 @@ class VBranchDigraph(LineDigraph):
 
         # === Compute AV and dir probabilities ===
         self._branch_fp_p = np.where(b_is_art | b_is_vei, 0.0, 1.0)
-        self._branch_av_p = b_is_art.astype(float)
+        self._branch_av_p = b_is_art
         self._branch_fp_logit = self._branch_av_logit = None
 
         branch_dir_p = branch_topo_a.p_dirs * branch_topo_a.plausibility * (~b_is_vei)
@@ -892,7 +901,7 @@ class VBranchDigraph(LineDigraph):
 
     def solve_optimal_arborescence(
         self, *, remove_missing_branch=False, detect_major_av_error=False, method: DigraphSolver = "approx"
-    ) -> tuple[Indices, Bool1DArray]:
+    ) -> tuple[Int1DArray, Bool1DArray]:
         """Compute the optimal arborescence of the directed graph. Missing branches are ignored in the optimization and can optionally be removed from the output.
 
         Parameters
@@ -937,9 +946,9 @@ class VBranchDigraph(LineDigraph):
                 return np.empty((0,), dtype=np.int_), np.empty((0,), dtype=np.bool_)
 
             # No valid line, return trivial solution with all branches as root
-            branch_parents = np.full((self.branch_count,), -1, dtype=np.int_)
+            branch_parents: Int1DArray = np.full((self.branch_count,), -1, dtype=np.int_)
             if self.branch_dir_p is None:
-                branch_dir = np.ones((self.branch_count,), dtype=np.bool_)
+                branch_dir: Bool1DArray = np.ones((self.branch_count,), dtype=np.bool_)
             else:
                 branch_dir = self.branch_dir_p > 0.5
             return branch_parents, branch_dir
@@ -992,14 +1001,31 @@ class VBranchDigraph(LineDigraph):
         fp_branch: Optional[Bool1DArray] = None,
         *,
         keep_missing_branch: bool = False,
+        assign_av: Literal["branch", "subtree", False] = False,
     ) -> VTree:
         """Resolve the directed graph into an arborescence (a directed tree).
+
+        Parameters
+        ----------
+        branch_parents : npt.NDArray[np.int_]
+            An array of shape (B,) representing the parent branch of each branch in the optimal arborescence. The root branch has a parent of -1.
+        branch_dir : npt.NDArray[np.bool_]
+            An array of shape (B,) representing the direction of each branch in the optimal arborescence: True if the branch is oriented from its first node to its second node, False otherwise.
+        fp_branch : Optional[npt.NDArray[np.bool_]], optional
+            An array of shape (B,) representing whether each branch is a false positive. If provided, it will be used to remove false positive branches from the graph and re-index the branch indices accordingly. If not provided, the method will use the ``branch_fp`` method to determine false positive branches. By default, None.
+        keep_missing_branch : bool, optional
+            Whether to keep missing branches in the output tree. If False (by default), missing branches will be removed from the output tree. If True, missing branches will be kept in the output tree with a parent of -1 and with their most probable direction according to ``self.branch_dir_p``.
+        assign_av : Literal["branch", "subtree", False], optional
+            Whether to assign artery/vein class labels to branches in the output tree based on the artery/vein probabilities of branches in the directed graph.
+             - If "branch", assign AV class based on the AV probability of each branch independently;
+             - If "subtree", assign AV class based on the average AV probability of each subtree to which branches belong, to get more consistent AV labels across the tree;
+             - If False (by default), leave AV attribute as is in the output tree.
 
         Returns
         -------
         VTree
             The tree representation of the directed graph.
-        """
+        """  # noqa: E501
         assert self.graph is not None, "The graph attribute must be set to compute the optimized tree"
 
         # === Update graph according to optimal arborescence ===
@@ -1045,9 +1071,30 @@ class VBranchDigraph(LineDigraph):
         branch_dir = np.hstack([branch_dir, np.ones(len(added_branch_parents), dtype=np.bool_)])
         tree = VTree.from_graph(vgraph, branch_parents, branch_dir, copy=False)
 
+        # Assign AV label accordingly to branch AV logit if specified
+        av_logit = self.branch_av_logit
+        if assign_av is not False and av_logit is not None:
+            if not keep_missing_branch:
+                av_logit = av_logit[~fp_branch]
+            if assign_av == "subtree":  # Average AV logit over subtrees to assign more consistent AV labels
+                subtrees = tree.subtrees_branch_labels()
+                av_class = np.sign(np_groupby_mean(av_logit, subtrees[: len(av_logit)]))
+                av_class[av_class == -1] = 2
+                tree.branch_attr["av"] = av_class[subtrees]
+            else:
+                av_class = np.zeros(tree.branch_count, dtype=int)
+                av_class[: len(av_logit)] = np.sign(av_logit)
+                av_class[av_class == -1] = 2
+                tree.branch_attr["av"] = av_class
+
         return tree
 
-    def optimize_tree(self, keep_missing_branch: bool = False, method: DigraphSolver = "approx") -> VTree:
+    def optimize_tree(
+        self,
+        keep_missing_branch: bool = False,
+        assign_av: Literal["subtree", "branch", False] = False,
+        method: DigraphSolver = "approx",
+    ) -> VTree:
         """Resolve the directed graph into an arborescence (a directed tree).
 
         Returns
@@ -1057,7 +1104,9 @@ class VBranchDigraph(LineDigraph):
         """
         # === Solve Optimal Arborescence ===
         branch_parents, branch_dir = self.solve_optimal_arborescence(method=method)
-        return self.compute_tree_from_arborescence(branch_parents, branch_dir, keep_missing_branch=keep_missing_branch)
+        return self.compute_tree_from_arborescence(
+            branch_parents, branch_dir, keep_missing_branch=keep_missing_branch, assign_av=assign_av
+        )
 
     # === UTILS ===
     def lines_info(
@@ -1444,7 +1493,7 @@ def solve_line_digraph_approx(
     line_p: npt.NDArray[np.float64],
     branch_dir_p: Optional[npt.NDArray[np.float64]] = None,
     ignore_branch_dir_in_MSA: bool = False,
-) -> tuple[npt.NDArray[np.int_], npt.NDArray[np.bool_]]:
+) -> tuple[Int1DArray, Bool1DArray]:
     """Resolve the directed graph into an arborescence (a directed tree).
 
     Parameters
@@ -1594,7 +1643,7 @@ def solve_line_digraph_a_star(
     line_list: npt.NDArray[np.int_] | LineDigraph,
     line_p: npt.NDArray[np.float64],
     branch_dir_p: npt.NDArray[np.float64] | None = None,
-) -> tuple[npt.NDArray[np.int_], npt.NDArray[np.bool_]]:
+) -> tuple[Int1DArray, Bool1DArray]:
     """Resolve the directed graph into an arborescence (a directed tree).
 
     Parameters

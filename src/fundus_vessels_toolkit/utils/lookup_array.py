@@ -4,7 +4,7 @@ from typing import Dict, Literal, Mapping, Optional, Tuple, TypeVar, overload
 import numpy as np
 import numpy.typing as npt
 
-from fundus_vessels_toolkit.utils.typing import Int1DArray, Int1DArrayLike, as_int_1d
+from fundus_toolkits.utils.typing import Int1DArray, Int1DArrayLike, as_int_1d
 
 from .binary_mask import index_to_mask
 

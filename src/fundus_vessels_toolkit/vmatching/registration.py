@@ -10,19 +10,19 @@ from pygmtools.linear_solvers import hungarian
 from scipy.ndimage import distance_transform_edt
 
 from fundus_toolkits import FundusData, Point, Rect
-
-from ..segment_to_graph.graph_simplification import simplify_passing_nodes
-from ..utils.fundus_projections import (
-    AffineProjection,
-    FundusProjection,
-    IdentityProjection,
-    QuadraticProjection,
-    RadialToRadial,
+from fundus_toolkits.transform import (
+    AffineTransform,
+    IdentityTransform,
+    QuadraticTransform,
+    RadialToRadialTransform,
     SimilarityTransform,
+    Transform,
     Translation,
 )
+from fundus_toolkits.utils.typing import Bool2DArray, FloatPairArray, Int1DArray, IntPairArray, IntPairArrayLike
+
+from ..segment_to_graph.graph_simplification import simplify_passing_nodes
 from ..utils.graph.matching import incident_branches_similarity
-from ..utils.typing import Bool2DArray, FloatPairArray, Int1DArray, IntPairArray, IntPairArrayLike
 from ..vascular_data_objects import VGraph
 from ..vascular_data_objects.vtree import VTree
 from ..vmatching.descriptor import junction_adjacent_branches_descriptor, tree_node_histogram
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class RegistrationResult:
-    transformation: FundusProjection
+    transformation: Transform
     matched_nodes: Int1DArray
     mean_error: float
 
@@ -44,7 +44,7 @@ def register_graph(
     fix_graph: VGraph,
     moving_graph: VGraph,
     matched_nodes: Optional[IntPairArrayLike] = None,
-    projection: Optional[Type[FundusProjection]] = None,
+    projection: Optional[Type[Transform]] = None,
     *,
     reindex_graphs: bool = False,
     register_branches: bool = True,
@@ -96,10 +96,10 @@ def register_graph(
 
 def multi_vgraph_registration(
     vgraphs: Sequence[VGraph],
-    projection: Optional[Type[FundusProjection] | dict[int, Type[FundusProjection]]] = None,
+    projection: Optional[Type[Transform] | dict[int, Type[Transform]]] = None,
     iterative: bool = False,
     ensure_exact: Literal["direct", "inverse", None] = None,
-) -> list[FundusProjection]:
+) -> list[Transform]:
     """
     Register multiple vascular graphs together.
 
@@ -122,7 +122,7 @@ def multi_vgraph_registration(
     import networkx as nx
 
     if projection is None:
-        projection = {3: AffineProjection, 12: QuadraticProjection}
+        projection = {3: AffineTransform, 12: QuadraticTransform}
 
     n_graph = len(vgraphs)
     matching = {}
@@ -162,7 +162,7 @@ def multi_vgraph_registration(
     # Accumulate the transformation from all other graphs to the center of the spanning tree
     root = nx.center(ST)[0]
     yx0 = vgraphs[root].node_coord()
-    transformations = {root: FundusProjection.identity()}
+    transformations = {root: Transform.identity()}
 
     priority: Optional[Callable[[Sequence[int]], Sequence[int]]] = None
     if iterative:
@@ -224,7 +224,7 @@ def multi_vgraph_registration(
         if i2 in transformations:
             i1, i2 = i2, i1
             match1, match2 = match2, match1
-            T21: FundusProjection = T21.invert()
+            T21: Transform = T21.invert()
 
         # If iterative is true, check if we can recompute the transformation from scratch
         if iterative:
@@ -233,10 +233,10 @@ def multi_vgraph_registration(
                 assert ext_yx0 is not None
                 # If this fundus can be registered to several already transformed fundus, recompute the transformation
                 if ensure_exact == "inverse":
-                    T02 = FundusProjection.fit_to_projection(ext_yx0, ext_yx2, projection=projection)[0]
+                    T02 = Transform.fit_to_projection(ext_yx0, ext_yx2, projection=projection)[0]
                     T20 = T02.invert()
                 else:
-                    T20 = FundusProjection.fit_to_projection(ext_yx2, ext_yx0, projection=projection)[0]
+                    T20 = Transform.fit_to_projection(ext_yx2, ext_yx0, projection=projection)[0]
                 transformations[i2] = T20
                 continue
 
@@ -244,12 +244,12 @@ def multi_vgraph_registration(
         if ensure_exact == "inverse" and not T21.is_inverse_exact:
             yx2 = vgraphs[i2].node_coord()[match2]
             yx1 = vgraphs[i1].node_coord()[match1]
-            T12 = FundusProjection.fit_to_projection(yx1, yx2, projection=projection)[0]
+            T12 = Transform.fit_to_projection(yx1, yx2, projection=projection)[0]
             T21 = T12.invert()
         elif ensure_exact == "direct" and not T21.is_exact:
             yx2 = vgraphs[i2].node_coord()[match2]
             yx1 = vgraphs[i1].node_coord()[match1]
-            T21 = FundusProjection.fit_to_projection(yx2, yx1, projection=projection)[0]
+            T21 = Transform.fit_to_projection(yx2, yx1, projection=projection)[0]
 
         # Compose the transformation with the already computed one
         T10 = transformations[i1]
@@ -268,7 +268,7 @@ class TreeRegistrationResult:
     tree2: VTree
     fundus1: FundusData
     fundus2: FundusData
-    T12: FundusProjection
+    T12: Transform
     node_match: IntPairArray
     branch_match: dict[tuple[int], tuple[int]]
 
@@ -276,6 +276,7 @@ class TreeRegistrationResult:
         self,
         common_tree: bool = False,
         *,
+        draw_od_mac: bool = False,
         split_spheric_projection: bool = True,
         label: bool = True,
         height=600,
@@ -294,11 +295,11 @@ class TreeRegistrationResult:
         cmap = colormap_by_name("catppuccin-latte")
         N = len(self.node_match)
 
-        if isinstance(self.T12, RadialToRadial) and split_spheric_projection:
+        if isinstance(self.T12, RadialToRadialTransform) and split_spheric_projection:
             T12, T21 = self.T12.split_spheric_projections()
         else:
             T12 = self.T12
-            T21 = IdentityProjection()
+            T21 = IdentityTransform()
         domain1 = T12.transform_domain(Rect.from_size(self.fundus1.shape))
         domain2 = T21.transform_domain(Rect.from_size(self.fundus2.shape))
         full_domain = domain1 | domain2
@@ -314,6 +315,36 @@ class TreeRegistrationResult:
         m[1].domain = full_domain
         m[1].add_image(T21.warp(fundus2, warped_domain=full_domain)[0], "fundus").domain = full_domain
         print(f"   warp fundus done in ({time.perf_counter() - t2:.2f}s)")
+
+        # === DRAW OD AND MACULA ===
+        if draw_od_mac:
+            od_mac1 = (1 * self.fundus1.od + 2 * self.fundus1.macula).astype(np.uint8)
+            m[0].add_label(
+                T12.warp(od_mac1, warped_domain=full_domain)[0],
+                "OD",
+                {1: "red", 2: "green"},
+                opacity=0.8,
+            ).domain = full_domain
+            m[0].add_graph(
+                np.empty((0, 2)),
+                T12.transform([self.fundus1.od_center, self.fundus1.macula_center]),
+                name="OD",
+            )
+            print("OD MAC 1:", T12.transform([self.fundus1.od_center, self.fundus1.macula_center]))
+
+            od_mac2 = (1 * self.fundus2.od + 2 * self.fundus2.macula).astype(np.uint8)
+            m[1].add_label(
+                T21.warp(od_mac2, warped_domain=full_domain)[0],
+                "OD",
+                {1: "red", 2: "green"},
+                opacity=0.8,
+            ).domain = full_domain
+            m[1].add_graph(
+                np.empty((0, 2)),
+                T21.transform([self.fundus2.od_center, self.fundus2.macula_center]),
+                name="OD",
+            )
+            print("OD MAC 2:", T21.transform([self.fundus2.od_center, self.fundus2.macula_center]))
 
         # === DRAW TREES ===
         if common_tree:
@@ -409,13 +440,13 @@ class TreeRegistrationResult:
 
         return tuple(out_trees) + tuple(out_branch_match)  # type: ignore
 
-    def refine_transform(self, same_k: bool = False, verbose=False) -> tuple[FundusProjection, float]:
+    def refine_transform(self, same_k: bool = False, verbose=False) -> tuple[Transform, float]:
         # TODO: use matched branch curvatures roots as additional matching points to refine the transformation
         # TODO: visualisation FundusProjection.draw_grid(domain: Rect, subdivision: int | tuple(int, int), resolution: float) -> tuple[Bool2DArray, Rect]
         src = self.tree1.node_coord()[self.node_match[:, 0]]
         dst = self.tree2.node_coord()[self.node_match[:, 1]]
         # return AffineProjection.fit(src, dst)
-        return RadialToRadial.fit(
+        return RadialToRadialTransform.fit(
             src=src,
             dst=dst,
             center_src=np.array(self.fundus1.shape) / 2,
@@ -427,7 +458,7 @@ class TreeRegistrationResult:
 
 def naive_register_trees(
     tree1, tree2, fundus1: FundusData, fundus2: FundusData, *, max_adj_branch: int = 5, match_max_distance: float = 100
-):
+) -> TreeRegistrationResult:
     if not fundus1.has_od_center or fundus1.od_center is None or not fundus2.has_od_center or fundus2.od_center is None:
         raise NotImplementedError("Current implementation of tree registration requires OD centers.")
 
@@ -441,7 +472,7 @@ def naive_register_trees(
     # roi2 &= ~(distance_transform_edt(fundus2.od) > fundus2.od_diameter * 0.15)
 
     # === 2. Find candidates for bifurcations matching ===
-    def get_bifurcations(tree, T: FundusProjection, fundus: FundusData) -> tuple[Int1DArray, FloatPairArray]:
+    def get_bifurcations(tree, T: Transform, fundus: FundusData) -> tuple[Int1DArray, FloatPairArray]:
         """Get the bifurcations of the tree that are in the ROI as well as their coordinates."""
         biff = np.where((tree.node_outdegree() > 1) & (tree.node_indegree() == 1))[0]
         biff_yx = tree.geometric_data().node_coord(biff).astype(np.int_)
@@ -707,7 +738,7 @@ def od_macula_registration(
 def fundus_roi_overlap(
     fundus1: FundusData,
     fundus2: FundusData,
-    T12: FundusProjection,
+    T12: Transform,
     *,
     extend_roi: int = 0,
 ) -> tuple[Bool2DArray, Bool2DArray]:

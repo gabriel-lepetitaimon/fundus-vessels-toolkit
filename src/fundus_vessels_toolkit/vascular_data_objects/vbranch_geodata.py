@@ -8,11 +8,11 @@ from typing import Any, Dict, List, NamedTuple, Optional, Self, Sequence, Tuple,
 import numpy as np
 import numpy.typing as npt
 
+from fundus_toolkits.transform import Transform, Translation
 from fundus_toolkits.utils.geometric import Point
 
 from ..utils.bezier import BezierCubic, BSpline
 from ..utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
-from ..utils.fundus_projections import FundusProjection, Translation
 from ..utils.lookup_array import invert_lookup
 
 _registered_vbranch_geo_data_types: Dict[str, Type[VBranchGeoDataBase]] = {}
@@ -181,7 +181,7 @@ class VBranchGeoDataBase(ABC, metaclass=MetaVBranchGeoDataBase):
         """
         ...
 
-    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+    def transform(self, projection: Transform, ctx: BranchGeoDataEditContext) -> Self:
         """Transform the parametric data using a projection.
 
         Parameters
@@ -234,7 +234,7 @@ class VBranchCurveData(VBranchGeoDataBase):
     def split(self, splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:  # noqa: F821
         return [self.__class__(self.data[start:end]) for start, end in itertools.pairwise(splits_id)]
 
-    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+    def transform(self, projection: Transform, ctx: BranchGeoDataEditContext) -> Self:
         return self
 
     def resample(self, index: npt.NDArray[np.int_], ctx: BranchGeoDataEditContext) -> Self:
@@ -249,7 +249,7 @@ class VBranchCurveData(VBranchGeoDataBase):
 class VBranchCurveScalableData(VBranchCurveData):
     """``VBranchCurveData`` is a class that stores the parametric data of a vascular graph."""
 
-    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+    def transform(self, projection: Transform, ctx: BranchGeoDataEditContext) -> Self:
         data = self.data * ctx.info.get("local_scale", 1)
         return self.__class__(data.astype(self.data.dtype))
 
@@ -289,7 +289,7 @@ class BoundariesData(LeftRightCurveData):
             return "BoundariesData must be a 3D array with shape (N, 2, 2)."
         return super().is_invalid(ctx)
 
-    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+    def transform(self, projection: Transform, ctx: BranchGeoDataEditContext) -> Self:
         data = projection.transform(self.data.reshape((-1, 2))).reshape(self.data.shape)
         return self.__class__(data.astype(self.data.dtype))
 
@@ -353,7 +353,7 @@ class VBranchCurveIndex(VBranchGeoDataBase):
 
         return splitted_curveId
 
-    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+    def transform(self, projection: Transform, ctx: BranchGeoDataEditContext) -> Self:
         return self
 
     def resample(self, index: npt.NDArray[np.int_], ctx: BranchGeoDataEditContext) -> Self:
@@ -410,7 +410,7 @@ class VBranchTangents(VBranchGeoDataBase):
     def split(self, splits_id: List[int], ctx: BranchGeoDataEditContext) -> List[Self]:
         return [self.__class__(self.data[start:end]) for start, end in itertools.pairwise(splits_id)]
 
-    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+    def transform(self, projection: Transform, ctx: BranchGeoDataEditContext) -> Self:
         if self.is_empty() or isinstance(projection, Translation):
             return self
         p1 = (p0 := ctx.curve) + self.data
@@ -506,7 +506,7 @@ class VBranchTipsScalarData(VBranchTipsData):
     def empty_data(cls) -> np.ndarray:
         return np.array(float("nan"), dtype=float)
 
-    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+    def transform(self, projection: Transform, ctx: BranchGeoDataEditContext) -> Self:
         return self
 
     def __eq__(self, other: object) -> bool:
@@ -517,7 +517,7 @@ class VBranchTipsScalarData(VBranchTipsData):
 class VBranchTipsScalableScalarData(VBranchTipsScalarData):
     """``VBranchTipsScalableScalarData`` is a class that stores a scalar associated with the tips of a vascular branch."""  # noqa: E501
 
-    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+    def transform(self, projection: Transform, ctx: BranchGeoDataEditContext) -> Self:
         if (local_scale := ctx.info.get("local_scale", None)) is None:
             return self
         data = self.data * local_scale[[0, -1]]
@@ -535,7 +535,7 @@ class VBranchTipsDoublePointsData(VBranchTipsData):
     def data_shape(cls) -> Tuple[int, ...]:
         return (2, 2)
 
-    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+    def transform(self, projection: Transform, ctx: BranchGeoDataEditContext) -> Self:
         if self.is_empty():
             return self
         data = projection.transform(self.data.reshape(-1, 2)).reshape(self.data.shape)
@@ -564,7 +564,7 @@ class VBranchTipsTangents(VBranchTipsData):
         data = np.flip(self.data, axis=0)  # No need to negate tangent tips are oriented in opposite direction
         return self.__class__(data)
 
-    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+    def transform(self, projection: Transform, ctx: BranchGeoDataEditContext) -> Self:
         if self.is_empty() or isinstance(projection, Translation):
             return self
         p0 = np.stack([ctx.curve[0], ctx.curve[-1]])
@@ -646,7 +646,7 @@ class VBranchBSpline(VBranchGeoDataBase):
     def __repr__(self) -> str:
         return f"VBranchBSpline({self.data})"
 
-    def transform(self, projection: FundusProjection, ctx: BranchGeoDataEditContext) -> Self:
+    def transform(self, projection: Transform, ctx: BranchGeoDataEditContext) -> Self:
         if self.is_empty():
             return self
         return self.__class__(self.data.transform(projection, round_p=True))
