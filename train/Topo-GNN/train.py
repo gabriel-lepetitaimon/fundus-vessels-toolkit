@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Annotated, Literal, NotRequired, TypedDict, get_args
+from typing import Annotated, Literal, NotRequired, TypedDict
 
 import psutil
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
-import yaml
 from lightning_fabric.plugins.precision.precision import _PRECISION_INPUT_STR
 from pydantic import BaseModel, ConfigDict, Field
-from pytorch_lightning.callbacks import Callback, ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from torch_geometric.loader import DataLoader as PyGDataLoader
 from torchmetrics import MetricCollection, Specificity
@@ -38,12 +37,14 @@ from fundus_vessels_toolkit.models.topology.losses import (
     CrossEntropyLoss,
 )
 from fundus_vessels_toolkit.models.topology.model import BranchDigraphModel, BranchDigraphModelCfg
+from fundus_vessels_toolkit.utils.nnet.experiment import ExperimentRunFactory
 from fundus_vessels_toolkit.utils.nnet.optuna import (
     FloatHyperParam,
     IntHyperParam,
     ListLiteralHyperParam,
     LiteralHyperParam,
 )
+from fundus_vessels_toolkit.utils.nnet.pydantic_yaml import model_validate_yaml_file
 
 # torch.set_float32_matmul_precision("medium")
 torch.backends.fp32_precision = "ieee"  # type: ignore
@@ -62,6 +63,8 @@ class DigraphGNNTrainerConfig(BaseModel):
     dataset: BranchDigraphDatasetConfig = Field(default_factory=BranchDigraphDatasetConfig)
     model: BranchDigraphModelCfg = Field(default_factory=BranchDigraphModelCfg)
     contrastive_loss: BranchContrastiveLossOpt = Field(default_factory=BranchContrastiveLossOpt)
+    topo_losses_delay: IntHyperParam = 0
+    """Number of epochs to delay the topology losses (line loss and contrastive loss) to allow the model to first learn to classify AV and direction before learning the topology. This can help stabilize the training and improve the final performance."""  # noqa: E501
 
     training_set: Annotated[list[TrainingSets], ListLiteralHyperParam(TrainingSets)] | None = Field(default=None)
     """Training set(s) to use. Can be a single dataset name, a list of dataset names, or None to use all datasets."""
@@ -131,92 +134,94 @@ class HardwareConfig(BaseModel):
             return (actual_batch_size, grad_acc_steps)
 
 
-def train(config=None, hdw_cfg=None):
-    wandb.init(project="GNN-topo-test", config=config)
+def load_hardware_config(cfg: Path | str | dict | None) -> HardwareConfig:
+    if cfg is None:
+        default_path = Path("hardware_cfg.yaml")
+        if default_path.exists():
+            return model_validate_yaml_file(default_path, HardwareConfig)
 
-    cfg = DigraphGNNTrainerConfig.model_validate(dict(wandb.config))
-    cfg_dict = cfg.model_dump()
-
-    if hdw_cfg is None:
-        if Path("hardware_cfg.yaml").exists():
-            try:
-                with open("hardware_cfg.yaml", "r") as f:
-                    hdw_cfg = HardwareConfig.model_validate(yaml.safe_load(f))
-            except Exception as e:
-                print(f"Error loading hardware config: {e}. Using default hardware config.")
-                hdw_cfg = HardwareConfig()
+    if isinstance(cfg, (Path, str)):
+        cfg = Path(cfg)
+        if cfg.exists():
+            return model_validate_yaml_file(cfg, HardwareConfig)
         else:
-            hdw_cfg = HardwareConfig()
-    else:
-        hdw_cfg = HardwareConfig.model_validate(hdw_cfg)
+            return HardwareConfig()
 
-    # === DATASET ===
-    dataset = BranchDigraphDataset("ALL_DATA_bundle.tar.gz", cfg=cfg.dataset)
-    train_set, val_set, test_set = dataset.split_sets(train_ratio=0.7, val_ratio=0.15)
+    return HardwareConfig.model_validate(cfg)
 
-    if cfg.training_set is not None and cfg.training_set:
-        train_set = train_set.select_dataset(cfg.training_set)
-        val_set = val_set.select_dataset(cfg.training_set)
-    if cfg.test_version not in ("training", "all"):
-        val_set.cfg.graph_version = cfg.test_version
 
-    batch_size, grad_acc = hdw_cfg.batch_size_grad_acc(cfg.batch_size)
+def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=None):
+    hdw_cfg = load_hardware_config(hdw_cfg)
 
-    train_loader = PyGDataLoader(
-        train_set.preload(with_image=False),
-        shuffle=True,
-        num_workers=hdw_cfg.train_num_workers,
-        persistent_workers=True,
-        batch_size=batch_size,
-    )
-    val_loader = PyGDataLoader(
-        val_set.preload(with_image=False),
-        batch_size=hdw_cfg.test_batch_size,
-        num_workers=hdw_cfg.test_num_workers,
-    )
+    with experiment as exp_run:
+        cfg = exp_run.cfg
 
-    # Setup the logger and trainer
-    wandb_logger = WandbLogger(log_model=True)
-    model = DigraphGNNTrainer(cfg_dict, compile=hdw_cfg.compile, n_step_per_epoch=len(train_loader))
+        # === DATASET ===
+        dataset = BranchDigraphDataset("ALL_DATA_bundle.tar.gz", cfg=cfg.dataset)
+        train_set, val_set, test_set = dataset.split_sets(train_ratio=0.7, val_ratio=0.15)
 
-    checkpoints: list[Callback] = [ModelCheckpoint(monitor="val_agg", mode="max", save_weights_only=True)]
+        if cfg.training_set is not None and cfg.training_set:
+            train_set = train_set.select_dataset(cfg.training_set)
+            val_set = val_set.select_dataset(cfg.training_set)
+        if cfg.test_version not in ("training", "all"):
+            val_set.cfg.graph_version = cfg.test_version
 
-    trainer = L.Trainer(
-        max_epochs=cfg.epoch,
-        logger=wandb_logger,
-        enable_progress_bar=True,
-        check_val_every_n_epoch=20,
-        accumulate_grad_batches=grad_acc,
-        # gradient_clip_val=0.5,
-        # gradient_clip_algorithm="value",
-        # num_sanity_val_steps=0,
-        callbacks=checkpoints,
-        precision=hdw_cfg.precision,
-        **hdw_cfg.gpu_specs(),
-    )
+        batch_size, grad_acc = hdw_cfg.batch_size_grad_acc(cfg.batch_size)
 
-    trainer.fit(model, train_loader, val_loader)
+        train_loader = PyGDataLoader(
+            train_set.preload(with_image=False),
+            shuffle=True,
+            num_workers=hdw_cfg.train_num_workers,
+            persistent_workers=True,
+            batch_size=batch_size,
+        )
+        val_loader = PyGDataLoader(
+            val_set.preload(with_image=False),
+            batch_size=hdw_cfg.test_batch_size,
+            num_workers=hdw_cfg.test_num_workers,
+        )
 
-    test_args = dict(batch_size=hdw_cfg.test_batch_size, num_workers=hdw_cfg.test_num_workers)
-    if cfg.test_version == "all":
-        test_loaders = {
-            f"{k}-{v}": PyGDataLoader(d.use_version(v), **test_args)  # type: ignore
-            for k, d in test_set.split_by_dataset().items()
-            for v in test_set.list_versions()
-        }
-    else:
-        test_version = cfg.test_version if cfg.test_version != "training" else cfg.dataset.graph_version
-        test_set.cfg.graph_version = test_version
-        test_loaders = {
-            k: PyGDataLoader(test_set.preload(with_image=False), **test_args)  # type: ignore
-            for k, d in test_set.split_by_dataset().items()
-        }
+        # Setup the logger and trainer
+        model = DigraphGNNTrainer(cfg.model_dump(), compile=hdw_cfg.compile, n_step_per_epoch=len(train_loader))
 
-    model._test_dataloaders_names = list(test_loaders.keys())
-    trainer.test(model, dataloaders=test_loaders, ckpt_path="best")
+        checkpoint = ModelCheckpoint(monitor="val_agg", mode="max", save_weights_only=True)
 
-    # Finish the run
-    wandb.finish()
+        trainer = L.Trainer(
+            max_epochs=cfg.epoch,
+            logger=exp_run.logger,
+            enable_progress_bar=True,
+            check_val_every_n_epoch=20,
+            accumulate_grad_batches=grad_acc,
+            # gradient_clip_val=0.5,
+            # gradient_clip_algorithm="value",
+            # num_sanity_val_steps=0,
+            callbacks=[checkpoint],
+            precision=hdw_cfg.precision,
+            **hdw_cfg.gpu_specs(),
+        )
+
+        trainer.fit(model, train_loader, val_loader)
+
+        if checkpoint.best_model_score is not None:
+            exp_run.finish(checkpoint.best_model_score.item(), state="success")
+
+        test_args = dict(batch_size=hdw_cfg.test_batch_size, num_workers=hdw_cfg.test_num_workers)
+        if cfg.test_version == "all":
+            test_loaders = {
+                f"{k}-{v}": PyGDataLoader(d.use_version(v), **test_args)  # type: ignore
+                for k, d in test_set.split_by_dataset().items()
+                for v in test_set.list_versions()
+            }
+        else:
+            test_version = cfg.test_version if cfg.test_version != "training" else cfg.dataset.graph_version
+            test_set.cfg.graph_version = test_version
+            test_loaders = {
+                k: PyGDataLoader(d.preload(with_image=False), **test_args)  # type: ignore
+                for k, d in test_set.split_by_dataset().items()
+            }
+
+        model._test_dataloaders_names = list(test_loaders.keys())
+        trainer.test(model, dataloaders=test_loaders, ckpt_path="best")
 
 
 class DigraphGNNTrainer(L.LightningModule):
@@ -367,7 +372,12 @@ class DigraphGNNTrainer(L.LightningModule):
         contrastive_losses = self.line_contrastive_loss(out)
         contrastive_loss = contrastive_losses.pop("loss")
 
-        loss = fp_loss + av_loss + dir_loss + line_loss + contrastive_loss * 0.1
+        if self.config.topo_losses_delay > 0:
+            delay_coef = (self.current_epoch - self.config.topo_losses_delay) / self.config.topo_losses_delay
+            delay_coef = max(min(1.0, delay_coef), 0)
+        else:
+            delay_coef = 1.0
+        loss = fp_loss + av_loss + dir_loss + (line_loss + contrastive_loss * 0.1) * delay_coef
         return (
             {
                 "fp_loss": fp_loss,
@@ -444,10 +454,6 @@ class DigraphGNNTrainer(L.LightningModule):
             optimizer, max_lr=self.config.lr, epochs=self.config.epoch, steps_per_epoch=self.n_step_per_epoch
         )
         return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "monitor": "train_loss"}}
-
-
-if __name__ == "__main__":
-    train()
 
 
 class _BatchSizeGradAccType(TypedDict):

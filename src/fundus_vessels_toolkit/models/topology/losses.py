@@ -162,7 +162,7 @@ class BranchDigraphMiner(pml_miners.BaseMiner):
 class BranchContrastiveLossOpt(BaseModel):
     contrastive_loss: bool = False
     contrastive_loss_weight: float = 0.2
-    triplet_loss: bool = True
+    triplet_loss: bool = False
     triplet_loss_weight: float = 2.0
 
 

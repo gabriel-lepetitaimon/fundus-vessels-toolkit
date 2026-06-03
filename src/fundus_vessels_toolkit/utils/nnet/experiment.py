@@ -1,20 +1,26 @@
 from __future__ import annotations
 
 import itertools
+import tempfile
 from contextvars import ContextVar, Token
+from functools import cached_property
 from pathlib import Path
-from typing import Annotated, Any, Literal, Optional, overload
+from typing import Annotated, Any, Literal, Optional, Sequence, overload
 
 import numpy as np
 import optuna
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PrivateAttr, ValidationError
+import pytorch_lightning as pl
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PrivateAttr, ValidationError, computed_field
 from pytorch_lightning.callbacks import Callback
+from pytorch_lightning.loggers import WandbLogger
 from rich.console import Console
+from ruamel.yaml import YAML
 
+import wandb
 from fundus_toolkits.utils.typing import Int1DArray
 
-from .optuna import OptunaCfg
-from .pydantic_yaml import model_validate_yaml_file, pretty_validation_error_msg
+from .optuna import OptunaCfg, TrialContext
+from .pydantic_yaml import InvalidDocumentCountError, YamlDocument, YamlDocumentWithFile, pretty_validation_error_msg
 
 
 def _validate_parameters_grid(value: dict[str, list] | list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -53,17 +59,20 @@ class ExperimentCfg(BaseModel):
     n_trials: int = Field(default=20)
     """Number of trials to run. Default is 20."""
 
+    test_debug: bool = Field(default=False)
+    """Whether this is a test/debug run. If True, the experiment will use a temporary Optuna storage and will log to Wandb Test & Debug project, to avoid polluting the experiment results with test runs."""  # noqa: E501
+
     parameters_grid: Annotated[
         list[dict[str, Any]],
         BeforeValidator(_validate_parameters_grid, json_schema_input_type=dict[str, list] | list[dict[str, Any]]),
     ] = Field(default_factory=list)
     """Grid of parameters values to explore. This experiment will be run for each combination of parameters.
-    The value of the parameters defined here can be referred to in the configuration file as '%<parameter_name>'"""  # noqa: E501
+    The value of the parameters defined here can be referred to in the configuration file as '$<parameter_name>'"""  # noqa: E501
 
-    _parameters_hashes: list[str] = PrivateAttr(default_factory=list)
-
-    optuna: OptunaCfg
+    optuna: OptunaCfg = Field(default_factory=OptunaCfg)
     """Optuna configuration for hyperparameter optimization."""
+
+    _file: Optional[Path] = PrivateAttr(default=None)
 
     @property
     def total_trials_count(self) -> int:
@@ -100,39 +109,74 @@ class ExperimentCfg(BaseModel):
         c = np.clip(self.n_trials - c, 0, None)
         return c if split_by_parameters else c.sum()
 
-    def next_run(self) -> Optional[ExperimentRun]:
-        """Get the next experiment run to execute, based on the current trial counts and parameter combinations. Returns None if all trials have been completed."""  # noqa: E501
-        for i, study_name in enumerate(self._study_names()):
-            study = self.optuna.load_study(study_name)
-            if study.valid_trials_count(only_completed=False) < self.n_trials:
-                return ExperimentRun(self, i, study, study.ask(fixed_parameters=self.parameters_grid[i]))
-        return None
-
-    @property
+    @computed_field
+    @cached_property
     def parameters_hashes(self) -> list[str]:
         """List of hashes for each parameter combination. This can be used to uniquely identify trials with specific parameter combinations."""  # noqa: E501
-        if not self._parameters_hashes:
 
-            def parameter_hash(params: dict[str, Any]) -> str:
-                return "|".join(str(params[k]) for k in sorted(params.keys()))
+        def parameter_hash(params: dict[str, Any]) -> str:
+            return "|".join(str(params[k]) for k in sorted(params.keys()))
 
-            self._parameters_hashes = [parameter_hash(params) for params in self.parameters_grid]
-        return self._parameters_hashes
+        return [parameter_hash(params) for params in self.parameters_grid]
+
+    @property
+    def parameters_grid_by_name(self) -> dict[str, dict[str, Any]]:
+        """Dictionary mapping parameter names to their values for each parameter combination."""  # noqa: E501
+        if len(self.parameters_grid) == 0:
+            return {self.experiment: {}}
+        return dict(zip(self._study_names(), self.parameters_grid, strict=True))
 
     def _study_names(self) -> list[str]:
         """List of Optuna study names for this experiment, based on the parameter combinations and the number of trials."""  # noqa: E501
+        if len(self.parameters_grid) == 0:
+            return [self.experiment]
         return [self.experiment + "-" + param_hash for param_hash in self.parameters_hashes]
+
+    @property
+    def file(self) -> Optional[Path]:
+        """Path to the YAML file from which this experiment configuration was loaded, if available. This can be used for logging and error reporting purposes."""  # noqa: E501
+        return self._file
+
+    @classmethod
+    def _read_file(cls, file: str | Path, strict: Optional[bool] = None) -> tuple[ExperimentCfg, YamlDocumentWithFile]:
+        yaml_docs = YamlDocument.read_file(file)
+        if len(yaml_docs) != 2:
+            raise InvalidDocumentCountError(expected=2, actual=len(yaml_docs), file=file)
+        exp = yaml_docs[0].validate(ExperimentCfg, strict=strict)
+        exp._file = yaml_docs[0].file
+        return exp, yaml_docs[1]
 
     @classmethod
     def check_file(cls, file: str | Path, model: type, strict: Optional[bool] = None) -> bool:
-        """Check if the given experiment configuration file is valid according to the schema. Raises an exception if the file is invalid."""  # noqa: E501
+        """Check if the given experiment configuration file is valid according to the schema.
+        If the file is invalid prints a detailed error message with the validation errors and returns False. Otherwise, returns True.
+
+        Parameters
+        ----------
+        file : str | Path
+            Path to the experiment configuration YAML file.
+
+        model : type
+            Pydantic model class to validate the experiment configuration against. This should be the same model that will be used to load the experiment with `load_experiment`.
+
+        strict : Optional[bool], default None
+            Whether to use strict validation. If None, uses the default behavior of the model validation (which is strict for BaseModel and non-strict for other types).
+
+        Returns
+        -------
+        bool
+            True if the file is valid, False otherwise.
+        """  # noqa: E501
         console = Console(highlight=False)
-        file = Path(file)
-        if not file.exists():
+
+        try:
+            exp, yaml_doc = cls._read_file(file, strict=strict)
+        except FileNotFoundError:
             console.print(f"[bold][red]Experiment configuration file not found[/red][/bold]: {file}")
             return False
-        try:
-            exp = model_validate_yaml_file(file, ExperimentCfg, strict=strict)
+        except InvalidDocumentCountError as e:
+            console.print(f"[bold][red]{e}[/red][/bold]: {file}")
+            return False
         except ValidationError as e:
             msg = f"[bold][red]Invalid experiment header[/red][bold]: {file}\n"
             msg += pretty_validation_error_msg(e, ExperimentCfg)
@@ -140,13 +184,13 @@ class ExperimentCfg(BaseModel):
             return False
 
         for i, study_name in enumerate(exp._study_names()):
-            study = exp.optuna.load_study(study_name, ram_storage=True)
-            run = ExperimentRun(exp, i, study, study.ask(fixed_parameters=exp.parameters_grid[i]))
-            with run:
+            study = exp.optuna.load_study(study_name, temp_storage=True)
+            trial = study.ask(fixed_parameters=exp.parameters_grid[i])
+            with TrialContext(trial):
                 try:
-                    model_validate_yaml_file(file, model, document_id=1, strict=strict)
+                    yaml_doc.validate(model, strict=strict)
                 except ValidationError as e:
-                    file_link = f"[link=file://{str(file.absolute())}]{file}[/link]"
+                    file_link = f"[link=file://{str(yaml_doc.file.absolute())}]{file}[/link]"
                     msg = f"[bold][red]Invalid experiment configuration[/red][/bold]: {file_link} with parameter(s):\n"
                     for k, v in exp.parameters_grid[i].items():
                         msg += f"\t${k}={repr(v)}\n"
@@ -155,44 +199,171 @@ class ExperimentCfg(BaseModel):
                     return False
         return True
 
+    @classmethod
+    def load_experiment(
+        cls,
+        file: str | Path,
+        model: type,
+        strict: Optional[bool] = None,
+        header_override: dict | None = None,
+        override: dict | None = None,
+    ) -> ExperimentRunFactory:
+        """Load an experiment configuration from a YAML file and return an ExperimentRunFactory for executing the experiment. Raises an exception if the file is invalid.
+
+        The Yaml file should contains two documents:
+            - The first document should be a valid ExperimentCfg, which defines the experiment settings and the hyperparameter grid.
+            - The second document should be the experiment configuration, which will be validated against the given model. This document can refer to the parameters defined in the first document using the syntax '$<parameter_name>'.
+        """  # noqa: E501
+        exp, yaml_doc = cls._read_file(file, strict=strict)
+        if header_override is not None:
+            exp = exp.model_copy(update=header_override)
+        return ExperimentRunFactory(exp, yaml_doc, model, override)
+
+
+class ExperimentRunFactory[T: BaseModel]:
+    def __init__(self, cfg: ExperimentCfg, yaml: YamlDocument, model: type[T], yaml_override: dict | None = None):
+        self.cfg = cfg
+        self.model = model
+        self.yaml = yaml
+        self.yaml_override = yaml_override
+        self.__ctx_token: Optional[Token[Optional[ExperimentRun]]] = None
+
+    def next_run(self) -> Optional[ExperimentRun[T]]:
+        """Get the next experiment run to execute, based on the current trial counts and parameter combinations. Returns None if all trials have been completed."""  # noqa: E501
+
+        cfg = self.cfg
+        for i, (study_name, params) in enumerate(cfg.parameters_grid_by_name.items()):
+            study = cfg.optuna.load_study(study_name, temp_storage=self.cfg.test_debug)
+            if study.valid_trials_count(only_completed=False) < cfg.n_trials:
+                trial = study.ask(fixed_parameters=params)
+                with TrialContext(trial):
+                    run_cfg = self.yaml.validate(self.model)
+                    if self.yaml_override is not None:
+                        run_cfg = run_cfg.model_copy(update=self.yaml_override)
+                    return ExperimentRun(self.cfg, run_cfg, study, study.ask(fixed_parameters=params), i)
+        return None
+
+    def __enter__(self) -> ExperimentRun[T]:
+        exp_run = self.next_run()
+        if exp_run is None:
+            raise RuntimeError("All trials for this experiment have already been completed.")
+        self.__ctx_token = _current_experiment.set(exp_run)
+        exp_run.init()
+        return exp_run
+
+    def __exit__(self, exc_type: Optional[type], exc_val: Optional[BaseException], exc_tb: Optional[Any]) -> None:
+        if self.__ctx_token is not None:
+            exp_run = self.__ctx_token.var.get()
+            assert exp_run is not None
+
+            if exc_val is None:
+                exp_run.finish(state="success")
+            elif isinstance(exc_val, optuna.exceptions.TrialPruned):
+                exp_run.finish(state="aborted")
+            else:
+                exp_run.finish(state="failed")
+
+            _current_experiment.reset(self.__ctx_token)
+            self.__ctx_token = None
+
 
 ####################################
 #   --- Experiment ---   #
 ####################################
-class ExperimentRun:
+class ExperimentRun[T: BaseModel]:
     """Context manager for setting the current experiment. This is used internally by the OptunaCfg to manage the experiment context during hyperparameter optimization."""  # noqa: E501
 
     def __init__(
-        self,
-        cfg: ExperimentCfg,
-        param_config_id: int,
-        study: optuna.study.Study,
-        trial: optuna.Trial,
+        self, exp: ExperimentCfg, cfg: T, study: optuna.study.Study, trial: optuna.Trial, param_config_id: int
     ):
+        self.exp = exp
         self.cfg = cfg
         self.param_config_id = param_config_id
         self.study = study
         self.trial = trial
-        self.__ctx_token: Optional[Token[Optional[ExperimentRun]]] = None
-
-    def __enter__(self) -> None:
-        self.__ctx_token = _current_experiment.set(self)
-
-    def __exit__(self, exc_type: Optional[type], exc_val: Optional[BaseException], exc_tb: Optional[Any]) -> None:
-        if self.__ctx_token is not None:
-            _current_experiment.reset(self.__ctx_token)
-            self.__ctx_token = None
+        self.logger: Optional[WandbLogger] = None
 
     @classmethod
-    def current(cls) -> Optional[ExperimentRun]:
+    def current(cls) -> Optional[ExperimentRun[T]]:
         """Get the current experiment from the context."""
         return _current_experiment.get()
+
+    @property
+    def parameters_grid(self) -> dict[str, Any]:
+        """Get the current parameter combination for this run."""
+        if len(self.exp.parameters_grid) == 0:
+            return {}
+        return self.exp.parameters_grid[self.param_config_id]
+
+    @property
+    def exp_name(self) -> str:
+        """Get the experiment name for this run, based on the experiment configuration and the parameter combination."""  # noqa: E501
+        trial_name = []
+        for k, v in self.parameters_grid.items():
+            trial_name.append(f"{k}={v},")
+        trial_name = f"[{self.param_config_id}|{';'.join(trial_name)}]" if trial_name else ""
+        return self.exp.experiment + trial_name
+
+    @property
+    def run_id(self) -> int:
+        """Get the current run ID from the trial user attributes. This can be used to differentiate between multiple runs of the same trial (e.g. for different random seeds)."""  # noqa: E501
+        return self.trial.user_attrs.get("ID", self.trial.number)
+
+    @property
+    def run_name(self) -> str:
+        return self.exp_name + f"-{self.run_id:02d}"
+
+    def init(self) -> None:
+        # Init logger
+        self.logger = WandbLogger(
+            name=self.run_name,
+            tags=self.exp.tags,
+            group=self.exp.experiment,
+            project="Test & Debug" if self.exp.test_debug else None,
+            config=self.cfg.model_dump(),
+        )
+
+        # Log config artifact
+        config_artifact = wandb.Artifact(self.run_name.replace(" ", "_"), type="hyper-parameters")
+        yaml = YAML()
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml") as tmp:
+            yaml.dump(self.cfg.model_dump(), tmp)
+            config_artifact.add_file(tmp.name, name="config.yaml")
+        if self.exp.file is not None:
+            config_artifact.add_file(str(self.exp.file.absolute()), name="experiment.yaml")
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml") as tmp:
+            yaml.dump(self.parameters_grid, tmp)
+            config_artifact.add_file(tmp.name, name="parameters_grid.yaml")
+
+    def finish(
+        self,
+        values: float | Sequence[float] | None = None,
+        state: Optional[Literal["success", "failed", "aborted"]] = None,
+    ) -> None:
+        """Finish the current trial with the given value and state. This should be called at the end of each trial to report the results to Optuna."""  # noqa: E501
+        match state:
+            case "success":
+                state_ = optuna.trial.TrialState.COMPLETE
+                exit_code = 0
+            case "failed":
+                state_ = optuna.trial.TrialState.FAIL
+                exit_code = 10
+            case "aborted":
+                state_ = None
+                exit_code = 1
+            case _:
+                state_ = None
+        self.study.tell(self.trial, values=values, state=state_, skip_if_finished=True)
+
+        if state is not None and self.logger is not None:
+            self.logger.finalize(status=state)
+            wandb.finish(exit_code=exit_code)
 
     def pruning_callback(self, monitor: str) -> Callback:
         """Optuna pruning callback to be called at the end of each epoch during training. This will report the intermediate value to Optuna and check if the trial should be pruned."""  # noqa: E501
         from optuna.integration import PyTorchLightningPruningCallback
 
-        if self.cfg.optuna.pruner is not None:
+        if self.exp.optuna.pruner is not None:
             return PyTorchLightningPruningCallback(self.trial, monitor=monitor)
         else:
             return Callback()  # No-op callback

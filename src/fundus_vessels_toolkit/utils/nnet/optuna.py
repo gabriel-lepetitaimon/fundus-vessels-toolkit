@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import re
 from abc import abstractmethod
-from contextvars import ContextVar
-from types import EllipsisType
-from typing import Annotated, Any, Generic, Literal, Optional, Self, cast, get_args
+from contextvars import ContextVar, Token
+from typing import Annotated, Any, Literal, Optional, Self, get_args
 
 import optuna
-from optuna.distributions import CategoricalChoiceType
+import yaml
 from optuna.trial import Trial
 from pydantic import (
     BaseModel,
@@ -19,7 +18,6 @@ from pydantic import (
     ValidationError,
     ValidationInfo,
 )
-import yaml
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -168,8 +166,8 @@ class OptunaCfg(BaseModel):
     def optuna_db(self) -> OptunaDB | None:
         return OptunaDB(storage=self.storage) if self.storage is not None else None
 
-    def load_study(self, study_name: str, ram_storage: bool = False) -> OptunaStudy:
-        return OptunaStudy.load(study_name=study_name, cfg=self, ram_storage=ram_storage)
+    def load_study(self, study_name: str, temp_storage: bool = False) -> OptunaStudy:
+        return OptunaStudy.load(study_name=study_name, cfg=self, temp_storage=temp_storage)
 
 
 class OptunaDB:
@@ -187,10 +185,10 @@ class OptunaStudy(optuna.study.Study):
     """Utility class for managing a specific Optuna study. This class provides methods for retrieving trial information, best parameters, and other related data for a given Optuna study."""  # noqa: E501
 
     @classmethod
-    def load(cls, study_name: str, cfg: OptunaCfg, ram_storage: bool = False) -> Self:
+    def load(cls, study_name: str, cfg: OptunaCfg, temp_storage: bool = False) -> Self:
         study = optuna.create_study(
             study_name=study_name,
-            storage=None if ram_storage else cfg.storage,
+            storage=None if temp_storage else cfg.storage,
             sampler=cfg.sampler.create_sampler(),
             pruner=cfg.pruner.create_pruner() if cfg.pruner is not None else None,
             direction=cfg.direction,
@@ -230,8 +228,31 @@ class OptunaStudy(optuna.study.Study):
 ##############################################################################################################
 # === OPTUNA / PYDANTIC HYPERPARAMETERS ===
 ##############################################################################################################
+_current_trial: ContextVar[Optional[Trial]] = ContextVar("current_trial", default=None)
+
+
+class TrialContext:
+    """Context manager for setting the current Optuna trial in context. This allows the hyperparameter parsing functions to access the current trial and its parameters when parsing hyperparameter search spaces."""  # noqa: E501
+
+    def __init__(self, trial: Trial):
+        self.trial = trial
+        self.token: Optional[Token[Trial | None]] = None
+
+    def __enter__(self) -> Trial:
+        self.token = _current_trial.set(self.trial)
+        return self.trial
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.token is not None:
+            _current_trial.reset(self.token)
+
+
 def current_trial() -> Trial:
     from .experiment import ExperimentRun
+
+    current_trial = _current_trial.get()
+    if current_trial is not None:
+        return current_trial
 
     exp = ExperimentRun.current()
     if exp is None:

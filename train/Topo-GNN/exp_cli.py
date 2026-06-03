@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-import yaml
 
 from fundus_vessels_toolkit.utils.nnet.experiment import ExperimentCfg
 from fundus_vessels_toolkit.utils.nnet.pydantic_yaml import model_validate_yaml_file
@@ -26,11 +25,11 @@ def export_schema(
 
     experiment_path.parent.mkdir(parents=True, exist_ok=True)
     with open(experiment_path, "w") as f:
-        json.dump(ExperimentCfg.model_json_schema(), f, indent=4)
+        json.dump(ExperimentCfg.model_json_schema(), f)
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with open(config_path, "w") as f:
-        json.dump(DigraphGNNTrainerConfig.model_json_schema(), f, indent=4)
+        json.dump(DigraphGNNTrainerConfig.model_json_schema(), f)
 
     template_path.parent.mkdir(parents=True, exist_ok=True)
     if template_path.exists():
@@ -40,6 +39,7 @@ def export_schema(
     with open(template_path, "w") as f:
         f.write(f"""
 # yaml-language-server: $schema={experiment_path}
+experiment: <experiment_name>
 ---
 # yaml-language-server: $schema={config_path}
 """)
@@ -49,6 +49,19 @@ def export_schema(
 def check(file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to check.")]):
     if ExperimentCfg.check_file(file, DigraphGNNTrainerConfig):
         print("Configuration file is valid.")
+
+
+@app.command()
+def test_run(
+    file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to check.")],
+    max_epoch: int = 25,
+):
+    from train import train
+
+    exp = ExperimentCfg.load_experiment(
+        file, DigraphGNNTrainerConfig, header_override={"test_debug": True}, override={"epoch": max_epoch}
+    )
+    train(exp)
 
 
 if __name__ == "__main__":
