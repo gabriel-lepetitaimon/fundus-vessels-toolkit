@@ -1,0 +1,5 @@
+
+# yaml-language-server: $schema=experiment.schema.json
+experiment: <experiment_name>
+---
+# yaml-language-server: $schema=config.schema.json

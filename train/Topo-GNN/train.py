@@ -106,6 +106,9 @@ class HardwareConfig(BaseModel):
     max_batch_size: int = 4
     """Maximum batch size for training. If the batch_size in the config is larger than this, gradient accumulation will be used."""  # noqa: E501
 
+    val_every_n_epoch: int = 10
+    """Number of epochs between each validation. If 0, validation will be done only at the end of training."""
+
     train_num_workers: int = -2
     """Number of workers for the training data loader."""
 
@@ -190,7 +193,7 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
             max_epochs=cfg.epoch,
             logger=exp_run.logger,
             enable_progress_bar=True,
-            check_val_every_n_epoch=20,
+            check_val_every_n_epoch=hdw_cfg.val_every_n_epoch,
             accumulate_grad_batches=grad_acc,
             # gradient_clip_val=0.5,
             # gradient_clip_algorithm="value",
@@ -203,7 +206,7 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
         trainer.fit(model, train_loader, val_loader)
 
         if checkpoint.best_model_score is not None:
-            exp_run.finish(checkpoint.best_model_score.item(), state="success")
+            exp_run.tell(checkpoint.best_model_score.item())
 
         test_args = dict(batch_size=hdw_cfg.test_batch_size, num_workers=hdw_cfg.test_num_workers)
         if cfg.test_version == "all":
@@ -215,10 +218,7 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
         else:
             test_version = cfg.test_version if cfg.test_version != "training" else cfg.dataset.graph_version
             test_set.cfg.graph_version = test_version
-            test_loaders = {
-                k: PyGDataLoader(d.preload(with_image=False), **test_args)  # type: ignore
-                for k, d in test_set.split_by_dataset().items()
-            }
+            test_loaders = {k: PyGDataLoader(d, **test_args) for k, d in test_set.split_by_dataset().items()}  # type: ignore
 
         model._test_dataloaders_names = list(test_loaders.keys())
         trainer.test(model, dataloaders=test_loaders, ckpt_path="best")
@@ -227,7 +227,7 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
 class DigraphGNNTrainer(L.LightningModule):
     def __init__(self, config: DigraphGNNTrainerConfig | dict, compile: bool = False, n_step_per_epoch: int = 64):
         super().__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters(logger=False)
         self.config = DigraphGNNTrainerConfig.model_validate(config)
         self.n_step_per_epoch = n_step_per_epoch
 
@@ -427,7 +427,7 @@ class DigraphGNNTrainer(L.LightningModule):
         model_out = self(batch)
         losses = self.losses(model_out)
         if self._test_dataloaders_names is not None:
-            suffix = "/" + self._test_dataloaders_names[dataloader_idx] + "_"
+            suffix = "/" + self._test_dataloaders_names[dataloader_idx]
         else:
             suffix = ""
         self.log_dict(
@@ -435,10 +435,12 @@ class DigraphGNNTrainer(L.LightningModule):
             batch_size=batch.num_graphs,
             on_step=False,
             on_epoch=True,
-            add_dataloader_idx=self._test_dataloaders_names is not None,
+            add_dataloader_idx=suffix == "",
         )
         test_metrics = self.update_metrics_collection(self.test_metrics, model_out, prefix="test_", suffix=suffix)
-        self.log_dict(test_metrics, batch_size=batch.num_graphs, on_step=False, on_epoch=True)
+        self.log_dict(
+            test_metrics, batch_size=batch.num_graphs, on_step=False, on_epoch=True, add_dataloader_idx=suffix == ""
+        )
 
         self.update_preds(self.test_preds, model_out)
 

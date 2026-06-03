@@ -6,18 +6,18 @@ import numpy as np
 import numpy.typing as npt
 from pydantic import BaseModel, ConfigDict, Field
 
-from fundus_toolkits.utils.geometric import Rect
-
-from ...segment_to_graph.graph_simplification import remove_orphan_nodes, simplify_passing_nodes
-from ...segment_to_graph.vbranch_digraph import VBranchDigraph
 from fundus_toolkits.transform import (
     AffineTransform,
     ElasticTransform,
     FlipTransform,
-    Transform,
     IdentityTransform,
+    Transform,
     TransformComposition,
 )
+from fundus_toolkits.utils.geometric import Rect
+
+from ...segment_to_graph.graph_simplification import remove_orphan_nodes, simplify_passing_nodes
+from ...segment_to_graph.vbranch_digraph import VBranchDigraph
 from ...vascular_data_objects import VBranchGeoData, VGraph, VGraphBranch, VTree
 
 

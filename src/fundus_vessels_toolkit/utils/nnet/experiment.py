@@ -59,6 +59,8 @@ class ExperimentCfg(BaseModel):
     n_trials: int = Field(default=20)
     """Number of trials to run. Default is 20."""
 
+    log_model: bool | Literal["all"] = Field(default=True)
+
     test_debug: bool = Field(default=False)
     """Whether this is a test/debug run. If True, the experiment will use a temporary Optuna storage and will log to Wandb Test & Debug project, to avoid polluting the experiment results with test runs."""  # noqa: E501
 
@@ -240,7 +242,7 @@ class ExperimentRunFactory[T: BaseModel]:
                     run_cfg = self.yaml.validate(self.model)
                     if self.yaml_override is not None:
                         run_cfg = run_cfg.model_copy(update=self.yaml_override)
-                    return ExperimentRun(self.cfg, run_cfg, study, study.ask(fixed_parameters=params), i)
+                    return ExperimentRun(self.cfg, run_cfg, study, trial, i)
         return None
 
     def __enter__(self) -> ExperimentRun[T]:
@@ -296,13 +298,19 @@ class ExperimentRun[T: BaseModel]:
         return self.exp.parameters_grid[self.param_config_id]
 
     @property
-    def exp_name(self) -> str:
+    def experiment_name(self) -> str:
+        """Get the base experiment name without parameter or version information."""
+        version = f"v{self.exp.version}" if self.exp.version is not None else ""
+        return self.exp.experiment + version
+
+    @property
+    def trial_name(self) -> str:
         """Get the experiment name for this run, based on the experiment configuration and the parameter combination."""  # noqa: E501
         trial_name = []
         for k, v in self.parameters_grid.items():
             trial_name.append(f"{k}={v},")
         trial_name = f"[{self.param_config_id}|{';'.join(trial_name)}]" if trial_name else ""
-        return self.exp.experiment + trial_name
+        return self.experiment_name + trial_name
 
     @property
     def run_id(self) -> int:
@@ -311,16 +319,22 @@ class ExperimentRun[T: BaseModel]:
 
     @property
     def run_name(self) -> str:
-        return self.exp_name + f"-{self.run_id:02d}"
+        return self.trial_name + f"-{self.run_id:02d}"
 
     def init(self) -> None:
         # Init logger
+        config = self.cfg.model_dump()
+        config["parameters_grid"] = self.parameters_grid
+        config["EXP"] = self.experiment_name
+        config["TRIAL"] = self.trial_name
         self.logger = WandbLogger(
             name=self.run_name,
             tags=self.exp.tags,
-            group=self.exp.experiment,
+            group=self.exp.topic,
             project="Test & Debug" if self.exp.test_debug else None,
-            config=self.cfg.model_dump(),
+            config=config,
+            log_model=self.exp.log_model,
+            save_dir="tmp",
         )
 
         # Log config artifact
@@ -335,11 +349,10 @@ class ExperimentRun[T: BaseModel]:
             yaml.dump(self.parameters_grid, tmp)
             config_artifact.add_file(tmp.name, name="parameters_grid.yaml")
 
-    def finish(
-        self,
-        values: float | Sequence[float] | None = None,
-        state: Optional[Literal["success", "failed", "aborted"]] = None,
-    ) -> None:
+    def tell(self, values: float | Sequence[float] | None = None):
+        self.study.tell(self.trial, values=values, state=optuna.trial.TrialState.COMPLETE, skip_if_finished=True)
+
+    def finish(self, state: Literal["success", "failed", "aborted"]) -> None:
         """Finish the current trial with the given value and state. This should be called at the end of each trial to report the results to Optuna."""  # noqa: E501
         match state:
             case "success":
@@ -349,13 +362,13 @@ class ExperimentRun[T: BaseModel]:
                 state_ = optuna.trial.TrialState.FAIL
                 exit_code = 10
             case "aborted":
-                state_ = None
+                state_ = optuna.trial.TrialState.PRUNED
                 exit_code = 1
             case _:
                 state_ = None
-        self.study.tell(self.trial, values=values, state=state_, skip_if_finished=True)
+        self.study.tell(self.trial, state=state_, skip_if_finished=True)
 
-        if state is not None and self.logger is not None:
+        if self.logger is not None:
             self.logger.finalize(status=state)
             wandb.finish(exit_code=exit_code)
 

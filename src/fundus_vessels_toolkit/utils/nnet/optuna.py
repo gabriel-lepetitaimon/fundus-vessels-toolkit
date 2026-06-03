@@ -218,8 +218,9 @@ class OptunaStudy(optuna.study.Study):
         return new_id
 
     def ask(self, fixed_parameters: Optional[dict[str, Any]] = None) -> Trial:
+        trail_id = self.new_trial_id()
         trial = super().ask()
-        trial.set_user_attr("ID", self.new_trial_id())
+        trial.set_user_attr("ID", trail_id)
         if fixed_parameters is not None:
             trial.set_user_attr("fixed_params", fixed_parameters)
         return trial
@@ -280,11 +281,20 @@ def optuna_parse_int(value: int | IntSearchSpace, info: ValidationInfo):
     if info.field_name is None:
         raise ValueError("Field name must be provided in ValidationInfo for optuna_parse_int.")
 
-    low, high = re.split(r"[:~]", value)
-    return current_trial().suggest_int(info.field_name, int(low), int(high), log="~" in value)
+    search_space = re.split(r"[:~]", value)
+    if len(search_space) == 2:
+        low, high = search_space
+        step = 1
+    elif len(search_space) == 3:
+        low, step, high = search_space
+    else:
+        raise ValueError(f"Invalid search space format: {value}. Expected format is 'low:high' or 'low:step:high'.")
+    return current_trial().suggest_int(info.field_name, int(low), int(high), log="~" in value, step=int(step))
 
 
-type IntSearchSpace = Annotated[str, StringConstraints(pattern=rf"^(?:(\d+(:|~)\d+)|{VAR_PATTERN})$")]
+type IntSearchSpace = Annotated[
+    str, StringConstraints(pattern=r"^(?:((\+|-)?\d+(:|~)(\+|-)?\d+(?:(:|~)(\+|-)?\d+)?)|" + VAR_PATTERN + r")$")
+]
 type IntHyperParam = Annotated[int, BeforeValidator(optuna_parse_int, json_schema_input_type=int | IntSearchSpace)]
 """
 An integer field accepting either a fixed integer or a string describing an integer search space. 
