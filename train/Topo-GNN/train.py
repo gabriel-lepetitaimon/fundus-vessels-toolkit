@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Literal, NotRequired, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict, get_args
 
 import psutil
 import pytorch_lightning as L
@@ -38,7 +38,12 @@ from fundus_vessels_toolkit.models.topology.losses import (
     CrossEntropyLoss,
 )
 from fundus_vessels_toolkit.models.topology.model import BranchDigraphModel, BranchDigraphModelCfg
-from fundus_vessels_toolkit.utils.nnet.optuna import FloatHyperParam, IntHyperParam
+from fundus_vessels_toolkit.utils.nnet.optuna import (
+    FloatHyperParam,
+    IntHyperParam,
+    ListLiteralHyperParam,
+    LiteralHyperParam,
+)
 
 # torch.set_float32_matmul_precision("medium")
 torch.backends.fp32_precision = "ieee"  # type: ignore
@@ -48,19 +53,20 @@ torch.backends.cudnn.conv.fp32_precision = "tf32"  # type: ignore
 
 
 type TrainingSets = Literal["FundusAV", "HRF", "LES-AV", "MAPLES-DR", "DRIVE_train", "GAVE-train", "INSPIRE"]
+type GraphVersion = Literal["fvt", "automorph", "vesx", "all", "training"]
 
 
 class DigraphGNNTrainerConfig(BaseModel):
-    model_config = ConfigDict(use_attribute_docstrings=True)
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
     dataset: BranchDigraphDatasetConfig = Field(default_factory=BranchDigraphDatasetConfig)
     model: BranchDigraphModelCfg = Field(default_factory=BranchDigraphModelCfg)
     contrastive_loss: BranchContrastiveLossOpt = Field(default_factory=BranchContrastiveLossOpt)
 
-    training_set: TrainingSets | list[TrainingSets] | None = Field(default=None)
+    training_set: Annotated[list[TrainingSets], ListLiteralHyperParam(TrainingSets)] | None = Field(default=None)
     """Training set(s) to use. Can be a single dataset name, a list of dataset names, or None to use all datasets."""
 
-    test_version: str | None = Field(default=None)
+    test_version: Annotated[GraphVersion, LiteralHyperParam(GraphVersion)] = Field(default="training")
     """Version of the test set to use. If None, the same version as the training set will be used."""
 
     epoch: IntHyperParam = 160
@@ -151,9 +157,8 @@ def train(config=None, hdw_cfg=None):
     if cfg.training_set is not None and cfg.training_set:
         train_set = train_set.select_dataset(cfg.training_set)
         val_set = val_set.select_dataset(cfg.training_set)
-    if cfg.test_version is not None:
+    if cfg.test_version not in ("training", "all"):
         val_set.cfg.graph_version = cfg.test_version
-        test_set.cfg.graph_version = cfg.test_version
 
     batch_size, grad_acc = hdw_cfg.batch_size_grad_acc(cfg.batch_size)
 
@@ -192,10 +197,21 @@ def train(config=None, hdw_cfg=None):
 
     trainer.fit(model, train_loader, val_loader)
 
-    test_loaders = {
-        k: PyGDataLoader(v, batch_size=hdw_cfg.test_batch_size, num_workers=hdw_cfg.test_num_workers)
-        for k, v in test_set.split_by_dataset().items()
-    }
+    test_args = dict(batch_size=hdw_cfg.test_batch_size, num_workers=hdw_cfg.test_num_workers)
+    if cfg.test_version == "all":
+        test_loaders = {
+            f"{k}-{v}": PyGDataLoader(d.use_version(v), **test_args)  # type: ignore
+            for k, d in test_set.split_by_dataset().items()
+            for v in test_set.list_versions()
+        }
+    else:
+        test_version = cfg.test_version if cfg.test_version != "training" else cfg.dataset.graph_version
+        test_set.cfg.graph_version = test_version
+        test_loaders = {
+            k: PyGDataLoader(test_set.preload(with_image=False), **test_args)  # type: ignore
+            for k, d in test_set.split_by_dataset().items()
+        }
+
     model._test_dataloaders_names = list(test_loaders.keys())
     trainer.test(model, dataloaders=test_loaders, ckpt_path="best")
 

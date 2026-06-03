@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import itertools
 from contextvars import ContextVar, Token
+from pathlib import Path
 from typing import Annotated, Any, Literal, Optional, overload
 
 import numpy as np
 import optuna
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PrivateAttr, ValidationError
 from pytorch_lightning.callbacks import Callback
+from rich.console import Console
 
 from fundus_toolkits.utils.typing import Int1DArray
 
 from .optuna import OptunaCfg
+from .pydantic_yaml import model_validate_yaml_file, pretty_validation_error_msg
 
 
 def _validate_parameters_grid(value: dict[str, list] | list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -119,6 +122,38 @@ class ExperimentCfg(BaseModel):
     def _study_names(self) -> list[str]:
         """List of Optuna study names for this experiment, based on the parameter combinations and the number of trials."""  # noqa: E501
         return [self.experiment + "-" + param_hash for param_hash in self.parameters_hashes]
+
+    @classmethod
+    def check_file(cls, file: str | Path, model: type, strict: Optional[bool] = None) -> bool:
+        """Check if the given experiment configuration file is valid according to the schema. Raises an exception if the file is invalid."""  # noqa: E501
+        console = Console(highlight=False)
+        file = Path(file)
+        if not file.exists():
+            console.print(f"[bold][red]Experiment configuration file not found[/red][/bold]: {file}")
+            return False
+        try:
+            exp = model_validate_yaml_file(file, ExperimentCfg, strict=strict)
+        except ValidationError as e:
+            msg = f"[bold][red]Invalid experiment header[/red][bold]: {file}\n"
+            msg += pretty_validation_error_msg(e, ExperimentCfg)
+            console.print(msg)
+            return False
+
+        for i, study_name in enumerate(exp._study_names()):
+            study = exp.optuna.load_study(study_name, ram_storage=True)
+            run = ExperimentRun(exp, i, study, study.ask(fixed_parameters=exp.parameters_grid[i]))
+            with run:
+                try:
+                    model_validate_yaml_file(file, model, document_id=1, strict=strict)
+                except ValidationError as e:
+                    file_link = f"[link=file://{str(file.absolute())}]{file}[/link]"
+                    msg = f"[bold][red]Invalid experiment configuration[/red][/bold]: {file_link} with parameter(s):\n"
+                    for k, v in exp.parameters_grid[i].items():
+                        msg += f"\t${k}={repr(v)}\n"
+                    msg += "\n" + pretty_validation_error_msg(e, model)
+                    console.print(msg)
+                    return False
+        return True
 
 
 ####################################

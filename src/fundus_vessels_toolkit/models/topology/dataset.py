@@ -447,7 +447,7 @@ class SampleSource:
                     av2tree = GNNAVSegToTree()
                 fundus.update(av=graph_path, crop_pad=roi, reshape_method="resize", inplace=True)
                 if mask_optic_disc:
-                    selem = disk(fundus.od_diameter * 0.2, dtype=bool)
+                    selem = disk(fundus.od_diameter * 0.2, dtype=bool)  # type: ignore
                     mask = ~binary_erosion(fundus.od, selem)  # type: ignore
                     fundus.update(av=fundus.av * mask, inplace=True)
                 graph = av2tree.to_vgraph(fundus)
@@ -509,13 +509,13 @@ class BranchDigraphDatasetConfig(BaseModel):
 
     model_config = ConfigDict(use_attribute_docstrings=True)
 
-    graph_version: str | dict[str, float] = Field(default_factory=dict)
+    graph_version: dict[str, float] | str = Field(default_factory=dict)
     """Version of the graph to use as input.
     If a string is provided, it should be one of the keys in the graphes dict of the samples, and the corresponding graph will be used for all samples.
     If a dict is provided, it should map graph version names to weights, and the corresponding graphs will be loaded and merged with the specified weights for each sample. If a version name in the dict is not found in a sample, that sample will be skipped with a warning.
     """  # noqa: E501
     preload: bool | Literal["without-image"] = Field(default=False)
-    augment: bool | AugmentationOpts = Field(default=False)
+    augment: AugmentationOpts | bool = Field(default=False)
     verbose: bool = Field(default=True)
     # line_p_smoothing: NotRequired[float] = 0.0
 
@@ -813,6 +813,18 @@ class BranchDigraphDataset(PygDataset):
             return sample
         else:
             return self.samples_info[idx].load(discard_gt_tree=discard_gt_tree)
+
+    def list_versions(self) -> list[str]:
+        """Return the list of available graph versions in the dataset."""
+        versions = set()
+        for sample in self.samples_info:
+            versions.update(sample.graphes.keys())
+        return sorted(versions)
+
+    def use_version(self, version: str) -> Self:
+        """Set the default graph version to use when calling get() without specifying a version. The version should be one of the available versions in the dataset, which can be obtained by calling list_versions()."""  # noqa: E501
+        self.cfg.graph_version = version
+        return self
 
     def jppype_show(
         self,

@@ -3,12 +3,25 @@ from __future__ import annotations
 import re
 from abc import abstractmethod
 from contextvars import ContextVar
-from typing import Annotated, Any, Callable, Literal, Optional, Self, Sequence, get_args
+from types import EllipsisType
+from typing import Annotated, Any, Generic, Literal, Optional, Self, cast, get_args
 
 import optuna
 from optuna.distributions import CategoricalChoiceType
 from optuna.trial import Trial
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PrivateAttr, StringConstraints, ValidationInfo
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    TypeAdapter,
+    ValidationError,
+    ValidationInfo,
+)
+import yaml
+
+optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 
 ##################################
@@ -155,8 +168,8 @@ class OptunaCfg(BaseModel):
     def optuna_db(self) -> OptunaDB | None:
         return OptunaDB(storage=self.storage) if self.storage is not None else None
 
-    def load_study(self, study_name: str) -> OptunaStudy:
-        return OptunaStudy.load(study_name=study_name, cfg=self)
+    def load_study(self, study_name: str, ram_storage: bool = False) -> OptunaStudy:
+        return OptunaStudy.load(study_name=study_name, cfg=self, ram_storage=ram_storage)
 
 
 class OptunaDB:
@@ -174,10 +187,10 @@ class OptunaStudy(optuna.study.Study):
     """Utility class for managing a specific Optuna study. This class provides methods for retrieving trial information, best parameters, and other related data for a given Optuna study."""  # noqa: E501
 
     @classmethod
-    def load(cls, study_name: str, cfg: OptunaCfg) -> Self:
+    def load(cls, study_name: str, cfg: OptunaCfg, ram_storage: bool = False) -> Self:
         study = optuna.create_study(
             study_name=study_name,
-            storage=cfg.storage,
+            storage=None if ram_storage else cfg.storage,
             sampler=cfg.sampler.create_sampler(),
             pruner=cfg.pruner.create_pruner() if cfg.pruner is not None else None,
             direction=cfg.direction,
@@ -228,22 +241,20 @@ def current_trial() -> Trial:
     return exp.trial
 
 
-VAR_SYMBOL = r"\$"
-VAR_PATTERN = rf"({VAR_SYMBOL}[a-zA-Z_]\w*)"
+VAR_SYMBOL = "$"
+VAR_PATTERN = rf"(\{VAR_SYMBOL}[a-zA-Z_]\w*)"
+ENUM_SYMBOL = "~"
 
 
-def optuna_parse_int(value: int | IntSearchSpace, info: ValidationInfo) -> int:
-    if isinstance(value, int):
+def optuna_parse_int(value: int | IntSearchSpace, info: ValidationInfo):
+    if not isinstance(value, str):
         return value
 
     if value.startswith(VAR_SYMBOL):
         params = current_trial().user_attrs.get("fixed_params", {}).get(value[1:], ...)
         if params is ...:
             raise ValueError(f"Parameter '{value[1:]}' not found in fixed parameters of the current trial.")
-        try:
-            return int(params)
-        except Exception as e:
-            raise ValueError(f"Failed to parse parameter '{value[1:]}' with value '{params}' as int.") from None
+        return params
 
     if info.field_name is None:
         raise ValueError("Field name must be provided in ValidationInfo for optuna_parse_int.")
@@ -260,18 +271,15 @@ Search space is defined as "low:high" for uniform sampling or "low~high" for log
 """
 
 
-def optuna_parse_float(value: float | FloatSearchSpace, info: ValidationInfo) -> float:
-    if isinstance(value, (float, int)):
-        return float(value)
+def optuna_parse_float(value: float | FloatSearchSpace, info: ValidationInfo):
+    if not isinstance(value, str):
+        return value
 
     if value.startswith(VAR_SYMBOL):
         params = current_trial().user_attrs.get("fixed_params", {}).get(value[1:], ...)
         if params is ...:
             raise ValueError(f"Parameter '{value[1:]}' not found in fixed parameters of the current trial.")
-        try:
-            return float(params)
-        except Exception as e:
-            raise ValueError(f"Failed to parse parameter '{value[1:]}' with value '{params}' as float.") from None
+        return params
 
     if info.field_name is None:
         raise ValueError("Field name must be provided in ValidationInfo for optuna_parse_float.")
@@ -292,48 +300,113 @@ Search space is defined as "low:high" for uniform sampling or "low~high" for log
 """
 
 
-def optuna_parse_literal[T: CategoricalChoiceType](valid_values: Sequence[T]) -> Callable[[str | T, ValidationInfo], T]:
-    def str_to_literal(value: str) -> T:
-        for v in valid_values:
-            if re.escape(str(v)) == value:
-                return v
-        raise ValueError(f"Value '{value}' is not in the list of valid values: {valid_values}.")
+def optuna_parse_literal(literal_type, to_list: bool = False):
+    def parser(value, info: ValidationInfo):
+        if not isinstance(value, str):
+            return value
 
-    def parser(value: str | T, info: ValidationInfo) -> T:
-        value = str(value)
         if value.startswith(VAR_SYMBOL):
             params = current_trial().user_attrs.get("fixed_params", {}).get(value[1:], ...)
             if params is ...:
                 raise ValueError(f"Parameter '{value[1:]}' not found in fixed parameters of the current trial.")
-            try:
-                return str_to_literal(params)
-            except Exception as e:
-                raise ValueError(
-                    f"Failed to parse parameter '{value[1:]}' with value '{params}' as a valid literal ({T})."
-                ) from None
+            value = params
 
-        if "|" not in value:
-            return str_to_literal(value)
-        values = value.split("|")
+        if ENUM_SYMBOL not in value:
+            if to_list and isinstance(value, str):
+                value = [v.strip() for v in value.split(",")]
+            return value
         assert info.field_name is not None, "Field has no name."
-        values_: list[T] = [str_to_literal(v) for v in values]
-        return current_trial().suggest_categorical(info.field_name, values_)  # type: ignore
+
+        values = value.split(ENUM_SYMBOL)
+        adapter = TypeAdapter(list[literal_type] if to_list else literal_type)
+        if to_list:
+            values = [yaml.safe_load(v.strip()) for v in values]
+        values_ = []
+        for v in values:
+            try:
+                values_.append(adapter.validate_python(v))
+            except ValidationError as e:
+                raise ValueError(
+                    f"Invalid value in search space: {v}. Valid values are list of: {literal_pattern(literal_type)}"
+                ) from None
+        return values_[current_trial().suggest_int(info.field_name, 0, len(values_) - 1)]
 
     return parser
 
 
-def _pattern_from_literal(literal_type) -> str:
-    valid_values_re = "|".join(re.escape(str(v)) for v in get_args(literal_type))
-    return r"(" + valid_values_re + r")(\|(" + valid_values_re + r"))*"
+def literal_pattern(literal_type) -> str:
+    literals = get_args(literal_type)
+    while literals == ():
+        if hasattr(literal_type, "__value__"):
+            literal_type = literal_type.__value__
+            literals = get_args(literal_type)
+        else:
+            break
+    literals = list(literals)
+    if None in literals:
+        literals = [v for v in literals if v is not None] + ["null"]
+    return "|".join(re.escape(str(v)) for v in literals)
 
 
-type LiteralSearchSpace[T] = Annotated[
-    T, StringConstraints(pattern=rf"^(?:({_pattern_from_literal(T)})|{VAR_PATTERN})$")
-]
-type LiteralHyperParam[T] = Annotated[
-    T, BeforeValidator(optuna_parse_literal(get_args(T)), json_schema_input_type=str | T)
-]
-"""
-A field bounded to a set of literal values, accepting either a fixed value or a string describing a categorical search space.
-Search space is defined as "value1|value2|value3" for categorical sampling.
-"""  # noqa: E501
+class _LiteralSearchSpace:
+    @classmethod
+    def pattern(cls, literal_type) -> str:
+        literal_re = literal_pattern(literal_type)
+        return rf"({literal_re})(\s*{ENUM_SYMBOL}\s*({literal_re}))*"
+
+    def __class_getitem__(cls, T):
+        return Annotated[str, StringConstraints(pattern=rf"^(?:({cls.pattern(T)})|{VAR_PATTERN})$")]
+
+
+def LiteralHyperParam(literal_type):
+    """Annotation for a hyperparameter that can be either a fixed literal value or a string describing a categorical search space.
+    Search space is defined as "value1~value2~value3" for categorical sampling.
+
+    Parameters
+    ----------
+    literal_type :
+        Literal type defining the allowed fixed values for the hyperparameter.
+
+    Examples
+    --------
+    >>> CustomLiteral = Literal["a", "b", None]
+    >>> test_version: Annotated[CustomLiteral, LiteralHyperParam(CustomLiteral)] = Field(default=None)
+
+    """  # noqa: E501
+    return BeforeValidator(
+        optuna_parse_literal(literal_type),
+        json_schema_input_type=literal_type | _LiteralSearchSpace[literal_type],
+    )
+
+
+class _ListLiteralSearchSpace:
+    @classmethod
+    def pattern(cls, literal_type) -> str:
+        literal_re = literal_pattern(literal_type)
+        array_re = rf"\s*\[\s*({literal_re})\s*(?:,\s*({literal_re})\s*)*\]"
+        return rf"({array_re})(\s*{ENUM_SYMBOL}\s*({array_re}))*"
+
+    @classmethod
+    def __class_getitem__(cls, T):
+        return Annotated[str, StringConstraints(pattern=rf"^(?:({cls.pattern(T)})|{VAR_PATTERN})$")]
+
+
+def ListLiteralHyperParam(literal_type):
+    """Annotation for a hyperparameter that can be either a fixed list of literal values or a string describing a categorical search space over lists of literals.
+
+    Search space is defined as "[value1, value2]~[value3, value4]~[value5]" for categorical sampling over lists of literals.
+
+    Parameters
+    ----------
+    literal_type :
+        Literal type defining the allowed fixed values for the elements of the list.
+
+    Examples
+    --------
+    >>> CustomLiteral = Literal["a", "b", None]
+    >>> training_set: Annotated[list[CustomLiteral], ListLiteralHyperParam(CustomLiteral)] = Field(default=[None])
+    """  # noqa: E501
+    return BeforeValidator(
+        optuna_parse_literal(literal_type, to_list=True),
+        json_schema_input_type=literal_type | list[literal_type] | _ListLiteralSearchSpace[literal_type],
+    )

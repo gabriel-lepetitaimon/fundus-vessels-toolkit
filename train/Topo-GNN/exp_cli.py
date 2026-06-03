@@ -6,6 +6,7 @@ import typer
 import yaml
 
 from fundus_vessels_toolkit.utils.nnet.experiment import ExperimentCfg
+from fundus_vessels_toolkit.utils.nnet.pydantic_yaml import model_validate_yaml_file
 from train import DigraphGNNTrainerConfig
 
 app = typer.Typer()
@@ -46,13 +47,8 @@ def export_schema(
 
 @app.command()
 def check(file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to check.")]):
-    try:
-        with open(file, "r") as f:
-            config_dict = json.load(f)
-        ExperimentCfg(**config_dict)
-        print("Experiment configuration is valid.")
-    except Exception as e:
-        print(f"Experiment configuration is invalid: {e}")
+    if ExperimentCfg.check_file(file, DigraphGNNTrainerConfig):
+        print("Configuration file is valid.")
 
 
 if __name__ == "__main__":

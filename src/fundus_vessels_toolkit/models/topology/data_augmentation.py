@@ -123,10 +123,10 @@ class RotationOpts(BaseModel):
 class AugmentationOpts(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True)
 
-    elastic: bool | ElasticOpts = Field(default=True)
+    elastic: ElasticOpts | bool = Field(default=True)
     """Whether to apply elastic deformation"""
 
-    rotate: bool | RotationOpts = Field(default=False)
+    rotate: RotationOpts | bool = Field(default=False)
     """Whether to apply rotation"""
 
     horizontal_flip: bool = Field(default=True)
