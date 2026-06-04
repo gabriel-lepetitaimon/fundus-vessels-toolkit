@@ -114,15 +114,15 @@ def sbatch(
     # Replace field in bash script
     with open(script, "r") as script_file:
         script_txt = script_file.read()
-    script_txt.replace("{EXP}", exp_header.experiment_name)
-    script_txt.replace("{N_RUNS}", str(n_runs))
-    script_txt.replace("{EXP_FILE}", str((job_dir / "cfg.yaml").absolute()))
+    script_txt = script_txt.replace(r"{EXP}", exp_header.experiment_name)
+    script_txt = script_txt.replace(r"{N_RUNS}", str(n_runs))
+    script_txt = script_txt.replace(r"{EXP_FILE}", str((job_dir / "cfg.yaml").absolute()))
     with open(job_script, "w") as script_file:
         script_file.write(script_txt)
     job_script.chmod(0o755)
 
     # Submit job
-    submit_result = subprocess.run(["sbatch", str(job_script.absolute())], shell=True, capture_output=True, text=True)
+    submit_result = subprocess.run(["sbatch", str(job_script.absolute())], capture_output=True, text=True)
     if submit_result.returncode != 0:
         print(f"Failed to submit job: {submit_result.stderr}")
     else:
