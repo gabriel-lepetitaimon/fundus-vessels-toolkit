@@ -29,6 +29,9 @@ class YamlLoc:
 
     @classmethod
     def from_loc(cls, loc: tuple[int | str, ...], yaml_data, line_offset: int = 0, file: Optional[Path] = None):
+        if yaml_data is None:
+            return cls(line=line_offset, column=0, file=file), ()
+
         item: Any = yaml_data
         loc_keys = []
         loc_items = [item]

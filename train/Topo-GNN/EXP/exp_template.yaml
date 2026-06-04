@@ -3,3 +3,4 @@
 experiment: <experiment_name>
 ---
 # yaml-language-server: $schema=config.schema.json
+epoch: 250

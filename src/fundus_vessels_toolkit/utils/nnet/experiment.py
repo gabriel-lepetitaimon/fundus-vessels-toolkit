@@ -196,16 +196,16 @@ class ExperimentCfg(BaseModel):
             console.print(msg)
             return False
 
-        for i, study_name in enumerate(exp._study_names()):
+        for i, (study_name, parameters) in enumerate(exp.parameters_grid_by_name.items()):
             study = exp.optuna.load_study(study_name, temp_storage=True)
-            trial = study.ask(fixed_parameters=exp.parameters_grid[i])
+            trial = study.ask(fixed_parameters=parameters)
             with TrialContext(trial):
                 try:
                     yaml_doc.validate(model, strict=strict)
                 except ValidationError as e:
                     file_link = f"[link=file://{str(yaml_doc.file.absolute())}]{file}[/link]"
                     msg = f"[bold][red]Invalid experiment configuration[/red][/bold]: {file_link} with parameter(s):\n"
-                    for k, v in exp.parameters_grid[i].items():
+                    for k, v in parameters.items():
                         msg += f"\t${k}={repr(v)}\n"
                     msg += "\n" + pretty_validation_error_msg(e, model)
                     console.print(msg)

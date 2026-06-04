@@ -46,6 +46,14 @@ experiment: <experiment_name>
 ---
 # yaml-language-server: $schema={config_path}
 """)
+        required_fields = [
+            field_name
+            for field_name, field_info in DigraphGNNTrainerConfig.model_fields.items()
+            if field_info.is_required()
+        ]
+        if required_fields:
+            for field_name in required_fields:
+                f.write(f"{field_name}: <{field_name}>\n")
 
 
 @app.command()
@@ -81,9 +89,13 @@ def sbatch(
     script: Annotated[Path, typer.Argument(help="Path to the bash script to submit.")],
     file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to run.")],
 ):
+    print(f"Checking configuration file {file}...", end="")
     if not check(file):
+        print("\t [FAILED]")
         print("Configuration file is not valid. Aborting.")
         return
+    else:
+        print("\t [OK]")
     exp_header = ExperimentCfg.load_header(file)
     n_runs = exp_header.trials_to_run()
     if n_runs == 0:
