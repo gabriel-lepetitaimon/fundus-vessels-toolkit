@@ -37,6 +37,7 @@ from ...segment_to_graph.vbranch_digraph import (
 )
 from ...utils import if_none
 from ...utils.numpy import np_group_by
+from ...utils.nnet.experiment import ExperimentHeader, ExperimentRun
 from ...vascular_data_objects import VBranchGeoData, VTree
 from .data import BranchDigraphData
 from .data_augmentation import AugmentationOpts
@@ -516,7 +517,7 @@ class BranchDigraphDatasetConfig(BaseModel):
     """  # noqa: E501
     preload: bool | Literal["without-image"] = Field(default=False)
     augment: AugmentationOpts | bool = Field(default=False)
-    verbose: bool = Field(default=True)
+
     # line_p_smoothing: NotRequired[float] = 0.0
 
 
@@ -571,9 +572,11 @@ class BranchDigraphDataset(PygDataset):
 
     def preload(self, with_image: bool = False) -> Self:
         """Preload the samples into memory. If with_image is False, only the graph and topology data will be preloaded, and the fundus images will be loaded on demand when calling get_sample()."""  # noqa: E501
+        progress_bar = run.header.progress_bar if (run := ExperimentRun.current()) is not None else True
+
         self._preloaded_samples = [
             samples_info.load(image=with_image)
-            for samples_info in tqdm.tqdm(self.samples_info, desc="Preloading dataset", disable=not self.cfg.verbose)
+            for samples_info in tqdm.tqdm(self.samples_info, desc="Preloading dataset", disable=not progress_bar)
         ]
         return self
 
@@ -606,7 +609,7 @@ class BranchDigraphDataset(PygDataset):
         n_workers: int = 0,
     ) -> Self:
         cfg = cfg or BranchDigraphDatasetConfig()
-        verbose = cfg.verbose
+        verbose = run.header.verbose if (run := ExperimentRun.current()) is not None else True
         # === List source files ===
         if isinstance(fundus_dir, list):
             N = len(fundus_dir)

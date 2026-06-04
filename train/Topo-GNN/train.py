@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Annotated, Literal, NotRequired, TypedDict
 
@@ -11,7 +12,6 @@ import torch.nn as nn
 from lightning_fabric.plugins.precision.precision import _PRECISION_INPUT_STR
 from pydantic import BaseModel, ConfigDict, Field
 from pytorch_lightning.callbacks import ModelCheckpoint
-from pytorch_lightning.loggers import WandbLogger
 from torch_geometric.loader import DataLoader as PyGDataLoader
 from torchmetrics import MetricCollection, Specificity
 from torchmetrics.classification import Accuracy, Precision, Recall
@@ -103,6 +103,10 @@ class HardwareConfig(BaseModel):
             specs["devices"] = self.gpu
         return specs
 
+    @classmethod
+    def current(cls) -> HardwareConfig:
+        return _hardware_config.get() or HardwareConfig()
+
     max_batch_size: int = 4
     """Maximum batch size for training. If the batch_size in the config is larger than this, gradient accumulation will be used."""  # noqa: E501
 
@@ -124,6 +128,9 @@ class HardwareConfig(BaseModel):
     precision: _PRECISION_INPUT_STR = "bf16-mixed"
     """Precision for training. Can be one of the following: "64-true", "32-true", "16-true", "16-mixed", "bf16-true", "bf16-mixed", "transformer-engine", "transformer-engine-float16"."""  # noqa: E501
 
+    progress_bar: bool = False
+    """Whether to show the progress bar during training. Can be useful to disable it when running in a non-interactive environment."""  # noqa: E501
+
     gpu: int | list[int] | None = None
     """GPU device index to use. If None, the default GPU will be used."""
 
@@ -135,6 +142,9 @@ class HardwareConfig(BaseModel):
             grad_acc_steps = math.ceil(batch_size / self.max_batch_size)
             actual_batch_size = int(round(batch_size / grad_acc_steps))
             return (actual_batch_size, grad_acc_steps)
+
+
+_hardware_config: ContextVar[HardwareConfig | None] = ContextVar("_hardware_config", default=None)
 
 
 def load_hardware_config(cfg: Path | str | dict | None) -> HardwareConfig:
@@ -150,7 +160,9 @@ def load_hardware_config(cfg: Path | str | dict | None) -> HardwareConfig:
         else:
             return HardwareConfig()
 
-    return HardwareConfig.model_validate(cfg)
+    hdw_cfg = HardwareConfig.model_validate(cfg)
+    _hardware_config.set(hdw_cfg)
+    return hdw_cfg
 
 
 def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=None):
@@ -192,7 +204,7 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
         trainer = L.Trainer(
             max_epochs=cfg.epoch,
             logger=exp_run.logger,
-            enable_progress_bar=True,
+            enable_progress_bar=hdw_cfg.progress_bar,
             check_val_every_n_epoch=hdw_cfg.val_every_n_epoch,
             accumulate_grad_batches=grad_acc,
             # gradient_clip_val=0.5,

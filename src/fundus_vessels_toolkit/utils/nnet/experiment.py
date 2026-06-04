@@ -26,7 +26,7 @@ from .pydantic_yaml import InvalidDocumentCountError, YamlDocument, YamlDocument
 class NoTrialsToRunError(RuntimeError):
     """Raised when trying to load an experiment that has no remaining trials to run."""
 
-    def __init__(self, header: ExperimentCfg, file: str | Path):
+    def __init__(self, header: ExperimentHeader, file: str | Path):
         super().__init__(
             f"All trials for this experiment have already been completed. No remaining trials to run for experiment defined in {file}."  # noqa: E501
         )
@@ -50,7 +50,7 @@ def _validate_parameters_grid(value: dict[str, list] | list[dict[str, Any]]) -> 
         raise ValueError("parameters_grid must be either a dict of lists or a list of dicts.")
 
 
-class ExperimentCfg(BaseModel):
+class ExperimentHeader(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True, frozen=True)
 
     experiment: str
@@ -82,6 +82,12 @@ class ExperimentCfg(BaseModel):
 
     optuna: OptunaCfg = Field(default_factory=OptunaCfg)
     """Optuna configuration for hyperparameter optimization."""
+
+    progress_bar: bool = Field(default=True)
+    """Whether to show a progress bar during training. This can be set to False to reduce console output when running many trials."""  # noqa: E501
+
+    verbose: bool = Field(default=True)
+    """Whether to show verbose output during training. """
 
     _file: Optional[Path] = PrivateAttr(default=None)
 
@@ -160,11 +166,13 @@ class ExperimentCfg(BaseModel):
         return self._file
 
     @classmethod
-    def _read_file(cls, file: str | Path, strict: Optional[bool] = None) -> tuple[ExperimentCfg, YamlDocumentWithFile]:
+    def _read_file(
+        cls, file: str | Path, strict: Optional[bool] = None
+    ) -> tuple[ExperimentHeader, YamlDocumentWithFile]:
         yaml_docs = YamlDocument.read_file(file)
         if len(yaml_docs) != 2:
             raise InvalidDocumentCountError(expected=2, actual=len(yaml_docs), file=file)
-        exp = yaml_docs[0].validate(ExperimentCfg, strict=strict)
+        exp = yaml_docs[0].validate(ExperimentHeader, strict=strict)
         exp._file = yaml_docs[0].file
         return exp, yaml_docs[1]
 
@@ -201,7 +209,7 @@ class ExperimentCfg(BaseModel):
             return False
         except ValidationError as e:
             msg = f"[bold][red]Invalid experiment header[/red][bold]: {file}\n"
-            msg += pretty_validation_error_msg(e, ExperimentCfg)
+            msg += pretty_validation_error_msg(e, ExperimentHeader)
             console.print(msg)
             return False
 
@@ -222,7 +230,7 @@ class ExperimentCfg(BaseModel):
         return True
 
     @classmethod
-    def load_header(cls, file: str | Path) -> ExperimentCfg:
+    def load_header(cls, file: str | Path) -> ExperimentHeader:
         """Get the number of remaining trials to run for the given experiment configuration file. This is calculated as the total number of trials minus the number of completed trials."""  # noqa: E501
         exp, _ = cls._read_file(file)
         return exp
@@ -251,7 +259,7 @@ class ExperimentCfg(BaseModel):
 
 
 class ExperimentRunFactory[T: BaseModel]:
-    def __init__(self, cfg: ExperimentCfg, yaml: YamlDocument, model: type[T], yaml_override: dict | None = None):
+    def __init__(self, cfg: ExperimentHeader, yaml: YamlDocument, model: type[T], yaml_override: dict | None = None):
         self.cfg = cfg
         self.model = model
         self.yaml = yaml
@@ -304,7 +312,7 @@ class ExperimentRun[T: BaseModel]:
     """Context manager for setting the current experiment. This is used internally by the OptunaCfg to manage the experiment context during hyperparameter optimization."""  # noqa: E501
 
     def __init__(
-        self, exp: ExperimentCfg, cfg: T, study: optuna.study.Study, trial: optuna.Trial, param_config_id: int
+        self, exp: ExperimentHeader, cfg: T, study: optuna.study.Study, trial: optuna.Trial, param_config_id: int
     ):
         self.header = exp
         self.cfg = cfg

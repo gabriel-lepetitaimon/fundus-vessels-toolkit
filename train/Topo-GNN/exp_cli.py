@@ -7,7 +7,7 @@ from typing import Annotated
 
 import typer
 
-from fundus_vessels_toolkit.utils.nnet.experiment import ExperimentCfg, NoTrialsToRunError
+from fundus_vessels_toolkit.utils.nnet.experiment import ExperimentHeader, NoTrialsToRunError
 from train import DigraphGNNTrainerConfig
 
 app = typer.Typer()
@@ -27,7 +27,7 @@ def export_schema(
 
     experiment_path.parent.mkdir(parents=True, exist_ok=True)
     with open(experiment_path, "w") as f:
-        json.dump(ExperimentCfg.model_json_schema(), f)
+        json.dump(ExperimentHeader.model_json_schema(), f)
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with open(config_path, "w") as f:
@@ -57,7 +57,7 @@ experiment: <experiment_name>
 
 @app.command()
 def check(file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to check.")]):
-    if ExperimentCfg.check_file(file, DigraphGNNTrainerConfig):
+    if ExperimentHeader.check_file(file, DigraphGNNTrainerConfig):
         print("Configuration file is valid.")
 
 
@@ -68,7 +68,7 @@ def test_run(
 ):
     from train import train
 
-    exp = ExperimentCfg.load_experiment(
+    exp = ExperimentHeader.load_experiment(
         file, DigraphGNNTrainerConfig, header_override={"test_debug": True}, override={"epoch": max_epoch}
     )
     train(exp)
@@ -81,7 +81,7 @@ def single_run(
     from train import train
 
     try:
-        exp = ExperimentCfg.load_experiment(file, DigraphGNNTrainerConfig)
+        exp = ExperimentHeader.load_experiment(file, DigraphGNNTrainerConfig)
     except NoTrialsToRunError as e:
         raise typer.Exit(20) from None
     train(exp)
@@ -93,13 +93,13 @@ def sbatch(
     file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to run.")],
 ):
     print(f"Checking configuration file {file}...")
-    if ExperimentCfg.check_file(file, DigraphGNNTrainerConfig):
+    if ExperimentHeader.check_file(file, DigraphGNNTrainerConfig):
         print("\t\t [OK]")
     else:
         print("Configuration file is not valid. Aborting.")
         return
 
-    exp_header = ExperimentCfg.load_header(file)
+    exp_header = ExperimentHeader.load_header(file)
     n_runs = exp_header.trials_to_run()
     if n_runs == 0:
         print("No remaining trials to run for this configuration. Aborting.")
