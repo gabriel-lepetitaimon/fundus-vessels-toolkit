@@ -105,7 +105,11 @@ class ExperimentCfg(BaseModel):
                 counts[i] = study.valid_trials_count(only_completed=only_completed)
         return counts if split_by_parameters else sum(counts)
 
-    def trials_to_run(self, *, split_by_parameters: bool = False, ignore_running: bool = False) -> int | list[int]:
+    @overload
+    def trials_to_run(self, *, split_by_parameters: Literal[False] = False, ignore_running: bool = False) -> int: ...
+    @overload
+    def trials_to_run(self, *, split_by_parameters: Literal[True], ignore_running: bool = False) -> Int1DArray: ...
+    def trials_to_run(self, *, split_by_parameters: bool = False, ignore_running: bool = False) -> int | Int1DArray:
         """Number of trials left to run for this experiment. If split_by_parameters is True, returns a list of counts for each parameter combination."""  # noqa: E501
         c = self.current_trials_count(split_by_parameters=False, only_completed=ignore_running)
         c = np.clip(self.n_trials - c, 0, None)
@@ -128,11 +132,18 @@ class ExperimentCfg(BaseModel):
             return {self.experiment: {}}
         return dict(zip(self._study_names(), self.parameters_grid, strict=True))
 
+    @computed_field
+    @cached_property
+    def experiment_name(self) -> str:
+        """Get the base experiment name without parameter or version information."""
+        version = f"v{self.version}" if self.version is not None else ""
+        return self.experiment + version
+
     def _study_names(self) -> list[str]:
         """List of Optuna study names for this experiment, based on the parameter combinations and the number of trials."""  # noqa: E501
         if len(self.parameters_grid) == 0:
-            return [self.experiment]
-        return [self.experiment + "-" + param_hash for param_hash in self.parameters_hashes]
+            return [self.experiment_name]
+        return [self.experiment_name + "-" + param_hash for param_hash in self.parameters_hashes]
 
     @property
     def file(self) -> Optional[Path]:
@@ -200,6 +211,12 @@ class ExperimentCfg(BaseModel):
                     console.print(msg)
                     return False
         return True
+
+    @classmethod
+    def load_header(cls, file: str | Path) -> ExperimentCfg:
+        """Get the number of remaining trials to run for the given experiment configuration file. This is calculated as the total number of trials minus the number of completed trials."""  # noqa: E501
+        exp, _ = cls._read_file(file)
+        return exp
 
     @classmethod
     def load_experiment(
@@ -278,7 +295,7 @@ class ExperimentRun[T: BaseModel]:
     def __init__(
         self, exp: ExperimentCfg, cfg: T, study: optuna.study.Study, trial: optuna.Trial, param_config_id: int
     ):
-        self.exp = exp
+        self.header = exp
         self.cfg = cfg
         self.param_config_id = param_config_id
         self.study = study
@@ -293,15 +310,9 @@ class ExperimentRun[T: BaseModel]:
     @property
     def parameters_grid(self) -> dict[str, Any]:
         """Get the current parameter combination for this run."""
-        if len(self.exp.parameters_grid) == 0:
+        if len(self.header.parameters_grid) == 0:
             return {}
-        return self.exp.parameters_grid[self.param_config_id]
-
-    @property
-    def experiment_name(self) -> str:
-        """Get the base experiment name without parameter or version information."""
-        version = f"v{self.exp.version}" if self.exp.version is not None else ""
-        return self.exp.experiment + version
+        return self.header.parameters_grid[self.param_config_id]
 
     @property
     def trial_name(self) -> str:
@@ -310,7 +321,7 @@ class ExperimentRun[T: BaseModel]:
         for k, v in self.parameters_grid.items():
             trial_name.append(f"{k}={v},")
         trial_name = f"[{self.param_config_id}|{';'.join(trial_name)}]" if trial_name else ""
-        return self.experiment_name + trial_name
+        return self.header.experiment_name + trial_name
 
     @property
     def run_id(self) -> int:
@@ -325,15 +336,15 @@ class ExperimentRun[T: BaseModel]:
         # Init logger
         config = self.cfg.model_dump()
         config["parameters_grid"] = self.parameters_grid
-        config["EXP"] = self.experiment_name
+        config["EXP"] = self.header.experiment_name
         config["TRIAL"] = self.trial_name
         self.logger = WandbLogger(
             name=self.run_name,
-            tags=self.exp.tags,
-            group=self.exp.topic,
-            project="Test & Debug" if self.exp.test_debug else None,
+            tags=self.header.tags,
+            group=self.header.topic,
+            project="Test & Debug" if self.header.test_debug else None,
             config=config,
-            log_model=self.exp.log_model,
+            log_model=self.header.log_model,
             save_dir="tmp",
         )
 
@@ -343,8 +354,8 @@ class ExperimentRun[T: BaseModel]:
         with tempfile.NamedTemporaryFile("w", suffix=".yaml") as tmp:
             yaml.dump(self.cfg.model_dump(), tmp)
             config_artifact.add_file(tmp.name, name="config.yaml")
-        if self.exp.file is not None:
-            config_artifact.add_file(str(self.exp.file.absolute()), name="experiment.yaml")
+        if self.header.file is not None:
+            config_artifact.add_file(str(self.header.file.absolute()), name="experiment.yaml")
         with tempfile.NamedTemporaryFile("w", suffix=".yaml") as tmp:
             yaml.dump(self.parameters_grid, tmp)
             config_artifact.add_file(tmp.name, name="parameters_grid.yaml")
@@ -376,7 +387,7 @@ class ExperimentRun[T: BaseModel]:
         """Optuna pruning callback to be called at the end of each epoch during training. This will report the intermediate value to Optuna and check if the trial should be pruned."""  # noqa: E501
         from optuna.integration import PyTorchLightningPruningCallback
 
-        if self.exp.optuna.pruner is not None:
+        if self.header.optuna.pruner is not None:
             return PyTorchLightningPruningCallback(self.trial, monitor=monitor)
         else:
             return Callback()  # No-op callback

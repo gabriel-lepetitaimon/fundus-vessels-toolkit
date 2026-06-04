@@ -1,6 +1,9 @@
 import json
 from pathlib import Path
+import subprocess
 from typing import Annotated
+import shutil
+import uuid
 
 import typer
 
@@ -62,6 +65,56 @@ def test_run(
         file, DigraphGNNTrainerConfig, header_override={"test_debug": True}, override={"epoch": max_epoch}
     )
     train(exp)
+
+
+@app.command()
+def single_run(
+    file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to check.")],
+):
+    from train import train
+
+    train(ExperimentCfg.load_experiment(file, DigraphGNNTrainerConfig))
+
+
+@app.command()
+def slurm_submit(
+    script: Annotated[Path, typer.Argument(help="Path to the bash script to submit.")],
+    file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to run.")],
+):
+    if not check(file):
+        print("Configuration file is not valid. Aborting.")
+        return
+    exp_header = ExperimentCfg.load_header(file)
+    n_runs = exp_header.trials_to_run()
+    if n_runs == 0:
+        print("No remaining trials to run for this configuration. Aborting.")
+        return
+
+    job_uuid = uuid.uuid4().hex
+    print(f"Submitting {n_runs} runs for experiment configuration {file} with UUID {job_uuid}...")
+
+    # Move config file and bash script to dedicated folder
+    job_dir = Path("tmp") / "JOBS" / job_uuid
+    job_dir.parent.mkdir(exist_ok=True, parents=True)
+    shutil.copy(file, job_dir / "cfg.yaml")
+    job_script = job_dir / "run.sh"
+
+    # Replace field in bash script
+    with open(script, "r") as script_file:
+        script_txt = script_file.read()
+    script_txt.replace("{EXP}", exp_header.experiment_name)
+    script_txt.replace("{N_RUNS}", str(n_runs))
+    script_txt.replace("{EXP_FILE}", str((job_dir / "cfg.yaml").absolute()))
+    with open(job_script, "w") as script_file:
+        script_file.write(script_txt)
+    job_script.chmod(0o755)
+
+    # Submit job
+    submit_result = subprocess.run(["sbatch", str(job_script.absolute())], shell=True, capture_output=True, text=True)
+    if submit_result.returncode != 0:
+        print(f"Failed to submit job: {submit_result.stderr}")
+    else:
+        print(f"Job submitted successfully: {submit_result.stdout}")
 
 
 if __name__ == "__main__":
