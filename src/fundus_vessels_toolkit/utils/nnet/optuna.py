@@ -215,7 +215,13 @@ class OptunaDB:
     def __init__(self, storage: str):
         self.storage = storage
 
+    @classmethod
+    def ensure_storage_path(cls, storage: str):
+        if storage.startswith("sqlite:///"):
+            Path(storage[len("sqlite:///") :]).parent.mkdir(parents=True, exist_ok=True)
+
     def list_studies_name(self) -> list[str]:
+        self.ensure_storage_path(self.storage)
         """List all study names in the Optuna storage."""
         return optuna.get_all_study_names(storage=self.storage)
 
@@ -225,9 +231,8 @@ class OptunaStudy(optuna.study.Study):
 
     @classmethod
     def load(cls, study_name: str, cfg: OptunaCfg, temp_storage: bool = False) -> Self:
-        if not temp_storage and cfg.storage is not None and cfg.storage.startswith("sqlite:///"):
-            # Ensure cfg.storage path exist
-            Path(cfg.storage[len("sqlite:///") :]).parent.mkdir(parents=True, exist_ok=True)
+        if not temp_storage and cfg.storage is not None:
+            OptunaDB.ensure_storage_path(cfg.storage)
 
         study = optuna.create_study(
             study_name=study_name,
