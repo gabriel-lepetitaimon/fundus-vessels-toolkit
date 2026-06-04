@@ -188,8 +188,8 @@ class OptunaCfg(BaseModel):
 
     model_config = ConfigDict(use_attribute_docstrings=True, frozen=True)
 
-    storage: Optional[str] = Field(default=None, pattern=r"^(sqlite|postgresql|mysql)://")
-    """Optuna storage URL. If None (by default), use a in-memory non-persistent storage."""
+    storage: Optional[str] = Field(default="sqlite:///tmp/optuna.db", pattern=r"^(sqlite|postgresql|mysql)://")
+    """Optuna storage URL. If None, use a in-memory non-persistent storage. Default is "sqlite:///optuna.db"."""
 
     sampler: SamplerCfg = Field(default_factory=RandomSamplerCfg)
     """Optuna sampler specification."""

@@ -117,6 +117,7 @@ def sbatch(
     # Replace field in bash script
     with open(script, "r") as script_file:
         script_txt = script_file.read()
+    script_txt = script_txt.replace(r"{DIR}", str(job_dir.absolute()))
     script_txt = script_txt.replace(r"{EXP}", exp_header.experiment_name)
     script_txt = script_txt.replace(r"{N_RUNS}", str(n_runs))
     script_txt = script_txt.replace(r"{EXP_FILE}", str((job_dir / "cfg.yaml").absolute()))

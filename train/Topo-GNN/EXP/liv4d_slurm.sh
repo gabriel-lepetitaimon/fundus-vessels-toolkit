@@ -1,7 +1,7 @@
 #!/bin/bash
     
 #SBATCH --job-name={EXP}
-#SBATCH --output=out_{EXP}.out
+#SBATCH --output={DIR}/out_{EXP}-%A-%a.out
 #SBATCH --array=1,2,3,4
     
 #SBATCH --ntasks=1
@@ -14,6 +14,7 @@
 cd "/store-liv4d/travail/GNN-Fundus-galep/fundus-vessels-toolkit/train/Topo-GNN"
 /store-liv4d/travail/GNN-Fundus-galep/miniconda3/bin/conda init
 conda activate gnn
+ulimit -n 2048
 
 local retry_count=0
 while true; do

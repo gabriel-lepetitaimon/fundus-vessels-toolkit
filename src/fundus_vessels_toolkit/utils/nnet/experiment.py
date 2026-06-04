@@ -371,21 +371,35 @@ class ExperimentRun[T: BaseModel]:
             yaml.dump(self.parameters_grid, tmp)
             config_artifact.add_file(tmp.name, name="parameters_grid.yaml")
 
+        console = Console()
+        console.print(f"[purple]=== Starting experiment run: [bold]{self.run_name}[/bold] ===[/purple]")
+        console.print("\t[bold]Parameter Grid:[/bold]")
+        for k, v in self.parameters_grid.items():
+            console.print(f"\t\t{k}: {v}")
+        console.print("\t[bold]Optuna Parameter:[/bold]")
+        for k, v in self.trial.params.items():
+            console.print(f"\t\t{k}: {v}")
+        console.print("\t[bright_black]-- -- -- -- -- -- -- -- -- --[/bright_black]")
+
     def tell(self, values: float | Sequence[float] | None = None):
         self.study.tell(self.trial, values=values, state=optuna.trial.TrialState.COMPLETE, skip_if_finished=True)
 
     def finish(self, state: Literal["success", "failed", "aborted"]) -> None:
         """Finish the current trial with the given value and state. This should be called at the end of each trial to report the results to Optuna."""  # noqa: E501
+        console = Console()
         match state:
             case "success":
                 state_ = optuna.trial.TrialState.COMPLETE
                 exit_code = 0
+                console.print(f"[green]=== Run {self.run_name} [bold] COMPLETED [/bold] ===[/green]")
             case "failed":
                 state_ = optuna.trial.TrialState.FAIL
                 exit_code = 10
+                console.print(f"[red]=== Run {self.run_name} [bold] FAILED [/bold] ===[/red]")
             case "aborted":
                 state_ = optuna.trial.TrialState.PRUNED
                 exit_code = 1
+                console.print(f"[yellow]=== Run {self.run_name} [bold] PRUNED [/bold] ===[/yellow]")
             case _:
                 state_ = None
         self.study.tell(self.trial, state=state_, skip_if_finished=True)
@@ -393,6 +407,7 @@ class ExperimentRun[T: BaseModel]:
         if self.logger is not None:
             self.logger.finalize(status=state)
             wandb.finish(exit_code=exit_code)
+        console.print("\t[bright_black]---------------------------------------------------------------[/bright_black]")
 
     def pruning_callback(self, monitor: str) -> Callback:
         """Optuna pruning callback to be called at the end of each epoch during training. This will report the intermediate value to Optuna and check if the trial should be pruned."""  # noqa: E501
