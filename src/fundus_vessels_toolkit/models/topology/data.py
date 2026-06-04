@@ -13,11 +13,13 @@ from torch_geometric.typing import OptTensor
 from fundus_toolkits import FundusData
 from fundus_toolkits.utils.geometric import Point, Rect
 
+from fundus_vessels_toolkit.segment_to_graph.geometry_parsing import populate_tangent
+
 from ...segment_to_graph.vbranch_digraph import (
-    _VBranchDigraphWithAVProba,
     TreeTopology,
     VBranchDigraph,
     VGraph,
+    _VBranchDigraphWithAVProba,
 )
 from ...utils import if_none
 from ...utils.tree import tree_connected_components
@@ -432,6 +434,7 @@ class BranchDigraphData(PygData):
             else:
                 mac_center = Point(od_center.y, od_center.x - fundus_shape[1] // 2)
 
+        graph.geometric_data().clear_attribute(all_except="CALIBRE")
         if augment_opts.geometric:
             t = augment_opts.generate_transform(shape=fundus_shape)
             branch_digraph.graph.transform(t, warped_domain="same", inplace=True)
@@ -440,6 +443,7 @@ class BranchDigraphData(PygData):
             od_yx, mac_yx = t.transform(np.array([od_center, mac_center]))
         else:
             od_yx, mac_yx = od_center.numpy(), mac_center.numpy()
+        populate_tangent(branch_digraph.graph, tips=True)
 
         data = cls.from_branch_digraph(
             digraph=branch_digraph,

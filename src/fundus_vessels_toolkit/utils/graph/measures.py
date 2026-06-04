@@ -197,7 +197,7 @@ def extract_branch_geometry_from_skeleton(
 
 
 @autocast_torch
-def curve_tangent(curve_yx, std=3, eval_for=None):
+def curve_tangent(curve_yx, std: int = 3, eval_for=None):
     """Compute the local tangents of a curve.`
 
     The tangent at each point is computed by averaging the vectors starting from the current node and pointing to the next node in the curve, with those starting from the previous nodes and pointing to the current node. The vectors are weighted by a gaussian distribution centered on the current node.

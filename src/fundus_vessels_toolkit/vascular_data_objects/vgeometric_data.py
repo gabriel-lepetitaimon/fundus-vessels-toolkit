@@ -2318,13 +2318,11 @@ class VGeometricData:
                 cleaned_curve, new_id = remove_consecutive_duplicates(curve, return_index=True)
                 if np.all(new_id == np.arange(len(new_id))):
                     cleaned_curve, new_id = curve, None
-                else:
-                    local_scale = local_scale[new_id]
             else:
                 cleaned_curve, new_id = curve, None
 
             ctx = self._geodata_edit_ctx(branch_id)
-            ctx.set_info(local_scale=local_scale)
+            ctx = ctx.set_info(local_scale=local_scale, transformed_curve=curve)
 
             for attr_name, attr in ctx.geodata_attrs.items():
                 try:

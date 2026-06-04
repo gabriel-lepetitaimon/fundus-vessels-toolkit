@@ -36,8 +36,8 @@ from ...segment_to_graph.vbranch_digraph import (
     VGraph,
 )
 from ...utils import if_none
-from ...utils.numpy import np_group_by
 from ...utils.nnet.experiment import ExperimentHeader, ExperimentRun
+from ...utils.numpy import np_group_by
 from ...vascular_data_objects import VBranchGeoData, VTree
 from .data import BranchDigraphData
 from .data_augmentation import AugmentationOpts
@@ -516,7 +516,7 @@ class BranchDigraphDatasetConfig(BaseModel):
     If a dict is provided, it should map graph version names to weights, and the corresponding graphs will be loaded and merged with the specified weights for each sample. If a version name in the dict is not found in a sample, that sample will be skipped with a warning.
     """  # noqa: E501
     preload: bool | Literal["without-image"] = Field(default=False)
-    augment: AugmentationOpts | bool = Field(default=False)
+    augment: AugmentationOpts | bool = Field(default_factory=AugmentationOpts)
 
     # line_p_smoothing: NotRequired[float] = 0.0
 

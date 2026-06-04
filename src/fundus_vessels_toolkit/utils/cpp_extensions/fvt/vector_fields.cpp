@@ -31,9 +31,13 @@ torch::Tensor inverse_displacement(const torch::Tensor& disp_field, const torch:
 
     // Fixed-point iteration for inversion
     // #pragma omp parallel for
+    Point last_p, last_inv_disp_p;
     for (int64_t n = 0; n < N; ++n) {
         Point p{coords_acc[n][0], coords_acc[n][1]};
-        Point inv_disp_p = _vec_bilinear_interpolate(disp_acc, p, IntPoint{H, W});
+
+        const Point& diff_p = p - last_p;
+        Point inv_disp_p = diff_p.squaredNorm() <= 3 ? last_inv_disp_p + diff_p
+                                                     : _vec_bilinear_interpolate(disp_acc, p, IntPoint{H, W});
 
         for (int iter = 0; iter < max_iters; ++iter) {
             Point disp_o = _vec_bilinear_interpolate(disp_acc, p + inv_disp_p, IntPoint{H, W});

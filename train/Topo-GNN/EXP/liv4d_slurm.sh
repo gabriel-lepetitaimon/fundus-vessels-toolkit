@@ -5,7 +5,7 @@
 #SBATCH --array=1,2,3,4
     
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=3
 #SBATCH --time=12:00:00
 #SBATCH --mem=32G
 #SBATCH --partition=liv4d
@@ -15,6 +15,8 @@ cd "/store-liv4d/travail/GNN-Fundus-galep/fundus-vessels-toolkit/train/Topo-GNN"
 /store-liv4d/travail/GNN-Fundus-galep/miniconda3/bin/conda init
 conda activate gnn
 ulimit -n 2048
+
+sleep $(( RANDOM % 11 )) # Sleep for a random time between 0 and 10 seconds to avoid starting all jobs at the same time
 
 local retry_count=0
 while true; do

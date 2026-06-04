@@ -626,6 +626,9 @@ class VBranchDigraph(LineDigraph):
         ]
         line_list = np.vstack(line_list)
 
+        geodata = graph.geometric_data()
+        geodata.clear_branch_gdata(np.argwhere(geodata.branch_arc_length() <= 2).flatten())
+
         digraph = cls(graph=graph, line_list=line_list)
         if check:
             digraph.check_lines(on_invalid="warn")

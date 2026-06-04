@@ -7,7 +7,7 @@ from fundus_toolkits import FundusData
 from fundus_toolkits.utils.geometric import Rect
 from fundus_vessels_toolkit.utils.bezier import BSpline
 
-from ..utils.graph.measures import extract_branch_geometry
+from ..utils.graph.measures import curve_tangent, extract_branch_geometry
 from ..utils.math import intercept_segment
 from ..vascular_data_objects import VBranchGeoData, VGraph
 from ..vascular_data_objects.vtree import VTree
@@ -126,6 +126,44 @@ def populate_geometry(
     if populate_tip_geodata:
         derive_tips_geometry_from_curve_geometry(vgraph, inplace=True)
 
+    return vgraph
+
+
+def populate_tangent(vgraph: VGraph, *, std: int = 3, tips: bool = True, inplace: bool = False) -> VGraph:
+    """Populate the tangent of the branches from their curve geometry.
+
+    Parameters
+    ----------
+    vgraph : VGraph
+        The graph to populate the tangent of the branches of.
+    std: int, optional
+        The standard deviation of the gaussian kernel used to average the tangents, by default 3.
+
+    Returns
+    -------
+    VGraph
+        The graph with the tangent of the branches populated.
+    """
+    if not inplace:
+        vgraph = vgraph.copy()
+    if vgraph.branch_count == 0:
+        return vgraph
+
+    geo_data = vgraph.geometric_data()
+    curves = geo_data.branch_curve()
+    tangents = [curve_tangent(curve, std=std) if len(curve) > 1 else np.empty((0, 2)) for curve in curves]
+    geo_data.set_branch_data(VBranchGeoData.Fields.TANGENTS, tangents)
+    if tips:
+        tips_tangents = []
+        for i, t in enumerate(tangents):
+            if t is not None and len(t) >= 2:
+                tips_tangents.append(np.stack([t[:10].mean(axis=0), -t[-10:].mean(axis=0)]))
+            else:
+                n1, n2 = geo_data.node_coord(vgraph.branch_list[i])
+                dist = np.linalg.norm(u21 := n2 - n1)
+                u21 = u21 / (dist + 1e-6)
+                tips_tangents.append(np.array([-u21, u21], dtype=float))
+        geo_data.set_branch_data(VBranchGeoData.Fields.TIPS_TANGENT, tips_tangents, graph_index=False, no_check=True)
     return vgraph
 
 

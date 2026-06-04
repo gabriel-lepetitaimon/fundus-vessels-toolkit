@@ -413,8 +413,9 @@ class VBranchTangents(VBranchGeoDataBase):
     def transform(self, projection: Transform, ctx: BranchGeoDataEditContext) -> Self:
         if self.is_empty() or isinstance(projection, Translation):
             return self
-        p1 = (p0 := ctx.curve) + self.data
-        p0, p1 = projection.transform(p0), projection.transform(p1)
+        p1 = projection.transform(ctx.curve + self.data)
+        if (p0 := ctx.info.get("transformed_curve", None)) is None:
+            p0 = projection.transform(ctx.curve)
         return self.__class__(p1 - p0)
 
     def resample(self, index: npt.NDArray[np.int_], ctx: BranchGeoDataEditContext) -> Self:
