@@ -10,7 +10,6 @@
 #SBATCH --mem=32G
 #SBATCH --partition=liv4d
 #SBATCH --gres=gpu:rtx2080ti:1
-#SBATCH --exclusive
 
 cd "/store-liv4d/travail/GNN-Fundus-galep/fundus-vessels-toolkit/train/Topo-GNN"
 /store-liv4d/travail/GNN-Fundus-galep/miniconda3/bin/conda init
