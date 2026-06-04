@@ -27,13 +27,20 @@ dependencies = [
     'torchmetrics',
     'torch-geometric',
 
-    'fundus-toolkits-common @ git+https://github.com/LIV4D/fundus-toolkits-common.git',
+    'fundus-toolkits-common @ git+https://github.com/LIV4D/fundus-toolkits-common.git@d08d4da36eba8d78f96cb4edcfd355211a28602a',
 ]
 
 
 [project.optional-dependencies]
 build = ['wheel', 'twine', 'ninja']
-train = ['pytorch-lightning', 'wandb', 'pydantic', 'pytorch-metric-learning']
+train = [
+    'pytorch-lightning',
+    'wandb',
+    'pydantic',
+    'pytorch-metric-learning',
+    'optuna',
+    'ruamel.yaml',
+]
 dev = [
     'sphinx',
     'sphinx-rtd-theme', # Read the docs theme
