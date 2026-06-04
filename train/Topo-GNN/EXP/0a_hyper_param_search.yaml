@@ -14,7 +14,7 @@ log_model: false
 progress_bar: false
 ---
 # yaml-language-server: $schema=config.schema.json
-epoch: 250
+epoch: 200
 lr: 1e-4~1e-2
 batch_size: 2:4:14
 topo_losses_delay: 10
