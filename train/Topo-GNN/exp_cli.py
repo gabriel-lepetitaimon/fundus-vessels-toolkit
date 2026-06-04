@@ -69,7 +69,10 @@ def test_run(
     from train import train
 
     exp = ExperimentHeader.load_experiment(
-        file, DigraphGNNTrainerConfig, header_override={"test_debug": True}, override={"epoch": max_epoch}
+        file,
+        DigraphGNNTrainerConfig,
+        header_override={"test_debug": True, "progress_bar": True},
+        override={"epoch": max_epoch},
     )
     train(exp)
 

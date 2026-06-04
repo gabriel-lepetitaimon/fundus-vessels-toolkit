@@ -299,6 +299,9 @@ class ExperimentRunFactory[T: BaseModel]:
             elif isinstance(exc_val, optuna.exceptions.TrialPruned):
                 exp_run.finish(state="aborted")
             else:
+                # Print the exception in red in the console
+                console = Console()
+                console.print_exception(width=180, extra_lines=3, show_locals=False, theme="monokai")
                 exp_run.finish(state="failed")
 
             _current_experiment.reset(self.__ctx_token)
