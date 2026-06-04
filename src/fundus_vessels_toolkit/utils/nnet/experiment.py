@@ -23,6 +23,15 @@ from .optuna import OptunaCfg, TrialContext
 from .pydantic_yaml import InvalidDocumentCountError, YamlDocument, YamlDocumentWithFile, pretty_validation_error_msg
 
 
+class NoTrialsToRunError(RuntimeError):
+    """Raised when trying to load an experiment that has no remaining trials to run."""
+
+    def __init__(self, header: ExperimentCfg, file: str | Path):
+        super().__init__(
+            f"All trials for this experiment have already been completed. No remaining trials to run for experiment defined in {file}."  # noqa: E501
+        )
+
+
 def _validate_parameters_grid(value: dict[str, list] | list[dict[str, Any]]) -> list[dict[str, Any]]:
     if isinstance(value, dict):
         k, v = list(value.keys()), list(value.values())
@@ -233,10 +242,12 @@ class ExperimentCfg(BaseModel):
             - The first document should be a valid ExperimentCfg, which defines the experiment settings and the hyperparameter grid.
             - The second document should be the experiment configuration, which will be validated against the given model. This document can refer to the parameters defined in the first document using the syntax '$<parameter_name>'.
         """  # noqa: E501
-        exp, yaml_doc = cls._read_file(file, strict=strict)
+        header, yaml_doc = cls._read_file(file, strict=strict)
+        if header.trials_to_run() == 0:
+            raise NoTrialsToRunError(header, file)
         if header_override is not None:
-            exp = exp.model_copy(update=header_override)
-        return ExperimentRunFactory(exp, yaml_doc, model, override)
+            header = header.model_copy(update=header_override)
+        return ExperimentRunFactory(header, yaml_doc, model, override)
 
 
 class ExperimentRunFactory[T: BaseModel]:

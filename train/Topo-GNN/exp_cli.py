@@ -1,14 +1,13 @@
 import json
-from pathlib import Path
-import subprocess
-from typing import Annotated
 import shutil
+import subprocess
 import uuid
+from pathlib import Path
+from typing import Annotated
 
 import typer
 
-from fundus_vessels_toolkit.utils.nnet.experiment import ExperimentCfg
-from fundus_vessels_toolkit.utils.nnet.pydantic_yaml import model_validate_yaml_file
+from fundus_vessels_toolkit.utils.nnet.experiment import ExperimentCfg, NoTrialsToRunError
 from train import DigraphGNNTrainerConfig
 
 app = typer.Typer()
@@ -81,7 +80,11 @@ def single_run(
 ):
     from train import train
 
-    train(ExperimentCfg.load_experiment(file, DigraphGNNTrainerConfig))
+    try:
+        exp = ExperimentCfg.load_experiment(file, DigraphGNNTrainerConfig)
+    except NoTrialsToRunError as e:
+        raise typer.Exit(20) from None
+    train(exp)
 
 
 @app.command()
