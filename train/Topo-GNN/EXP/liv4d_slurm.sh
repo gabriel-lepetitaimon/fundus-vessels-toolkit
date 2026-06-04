@@ -1,7 +1,7 @@
 #!/bin/bash
     
 #SBATCH --job-name={EXP}
-#SBATCH --output=tmp/slurm/out_{EXP}.out
+#SBATCH --output=out_{EXP}.out
 #SBATCH --array=0-4
     
 #SBATCH --ntasks=1
@@ -13,6 +13,7 @@
 #SBATCH --exclusive
 
 cd "/store-liv4d/travail/GNN-Fundus-galep/fundus-vessels-toolkit/train/Topo-GNN"
+/store-liv4d/travail/GNN-Fundus-galep/miniconda3/bin/conda init
 conda activate gnn
 
 local retry_count=0
