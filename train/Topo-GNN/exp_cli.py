@@ -77,7 +77,7 @@ def single_run(
 
 
 @app.command()
-def slurm_submit(
+def sbatch(
     script: Annotated[Path, typer.Argument(help="Path to the bash script to submit.")],
     file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to run.")],
 ):
