@@ -1,7 +1,7 @@
 #!/bin/bash
     
 #SBATCH --job-name={EXP}
-#SBATCH --output=tmp/slurm/out_{EXP}_%A-%a.out
+#SBATCH --output=tmp/slurm/out_{EXP}.out
 #SBATCH --array=0-4
     
 #SBATCH --ntasks=1
@@ -17,7 +17,7 @@ conda activate gnn
 
 local retry_count=0
 while true; do
-    python exp_run.py single-run {EXP_FILE}
+    python exp_cli.py single-run {EXP_FILE}
 
     status=$?
     if [ $status -eq 20 ]; then
