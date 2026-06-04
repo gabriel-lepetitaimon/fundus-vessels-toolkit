@@ -2,7 +2,7 @@
     
 #SBATCH --job-name={EXP}
 #SBATCH --output=out_{EXP}.out
-#SBATCH --array=0-4
+#SBATCH --array=0-5
     
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
