@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import re
 from abc import abstractmethod
 from contextvars import ContextVar, Token
@@ -224,6 +225,10 @@ class OptunaStudy(optuna.study.Study):
 
     @classmethod
     def load(cls, study_name: str, cfg: OptunaCfg, temp_storage: bool = False) -> Self:
+        if not temp_storage and cfg.storage is not None and cfg.storage.startswith("sqlite:///"):
+            # Ensure cfg.storage path exist
+            Path(cfg.storage[len("sqlite:///") :]).parent.mkdir(parents=True, exist_ok=True)
+
         study = optuna.create_study(
             study_name=study_name,
             storage=None if temp_storage else cfg.storage,
