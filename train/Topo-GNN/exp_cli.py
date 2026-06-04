@@ -107,7 +107,7 @@ def sbatch(
 
     # Move config file and bash script to dedicated folder
     job_dir = Path("tmp") / "JOBS" / job_uuid
-    job_dir.parent.mkdir(exist_ok=True, parents=True)
+    job_dir.mkdir(exist_ok=True, parents=True)
     shutil.copy(file, job_dir / "cfg.yaml")
     job_script = job_dir / "run.sh"
 
