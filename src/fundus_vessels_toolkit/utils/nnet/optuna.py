@@ -44,7 +44,7 @@ class TPESamplerCfg(BaseSamplerCfg):
     """Number of startup trials for the TPE sampler. Default is 4."""
 
     def create_sampler(self) -> optuna.samplers.TPESampler:
-        return optuna.samplers.TPESampler(warn_independent_sampling=True)
+        return optuna.samplers.TPESampler(n_startup_trials=self.n_startup_trials)
 
 
 class RandomSamplerCfg(BaseSamplerCfg):
@@ -68,7 +68,9 @@ SAMPLER_NAME = Literal["TPE", "Random", "NSGA"]
 type AnySamplerCfg = Annotated[TPESamplerCfg | RandomSamplerCfg | NSGASamplerCfg, Field(discriminator="type")]
 
 
-def samplers_by_name(sampler_type: SAMPLER_NAME | AnySamplerCfg) -> AnySamplerCfg:
+def samplers_by_name(sampler_type):
+    if not isinstance(sampler_type, str):
+        return sampler_type
     match sampler_type:
         case "TPE":
             return TPESamplerCfg()
@@ -76,7 +78,7 @@ def samplers_by_name(sampler_type: SAMPLER_NAME | AnySamplerCfg) -> AnySamplerCf
             return RandomSamplerCfg()
         case "NSGA":
             return NSGASamplerCfg()
-    return sampler_type
+    raise ValueError(f"Unsupported sampler type: {sampler_type}")
 
 
 type SamplerCfg = Annotated[
@@ -102,22 +104,58 @@ class BasePrunerCfg(BaseModel):
 class MedianPrunerCfg(BasePrunerCfg):
     type: Literal["Median"] = "Median"
 
+    n_startup_trials: int = Field(default=5)
+    """Pruning is disabled until the given number of trials finish in the same study. Default is 5."""
+
+    n_warmup_epochs: int = Field(default=0)
+    """Pruning is disabled until the trial exceeds the given number of epoch."""
+
+    interval_epochs: int = Field(default=1)
+    """Interval in number of epochs between the pruning checks, offset by the warmup epochs. If no value has been reported at the time of a pruning check, that particular check will be postponed until a value is reported."""  # noqa: E501
+
+    n_min_trials: int = Field(default=3)
+    """Minimum number of reported trial results at an epoch to judge whether to prune. If the number of reported intermediate values from all trials at the current epoch is less than n_min_trials, the trial will not be pruned."""  # noqa: E501
+
     def create_pruner(self) -> optuna.pruners.MedianPruner:
-        return optuna.pruners.MedianPruner()
+        return optuna.pruners.MedianPruner(
+            n_startup_trials=self.n_startup_trials,
+            n_warmup_steps=self.n_warmup_epochs,
+            interval_steps=self.interval_epochs,
+            n_min_trials=self.n_min_trials,
+        )
 
 
 class SuccessiveHalvingPrunerCfg(BasePrunerCfg):
     type: Literal["SuccessiveHalving"] = "SuccessiveHalving"
 
+    min_epoch: int | Literal["auto"] = Field(default="auto")
+    """Min epoch for the successive halving pruner. Default is "auto", which sets min_epoch to the minimum epoch in the study's trials or 1 if there are no completed trials."""  # noqa: E501
+
+    reduction_factor: int = Field(default=4)
+    """Reduction factor for the successive halving pruner. Default is 4."""
+
+    min_early_stopping_rate: int = Field(default=0)
+    """Minimum early stopping rate for the successive halving pruner. Default is 0."""
+
+    bootstrap_count: int = Field(default=0)
+    """Number of bootstrap trials for the successive halving pruner. Default is 0."""
+
     def create_pruner(self) -> optuna.pruners.SuccessiveHalvingPruner:
-        return optuna.pruners.SuccessiveHalvingPruner()
+        return optuna.pruners.SuccessiveHalvingPruner(
+            min_resource=self.min_epoch,
+            reduction_factor=self.reduction_factor,
+            min_early_stopping_rate=self.min_early_stopping_rate,
+            bootstrap_count=self.bootstrap_count,
+        )
 
 
 PRUNER_NAME = Literal["Median", "SuccessiveHalving", None]
 type AnyPrunerCfg = Annotated[MedianPrunerCfg | SuccessiveHalvingPrunerCfg, Field(discriminator="type")]
 
 
-def pruners_by_name(pruner_type: PRUNER_NAME | AnyPrunerCfg) -> AnyPrunerCfg:
+def pruners_by_name(pruner_type):
+    if not isinstance(pruner_type, str):
+        return pruner_type
     match pruner_type:
         case "Median":
             return MedianPrunerCfg()

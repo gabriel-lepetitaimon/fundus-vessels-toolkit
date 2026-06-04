@@ -89,13 +89,13 @@ def sbatch(
     script: Annotated[Path, typer.Argument(help="Path to the bash script to submit.")],
     file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to run.")],
 ):
-    print(f"Checking configuration file {file}...", end="")
-    if not check(file):
-        print("\t [FAILED]")
+    print(f"Checking configuration file {file}...")
+    if ExperimentCfg.check_file(file, DigraphGNNTrainerConfig):
+        print("\t\t [OK]")
+    else:
         print("Configuration file is not valid. Aborting.")
         return
-    else:
-        print("\t [OK]")
+
     exp_header = ExperimentCfg.load_header(file)
     n_runs = exp_header.trials_to_run()
     if n_runs == 0:
