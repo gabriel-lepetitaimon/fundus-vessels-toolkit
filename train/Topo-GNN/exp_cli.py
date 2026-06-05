@@ -41,17 +41,16 @@ def export_schema(
     with open(template_path, "w") as f:
         f.write(f"""
 # yaml-language-server: $schema={experiment_path}
-experiment: <experiment_name>
+""")
+        for field_name, field_info in ExperimentHeader.model_fields.items():
+            if field_info.is_required():
+                f.write(f"{field_name}: <{field_name}>\n")
+        f.write(f"""
 ---
 # yaml-language-server: $schema={config_path}
 """)
-        required_fields = [
-            field_name
-            for field_name, field_info in DigraphGNNTrainerConfig.model_fields.items()
-            if field_info.is_required()
-        ]
-        if required_fields:
-            for field_name in required_fields:
+        for field_name, field_info in DigraphGNNTrainerConfig.model_fields.items():
+            if field_info.is_required():
                 f.write(f"{field_name}: <{field_name}>\n")
 
 

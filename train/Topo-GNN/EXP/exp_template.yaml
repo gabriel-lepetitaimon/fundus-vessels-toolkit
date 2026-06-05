@@ -1,6 +1,7 @@
 
 # yaml-language-server: $schema=experiment.schema.json
-experiment: <experiment_name>
+project: <project>
+experiment: <experiment>
+
 ---
 # yaml-language-server: $schema=config.schema.json
-epoch: 250

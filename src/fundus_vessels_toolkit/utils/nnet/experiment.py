@@ -53,6 +53,9 @@ def _validate_parameters_grid(value: dict[str, list] | list[dict[str, Any]]) -> 
 class ExperimentHeader(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True, frozen=True)
 
+    project: str
+    """Name of the project this experiment belongs to."""
+
     experiment: str
     """Name of the experiment. This is used for logging and can be used to group related experiments together."""
 

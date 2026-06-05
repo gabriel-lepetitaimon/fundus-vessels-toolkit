@@ -1,6 +1,8 @@
 # yaml-language-server: $schema=experiment.schema.json
+project: Topo-GNN
 experiment: HP-Search
 version: 1
+tag: hp-search
 n_trials: 32
 optuna:
   sampler: 
