@@ -31,6 +31,7 @@ from fundus_toolkits.transform import Transform
 from fundus_toolkits.utils.geometric import Point, Rect
 from fundus_toolkits.utils.typing import (
     Bool1DArray,
+    Bool2DArray,
     Float1DArrayLike,
     FloatPairArray,
     FloatPairArrayLike,
@@ -38,8 +39,10 @@ from fundus_toolkits.utils.typing import (
     IndicesLike,
     Int1DArray,
     Int1DArrayLike,
+    IntPair,
     IntPairArray,
     IntPairArrayLike,
+    PointArray,
     PointArrayLike,
     as_float_pairs,
     as_int_pairs,
@@ -75,8 +78,8 @@ class VGraphNode:
         self._id = id
         graph._node_refs.add(self)
 
-        self._ibranch_ids = None
-        self._ibranch_dirs = None
+        self._ibranch_ids: Int1DArray | None = None
+        self._ibranch_dirs: Bool1DArray | None = None
 
     def __repr__(self):
         return f"VGraphNode({self._id})"
@@ -109,7 +112,7 @@ class VGraphNode:
     def attr(self) -> DFSetterAccessor:
         if not self.is_valid():
             raise RuntimeError("The node has been removed from the graph.")
-        return DFSetterAccessor(self.__graph._node_attr, self._id)
+        return DFSetterAccessor(self.__graph.node_attr, self._id)
 
     def coord(self, geodata: VGeometricData | int = 0) -> Point:
         if not self.is_valid():
@@ -119,7 +122,7 @@ class VGraphNode:
         return Point(*geodata.node_coord(self._id))
 
     #  __ INCIDENT BRANCHES __
-    def _update_adjacent_branch_cache(self) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.bool_]]:
+    def _update_adjacent_branch_cache(self) -> tuple[Int1DArray, Bool1DArray]:
         self._ibranch_ids, self._ibranch_dirs = self.graph.adjacent_branches(self._id, return_branch_direction=True)
         return self._ibranch_ids, self._ibranch_dirs
 
@@ -224,12 +227,12 @@ class VGraphBranch:
     All their method and properties makes calls to :class:`VGraph` methods to generate their results.
     """
 
-    def __init__(self, graph: VGraph, id: int, nodes_id: Optional[npt.NDArray[np.int32]] = None):
+    def __init__(self, graph: VGraph, id: int, nodes_id: Optional[IntPair] = None):
         self.__graph = graph
         self._id = id
         graph._branch_refs.add(self)
 
-        self._node_ids = graph._branch_list[id] if nodes_id is None else nodes_id
+        self._node_ids: IntPair = graph._branch_list[id] if nodes_id is None else nodes_id
 
     def __repr__(self):
         return f"VGraphBranch({self._id})"
@@ -274,7 +277,7 @@ class VGraphBranch:
         """  # noqa: E501
         assert self.is_valid(), "The branch has been removed from the graph."
         n1, n2 = self._node_ids
-        return VGraphNode(self.__graph, n1), VGraphNode(self.__graph, n2)
+        return VGraphNode(self.__graph, int(n1)), VGraphNode(self.__graph, int(n2))
 
     def adjacent_branch_ids(self) -> list[int]:
         if not self.is_valid():
@@ -297,9 +300,9 @@ class VGraphBranch:
     @property
     def attr(self) -> DFSetterAccessor:
         assert self.is_valid(), "The branch has been removed from the graph."
-        return DFSetterAccessor(self.__graph._branch_attr, self._id)
+        return DFSetterAccessor(self.__graph.branch_attr, self._id)
 
-    def curve(self, geodata: VGeometricData | int = 0) -> npt.NDArray[np.int32]:
+    def curve(self, geodata: VGeometricData | int = 0) -> PointArray:
         """Return the indices of the pixels forming the curve of the branch as a 2D array of shape (n, 2).
 
         This method is a shortcut to :meth:`VGeometricData.branch_curve`.
@@ -413,13 +416,13 @@ class VGraphBranch:
         assert self.is_valid(), "The branch has been removed from the graph."
         geodata = self.graph.geometric_data(geodata)
         curve = geodata.branch_curve(self._id)
-        if curve.size == 0:
+        if curve.size == 0 or (boundaries := geodata.branch_data(VBranchGeoData.Fields.BOUNDARIES, self._id)) is None:
             return (
                 np.zeros(geodata.domain.shape, dtype=np.bool_)
                 if return_bbox is False
                 else (np.empty((0, 0), dtype=np.bool_), Rect.empty())
             )
-        boundaries = geodata.branch_data(VBranchGeoData.Fields.BOUNDARIES, self._id).data
+        boundaries = boundaries.data
         if return_bbox:
             points = np.concatenate([boundaries.flatten().reshape((-1, 2)), curve])
             bbox = Rect.from_points(tuple(points.min(axis=0)), tuple(points.max(axis=0) + 1))
@@ -493,7 +496,7 @@ class VGraph:
         except Exception as e:
             raise ValueError(f"Invalid branch_list: {e}.") from None
 
-        self._branch_list = branch_list
+        self._branch_list: IntPairArray = branch_list
         B = branch_list.shape[0]
 
         # === Infer node_count ===
@@ -509,11 +512,7 @@ class VGraph:
             N = node_count
         self._node_count = N
 
-        if node_attr is None:
-            node_attr = pd.DataFrame(index=pd.RangeIndex(N))
         self._node_attr = node_attr
-        if branch_attr is None:
-            branch_attr = pd.DataFrame(index=pd.RangeIndex(B))
         self._branch_attr = branch_attr
 
         if isinstance(geometric_data, VGeometricData):
@@ -590,28 +589,30 @@ class VGraph:
             errors.append(f"Geometric data contains nodes indices that are above the nodes count: {nodes_idx}.")
 
         # --- Check nodes attributes ---
-        if self._node_attr.index.inferred_type != "integer":
-            errors.append("The index of nodes_attr dataframe must be nodes Index.")
+        if self._node_attr is not None:
+            if self._node_attr.index.inferred_type != "integer":
+                errors.append("The index of nodes_attr dataframe must be nodes Index.")
 
-        if self._node_attr.index.max() >= N or self._node_attr.index.min() < 0:
-            errors.append(
-                "The maximum value in nodes_attr index must be lower than the number of nodes."
-                f" Got {self._node_attr.index.max()} instead of {N}"
-            )
-        if len(self._node_attr.index) != N:
-            self._node_attr.reindex(np.arange(N))
+            if self._node_attr.index.max() >= N or self._node_attr.index.min() < 0:
+                errors.append(
+                    "The maximum value in nodes_attr index must be lower than the number of nodes."
+                    f" Got {self._node_attr.index.max()} instead of {N}"
+                )
+            if len(self._node_attr.index) != N:
+                self._node_attr.reindex(np.arange(N))
 
         # --- Check branches attributes ---
-        if self._branch_attr.index.inferred_type != "integer":
-            errors.append("The index of branches_attr dataframe must be branches Index.")
+        if self._branch_attr is not None:
+            if self._branch_attr.index.inferred_type != "integer":
+                errors.append("The index of branches_attr dataframe must be branches Index.")
 
-        if self._branch_attr.index.max() >= B or self._branch_attr.index.min() < 0:
-            errors.append(
-                "The maximum value in branches_attr index must be lower than the number of branches."
-                f" Got {self._branch_attr.index.max()} instead of {B}"
-            )
-        if len(self._branch_attr.index) != B:
-            self._branch_attr.reindex(np.arange(B))
+            if self._branch_attr.index.max() >= B or self._branch_attr.index.min() < 0:
+                errors.append(
+                    "The maximum value in branches_attr index must be lower than the number of branches."
+                    f" Got {self._branch_attr.index.max()} instead of {B}"
+                )
+            if len(self._branch_attr.index) != B:
+                self._branch_attr.reindex(np.arange(B))
 
         if len(errors) > 0:
             msg = "Invalid graph:" + "\n - ".join(errors)
@@ -624,13 +625,20 @@ class VGraph:
         return "" if on_error == "report" else True
 
     def __eq__(self, other: object) -> bool:
+        def equals_df_or_none(df1: Optional[pd.DataFrame], df2: Optional[pd.DataFrame]) -> bool:
+            if df1 is None and df2 is None:
+                return True
+            if (df1 is None) or (df2 is None):
+                return False
+            return df1.equals(df2)  # type: ignore
+
         return (
             isinstance(other, VGraph)
             and np.array_equal(self._branch_list, other._branch_list)
             and len(self._geometric_data) == len(other._geometric_data)
             and all(geo1 == geo2 for geo1, geo2 in zip(self._geometric_data, other._geometric_data, strict=True))
-            and self._node_attr.equals(other._node_attr)
-            and self._branch_attr.equals(other._branch_attr)
+            and equals_df_or_none(self._node_attr, other._node_attr)
+            and equals_df_or_none(self._branch_attr, other._branch_attr)
         )
 
     def copy(self) -> Self:
@@ -671,10 +679,12 @@ class VGraph:
         data: NumpyDict = dict(
             branch_list=self._branch_list,
             geometric_data=[gdata.save() for gdata in self._geometric_data],
-            nodes_attr=pandas_to_numpy_dict(self._node_attr),
-            branches_attr=pandas_to_numpy_dict(self._branch_attr),
             node_count=self._node_count,
         )  # type: ignore
+        if self._node_attr is not None:
+            data["nodes_attr"] = pandas_to_numpy_dict(self._node_attr)  # type: ignore
+        if self._branch_attr is not None:
+            data["branches_attr"] = pandas_to_numpy_dict(self._branch_attr)  # type: ignore
 
         if filename is not None:
             save_numpy_dict(data, filename, on_exists=on_exists)
@@ -723,8 +733,8 @@ class VGraph:
 
     @classmethod
     def _empty_like_kwargs(cls, other: Self) -> Dict[str, Any]:
-        branch_attr = pd.DataFrame(columns=other._branch_attr.columns)
-        node_attr = pd.DataFrame(columns=other._node_attr.columns)
+        branch_attr = pd.DataFrame(columns=other._branch_attr.columns) if other._branch_attr is not None else None
+        node_attr = pd.DataFrame(columns=other._node_attr.columns) if other._node_attr is not None else None
 
         return dict(
             branch_list=np.empty((0, 2), dtype=int),
@@ -893,7 +903,7 @@ class VGraph:
 
         nodes_lookup = create_removal_lookup(nodes, length=self._node_count, invert=True, replace_value=-1)
 
-        subgraph_branches = np.isin(self._branch_list, nodes).all(axis=1)
+        subgraph_branches: Bool1DArray = np.isin(self._branch_list, nodes).all(axis=1)  # type: ignore
         branch_list = nodes_lookup[self._branch_list[subgraph_branches]]
         branch_lookup = create_removal_lookup(subgraph_branches, invert=True, replace_value=-1)
 
@@ -905,8 +915,8 @@ class VGraph:
         graph = VGraph(
             branch_list,
             geodata,
-            self._node_attr.loc[nodes].reset_index(drop=True),
-            self._branch_attr.loc[subgraph_branches].reset_index(drop=True),  # type: ignore
+            self._node_attr.loc[nodes].reset_index(drop=True) if self._node_attr is not None else None,
+            self._branch_attr.loc[subgraph_branches].reset_index(drop=True) if self._branch_attr is not None else None,
             len(nodes),
             check_integrity=False,
         )
@@ -983,11 +993,15 @@ class VGraph:
     @property
     def node_attr(self) -> pd.DataFrame:
         """The attributes of the nodes in the graph as a pandas.DataFrame."""
+        if self._node_attr is None:
+            self._node_attr = pd.DataFrame(index=pd.RangeIndex(self.node_count))
         return self._node_attr
 
     @property
     def branch_attr(self) -> pd.DataFrame:
         """The attributes of the branches in the graph as a pandas.DataFrame."""
+        if self._branch_attr is None:
+            self._branch_attr = pd.DataFrame(index=pd.RangeIndex(self.branch_count))
         return self._branch_attr
 
     def as_node_ids(self, ids: NodeIndicesLike | None, /, *, check=True) -> Indices:
@@ -1037,9 +1051,10 @@ class VGraph:
         elif isinstance(ids, pd.Series):
             if ids.dtype != bool:
                 raise ValueError("Invalid node index: pd.Series must be a boolean mask.")
-            if check and ids.index is not self._node_attr.index and np.any(ids.index != self._node_attr.index):
+            node_index = self._node_attr.index if self._node_attr is not None else pd.RangeIndex(self.node_count)
+            if check and ids.index is not node_index:
                 raise ValueError("Invalid node index: pd.Series must have the same index as the nodes attributes.")
-            return self._node_attr.index[ids].to_numpy()
+            return node_index[ids].to_numpy()
         elif isinstance(ids, Sequence):
             ids_seq = [_.id if isinstance(_, VGraphNode) else _ for _ in ids]
         elif isinstance(ids, np.ndarray):
@@ -1148,9 +1163,10 @@ class VGraph:
         elif isinstance(ids, pd.Series):
             if ids.dtype != bool:
                 raise ValueError("Invalid branch index: pd.Series must be a boolean mask.")
-            if check and ids.index is not self._branch_attr.index and np.any(ids.index != self._branch_attr.index):
+            branch_idx = self._branch_attr.index if self._branch_attr is not None else pd.RangeIndex(self.branch_count)
+            if check and ids.index is not branch_idx:
                 raise ValueError("Invalid branch index: pd.Series must have the same index as the branches attributes.")
-            branch_ids = self._branch_attr.index[ids].to_numpy()
+            branch_ids = branch_idx[ids].to_numpy()
             single = False
 
         elif np.isscalar(ids):
@@ -1268,16 +1284,16 @@ class VGraph:
     @overload
     def adjacent_branches(
         self, node_id: NodeIndicesLike, return_branch_direction: Literal[False] = False
-    ) -> Indices: ...
+    ) -> Int1DArray: ...
     @overload
     def adjacent_branches(
         self, node_id: NodeIndicesLike, return_branch_direction: Literal[True]
-    ) -> tuple[Indices, npt.NDArray[np.bool_]]: ...
+    ) -> tuple[Int1DArray, Bool1DArray]: ...
     def adjacent_branches(
         self,
         node_id: NodeIndicesLike,
         return_branch_direction: bool = False,
-    ) -> Indices | tuple[Indices, npt.NDArray[np.bool_]]:
+    ) -> Int1DArray | tuple[Int1DArray, Bool1DArray]:
         """Return the indices of the branches adjacent to the given node(s).
 
         Parameters
@@ -1326,7 +1342,7 @@ class VGraph:
             node_ids=node_id, return_branch_direction=return_branch_direction, individual_nodes=False
         )
 
-    def adjacent_nodes(self, node_id: NodeIndicesLike) -> Indices:
+    def adjacent_nodes(self, node_id: NodeIndicesLike) -> Int1DArray:
         """Compute the indices of the nodes adjacent to the given node.
 
         Parameters
@@ -1337,7 +1353,7 @@ class VGraph:
 
         Returns
         -------
-        Indices
+        Int1DArray
             The indices of the nodes adjacent to the given nodes.
 
         See Also
@@ -1355,7 +1371,7 @@ class VGraph:
         """
         node_id = np.unique(self.as_node_ids(node_id))
         adjacents = np.unique(self._branch_list[np.any(np.isin(self._branch_list, node_id), axis=1)])
-        return np.setdiff1d(adjacents, node_id, assume_unique=True)
+        return np.setdiff1d(adjacents, node_id, assume_unique=True)  # type: ignore
 
     @overload
     def adjacent_branches_per_node(
@@ -1416,26 +1432,26 @@ class VGraph:
     @overload
     def _adjacent_branches(
         self, node_ids: NodeIndicesLike, return_branch_direction: Literal[True], individual_nodes: Literal[True]
-    ) -> tuple[list[Indices], list[list[npt.NDArray[np.bool_]]]]: ...
+    ) -> tuple[list[Int1DArray], list[list[Bool1DArray]]]: ...
     @overload
     def _adjacent_branches(
         self, node_ids: NodeIndicesLike, return_branch_direction: Literal[False], individual_nodes: Literal[True]
-    ) -> list[Indices]: ...
+    ) -> list[Int1DArray]: ...
     @overload
     def _adjacent_branches(
         self, node_ids: NodeIndicesLike, return_branch_direction: Literal[True], individual_nodes: Literal[False]
-    ) -> tuple[Indices, npt.NDArray[np.bool_]]: ...
+    ) -> tuple[Int1DArray, Bool1DArray]: ...
     @overload
     def _adjacent_branches(
         self, node_ids: NodeIndicesLike, return_branch_direction: Literal[False], individual_nodes: Literal[False]
-    ) -> Indices: ...
+    ) -> Int1DArray: ...
     def _adjacent_branches(
         self, node_ids: NodeIndicesLike, return_branch_direction: bool, individual_nodes: bool
     ) -> (
-        list[Indices]
-        | tuple[list[Indices], list[list[npt.NDArray[np.bool_]]]]
-        | Indices
-        | tuple[Indices, npt.NDArray[np.bool_]]
+        list[Int1DArray]
+        | tuple[list[Int1DArray], list[list[Bool1DArray]]]
+        | Int1DArray
+        | tuple[Int1DArray, Bool1DArray]
     ):
         node_ids = self.as_node_ids(node_ids)
         if len(node_ids) == 0:
@@ -1453,19 +1469,22 @@ class VGraph:
 
         if not individual_nodes:
             if node_branches.shape[0] == len(node_ids) and np.all(node_branches[:, 0] == np.arange(len(node_ids))):
-                branch_ids = node_branches[:, 1]
+                branch_ids: Int1DArray = node_branches[:, 1]  # type: ignore
             else:
-                branch_ids = np.unique(node_branches[:, 1])
+                branch_ids = np.unique(node_branches[:, 1])  # type: ignore
             if return_branch_direction:
-                return branch_ids, np.isin(self._branch_list[branch_ids][:, 0], node_ids[:, None])
+                return branch_ids, np.isin(self._branch_list[branch_ids][:, 0], node_ids[:, None])  # type: ignore
             return branch_ids
 
         node_branches = node_branches[np.argsort(node_branches[:, 0])]
         node_split = np.searchsorted(node_branches[:, 0], np.arange(len(node_ids)))
-        branch_ids = np.split(node_branches[:, 1], node_split[1:])
+        branch_ids = np.split(node_branches[:, 1], node_split[1:])  # type: ignore
 
         if return_branch_direction:
-            return branch_ids, [self._branch_list[b][:, 0] == n for b, n in zip(branch_ids, node_ids, strict=True)]
+            bdir: Bool1DArray = np.array(
+                [self._branch_list[b][:, 0] == n for b, n in zip(branch_ids, node_ids, strict=True)], dtype=bool
+            )  # type: ignore
+            return branch_ids, bdir
         else:
             return branch_ids
 
@@ -1866,14 +1885,14 @@ class VGraph:
     @overload
     def endpoint_branches(
         self, *, as_mask: Literal[False] = False, return_node_mask: Literal[True]
-    ) -> tuple[Indices, Bool1DArray]: ...
+    ) -> tuple[Indices, Bool2DArray]: ...
     @overload
     def endpoint_branches(
         self, *, as_mask: Literal[True], return_node_mask: Literal[True]
-    ) -> tuple[Bool1DArray, Bool1DArray]: ...
+    ) -> tuple[Bool1DArray, Bool2DArray]: ...
     def endpoint_branches(
         self, *, as_mask=False, return_node_mask=False
-    ) -> Indices | Bool1DArray | tuple[Indices | Bool1DArray, Bool1DArray]:
+    ) -> Indices | Bool1DArray | tuple[Bool1DArray, Bool2DArray] | tuple[Indices, Bool2DArray]:
         """Return the indices of the terminal branches in the graph.
 
         The terminal branches are the branches connected to endpoint nodes.
@@ -1915,11 +1934,11 @@ class VGraph:
 
         """  # noqa: E501
         endpoint_nodes = self.endpoint_nodes(as_mask=True)
-        endpoints_mask = endpoint_nodes[self._branch_list]
+        endpoints_mask: Bool2DArray = endpoint_nodes[self._branch_list]  # type: ignore
         endpoints_branches = np.any(endpoints_mask, axis=1)
         if not as_mask:
             endpoints_branches = np.argwhere(endpoints_branches).flatten()
-            endpoints_mask = endpoints_mask[endpoints_branches]
+            endpoints_mask = endpoints_mask[endpoints_branches]  # type: ignore
         return (endpoints_branches, endpoints_mask) if return_node_mask else endpoints_branches
 
         ## Legacy implementation (slower?)
@@ -2215,8 +2234,18 @@ class VGraph:
         self._node_count += other._node_count
 
         # Update attributes
-        self._branch_attr = pd.concat([self._branch_attr, other._branch_attr], ignore_index=True)
-        self._node_attr = pd.concat([self._node_attr, other._node_attr], ignore_index=True)
+        def empty_if_none(df: Optional[pd.DataFrame], length) -> pd.DataFrame:
+            return pd.DataFrame(index=pd.RangeIndex(length)) if df is None else df
+
+        if self._node_attr is not None or other._node_attr is not None:
+            self_node_attr = empty_if_none(self._node_attr, self.node_count)
+            other_node_attr = empty_if_none(other._node_attr, other.node_count)
+            self._node_attr = pd.concat([self_node_attr, other_node_attr], ignore_index=True)
+
+        if self._branch_attr is not None or other._branch_attr is not None:
+            self_branch_attr = empty_if_none(self._branch_attr, self.branch_count)
+            other_branch_attr = empty_if_none(other._branch_attr, other.branch_count)
+            self._branch_attr = pd.concat([self_branch_attr, other_branch_attr], ignore_index=True)
 
         # Update geometric data
         if len(self._geometric_data) == 0:
@@ -2313,8 +2342,9 @@ class VGraph:
             indices = invert_complete_lookup(indices)
 
         # Update nodes indices in ...
-        graph._branch_list = indices[graph._branch_list]  # ... branch list
-        graph._node_attr = graph._node_attr.set_index(indices)  # ... nodes attributes
+        graph._branch_list = indices[graph._branch_list]  # ... branch list # type: ignore
+        if graph._node_attr is not None:
+            graph._node_attr = graph._node_attr.set_index(indices)  # ... nodes attributes # type: ignore
         for gdata in graph._geometric_data:  # ... geometric data
             gdata._reindex_nodes(indices)
 
@@ -2325,7 +2355,7 @@ class VGraph:
                 node_ref._id = indices[node_ref._id + 1]
         for branch_ref in graph._branch_refs:  # ... nodes indices stored in branches references
             if branch_ref.is_valid():
-                branch_ref._node_ids = indices[branch_ref._node_ids]
+                branch_ref._node_ids = indices[branch_ref._node_ids]  # type: ignore
         return graph
 
     def reindex_branches(self, indices: Int1DArrayLike | Mapping[int, int], inverse_lookup=False) -> Self:
@@ -2375,9 +2405,10 @@ class VGraph:
 
         # Update branches indices in ...
         self._branch_list[indices, :] = self._branch_list.copy()  # ... branch list
-        self._branch_attr = self._branch_attr.set_index(indices).reindex(
-            pd.RangeIndex(self.branch_count), copy=False
-        )  # ... branches attributes
+        if self._branch_attr is not None:
+            self._branch_attr = self._branch_attr.set_index(indices).reindex(
+                pd.RangeIndex(self.branch_count), copy=False
+            )  # ... branches attributes
         for gdata in self._geometric_data:
             gdata._reindex_branches(indices)
 
@@ -2484,7 +2515,8 @@ class VGraph:
             gdata._reindex_branches(branches_reindex)
 
         self._branch_list = np.delete(self._branch_list, branch_id, axis=0)
-        self._branch_attr = self._branch_attr.drop(branch_id).reset_index(drop=True)  # type: ignore
+        if self._branch_attr is not None:
+            self._branch_attr = self._branch_attr.drop(branch_id).reset_index(drop=True)  # type: ignore
 
         if update_refs:
             reindex_refs = add_empty_to_lookup(branches_reindex, increment_index=False)
@@ -2496,7 +2528,8 @@ class VGraph:
     def _delete_node(self, node_id: Indices, update_refs: bool = True) -> Indices:
         if len(node_id) == 0:
             return np.arange(self.node_count)
-        self._node_attr = self._node_attr.drop(node_id).reset_index(drop=True)  # type: ignore
+        if self._node_attr is not None:
+            self._node_attr = self._node_attr.drop(node_id).reset_index(drop=True)  # type: ignore
 
         nodes_reindex = create_removal_lookup(node_id, replace_value=-1, length=self.node_count)
         self._branch_list = nodes_reindex[self._branch_list]
@@ -2636,7 +2669,8 @@ class VGraph:
         assert np.all(np.logical_and(branch_nodes >= 0, branch_nodes < graph.node_count)), "Invalid node indices."
 
         graph._branch_list = np.concatenate((graph._branch_list, branch_nodes), axis=0)
-        graph._branch_attr = graph._branch_attr.reindex(pd.RangeIndex(len(graph._branch_list)), copy=False)
+        if graph._branch_attr is not None:
+            graph._branch_attr = graph._branch_attr.reindex(pd.RangeIndex(len(graph._branch_list)), copy=False)
 
         for gdata in graph._geometric_data:
             gdata._append_empty_branches(len(branch_nodes))
@@ -2713,8 +2747,9 @@ class VGraph:
         new_branches_id = np.arange(oldB, newB)
 
         graph._branch_list = np.concatenate((graph._branch_list, branch_nodes), axis=0)
-        graph._branch_attr = graph._branch_attr.reindex(pd.RangeIndex(newB))
-        graph._branch_attr.iloc[oldB:] = graph._branch_attr.iloc[branches_id]
+        if graph._branch_attr is not None:
+            graph._branch_attr = graph._branch_attr.reindex(pd.RangeIndex(newB))
+            graph._branch_attr.iloc[oldB:] = graph._branch_attr.iloc[branches_id]
 
         for gdata in graph._geometric_data:
             gdata._append_branch_duplicates(branches_id, new_branches_id)
@@ -2860,13 +2895,15 @@ class VGraph:
             new_branches.append((nPrev, nNext))
         graph._branch_list = np.concatenate((graph._branch_list, new_branches), axis=0)
         # 2. ... in the branches attributes
-        new_df = graph._branch_attr.reindex(pd.RangeIndex(len(graph._branch_list)), copy=False)
-        new_df.iloc[new_branchIds] = new_df.iloc[branch_id]
-        graph._branch_attr = new_df
+        if graph._branch_attr is not None:
+            new_df = graph._branch_attr.reindex(pd.RangeIndex(len(graph._branch_list)), copy=False)
+            new_df.iloc[new_branchIds] = new_df.iloc[branch_id]
+            graph._branch_attr = new_df
 
         # 3. ... in the nodes attributes
-        graph._node_count += len(new_nodeIds)
-        graph._node_attr = graph._node_attr.reindex(pd.RangeIndex(graph.node_count), copy=False)
+        if graph._node_attr is not None:
+            graph._node_count += len(new_nodeIds)
+            graph._node_attr = graph._node_attr.reindex(pd.RangeIndex(graph.node_count), copy=False)
 
         # === Update the nodes and branches references ===
         for node in graph._node_refs:
@@ -2981,7 +3018,8 @@ class VGraph:
 
         # Increment node attributes dataframe
         graph._node_count += N
-        graph._node_attr = graph._node_attr.reindex(pd.RangeIndex(graph._node_count), copy=False)
+        if graph._node_attr is not None:
+            graph._node_attr = graph._node_attr.reindex(pd.RangeIndex(graph._node_count), copy=False)
 
         # Update geometric data
         for gdata in graph._geometric_data:
@@ -3622,6 +3660,12 @@ class VGraph:
                     branch._node_ids = graph._branch_list[branch._id]
 
         return (graph, branch_lookup) if return_branch_reindex_lookup else graph
+
+    def clear_all_branch_attr(self):
+        self._branch_attr = None
+
+    def clear_all_node_attr(self):
+        self._node_attr = None
 
     ####################################################################################################################
     #  === BRANCH AND NODE ACCESSORS ===

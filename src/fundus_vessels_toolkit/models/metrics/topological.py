@@ -1,5 +1,3 @@
-from doctest import debug
-import itertools
 from typing import Literal
 
 import numpy as np
@@ -9,35 +7,34 @@ from ...segment_to_graph.skeletonize import skeletonize
 from ...utils.cpp_optimized import split_by
 from ...utils.safe_import import import_cv2
 
+# def vascular_graph_edit_distance(branch_to_node1, node1_yx, branch_to_node2, node2_yx):
+#     ny1, nx1 = node1_yx
+#     ny2, nx2 = node2_yx
+#     ny1 = ny1[:, None]
+#     nx1 = nx1[:, None]
+#     ny2 = ny2[None, :]
+#     nx2 = nx2[None, :]
+#     node_dist = np.sqrt((ny1 - ny2) ** 2 + (nx1 - nx2) ** 2)
+#     del ny1, nx1, ny2, nx2
 
-def vascular_graph_edit_distance(branch_to_node1, node1_yx, branch_to_node2, node2_yx):
-    ny1, nx1 = node1_yx
-    ny2, nx2 = node2_yx
-    ny1 = ny1[:, None]
-    nx1 = nx1[:, None]
-    ny2 = ny2[None, :]
-    nx2 = nx2[None, :]
-    node_dist = np.sqrt((ny1 - ny2) ** 2 + (nx1 - nx2) ** 2)
-    del ny1, nx1, ny2, nx2
+#     node_extended_match = node_dist < 10
+#     node_dist = 1 / (node_dist + 1e8)
+#     node_dist[~node_extended_match] = 0
+#     n1_match = np.where(np.sum(node_extended_match, axis=1))[0]
+#     n2_match = np.argmax(node_dist[n1_match], axis=0)
+#     del node_dist, node_extended_match
 
-    node_extended_match = node_dist < 10
-    node_dist = 1 / (node_dist + 1e8)
-    node_dist[~node_extended_match] = 0
-    n1_match = np.where(np.sum(node_extended_match, axis=1))[0]
-    n2_match = np.argmax(node_dist[n1_match], axis=0)
-    del node_dist, node_extended_match
+#     lookup_n1_idx = np.concatenate(
+#         [n1_match, np.isin(np.arange(len(node1_yx[0])), n1_match, invert=True, assume_unique=True)]
+#     )
+#     lookup_n2_idx = np.concatenate(
+#         [n2_match, np.isin(np.arange(len(node2_yx[0])), n2_match, invert=True, assume_unique=True)]
+#     )
 
-    lookup_n1_idx = np.concatenate(
-        [n1_match, np.isin(np.arange(len(node1_yx[0])), n1_match, invert=True, assume_unique=True)]
-    )
-    lookup_n2_idx = np.concatenate(
-        [n2_match, np.isin(np.arange(len(node2_yx[0])), n2_match, invert=True, assume_unique=True)]
-    )
+#     node_to_branch1 = branch_to_node1.T[lookup_n1_idx]
+#     node_to_branch2 = branch_to_node2.T[lookup_n2_idx]
 
-    node_to_branch1 = branch_to_node1.T[lookup_n1_idx]
-    node_to_branch2 = branch_to_node2.T[lookup_n2_idx]
-
-    return 0
+#     return 0
 
 
 def valid_path_ratio(gt_mask, pred_mask, skeleton=False):
@@ -120,7 +117,7 @@ def sample_valid_path_ratio(
 
     from ...utils.cpp_extensions.fvt_cpp import shortest_skeleton_path_length
 
-    cv2 = import_cv2()
+    # cv2 = import_cv2()
 
     mask1 = mask1 > 0
     mask2 = mask2 > 0
@@ -229,16 +226,16 @@ def sample_valid_path_ratio(
             else:
                 return shortest_path
 
-        sum_valid = 0
-        sum_same_path = 0
+        sum_valid: float = 0
+        sum_same_path: float = 0
         for pairs in torch.split(pairs1, batch_size):
             yx1 = p_yx1[pairs]
             shortest_path1 = compute_shortest_path(skel1[*yx1.unbind(-1)] - 1, *out1[1:], assume_valid=True)
             shortest_path2 = compute_shortest_path(skel2[*yx1.unbind(-1)] - 1, *out2[1:], assume_valid=False)
             valid = shortest_path2 != float("inf")
-            sum_valid += valid.sum()
+            sum_valid += valid.sum().item()
             path_diff = (shortest_path2[valid] - shortest_path1[valid]).abs()
-            sum_same_path += (path_diff <= shortest_path1[valid] * 1.1 + 5).sum()
+            sum_same_path += (path_diff <= shortest_path1[valid] * 1.1 + 5).sum().item()
         invalid_ratio1 = sum_valid / len(pairs1)
         same_ratio1 = sum_same_path / sum_valid
 
@@ -249,9 +246,9 @@ def sample_valid_path_ratio(
             shortest_path1 = compute_shortest_path(skel1[*yx2.unbind(-1)] - 1, *out1[1:], assume_valid=False)
             shortest_path2 = compute_shortest_path(skel2[*yx2.unbind(-1)] - 1, *out2[1:], assume_valid=True)
             valid2 = shortest_path1 != float("inf")
-            sum_valid += valid2.sum()
+            sum_valid += valid2.sum().item()
             path_diff = (shortest_path1[valid2] - shortest_path2[valid2]).abs()
-            sum_same_path += (path_diff <= shortest_path2[valid2] * 1.1 + 5).sum()
+            sum_same_path += (path_diff <= shortest_path2[valid2] * 1.1 + 5).sum().item()
         invalid_ratio2 = sum_valid / len(pairs2)
         same_ratio2 = sum_same_path / sum_valid
-        return (invalid_ratio1.item(), same_ratio1.item()), (invalid_ratio2.item(), same_ratio2.item())
+        return (invalid_ratio1, same_ratio1), (invalid_ratio2, same_ratio2)

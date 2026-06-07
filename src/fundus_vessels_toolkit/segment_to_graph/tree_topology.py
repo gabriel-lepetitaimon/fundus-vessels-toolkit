@@ -600,7 +600,7 @@ def read_branch_topology(
     tips_rank = np.zeros((B, 2), dtype=np.float32)
 
     for branch in graph.branches():
-        curve = branch.curve()
+        curve = branch.curve().astype(np.int_)
         if curve is None or len(curve) < 3:
             p0, p1 = branch.tip_coord()
             curve = rasterize_line(p0.to_int_pair(), p1.to_int_pair())

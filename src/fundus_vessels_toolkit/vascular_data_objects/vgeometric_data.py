@@ -23,7 +23,9 @@ from fundus_toolkits.utils.typing import (
     Int1DArray,
     Int1DArrayLike,
     Int2DArray,
+    PointArray,
     PointArrayLike,
+    as_float_pairs,
 )
 
 from ..utils import if_none
@@ -493,22 +495,22 @@ class VGeometricData:
         *,
         fill_with_nodes=False,
         min_length=1,
-    ) -> npt.NDArray[np.int_]: ...
+    ) -> PointArray: ...
     @overload
     def branch_curve(
         self,
-        ids: Optional[npt.NDArray[np.int_]] = None,
+        ids: Optional[Int1DArrayLike] = None,
         *,
         fill_with_nodes=False,
         min_length=1,
-    ) -> list[npt.NDArray[np.int_]]: ...
+    ) -> list[PointArray]: ...
     def branch_curve(
         self,
-        ids: Optional[int | npt.NDArray[np.int_]] = None,
+        ids: Optional[int | Int1DArrayLike] = None,
         *,
         fill_with_nodes=False,
         min_length=1,
-    ) -> npt.NDArray[np.int_] | list[npt.NDArray[np.int_]]:
+    ) -> PointArray | list[PointArray]:
         """Return the coordinates of the pixels that compose the branches of the graph.
 
         Parameters
@@ -530,9 +532,9 @@ class VGeometricData:
             - If ``ids`` is an iterable of int: a list of such arrays.
         """  # noqa: E501
 
-        def from_node(b_id: int) -> npt.NDArray[np.int_]:
+        def from_node(b_id: int) -> PointArray:
             nodes = self.parent_graph.branch_list[b_id]
-            return rasterize_line(*self.node_coord(nodes).astype(np.int_))
+            return as_float_pairs(rasterize_line(*self.node_coord(nodes).astype(np.int_)))
 
         if ids is None:
             ids = np.arange(self.branch_count)
@@ -541,7 +543,7 @@ class VGeometricData:
             ids, is_single = as_1d_array(ids)
 
         if isinstance(ids, np.ndarray):
-            curves = [if_none(self._branch_curve[i], EMPTY_CURVE) for i in ids]
+            curves = [as_float_pairs(if_none(self._branch_curve[i], EMPTY_CURVE)) for i in ids]
             if fill_with_nodes:
                 curves = [from_node(i) if len(c) < min_length else c for i, c in zip(ids, curves, strict=True)]
             return curves[0] if is_single else curves
