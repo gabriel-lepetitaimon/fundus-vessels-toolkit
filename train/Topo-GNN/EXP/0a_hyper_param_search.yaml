@@ -5,7 +5,8 @@ version: 1
 tag: hp-search
 n_trials: 32
 optuna:
-  sampler: 
+  direction: maximize
+  sampler:
     type: TPE
     n_startup_trials: 12
   pruner:
@@ -18,5 +19,8 @@ progress_bar: false
 # yaml-language-server: $schema=config.schema.json
 epoch: 200
 lr: 1e-4~1e-2
-batch_size: 2:4:14
+batch_size: 4:4:20
 topo_losses_delay: 10
+dataset:
+  augment:
+    deteriorate_graph: true|false

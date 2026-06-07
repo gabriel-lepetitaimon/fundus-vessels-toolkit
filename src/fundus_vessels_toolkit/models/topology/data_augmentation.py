@@ -18,6 +18,7 @@ from fundus_toolkits.utils.geometric import Rect
 
 from ...segment_to_graph.graph_simplification import remove_orphan_nodes, simplify_passing_nodes
 from ...segment_to_graph.vbranch_digraph import VBranchDigraph
+from ...utils.nnet.optuna import BoolHyperParam
 from ...vascular_data_objects import VBranchGeoData, VGraph, VGraphBranch, VTree
 
 
@@ -132,7 +133,7 @@ class AugmentationOpts(BaseModel):
     horizontal_flip: bool = Field(default=True)
     """Whether to apply horizontal flip"""
 
-    deteriorate_graph: DeteriorationOpts | bool = Field(default=True)
+    deteriorate_graph: DeteriorationOpts | BoolHyperParam = Field(default=True)
     """Whether to apply topological deterioration to the graph"""
 
     @property

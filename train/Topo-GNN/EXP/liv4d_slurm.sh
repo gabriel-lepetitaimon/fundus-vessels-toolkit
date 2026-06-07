@@ -6,8 +6,8 @@
     
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=3
-#SBATCH --time=12:00:00
-#SBATCH --mem=32G
+#SBATCH --time=44:00:00
+#SBATCH --mem=44G
 #SBATCH --partition=liv4d
 #SBATCH --gres=gpu:rtx2080ti:1
 
