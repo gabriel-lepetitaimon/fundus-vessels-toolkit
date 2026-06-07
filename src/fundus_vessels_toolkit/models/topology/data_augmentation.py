@@ -188,13 +188,19 @@ def deteriorate_trees(trees: tuple[VTree, VTree], opts: Optional[DeteriorationOp
 
 
 def deteriorate_graph[T: VGraph](
-    graph: T, opts: Optional[DeteriorationOpts] = None, *, rng=None, debug_info: Optional[dict[str, Any]] = None
+    graph: T,
+    opts: Optional[DeteriorationOpts] = None,
+    *,
+    rng=None,
+    debug_info: Optional[dict[str, Any]] = None,
+    inplace: bool = False,
 ) -> T:
     if opts is None:
         opts = DeteriorationOpts()
     if rng is None:
         rng = np.random.default_rng()
-    graph = graph.copy()
+    if not inplace:
+        graph = graph.copy()
     geo = graph.geometric_data()
     B = graph.branch_count
 

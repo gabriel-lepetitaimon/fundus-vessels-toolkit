@@ -407,8 +407,12 @@ class BranchDigraphData(PygData):
     ) -> Self | tuple[Self, VBranchDigraph]:
         """Alternative constructor to create a BranchDigraphData from a VGraph and a fundus image. Note that this method will not be able to fill all the fields of the data, especially those related to the ground truth probabilities and the branch curves, which are not stored in the VGraph."""  # noqa: E501
         augment_opts = AugmentationOpts.parse(augment)
+
+        graph = graph.copy()
+        graph.clear_all_branch_attr()
+        graph.clear_all_branch_attr()
         if augment_opts.deteriorate_graph:
-            graph = deteriorate_graph(graph, opts=augment_opts.deterioration_opts)
+            graph = deteriorate_graph(graph, opts=augment_opts.deterioration_opts, inplace=True)
 
         branch_digraph = VBranchDigraph.from_graph(graph, check=False)
         if gt_topology is not None:
