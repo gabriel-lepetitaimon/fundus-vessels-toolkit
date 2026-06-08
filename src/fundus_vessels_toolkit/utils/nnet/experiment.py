@@ -367,7 +367,7 @@ class ExperimentRun[T: BaseModel]:
             name=self.run_name,
             tags=self.header.tags,
             group=self.header.topic,
-            project="Test & Debug" if self.header.test_debug else None,
+            project="Test & Debug" if self.header.test_debug else self.header.project,
             config=config,
             log_model=self.header.log_model,
             save_dir="tmp",

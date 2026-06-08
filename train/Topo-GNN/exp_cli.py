@@ -90,6 +90,20 @@ def single_run(
 
 
 @app.command()
+def run_all(
+    file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to check.")],
+):
+    from train import train
+
+    while True:
+        try:
+            exp = ExperimentHeader.load_experiment(file, DigraphGNNTrainerConfig)
+        except NoTrialsToRunError as e:
+            raise typer.Exit(0) from None
+        train(exp)
+
+
+@app.command()
 def sbatch(
     script: Annotated[Path, typer.Argument(help="Path to the bash script to submit.")],
     file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to run.")],
