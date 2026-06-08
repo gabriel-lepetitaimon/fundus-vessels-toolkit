@@ -9,6 +9,7 @@ import psutil
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
+import wandb
 from lightning_fabric.plugins.precision.precision import _PRECISION_INPUT_STR
 from pydantic import BaseModel, ConfigDict, Field
 from pytorch_lightning.callbacks import ModelCheckpoint
@@ -16,7 +17,6 @@ from torch_geometric.loader import DataLoader as PyGDataLoader
 from torchmetrics import MetricCollection, Specificity
 from torchmetrics.classification import Accuracy, Precision, Recall
 
-import wandb
 from fundus_vessels_toolkit.models.metrics.tree import (
     MetricCollectionDict,
     ParentAcc,
@@ -470,7 +470,7 @@ class DigraphGNNTrainer(L.LightningModule):
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer, max_lr=self.config.lr, epochs=self.config.epoch, steps_per_epoch=self.n_step_per_epoch
         )
-        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "monitor": "train_loss"}}
+        return [optimizer], [{"scheduler": scheduler, "monitor": "train_loss", "interval": "step", "frequency": 1}]
 
 
 class _BatchSizeGradAccType(TypedDict):

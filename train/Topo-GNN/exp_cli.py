@@ -1,6 +1,7 @@
 import json
 import shutil
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 from typing import Annotated
@@ -93,14 +94,14 @@ def single_run(
 def run_all(
     file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to check.")],
 ):
-    from train import train
-
     while True:
-        try:
-            exp = ExperimentHeader.load_experiment(file, DigraphGNNTrainerConfig)
-        except NoTrialsToRunError as e:
-            raise typer.Exit(0) from None
-        train(exp)
+        out = subprocess.run([sys.executable, __file__, "single_run", file], capture_output=False)
+        if out.returncode == 20:
+            print("No more trials to run. Exiting.")
+            break
+        elif out.returncode != 0:
+            print(f"Error during run: {out.stderr}")
+            break
 
 
 @app.command()
