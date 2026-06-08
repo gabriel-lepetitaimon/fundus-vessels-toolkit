@@ -20,7 +20,7 @@ def torch_interp_bilinear(
     x: Tensor,
     batch_idx: Optional[Tensor] = None,
     img_shape: Optional[tuple[int, int]] = None,
-    legacy: bool = True,
+    legacy: Literal[True] = True,
 ) -> Tensor:
     """2D bilinear interpolation for a batch of images.
 
@@ -38,82 +38,40 @@ def torch_interp_bilinear(
     img_shape: Optional[tuple[int, int]], optional
         The initial shape of the input images (H, W) that the coordinates refer to, by default None. If not None, the input coordinates are rescaled from the original image size to the actual image size in ``imgs``.
 
-    legacy: bool
-        If True, use legacy python implementation, otherwise use torch.nn.function.grid_sample.
-
     Returns
     -------
     Tensor
-        A batch of interpolated values with shape (C, ..., N1, N2).
-
-    Example
-    -------
-    >>> torch.set_printoptions(precision=1, sci_mode=False)
-    >>> img = torch.tensor([[[0,0],[1,1]],[[0,1],[0,1]]]).float() # C=2, H=2, W=2
-    >>> imgs = torch.stack([img, img+10], dim=0) # B=2, C=2, H=2, W=2
-    >>> y = torch.tensor([[0, 0.5, 1.5], [0, 0.5, 1]]) # N=(2,3)
-    >>> x = torch.tensor([[0, 0, 1], [0, 0, 1]])
-    >>> batch_idx = torch.tensor([[0, 0, 0], [1, 1, 1]])
-    >>> torch_interp_bilinear(imgs, y, x, batch_idx, legacy=False)
-    tensor([[[ 0.0,  0.0],
-             [ 0.5,  0.0],
-             [ 1.0,  1.0]],
-            [[10.0, 10.0],
-             [10.5, 10.0],
-             [11.0, 11.0]]])
+        A batch of interpolated values with shape (N1, N2, ..., C).
     """  # noqa: E501
-    H, W = imgs.shape[-2:]
     if img_shape is not None and img_shape != imgs.shape[-2:]:
-        H_orig, W_orig = img_shape
+        H_fmap, W_fmap = imgs.shape[-2:]
+        H_img, W_img = img_shape
+        y, x = y * H_fmap / H_img, x * W_fmap / W_img
     elif not y.dtype.is_floating_point and y.dtype.is_floating_point:
         return imgs[batch_idx, :, y, x] if batch_idx is not None else imgs[:, y, x]
+
+    y0 = torch.clamp(torch.floor(y).long(), 0, imgs.shape[-2] - 2)
+    x0 = torch.clamp(torch.floor(x).long(), 0, imgs.shape[-1] - 2)
+
+    y1, x1 = y0 + 1, x0 + 1
+
+    dy0 = (y1 - y)[..., None]
+    dy1 = (y - y0)[..., None]
+    dx0 = (x1 - x)[..., None]
+    dx1 = (x - x0)[..., None]
+    if batch_idx is None:
+        img_y0x0 = imgs[:, y0, x0].view(*y0.shape, -1)
+        img_y1x0 = imgs[:, y1, x0].view(*y0.shape, -1)
+        img_y0x1 = imgs[:, y0, x1].view(*y0.shape, -1)
+        img_y1x1 = imgs[:, y1, x1].view(*y0.shape, -1)
     else:
-        H_orig, W_orig = H, W
+        b = batch_idx.long()
+        img_y0x0 = imgs[b, :, y0, x0].view(*y0.shape, -1)
+        img_y1x0 = imgs[b, :, y1, x0].view(*y0.shape, -1)
+        img_y0x1 = imgs[b, :, y0, x1].view(*y0.shape, -1)
+        img_y1x1 = imgs[b, :, y1, x1].view(*y0.shape, -1)
 
-    y = torch.clamp(y, 0, H_orig - 1)
-    x = torch.clamp(x, 0, W_orig - 1)
-
-    if legacy:
-        y = y * ((H - 1) / (H_orig - 1))
-        x = x * ((W - 1) / (W_orig - 1))
-        y0 = torch.clamp(torch.floor(y).long(), 0, H_orig - 2)
-        x0 = torch.clamp(torch.floor(x).long(), 0, W_orig - 2)
-        y1 = y0 + 1
-        x1 = x0 + 1
-
-        dy1 = (y - y0)[..., None]
-        dy0 = 1 - dy1
-        dx1 = (x - x0)[..., None]
-        dx0 = 1 - dx1
-        if batch_idx is None:
-            img_y0x0 = imgs[:, y0, x0].view(*y0.shape, -1)
-            img_y1x0 = imgs[:, y1, x0].view(*y0.shape, -1)
-            img_y0x1 = imgs[:, y0, x1].view(*y0.shape, -1)
-            img_y1x1 = imgs[:, y1, x1].view(*y0.shape, -1)
-        else:
-            b = batch_idx.long()
-            img_y0x0 = imgs[b, :, y0, x0].view(*y0.shape, -1)
-            img_y1x0 = imgs[b, :, y1, x0].view(*y0.shape, -1)
-            img_y0x1 = imgs[b, :, y0, x1].view(*y0.shape, -1)
-            img_y1x1 = imgs[b, :, y1, x1].view(*y0.shape, -1)
-
-        v = img_y0x0 * (dy0 * dx0) + img_y1x0 * (dy1 * dx0) + img_y0x1 * (dy0 * dx1) + img_y1x1 * (dy1 * dx1)
-        return v.permute(-1, *range(len(y.shape)))  # C, N1, N2, ...
-    else:
-        Ns = y.shape
-        C = imgs.shape[-3]
-        if batch_idx is not None:
-            B = imgs.shape[0]
-            y += B * batch_idx
-            H_orig = H * B
-            imgs = imgs.permute(1, 0, 2, 3).flatten(1, 2)  # C, B*H, W
-        x = x * (2 / (W_orig - 1)) - 1
-        y = y * (2 / (H_orig - 1)) - 1
-        imgs = imgs.unsqueeze(0)  # 1, C, H, W
-
-        grid = torch.stack((x.flatten(), y.flatten()), dim=-1)[None, None, :, :]  # 1, 1, N, 2
-        v = torch.nn.functional.grid_sample(imgs, grid, align_corners=True)  # 1, C, 1, N
-        return v.squeeze(0, 2).reshape(C, *Ns)
+    return img_y0x0 * (dy0 * dx0) + img_y1x0 * (dy1 * dx0) + img_y0x1 * (dy0 * dx1) + img_y1x1 * (dy1 * dx1)
 
 
 def grid_indices(shape: tuple[int, int], device=None) -> Tensor:
