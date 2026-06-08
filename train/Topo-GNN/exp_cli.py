@@ -95,7 +95,7 @@ def run_all(
     file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to check.")],
 ):
     while True:
-        out = subprocess.run([sys.executable, __file__, "single_run", file], capture_output=False)
+        out = subprocess.run([sys.executable, __file__, "single-run", file], capture_output=False)
         if out.returncode == 20:
             print("No more trials to run. Exiting.")
             break

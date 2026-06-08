@@ -10,13 +10,13 @@ from typing import Annotated, Any, Literal, Optional, Sequence, overload
 import numpy as np
 import optuna
 import pytorch_lightning as pl
+import wandb
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PrivateAttr, ValidationError, computed_field
 from pytorch_lightning.callbacks import Callback
 from pytorch_lightning.loggers import WandbLogger
 from rich.console import Console
 from ruamel.yaml import YAML
 
-import wandb
 from fundus_toolkits.utils.typing import Int1DArray
 
 from .optuna import OptunaCfg, TrialContext
