@@ -7,7 +7,7 @@ import torchmetrics as tm
 from torchmetrics import Metric as TorchMetric
 
 from ...segment_to_graph import FundusVesselSegToGraph
-from ...vascular_graph.matching import naive_edit_distance
+from ...vmatching import naive_edit_distance
 
 
 class ClDice(TorchMetric):

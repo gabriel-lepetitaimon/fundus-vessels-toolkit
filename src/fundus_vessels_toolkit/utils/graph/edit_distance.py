@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, NamedTuple, Optional, Set, Tuple
+from typing import List, NamedTuple, Optional, Self, Set, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -47,8 +47,8 @@ class NodeMapping:
         self.m12 = m12
         self.m21 = m21
 
-    def copy(self) -> Same:
-        return NodeMapping(self.m12.copy(), self.m21.copy())
+    def copy(self) -> Self:
+        return self.__class__(self.m12.copy(), self.m21.copy())
 
     def pending_nodes(self) -> Tuple[Set[int], Set[int]]:
         return {i for i, m in enumerate(self.m12) if m is None}, {i for i, m in enumerate(self.m21) if m is None}
@@ -74,7 +74,7 @@ class NodeMapping:
 class EditPath(NamedTuple):
     node_map: NodeMapping
     cost: float
-    parent: Optional[Same] = None
+    parent: Optional[Self] = None
 
     def is_complete(self) -> bool:
         return all(len(_) == 0 for _ in self.node_map.pending_nodes())

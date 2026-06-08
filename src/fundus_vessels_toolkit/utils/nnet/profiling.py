@@ -1,6 +1,5 @@
 from time import perf_counter
 
-
 _profilers = {}
 
 
@@ -50,10 +49,6 @@ class Profiler:
         return res
 
     @classmethod
-    def get(cls, name):
-        return _profilers.setdefault(name, Profiler(name))
-
-    @classmethod
     def reset(cls, name=None):
         if name is None:
             _profilers.clear()
@@ -68,3 +63,7 @@ def time2str(float, length=8):
         return f"{float * 1e3:.2f}ms".rjust(length)
     else:
         return f"{float:.3f}s".rjust(length)
+
+
+def profiler(name) -> Profiler:
+    return _profilers.setdefault(name, Profiler(name))

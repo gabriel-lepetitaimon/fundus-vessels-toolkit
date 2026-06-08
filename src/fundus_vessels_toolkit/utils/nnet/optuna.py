@@ -192,13 +192,13 @@ class OptunaCfg(BaseModel):
     storage: Optional[str] = Field(default="sqlite:///tmp/optuna.db", pattern=r"^(sqlite|postgresql|mysql)://")
     """Optuna storage URL. If None, use a in-memory non-persistent storage. Default is "sqlite:///optuna.db"."""
 
-    sampler: SamplerCfg = Field(default_factory=RandomSamplerCfg)
+    sampler: SamplerCfg = Field(default_factory=TPESamplerCfg)
     """Optuna sampler specification."""
 
     pruner: Optional[PrunerCfg] = Field(default=None)
     """Pruner to use for Optuna. Default is None (no pruning)."""
 
-    direction: Literal["minimize", "maximize"] = Field(default="minimize")
+    direction: Literal["minimize", "maximize"] = Field(default="maximize")
     """Direction of optimization for Optuna. Default is 'minimize'."""
 
     @property

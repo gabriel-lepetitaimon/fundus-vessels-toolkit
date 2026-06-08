@@ -159,7 +159,7 @@ class BranchDigraphModel(torch.nn.Module):
 
         Parameters
         ----------
-            features_map: Tensor (B, C_feature, H, W)
+            features_map: Tensor (B, F, H, W)
                 tensor of feature maps
             branch_curves: Tensor (N_branch, L, 2)
                 tensor of branch curves, where L is the number of curve points
@@ -167,11 +167,11 @@ class BranchDigraphModel(torch.nn.Module):
                 tensor of batch indices for each branch
         Returns
         -------
-            Tensor (N_branch, 2, C_feature) or (N_branch, 3, C_feature)
+            Tensor (N_branch, 2, F) or (N_branch, 3, F)
                 Image features sampled along the curve of each branch.
 
-                - If bipolar_node is False, the feature of each branch is the stacked features sampled at its two tips (shape=(N_branch, 2, C_feature)).
-                - If bipolar_node is True, the feature of each branch is the stacked features sampled at its two tips and the mean feature along the branch curve (shape=(N_branch, 3, C_feature)).
+                - If bipolar_node is False, the feature of each branch is the stacked features sampled at its two tips (shape=(N_branch, 2, F)).
+                - If bipolar_node is True, the feature of each branch is the stacked features sampled at its two tips and the mean feature along the branch curve (shape=(N_branch, 3, F)).
         """  # noqa: E501
         C = branch_curves.shape[1]
         halfC = C // 2
@@ -185,22 +185,26 @@ class BranchDigraphModel(torch.nn.Module):
             # === Simple node features: concatenate features at both tips ===
             features_tip = [], []
             for fmap in features_map:
-                features = torch_interp_bilinear(fmap, curve_y, curve_x, batch_idx, img_shape)  # (N_branch, F, C)
-                features_tip[0].append(features[:, halfC:].mean(dim=1))
-                features_tip[1].append(features[:, :halfC].mean(dim=1))
-            return torch.stack([torch.cat(f, dim=-1) for f in features_tip], dim=1)  # (B, 2, F)
+                features = torch_interp_bilinear(
+                    fmap, curve_y, curve_x, batch_idx, img_shape, legacy=True
+                )  # (F, N_branch, C)
+                features_tip[0].append(features[..., halfC:].mean(dim=-1))
+                features_tip[1].append(features[..., :halfC].mean(dim=-1))
+            return torch.stack([torch.cat(f, dim=0).T for f in features_tip], dim=1)  # (N_branch, 2, F)
         else:
             # === Bipolar node features: concatenate features at both tips and their average along the branch ===
             # Tip features are weighted to give more importance to the those near the tip.
-            tip_decay = self.tip_decay(C).view(1, -1, 1)
+            tip_decay = self.tip_decay(C)[None, None, :]
 
             features_tip, features_branch = ([], []), []
             for fmap in features_map:
-                features = torch_interp_bilinear(fmap, curve_y, curve_x, batch_idx, img_shape)
-                features_tip[0].append((features[:, halfC:] * tip_decay).sum(dim=1))
-                features_tip[1].append((features[:, :halfC] * tip_decay.flip(1)).sum(dim=1))
-                features_branch.append(features.mean(dim=-2))
-            return torch.stack([torch.cat(f, dim=-1) for f in (features_branch,) + features_tip], dim=1)  # (B, 3, F)
+                features = torch_interp_bilinear(fmap, curve_y, curve_x, batch_idx, img_shape, legacy=True)
+                features_tip[0].append((features[..., halfC:] * tip_decay).sum(dim=-1))
+                features_tip[1].append((features[..., :halfC] * tip_decay.flip(1)).sum(dim=-1))
+                features_branch.append(features.mean(dim=-1))
+            return torch.stack(
+                [torch.cat(f, dim=0).T for f in (features_branch,) + features_tip], dim=1
+            )  # (N_branch, 3, F)
 
     @classmethod
     def extract_edge_attr(cls, data: BranchDigraphBatch, opt: BranchDigraphModelCfg.EdgeAttr) -> Tensor:
