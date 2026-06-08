@@ -134,6 +134,9 @@ class HardwareConfig(BaseModel):
     gpu: int | list[int] | None = None
     """GPU device index to use. If None, the default GPU will be used."""
 
+    preload_with_img: bool = True
+    """Whether to preload the dataset with images. If False, the dataset will be preloaded without images, which can save memory but slow down the training."""  # noqa: E501
+
     def batch_size_grad_acc(self, batch_size: int) -> tuple[int, int]:
         """Calculate the actual batch size and the number of gradient accumulation steps based on the given batch size and the maximum batch size."""  # noqa: E501
         if batch_size <= self.max_batch_size:
@@ -184,7 +187,7 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
         batch_size, grad_acc = hdw_cfg.batch_size_grad_acc(cfg.batch_size)
 
         train_loader = PyGDataLoader(
-            train_set.preload(with_image=False),
+            train_set.preload(with_image=hdw_cfg.preload_with_img),
             shuffle=True,
             num_workers=hdw_cfg.train_num_workers,
             persistent_workers=True,

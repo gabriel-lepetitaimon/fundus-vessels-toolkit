@@ -379,6 +379,34 @@ Search space is defined as "low:high" for uniform sampling or "low~high" for log
 """
 
 
+def optuna_parse_bool(value: bool | BoolSearchSpace, info: ValidationInfo):
+    if not isinstance(value, str):
+        return value
+
+    if value.startswith(VAR_SYMBOL):
+        params = current_trial().user_attrs.get("fixed_params", {}).get(value[1:], ...)
+        if params is ...:
+            raise ValueError(f"Parameter '{value[1:]}' not found in fixed parameters of the current trial.")
+        return params
+
+    if info.field_name is None:
+        raise ValueError("Field name must be provided in ValidationInfo for optuna_parse_bool.")
+
+    if not re.match(r"^(?:([tT]rue\s*\|\s*[fF]alse)|([fF]alse\s*\|\s*[tT]rue))$", value):
+        raise ValueError(f"Invalid bool hyper-parameter format: {value}.")
+    return current_trial().suggest_int(info.field_name, 0, 1) == 1
+
+
+type BoolSearchSpace = Annotated[
+    str, StringConstraints(pattern=r"^(?:([tT]rue\s*\|\s*[fF]alse)|([fF]alse\s*\|\s*[tT]rue))$")
+]
+type BoolHyperParam = Annotated[bool, BeforeValidator(optuna_parse_bool, json_schema_input_type=bool | BoolSearchSpace)]
+"""
+A boolean field accepting either a fixed boolean or a string describing a boolean search space. 
+Search space is defined as "low:high" for uniform sampling or "low~high" for log-uniform sampling.
+"""
+
+
 def optuna_parse_literal(literal_type, to_list: bool = False):
     def parser(value, info: ValidationInfo):
         if not isinstance(value, str):
