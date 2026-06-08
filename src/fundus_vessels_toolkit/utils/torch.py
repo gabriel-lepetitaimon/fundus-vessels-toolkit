@@ -76,8 +76,8 @@ def torch_interp_bilinear(
     if legacy:
         y = y * ((H - 1) / (H_orig - 1))
         x = x * ((W - 1) / (W_orig - 1))
-        y0 = torch.floor(y).long()
-        x0 = torch.floor(x).long()
+        y0 = torch.clamp(torch.floor(y).long(), 0, H_orig - 2)
+        x0 = torch.clamp(torch.floor(x).long(), 0, W_orig - 2)
         y1 = y0 + 1
         x1 = x0 + 1
 
