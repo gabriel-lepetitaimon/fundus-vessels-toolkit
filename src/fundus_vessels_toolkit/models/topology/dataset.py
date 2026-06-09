@@ -37,11 +37,10 @@ from ...segment_to_graph.vbranch_digraph import (
 )
 from ...utils import if_none
 from ...utils.nnet.experiment import ExperimentRun
-from ...utils.nnet.optuna import BoolHyperParam
 from ...utils.numpy import np_group_by
 from ...vascular_data_objects import VBranchGeoData, VTree
 from .data import BranchDigraphData
-from .data_augmentation import AugmentationOpts
+from .data_augmentation import AugmentationCfg, AugmentationField
 
 if TYPE_CHECKING:
     from ...utils.jppype import Mosaic
@@ -517,7 +516,7 @@ class BranchDigraphDatasetConfig(BaseModel):
     If a dict is provided, it should map graph version names to weights, and the corresponding graphs will be loaded and merged with the specified weights for each sample. If a version name in the dict is not found in a sample, that sample will be skipped with a warning.
     """  # noqa: E501
     preload: bool | Literal["without-image"] = Field(default=False)
-    augment: AugmentationOpts | BoolHyperParam = Field(default_factory=AugmentationOpts)
+    augment: AugmentationField = Field(default_factory=AugmentationCfg)
 
     # line_p_smoothing: NotRequired[float] = 0.0
 
@@ -758,7 +757,7 @@ class BranchDigraphDataset(PygDataset):
         idx: int | str,
         *,
         version: Optional[str] = None,
-        augment: Optional[bool | AugmentationOpts] = None,
+        augment: Optional[bool | AugmentationCfg] = None,
         return_digraph: Literal[False] = False,
     ) -> BranchDigraphData: ...
     @overload
@@ -767,7 +766,7 @@ class BranchDigraphDataset(PygDataset):
         idx: int | str,
         *,
         version: Optional[str] = None,
-        augment: Optional[bool | AugmentationOpts] = None,
+        augment: Optional[bool | AugmentationCfg] = None,
         return_digraph: Literal[True],
     ) -> tuple[BranchDigraphData, VBranchDigraph]: ...
     def get(
@@ -775,7 +774,7 @@ class BranchDigraphDataset(PygDataset):
         idx: int | str,
         *,
         version: Optional[str] = None,
-        augment: Optional[bool | AugmentationOpts] = None,
+        augment: Optional[bool | AugmentationCfg] = None,
         return_digraph: bool = False,
     ) -> BranchDigraphData | tuple[BranchDigraphData, VBranchDigraph]:
         sample = self.get_sample(idx)
@@ -835,7 +834,7 @@ class BranchDigraphDataset(PygDataset):
         idx: int | str,
         *,
         version: Optional[str] = None,
-        augment: Optional[bool | AugmentationOpts] = None,
+        augment: Optional[bool | AugmentationCfg] = None,
         branch_label=False,
         node_label=False,
     ) -> tuple[Mosaic, BranchDigraphSample, BranchDigraphData]:

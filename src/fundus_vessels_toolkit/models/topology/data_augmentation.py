@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, Self
+from typing import Annotated, Any, Literal, Optional, Self
 
 import numpy as np
 import numpy.typing as npt
@@ -18,65 +18,68 @@ from fundus_toolkits.utils.geometric import Rect
 
 from ...segment_to_graph.graph_simplification import remove_orphan_nodes, simplify_passing_nodes
 from ...segment_to_graph.vbranch_digraph import VBranchDigraph
-from ...utils.nnet.optuna import BoolHyperParam
+from ...utils.nnet.optuna import BoolDefaultValidator, BoolHyperParam, FloatHyperParam, IntHyperParam
 from ...vascular_data_objects import VBranchGeoData, VGraph, VGraphBranch, VTree
 
 
-class DeteriorationOpts(BaseModel):
+class DeteriorationCfg(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True)
 
-    min_holes_count: int = Field(default=50)
+    min_holes_count: IntHyperParam = Field(default=50)
     """Minimum number of holes to create disconnections"""
 
-    max_holes_count: int = Field(default=70)
+    max_holes_count: IntHyperParam = Field(default=70)
     """Maximum number of holes to create disconnections"""
 
-    w_branch_base: float = Field(default=8.0)
+    w_branch_base: FloatHyperParam = Field(default=8.0)
     """Base weight for each branch"""
 
-    w_branch_inv_calibre_f: float = Field(default=1.5)
+    w_branch_inv_calibre_f: FloatHyperParam = Field(default=1.5)
     """Weighting branch calibre"""
 
-    w_branch_sqrt_length_f: float = Field(default=2.0)
+    w_branch_sqrt_length_f: FloatHyperParam = Field(default=2.0)
     """Weighting branch length"""
 
-    max_w_spread: float = Field(default=0.5)
+    max_w_spread: FloatHyperParam = Field(default=0.5)
     """Scale weighting so the min is max_w_spread * max"""
-    whole_branch_p: float = Field(default=0.1)
+    whole_branch_p: FloatHyperParam = Field(default=0.1)
     """Probability to drop an entire branch"""
 
-    whole_branch_max_calibre: float = Field(default=10.0)
+    whole_branch_max_calibre: FloatHyperParam = Field(default=10.0)
     """Maximum average calibre to consider dropping entire branch"""
 
-    whole_branch_max_length: int = Field(default=50)
+    whole_branch_max_length: IntHyperParam = Field(default=50)
     """Maximum length to consider dropping entire branch"""
 
-    tip_hole_p: float = Field(default=0.4)
+    tip_hole_p: FloatHyperParam = Field(default=0.4)
     """Probability to drop an endpoint branch"""
 
-    hole_avg_length: int = Field(default=10)
+    hole_avg_length: IntHyperParam = Field(default=10)
     """Average length of dropped segments (sampled from normal distribution)"""
 
-    hole_avg_length_f: float = Field(default=0.2)
+    hole_avg_length_f: FloatHyperParam = Field(default=0.2)
     """Factor of the branch length added to the average length of dropped segments"""
 
-    hole_std_length: int = Field(default=20)
+    hole_std_length: IntHyperParam = Field(default=20)
     """Standard deviation of the length of dropped segments"""
 
-    hole_min_length: int = Field(default=5)
+    hole_min_length: IntHyperParam = Field(default=5)
     """Minimum length of dropped segments"""
 
-    hole_min_length_f: float = Field(default=0.1)
+    hole_min_length_f: FloatHyperParam = Field(default=0.1)
     """Factor of the branch length added to the minimum length of dropped segments"""
 
-    segment_min_length: int = Field(default=5)
+    segment_min_length: IntHyperParam = Field(default=5)
     """Minimum length of left segments"""
 
-    segment_min_length_f: float = Field(default=0.2)
+    segment_min_length_f: FloatHyperParam = Field(default=0.2)
     """Factor of the branch length added to the minimum length left segments"""
 
 
-class ElasticOpts(BaseModel):
+type DeteriorationField = Annotated[Optional[DeteriorationCfg], BoolDefaultValidator(DeteriorationCfg)]
+
+
+class ElasticCfg(BaseModel):
     """
     Options for elastic deformation.
 
@@ -86,10 +89,10 @@ class ElasticOpts(BaseModel):
 
     model_config = ConfigDict(use_attribute_docstrings=True)
 
-    displacement_std: float = Field(default=80.0)
+    displacement_std: FloatHyperParam = Field(default=80.0)
     """Standard deviation of the displacement in pixels"""
 
-    smoothing_size: float = Field(default=200.0)
+    smoothing_size: FloatHyperParam = Field(default=200.0)
     """Size of the Gaussian kernel for smoothing the displacement field"""
 
     def generate_projection(
@@ -102,13 +105,16 @@ class ElasticOpts(BaseModel):
         )
 
 
-class RotationOpts(BaseModel):
+type ElasticField = Annotated[Optional[ElasticCfg], BoolDefaultValidator(ElasticCfg)]
+
+
+class RotationCfg(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True)
 
-    min_angle: float = Field(default=3.0)
+    min_angle: FloatHyperParam = Field(default=3.0)
     """Minimum absolute angle in degrees to apply rotation"""
 
-    max_angle: float = Field(default=30.0)
+    max_angle: FloatHyperParam = Field(default=30.0)
     """Maximum absolute angle in degrees to apply rotation"""
 
     def generate_projection(self, shape: tuple[int, int], rng: Optional[np.random.Generator] = None) -> AffineTransform:
@@ -121,19 +127,22 @@ class RotationOpts(BaseModel):
         return AffineTransform.rotate(angle, center)
 
 
-class AugmentationOpts(BaseModel):
+type RotationField = Annotated[Optional[RotationCfg], BoolDefaultValidator(RotationCfg)]
+
+
+class AugmentationCfg(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True)
 
-    elastic: ElasticOpts | bool = Field(default=True)
+    elastic: ElasticField = Field(default_factory=ElasticCfg)
     """Whether to apply elastic deformation"""
 
-    rotate: RotationOpts | bool = Field(default=False)
+    rotate: RotationField = Field(default_factory=RotationCfg)
     """Whether to apply rotation"""
 
-    horizontal_flip: bool = Field(default=True)
+    horizontal_flip: BoolHyperParam = Field(default=True)
     """Whether to apply horizontal flip"""
 
-    deteriorate_graph: DeteriorationOpts | BoolHyperParam = Field(default=True)
+    deteriorate_graph: DeteriorationField = Field(default_factory=DeteriorationCfg)
     """Whether to apply topological deterioration to the graph"""
 
     @property
@@ -141,16 +150,16 @@ class AugmentationOpts(BaseModel):
         return bool(self.horizontal_flip or self.rotate is not False or self.elastic is not False)
 
     @property
-    def rotation_opts(self) -> RotationOpts:
-        return self.rotate if isinstance(self.rotate, RotationOpts) else RotationOpts()
+    def rotation_opts(self) -> RotationCfg:
+        return self.rotate if isinstance(self.rotate, RotationCfg) else RotationCfg()
 
     @property
-    def elastic_opts(self) -> ElasticOpts:
-        return self.elastic if isinstance(self.elastic, ElasticOpts) else ElasticOpts()
+    def elastic_opts(self) -> ElasticCfg:
+        return self.elastic if isinstance(self.elastic, ElasticCfg) else ElasticCfg()
 
     @property
-    def deterioration_opts(self) -> DeteriorationOpts:
-        return self.deteriorate_graph if isinstance(self.deteriorate_graph, DeteriorationOpts) else DeteriorationOpts()
+    def deterioration_opts(self) -> DeteriorationCfg:
+        return self.deteriorate_graph if isinstance(self.deteriorate_graph, DeteriorationCfg) else DeteriorationCfg()
 
     def generate_transform(self, shape: tuple[int, int], rng: Optional[np.random.Generator] = None) -> Transform:
         if rng is None:
@@ -161,9 +170,9 @@ class AugmentationOpts(BaseModel):
         if self.horizontal_flip and rng.random() < 0.5:
             transforms.append(FlipTransform(center=center, horizontal=True))
         if self.rotate:
-            transforms.append(self.rotation_opts.generate_projection(shape, rng=rng))
+            transforms.append(self.rotate.generate_projection(shape, rng=rng))
         if self.elastic:
-            transforms.append(self.elastic_opts.generate_projection(shape, rng=rng))
+            transforms.append(self.elastic.generate_projection(shape, rng=rng))
         if len(transforms) == 0:
             return IdentityTransform()
         return TransformComposition(*transforms)
@@ -173,14 +182,17 @@ class AugmentationOpts(BaseModel):
         if data is True:
             return cls()
         elif data is False:
-            return cls(elastic=False, rotate=False, horizontal_flip=False, deteriorate_graph=False)
+            return cls(elastic=None, rotate=None, horizontal_flip=False, deteriorate_graph=None)
         else:
             return data
 
 
-def deteriorate_trees(trees: tuple[VTree, VTree], opts: Optional[DeteriorationOpts] = None) -> tuple[VTree, VTree]:
+type AugmentationField = Annotated[AugmentationCfg, BoolDefaultValidator(AugmentationCfg)]
+
+
+def deteriorate_trees(trees: tuple[VTree, VTree], opts: Optional[DeteriorationCfg] = None) -> tuple[VTree, VTree]:
     if opts is None:
-        opts = DeteriorationOpts()
+        opts = DeteriorationCfg()
 
     # === AV SWAP ===
 
@@ -190,14 +202,14 @@ def deteriorate_trees(trees: tuple[VTree, VTree], opts: Optional[DeteriorationOp
 
 def deteriorate_graph[T: VGraph](
     graph: T,
-    opts: Optional[DeteriorationOpts] = None,
+    opts: Optional[DeteriorationCfg] = None,
     *,
     rng=None,
     debug_info: Optional[dict[str, Any]] = None,
     inplace: bool = False,
 ) -> T:
     if opts is None:
-        opts = DeteriorationOpts()
+        opts = DeteriorationCfg()
     if rng is None:
         rng = np.random.default_rng()
     if not inplace:
@@ -361,13 +373,13 @@ def deteriorate_graph[T: VGraph](
 def geometric_augment(
     sample: tuple[VBranchDigraph, npt.NDArray, npt.NDArray, npt.NDArray],
     *,
-    opts: Optional[AugmentationOpts | Literal[True]] = None,
+    opts: Optional[AugmentationCfg | Literal[True]] = None,
     rng: Optional[np.random.Generator] = None,
 ) -> tuple[VBranchDigraph, npt.NDArray, npt.NDArray, npt.NDArray]:
     digraph, fundus_img, od_yx, mac_yx = sample
     assert digraph.graph is not None, "Graph must be initialized to apply geometric augmentations"
 
-    opts = AugmentationOpts() if opts in (True, None) else opts
+    opts = AugmentationCfg() if opts in (True, None) else opts
     if rng is None:
         rng = np.random.default_rng()
 

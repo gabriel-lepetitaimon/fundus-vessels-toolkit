@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 from abc import abstractmethod
 from contextvars import ContextVar, Token
-from typing import Annotated, Any, Literal, Optional, Self, get_args
+from typing import Annotated, Any, Callable, Literal, Optional, Self, get_args
 
 import optuna
 import yaml
@@ -517,3 +517,18 @@ def ListLiteralHyperParam(literal_type):
         optuna_parse_literal(literal_type, to_list=True),
         json_schema_input_type=literal_type | list[literal_type] | _ListLiteralSearchSpace[literal_type],
     )
+
+
+def BoolDefaultValidator[T](return_type: type[T], default_factory: Optional[Callable[[], T]] = None) -> BeforeValidator:
+    def validator(value: T | bool, info: ValidationInfo) -> Optional[T]:
+        if isinstance(value, str):
+            value = optuna_parse_bool(value, info)
+        if value is True:
+            if default_factory is None:
+                return return_type() if isinstance(return_type, type) else return_type
+            return default_factory()
+        elif value is False:
+            return None
+        return value
+
+    return BeforeValidator(validator, json_schema_input_type=BoolHyperParam | Optional[return_type])

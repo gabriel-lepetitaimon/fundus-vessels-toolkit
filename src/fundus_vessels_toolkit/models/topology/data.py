@@ -25,7 +25,7 @@ from ...utils import if_none
 from ...utils.tree import tree_connected_components
 from ...vascular_data_objects import VBranchGeoData
 from ...vascular_data_objects.vgeometric_data import VGeometricData
-from .data_augmentation import AugmentationOpts, deteriorate_graph
+from .data_augmentation import AugmentationCfg, deteriorate_graph
 
 
 class BranchDigraphData(PygData):
@@ -373,7 +373,7 @@ class BranchDigraphData(PygData):
         gt_topology: Optional[tuple[TreeTopology, TreeTopology]] = None,
         *,
         return_digraph: Literal[False] = False,
-        augment: bool | AugmentationOpts = False,
+        augment: bool | AugmentationCfg = False,
         name: Optional[str] = None,
         od_center: Optional[Point] = None,
         mac_center: Optional[Point] = None,
@@ -387,7 +387,7 @@ class BranchDigraphData(PygData):
         gt_topology: Optional[tuple[TreeTopology, TreeTopology]] = None,
         *,
         return_digraph: Literal[True],
-        augment: bool | AugmentationOpts = False,
+        augment: bool | AugmentationCfg = False,
         name: Optional[str] = None,
         od_center: Optional[Point] = None,
         mac_center: Optional[Point] = None,
@@ -400,13 +400,13 @@ class BranchDigraphData(PygData):
         gt_topology: Optional[tuple[TreeTopology, TreeTopology]] = None,
         *,
         return_digraph: bool = False,
-        augment: bool | AugmentationOpts = False,
+        augment: bool | AugmentationCfg = False,
         name: Optional[str] = None,
         od_center: Optional[Point] = None,
         mac_center: Optional[Point] = None,
     ) -> Self | tuple[Self, VBranchDigraph]:
         """Alternative constructor to create a BranchDigraphData from a VGraph and a fundus image. Note that this method will not be able to fill all the fields of the data, especially those related to the ground truth probabilities and the branch curves, which are not stored in the VGraph."""  # noqa: E501
-        augment_opts = AugmentationOpts.parse(augment)
+        augment_opts = AugmentationCfg.parse(augment)
 
         graph = graph.copy()
         graph.clear_all_branch_attr()
