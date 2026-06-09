@@ -200,7 +200,9 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
         )
 
         # Setup the logger and trainer
-        model = DigraphGNNTrainer(cfg.model_dump(), compile=hdw_cfg.compile, n_step_per_epoch=len(train_loader))
+        model = DigraphGNNTrainer(
+            cfg.model_dump(), compile=hdw_cfg.compile, n_step_per_epoch=len(train_loader) // grad_acc
+        )
 
         checkpoint = ModelCheckpoint(monitor="val_agg", mode="max", save_weights_only=True)
 
