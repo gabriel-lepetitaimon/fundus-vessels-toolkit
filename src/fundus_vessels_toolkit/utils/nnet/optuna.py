@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
 import re
 from abc import abstractmethod
 from contextvars import ContextVar, Token
+from pathlib import Path
 from typing import Annotated, Any, Callable, Literal, Optional, Self, get_args
 
 import optuna
@@ -179,7 +179,6 @@ class OptunaCfg(BaseModel):
     Examples
     --------
     >>> optuna = Optuna.model_validate({
-    ...     "study_name": "my_study",
     ...     "storage": "sqlite:///optuna.db",
     ...     "sampler": {"type": "TPE"},
     ...     "direction": "minimize"}

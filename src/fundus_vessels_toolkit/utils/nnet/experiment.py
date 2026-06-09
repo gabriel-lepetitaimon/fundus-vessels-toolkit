@@ -147,7 +147,7 @@ class ExperimentHeader(BaseModel):
     def parameters_grid_by_name(self) -> dict[str, dict[str, Any]]:
         """Dictionary mapping parameter names to their values for each parameter combination."""  # noqa: E501
         if len(self.parameters_grid) == 0:
-            return {self.experiment: {}}
+            return {self.experiment_name: {}}
         return dict(zip(self._study_names(), self.parameters_grid, strict=True))
 
     @computed_field
@@ -262,8 +262,8 @@ class ExperimentHeader(BaseModel):
 
 
 class ExperimentRunFactory[T: BaseModel]:
-    def __init__(self, cfg: ExperimentHeader, yaml: YamlDocument, model: type[T], yaml_override: dict | None = None):
-        self.cfg = cfg
+    def __init__(self, header: ExperimentHeader, yaml: YamlDocument, model: type[T], yaml_override: dict | None = None):
+        self.header = header
         self.model = model
         self.yaml = yaml
         self.yaml_override = yaml_override
@@ -272,16 +272,16 @@ class ExperimentRunFactory[T: BaseModel]:
     def next_run(self) -> Optional[ExperimentRun[T]]:
         """Get the next experiment run to execute, based on the current trial counts and parameter combinations. Returns None if all trials have been completed."""  # noqa: E501
 
-        cfg = self.cfg
+        cfg = self.header
         for i, (study_name, params) in enumerate(cfg.parameters_grid_by_name.items()):
-            study = cfg.optuna.load_study(study_name, temp_storage=self.cfg.test_debug)
+            study = cfg.optuna.load_study(study_name, temp_storage=self.header.test_debug)
             if study.valid_trials_count(only_completed=False) < cfg.n_trials:
                 trial = study.ask(fixed_parameters=params)
                 with TrialContext(trial):
                     run_cfg = self.yaml.validate(self.model)
                     if self.yaml_override is not None:
                         run_cfg = run_cfg.model_copy(update=self.yaml_override)
-                    return ExperimentRun(self.cfg, run_cfg, study, trial, i)
+                    return ExperimentRun(self.header, run_cfg, study, trial, i)
         return None
 
     def __enter__(self) -> ExperimentRun[T]:
