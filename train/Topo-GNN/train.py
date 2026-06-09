@@ -200,9 +200,9 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
         )
 
         # Setup the logger and trainer
-        model = DigraphGNNTrainer(
-            cfg.model_dump(), compile=hdw_cfg.compile, n_step_per_epoch=len(train_loader) // grad_acc
-        )
+        n_step_per_epoch = math.ceil(len(train_loader) / grad_acc)
+
+        model = DigraphGNNTrainer(cfg.model_dump(), compile=hdw_cfg.compile, n_step_per_epoch=n_step_per_epoch)
 
         checkpoint = ModelCheckpoint(monitor="val_agg", mode="max", save_weights_only=True)
 
@@ -470,7 +470,10 @@ class DigraphGNNTrainer(L.LightningModule):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.config.lr / 25)
         # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer, max_lr=self.config.lr, epochs=self.config.epoch, steps_per_epoch=self.n_step_per_epoch
+            optimizer,
+            max_lr=self.config.lr,
+            epochs=self.config.epoch,
+            steps_per_epoch=self.n_step_per_epoch,
         )
         return [optimizer], [{"scheduler": scheduler, "monitor": "train_loss", "interval": "step", "frequency": 1}]
 
