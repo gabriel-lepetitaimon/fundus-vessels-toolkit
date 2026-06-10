@@ -255,6 +255,8 @@ class ExperimentHeader(BaseModel):
             - The second document should be the experiment configuration, which will be validated against the given model. This document can refer to the parameters defined in the first document using the syntax '$<parameter_name>'.
         """  # noqa: E501
         header, yaml_doc = cls._read_file(file, strict=strict)
+        if header_override is not None:
+            header = header.model_copy(update=header_override)
         if header.trials_to_run() == 0:
             if not header.test_debug:
                 raise NoTrialsToRunError(header, file)
@@ -263,8 +265,6 @@ class ExperimentHeader(BaseModel):
                 console.print(
                     f"[yellow][bold]Warning:[/bold] All trials for this experiment have already been completed. No remaining trials to run for experiment defined in {file}.[/yellow]"  # noqa: E501
                 )
-        if header_override is not None:
-            header = header.model_copy(update=header_override)
         return ExperimentRunFactory(header, yaml_doc, model, override)
 
 
