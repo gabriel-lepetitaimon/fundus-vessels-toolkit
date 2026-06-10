@@ -23,7 +23,7 @@ torch::Tensor inverse_displacement(const torch::Tensor& disp_field, const torch:
     TORCH_CHECK_VALUE(points.dim() == 2, "points must be a 2D tensor");
     TORCH_CHECK_VALUE(points.size(1) == 2, "points must have 2 columns (y, x)");
     const int64_t N = points.size(0);
-    auto coords_acc = points.accessor<float, 2>();
+    auto coords_acc = points.accessor<double, 2>();
 
     // Prepare output tensor
     torch::Tensor output = torch::empty({N, 2}, disp_field.options());

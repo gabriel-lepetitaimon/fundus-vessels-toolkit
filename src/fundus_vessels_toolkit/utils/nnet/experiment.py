@@ -256,7 +256,13 @@ class ExperimentHeader(BaseModel):
         """  # noqa: E501
         header, yaml_doc = cls._read_file(file, strict=strict)
         if header.trials_to_run() == 0:
-            raise NoTrialsToRunError(header, file)
+            if not header.test_debug:
+                raise NoTrialsToRunError(header, file)
+            else:
+                console = Console()
+                console.print(
+                    f"[yellow][bold]Warning:[/bold] All trials for this experiment have already been completed. No remaining trials to run for experiment defined in {file}.[/yellow]"  # noqa: E501
+                )
         if header_override is not None:
             header = header.model_copy(update=header_override)
         return ExperimentRunFactory(header, yaml_doc, model, override)
