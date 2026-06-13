@@ -259,15 +259,14 @@ class OptunaStudy(optuna.study.Study):
         from optuna.trial import TrialState as State
 
         used_id = set(trial.user_attrs.get("ID", 0) for trial in self.trials if trial.state != State.FAIL)
-        new_id = 1
+        new_id = 0
         while new_id in used_id:
             new_id += 1
         return new_id
 
     def ask(self, fixed_parameters: Optional[dict[str, Any]] = None) -> Trial:
-        trail_id = self.new_trial_id()
         trial = super().ask()
-        trial.set_user_attr("ID", trail_id)
+        trial.set_user_attr("ID", self.new_trial_id())
         if fixed_parameters is not None:
             trial.set_user_attr("fixed_params", fixed_parameters)
         return trial

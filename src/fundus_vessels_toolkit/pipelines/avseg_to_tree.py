@@ -14,7 +14,6 @@ from skimage.morphology import binary_erosion, disk
 
 from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.geometric import Point
-
 from fundus_vessels_toolkit.segment_to_graph.vbranch_digraph import VBranchDigraph
 
 from ..segment_to_graph.graph_simplification import GraphSimplifyArg, ReconnectEndpointsArg

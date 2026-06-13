@@ -143,6 +143,17 @@ class VTreeNode(VGraphNode):
             branch_ids = self._update_incident_branch_cache()[0]
         return (VTreeBranch(self.graph, i) for i in branch_ids)
 
+    def incoming_branch(self, index: int = 0) -> VTreeBranch:
+        """Return the branch incoming to the node at the given index."""
+        if (branch_ids := self._incoming_branch_ids) is None:
+            branch_ids = self._update_incident_branch_cache()[0]
+        try:
+            return VTreeBranch(self.graph, branch_ids[index])
+        except IndexError:
+            raise IndexError(
+                f"Index {index} out of range for node {self.id} with {len(branch_ids)} incoming branches."
+            ) from None
+
     # __ Outgoing branches __
     @property
     def outgoing_branch_ids(self) -> npt.NDArray[np.int_]:
@@ -163,6 +174,17 @@ class VTreeNode(VGraphNode):
         if (branch_ids := self._outgoing_branch_ids) is None:
             branch_ids = self._update_incident_branch_cache()[1]
         return (VTreeBranch(self.graph, i) for i in branch_ids)
+
+    def outgoing_branch(self, index: int) -> VTreeBranch:
+        """Return the branch outgoing from the node at the given index."""
+        if (branch_ids := self._outgoing_branch_ids) is None:
+            branch_ids = self._update_incident_branch_cache()[1]
+        try:
+            return VTreeBranch(self.graph, branch_ids[index])
+        except IndexError:
+            raise IndexError(
+                f"Index {index} out of range for node {self.id} with {len(branch_ids)} outgoing branches."
+            ) from None
 
 
 class VTreeBranch(VGraphBranch):

@@ -28,8 +28,11 @@ from fundus_toolkits.utils.data_io import most_common_image_ext, overwrite_or_ne
 from fundus_toolkits.utils.geometric import Point, Rect
 from fundus_toolkits.utils.typing import Bool1DArray, Int1DArray, Int1DArrayLike
 
+from fundus_vessels_toolkit.segment_to_graph.tree_simplification import disconnect_crossing
+from fundus_vessels_toolkit.utils.profiling import watch
+
 from ...pipelines.avseg_to_tree import AVSegToTreeBase, GNNAVSegToTree
-from ...segment_to_graph.graph_simplification import merge_nodes_by_distance
+from ...segment_to_graph.graph_simplification import merge_nodes_by_distance, simplify_passing_nodes
 from ...segment_to_graph.vbranch_digraph import (
     TreeTopology,
     VBranchDigraph,
@@ -102,8 +105,8 @@ class SampleInfo:
         return BranchDigraphSample(
             name=self.name,
             fundus=fundus,
-            art_topology=TreeTopology.load(self.art_topology, tree=not discard_gt_tree),
-            vei_topology=TreeTopology.load(self.vei_topology, tree=not discard_gt_tree),
+            art_topology=TreeTopology.load(self.art_topology, tree=not discard_gt_tree, sparse=True),
+            vei_topology=TreeTopology.load(self.vei_topology, tree=not discard_gt_tree, sparse=True),
             graphes={k: VGraph.load(p) for k, p in self.graphes.items()},
         )
 
@@ -794,7 +797,6 @@ class BranchDigraphDataset(PygDataset):
         else:  # version is a valid key in sample.graphes
             graph_version = self.cfg.graph_version
         graph = sample.graphes[graph_version]
-
         return BranchDigraphData.from_graph(
             graph,
             sample.fundus,
@@ -923,6 +925,8 @@ class BranchDigraphDataset(PygDataset):
         version: Optional[str] = None,
         gt_digraph: Optional[VBranchDigraph] = None,
         branch_label: bool = False,
+        simplify: bool = False,
+        blood_dir: bool = False,
     ) -> tuple[Mosaic, VTree]:
         from ...utils.jppype import AV_COLORS, Mosaic, draw_tree, draw_trees
 
@@ -945,72 +949,125 @@ class BranchDigraphDataset(PygDataset):
 
         B = len(parent_pred)
 
-        # Draw GT tree
-        solved_tree = gt_digraph.optimize_tree(keep_missing_branch=True)
+        # === Draw GT tree ===
+        gt_tree = gt_digraph.optimize_tree(keep_missing_branch=True)
         if show_gt_graph:
-            draw_tree(
-                solved_tree,
-                view=m[2],
-                branch_color="subtree",
-                bspline_dir=True,
-                interactive=True,
-            )
+            shown_gt_tree = gt_tree
+            if simplify:
+                shown_gt_tree = shown_gt_tree.delete_branch(np.where(gt_digraph.branch_fp())[0])
+                disconnect_crossing(shown_gt_tree, inplace=True)
+                simplify_passing_nodes(shown_gt_tree, min_angle=90, with_same_branch_attr="av")
+            draw_tree(gt_tree, view=m[2], branch_color="subtree", bspline_dir=True, interactive=True)
 
-        # Draw Predicted tree
-        tree = gt_digraph.compute_tree_from_arborescence(parent_pred, dir_pred, fp_pred, keep_missing_branch=True)
-        branch_dir_cmap = {}
-        for b in range(gt_digraph.branch_count):
-            if tree.branch_dirs(b) != gt_digraph.branch_dir[b] and not gt_digraph.branch_fp()[b]:
-                branch_dir_cmap[b] = "#d2ff1d"
-        for b in range(gt_digraph.branch_count, tree.branch_count):
-            branch_dir_cmap[b] = AV_COLORS[AVLabel.BKG]
+        # === Draw Predicted tree ===
+        tree = gt_digraph.compute_tree_from_arborescence(
+            parent_pred, dir_pred, fp_pred, keep_missing_branch=True, assign_av="subtree"
+        )
+
+        def next_valid_branch(b_id: int) -> Optional[int]:
+            while b_id >= B:
+                succs = tree.branch_successors(b_id)
+                if len(succs) == 0:
+                    return None
+                b_id = succs[0]
+            return b_id
+
+        INVALID = "#37be62"
+
+        # 1. Assign branch colors
         if av_pred is not None:
-            color_legend = {
-                (True, 1): AV_COLORS[AVLabel.ART],
-                (False, 2): AV_COLORS[AVLabel.VEI],
-                (True, 2): "#fc249b",
-                (False, 1): "#1c94e3",
-                (True, 0): "white",
-                (False, 0): "white",
-            }
-            branch_cmap = {i: color_legend[(av, gt_digraph.branch_av_class()[i])] for i, av in enumerate(av_pred)}
-            if fp_pred is not None:
-                for i in np.where(fp_pred)[0]:
-                    branch_cmap[i] = AV_COLORS[AVLabel.BKG]
-            for i in range(B, tree.branch_count):
-                if tree.branch_tree[i] >= 0:
-                    branch_cmap[i] = branch_cmap[tree.branch_tree[i]]
-                else:
-                    branch_cmap[i] = AV_COLORS[AVLabel.BKG]
-        node_cmap = {}
-        for node in tree.nodes():
-            if node.out_degree <= 0:
-                node_cmap[node.id] = branch_cmap[node.incoming_branch_ids[0]] if node.in_degree != 0 else "grey"
+            gt_av = gt_digraph.branch_av_class()
+            for b in tree.branches(np.arange(B)):
+                if b.id < B:
+                    # if gt_av[b.id] == 0:
+                    #     b.attr["color"] = "white"
+                    av = 2 - av_pred[b.id]
+                    b.attr["av"] = av
+                    if gt_av[b.id] == 0 or gt_av[b.id] == av:
+                        b.attr["color"] = AV_COLORS[av]
+                    else:
+                        b.attr["color"] = "#fc249b" if av_pred[b.id] else "#1c94e3"
+        else:
+            raise NotImplementedError("Visualization without AV prediction is not implemented yet")
+        if fp_pred is not None:
+            # Set false positive branches to background color
+            tree.branch_attr.loc[np.where(fp_pred)[0], "color"] = AV_COLORS[AVLabel.BKG]
+
+        # 2. Assign dir colors
+        for b in tree.branches(np.arange(B)):
+            if tree.branch_dirs(b.id) != gt_digraph.branch_dir[b.id] and not gt_digraph.branch_fp()[b.id]:
+                b.attr["dir_color"] = INVALID
             else:
-                for b in node.outgoing_branch_ids:
-                    if b >= B or gt_digraph.branch_fp()[b] or (fp_pred is not None and fp_pred[b]):
-                        continue
-                    parent = tree.branch_tree[b]
-                    while parent >= B:
-                        parent = tree.branch_tree[parent]
-                    gt_parent = solved_tree.branch_tree[b]
-                    while gt_parent >= B:
-                        gt_parent = solved_tree.branch_tree[gt_parent]
-                    if gt_parent != parent:
-                        node_cmap[node.id] = "#d2ff1d"
-                        break
+                b.attr["dir_color"] = b.attr["color"]
+
+        # 3. Check parent validity
+        tree.branch_attr["valid_parent"] = True
+        for b in tree.branches(np.arange(B)):
+            if fp_pred is not None and fp_pred[b.id] or gt_av[b.id] == 0:
+                continue
+            parent = tree.branch_tree[b.id]
+            while parent >= B:
+                parent = tree.branch_tree[parent]
+            gt_parent = gt_tree.branch_tree[b.id]
+            while gt_parent >= gt_digraph.branch_count:
+                gt_parent = gt_tree.branch_tree[gt_parent]
+            if gt_parent != parent:
+                b.attr["valid_parent"] = False
+
+        # 4. Propagate colors to added branches
+        for b in tree.branches(np.arange(B, tree.branch_count)):
+            if (next_b := next_valid_branch(b.id)) is not None:
+                next_b = tree.branch(next_b)
+                if not next_b.attr["valid_parent"]:
+                    b.attr["color"] = b.attr["dir_color"] = INVALID
                 else:
-                    node_cmap[node.id] = branch_cmap[node.outgoing_branch_ids[0]]
+                    b.attr["color"] = next_b.attr["color"]
+                    b.attr["dir_color"] = next_b.attr["dir_color"]
+                if av_pred is not None:
+                    b.attr["av"] = tree.branch_attr["av"].get(b.id, 0)
+            else:
+                b.attr["color"] = b.attr["dir_color"] = AV_COLORS[AVLabel.BKG]
+                if av_pred is not None:
+                    b.attr["av"] = AVLabel.BKG
+
+        # 4. Assign node colors
+        if simplify:
+            if fp_pred is not None:
+                tree.delete_branch(np.argwhere(fp_pred).flatten(), inplace=True)
+            disconnect_crossing(tree, inplace=True, fuse_passing_nodes=False)
+
+        tree.node_attr["valid"] = True
+        for node in tree.nodes():
+            if node.out_degree == 0:
+                node.attr["color"] = "grey" if node.in_degree == 0 else node.incoming_branch().attr["color"]
+            for b in node.outgoing_branches():
+                if not b.attr["valid_parent"]:
+                    node.attr["color"] = INVALID
+                    node.attr["valid"] = False
+                    break
+                else:
+                    node.attr["color"] = b.attr["color"]
+
+        if simplify:
+            simplify_passing_nodes(
+                tree,
+                only_fusable=tree.as_node_ids(tree.node_attr["valid"]),
+                min_angle=90,
+                with_same_branch_attr=["color", "dir_color"],
+                inplace=True,
+            )
 
         draw_tree(
             tree,
             view=m[1],
-            branch_color=branch_cmap,
+            branch_color=tree.branch_attr["color"].dropna().to_dict(),
             edge_labels=branch_label,
             node_labels=False,
-            node_cmap=node_cmap,
+            node_cmap=tree.node_attr["color"].dropna().to_dict(),
             interactive=True,
-            bspline_dir=branch_dir_cmap,
+            bspline_dir=tree.branch_attr["dir_color"].dropna().to_dict(),
+            node_dim_roots=False,
+            invert_bspline_dir=tree.branch_attr["av"].to_numpy() == 2 if blood_dir else False,
         )
 
         topo_map = TreeTopology.av_overlay(sample.fundus.image, *sample.target_topologies)

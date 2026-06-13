@@ -10,6 +10,7 @@ from jppype.layers import Layer, LayerGraph, LayerImage, LayerQuiver
 from fundus_toolkits import AVLabel
 from fundus_toolkits.utils.color import ColorSpec, parse_color
 from fundus_toolkits.utils.geometric import Point
+from fundus_toolkits.utils.typing import Bool1DArray
 
 from ..vascular_data_objects import VGraph, VTree
 
@@ -63,7 +64,9 @@ def draw_tree(
     edge: Literal["bspline", "line", "skeleton", "skeleton-dot"] = "bspline",
     branch_color: Literal["av", "rank", "subtree"] | dict[int, str] = "rank",
     node_cmap: Optional[dict[int, str]] = None,
+    node_dim_roots: bool = True,
     bspline_dir: bool | dict[int, str] = False,
+    invert_bspline_dir: bool | Bool1DArray = False,
     interactive: bool | _InteractiveCallback = False,
 ) -> LayerGraph:
     from jppype.utils.geometric import Rect as JPPRect
@@ -86,6 +89,12 @@ def draw_tree(
         geodata = tree.geometric_data()
         branch_dir = tree.branch_dirs()
         nodes_coord = geodata.node_coord()
+
+        if invert_bspline_dir is True:
+            branch_dir = ~branch_dir
+        elif isinstance(invert_bspline_dir, np.ndarray):
+            branch_dir = branch_dir.copy()
+            branch_dir[invert_bspline_dir] = ~branch_dir[invert_bspline_dir]
 
         if bspline_dir is not True:
             # If bspline_dir is a dict, add dummy branches to color the dir differently
@@ -137,10 +146,11 @@ def draw_tree(
         # nodes_color = pd.Series(main_color, index=tree.node_attr.index)
         # nodes_color[tree.root_nodes_ids()] = root_color
         # nodes_color[tree.leaf_nodes_ids()] = leaf_color
-    for node_id in tree.root_nodes_ids():
-        node_cmap[int(node_id)] = darken_hex(node_cmap.get(node_id, main_color), 0.3)
-    for node_id in tree.leaf_nodes_ids():
-        node_cmap[int(node_id)] = lighten_hex(node_cmap.get(node_id, main_color), 0.3)
+    if node_dim_roots:
+        for node_id in tree.root_nodes_ids():
+            node_cmap[int(node_id)] = darken_hex(node_cmap.get(node_id, main_color), 0.3)
+        for node_id in tree.leaf_nodes_ids():
+            node_cmap[int(node_id)] = lighten_hex(node_cmap.get(node_id, main_color), 0.3)
     layer.nodes_cmap = node_cmap
 
     if branch_color == "rank" and "rank" in tree.node_attr:

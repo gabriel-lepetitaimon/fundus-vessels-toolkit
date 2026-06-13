@@ -524,7 +524,7 @@ class BranchDigraphModel(torch.nn.Module):
             """  # noqa: E501
             digraph = self.to_digraph()
             try:
-                opti_parent, opti_dir = digraph.solve_optimal_arborescence(detect_major_av_error=False)
+                opti_parent, opti_dir = digraph.solve_optimal_arborescence(detect_major_av_error=True)
             except Exception as e:
                 print(f"Error solving optimal arborescence for batch {self.names}: {e}")
                 digraph.check_lines("warn", branch_mask=~digraph.branch_fp())

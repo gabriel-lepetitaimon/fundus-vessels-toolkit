@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from fundus_toolkits.transform import (
     AffineTransform,
     ElasticTransform,
+    ElasticTransformTorch,
     FlipTransform,
     IdentityTransform,
     Transform,
@@ -175,7 +176,7 @@ class AugmentationCfg(BaseModel):
             transforms.append(self.elastic.generate_projection(shape, rng=rng))
         if len(transforms) == 0:
             return IdentityTransform()
-        return TransformComposition(*transforms)
+        return TransformComposition(*transforms, sequential_warp=True)
 
     @classmethod
     def parse(cls, data: Self | bool) -> Self:

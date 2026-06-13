@@ -391,6 +391,7 @@ class ExperimentRun[T: BaseModel]:
         with tempfile.NamedTemporaryFile("w", suffix=".yaml") as tmp:
             yaml.dump(self.parameters_grid, tmp)
             config_artifact.add_file(tmp.name, name="parameters_grid.yaml")
+        self.logger.experiment.log_artifact(config_artifact)
 
         console = Console()
         console.print(f"[purple]=== Starting experiment run: [bold]{self.run_name}[/bold] ===[/purple]")

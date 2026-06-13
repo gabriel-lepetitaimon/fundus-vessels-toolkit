@@ -13,8 +13,7 @@ from torch_geometric.typing import OptTensor
 from fundus_toolkits import FundusData
 from fundus_toolkits.utils.geometric import Point, Rect
 
-from fundus_vessels_toolkit.segment_to_graph.geometry_parsing import populate_tangent
-
+from ...segment_to_graph.geometry_parsing import populate_tangent
 from ...segment_to_graph.vbranch_digraph import (
     TreeTopology,
     VBranchDigraph,
@@ -304,7 +303,7 @@ class BranchDigraphData(PygData):
     ) -> Self:
         # assert VBranchDigraph.has_all_p(digraph), "branch_digraph must have branch_fp_p and branch_av_p"
         assert digraph.graph is not None, "branch_digraph must have graph constructed"
-
+        # with watch("BranchDigraphData.from_branch_digraph") as p:
         if isinstance(fundus_img, np.ndarray):
             fundus_img = torch.from_numpy(fundus_img)
 
@@ -406,18 +405,25 @@ class BranchDigraphData(PygData):
         mac_center: Optional[Point] = None,
     ) -> Self | tuple[Self, VBranchDigraph]:
         """Alternative constructor to create a BranchDigraphData from a VGraph and a fundus image. Note that this method will not be able to fill all the fields of the data, especially those related to the ground truth probabilities and the branch curves, which are not stored in the VGraph."""  # noqa: E501
+        # with watch("BranchDigraphData.from_graph") as p:
+        #    with p.sub("parse cfg"):
         augment_opts = AugmentationCfg.parse(augment)
 
+        #    with p.sub("graph preprocessing"):
         graph = graph.copy()
         graph.clear_all_branch_attr()
         graph.clear_all_branch_attr()
         if augment_opts.deteriorate_graph:
+            #        with p.sub("graph deterioration"):
             graph = deteriorate_graph(graph, opts=augment_opts.deterioration_opts, inplace=True)
 
+        #    with p.sub("VBranchDigraph.from_graph"):
         branch_digraph = VBranchDigraph.from_graph(graph, check=False)
         if gt_topology is not None:
+            # with p.sub("compute_p_from_gt"):
             branch_digraph.compute_p_from_gt(*gt_topology, check=False)
 
+        # with p.sub("read fundus and preprocess"):
         if isinstance(fundus, FundusData):
             fundus_img = fundus.image
             if od_center is None and fundus.has_od_center:
@@ -438,16 +444,22 @@ class BranchDigraphData(PygData):
             else:
                 mac_center = Point(od_center.y, od_center.x - fundus_shape[1] // 2)
 
-        graph.geometric_data().clear_attribute(all_except="CALIBRE")
+        branch_digraph.graph.geometric_data().clear_attribute(all_except="CALIBRE")
         if augment_opts.geometric:
+            # with p.sub("Geometric Augmentation") as p_aug:
+            # with p_aug.sub("generate transform"):
             t = augment_opts.generate_transform(shape=fundus_shape)
+            # with p_aug.sub("transform graph"):
             branch_digraph.graph.transform(t, warped_domain="same", inplace=True)
+            # with p_aug.sub("warp fundus"):
             fundus_img, _ = t.warp(fundus_img.transpose((1, 2, 0)), warped_domain="same")
             fundus_img = fundus_img.transpose((2, 0, 1))
+            # with p_aug.sub("transform OD and macula centers"):
             od_yx, mac_yx = t.transform(np.array([od_center, mac_center]))
         else:
             od_yx, mac_yx = od_center.numpy(), mac_center.numpy()
-        populate_tangent(branch_digraph.graph, tips=True)
+            # with p.sub("recompute tangents"):
+        populate_tangent(branch_digraph.graph, tips=True, inplace=True)
 
         data = cls.from_branch_digraph(
             digraph=branch_digraph,

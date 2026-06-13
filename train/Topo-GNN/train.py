@@ -9,7 +9,6 @@ import psutil
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
-import wandb
 from lightning_fabric.plugins.precision.precision import _PRECISION_INPUT_STR
 from pydantic import BaseModel, ConfigDict, Field
 from pytorch_lightning.callbacks import ModelCheckpoint
@@ -17,6 +16,7 @@ from torch_geometric.loader import DataLoader as PyGDataLoader
 from torchmetrics import MetricCollection, Specificity
 from torchmetrics.classification import Accuracy, Precision, Recall
 
+import wandb
 from fundus_vessels_toolkit.models.metrics.tree import (
     MetricCollectionDict,
     ParentAcc,
@@ -142,8 +142,12 @@ class HardwareConfig(BaseModel):
         if batch_size <= self.max_batch_size:
             return (batch_size, 1)
         else:
-            grad_acc_steps = math.ceil(batch_size / self.max_batch_size)
-            actual_batch_size = int(round(batch_size / grad_acc_steps))
+            actual_batch_size = 1
+            for i in reversed(range(2, self.max_batch_size + 1)):
+                if batch_size % i == 0:
+                    actual_batch_size = i
+                    break
+            grad_acc_steps = batch_size // actual_batch_size
             return (actual_batch_size, grad_acc_steps)
 
 

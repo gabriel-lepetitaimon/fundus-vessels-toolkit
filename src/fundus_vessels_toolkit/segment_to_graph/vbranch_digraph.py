@@ -20,6 +20,8 @@ from fundus_toolkits.utils.typing import (
     Int2DArrayLike,
 )
 
+from fundus_vessels_toolkit.utils.profiling import watch
+
 from ..utils.cluster import cluster_by_distance
 from ..utils.lookup_array import create_removal_lookup
 from ..utils.math import gaussian, sigmoid, softmax
@@ -674,25 +676,31 @@ class VBranchDigraph(LineDigraph):
         assert self.graph is not None, (
             "The graph attribute must be set to compute probabilities from ground truth topologies"
         )
+        # with watch("Reading branch topologies"):
         branch_topo_a = art_topology.read_branch_topo(self.graph)
         branch_topo_v = vei_topology.read_branch_topo(self.graph)
 
         # === Select most plausible topology between artery and vein for each branch ===
+        # with watch("Highest topology plausibility selection"):
         branch_av = highest_topo_plausibility([branch_topo_a, branch_topo_v], mask_inplace=True)
         b_is_art = branch_av == 0
         b_is_vei = branch_av == 1
 
         # === Compute optimal lines according to branch topologies ===
+        # TODO: The two next lines take 10ms on avg. Could be optimized in cpp.
+        # with watch("Optimal lines selection"):
         art_lines = optimal_lines(branch_topo_a, self.line_list)
         vei_lines = optimal_lines(branch_topo_v, self.line_list)
 
         # === Post fix erroneous branch skips ===
+        # with watch("Post-fix erroneous branch skips"):
         valid_art_shortcut = ~b_is_vei & (branch_topo_a.plausibility > branch_topo_v.plausibility)
         valid_vei_shortcut = ~b_is_art & (branch_topo_v.plausibility > branch_topo_a.plausibility)
         prioritize_existing_branch(self, art_lines, b_is_art, valid_art_shortcut, branch_topo_a.p_dirs)
         prioritize_existing_branch(self, vei_lines, b_is_vei, valid_vei_shortcut, branch_topo_v.p_dirs)
 
         # === Compute AV and dir probabilities ===
+        # with watch("Branch probabilities"):
         self._branch_fp_p = np.where(b_is_art | b_is_vei, 0.0, 1.0)
         self._branch_av_p = b_is_art
         self._branch_fp_logit = self._branch_av_logit = None
@@ -703,6 +711,7 @@ class VBranchDigraph(LineDigraph):
         self._branch_dir_p = None
 
         # === Compute lines probabilities ===
+        # with watch("Lines probabilities from branch probabilities"):
         line_p = art_lines | vei_lines
 
         # Ensure missing branches only have not-null probability for root lines
@@ -714,6 +723,7 @@ class VBranchDigraph(LineDigraph):
 
         # === Smooth lines probabilities ===
         if smooth_p > 0:
+            # with watch("Lines probabilities smoothing"):
             assert smooth_p < 0.5, "smooth_p must be inferior to 0.5"
             gt_parent = np.full((self.branch_count,), -1, dtype=int)
             gt_parent[b1[line_p]] = b0[line_p]

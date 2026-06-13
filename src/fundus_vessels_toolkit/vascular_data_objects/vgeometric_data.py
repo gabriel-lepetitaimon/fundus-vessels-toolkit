@@ -2304,13 +2304,21 @@ class VGeometricData:
         projection = Translation(-new_domain.top_left) @ projection @ Translation(self._domain.top_left)
         self._domain = new_domain
 
+        all_curves = np.concatenate(
+            [curve for curve in self._branch_curve if curve is not None and len(curve) > 0], axis=0
+        )
+        all_curves_transformed = projection.transform(all_curves).astype(np.float64)
+
         self._nodes_coord = projection.transform(self._nodes_coord).astype(np.float64)
+        start_idx = 0
         for branch_id, curve in enumerate(self._branch_curve):
             if curve is None or len(curve) == 0:
                 continue
+
             prev_curve_delta_d = np.linalg.norm(np.diff(curve, axis=0), axis=1)
-            curve = projection.transform(curve.astype(float))
+            curve = all_curves_transformed[start_idx : start_idx + len(curve)]
             new_curve_delta_d = np.linalg.norm(np.diff(curve, axis=0), axis=1)
+
             local_scale = new_curve_delta_d / (prev_curve_delta_d + 1e-8)
             local_scale = np.concatenate([local_scale[:1], local_scale, local_scale[-1:]])
             local_scale = (local_scale[1:] + local_scale[:-1]) / 2
@@ -2338,6 +2346,7 @@ class VGeometricData:
                     break
 
             self._branch_curve[branch_id] = readonly(cleaned_curve)
+            start_idx += len(curve)
 
         return self
 

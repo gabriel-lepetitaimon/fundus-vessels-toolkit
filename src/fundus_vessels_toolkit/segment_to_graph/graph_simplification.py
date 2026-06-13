@@ -486,7 +486,7 @@ def simplify_passing_nodes[T: VGraph](
     not_fusable: Optional[npt.ArrayLike] = None,
     only_fusable: Optional[npt.ArrayLike] = None,
     min_angle: float = 0,
-    with_same_label=None,
+    with_same_branch_attr: Optional[str | list[str] | np.ndarray] = None,
     inplace=False,
 ) -> T:
     """
@@ -508,9 +508,9 @@ def simplify_passing_nodes[T: VGraph](
 
             (Require the terminaison tangents field in `VBranchGeoData`)
 
-        with_same_label:
-            If not None, the nodes are merged only if they have the same label.
-            If a string, use ``graph.branch_attr[with_same_label]`` as the labels.
+        with_same_branch_attr:
+            If not None, the nodes are merged only if they have the same attribute.
+            If a string, use ``graph.branch_attr[with_same_branch_attr]`` as the attributes.
 
     Returns
     -------
@@ -557,13 +557,21 @@ def simplify_passing_nodes[T: VGraph](
         incident_branches = incident_branches[fuseable_nodes]
 
     # === Filter nodes which don't have the same label ===
-    if with_same_label is not None:
-        if isinstance(with_same_label, str):
+    if with_same_branch_attr is not None:
+        if isinstance(with_same_branch_attr, str):
             # Attempt to get the labels from the branches attributes
-            with_same_label = graph.branch_attr[with_same_label]
-        with_same_label = np.asarray(with_same_label)
+            with_same_branch_attr = graph.branch_attr[with_same_branch_attr].to_numpy()
+        elif isinstance(with_same_branch_attr, list) and all(isinstance(_, str) for _ in with_same_branch_attr):
+            # Attempt to get the labels from the branches attributes and combine them into a single label by concatenating them
+            with_same_branch_attr = np.stack([graph.branch_attr[_].to_numpy() for _ in with_same_branch_attr], -1)
+        else:
+            with_same_branch_attr = np.asarray(with_same_branch_attr)
+        if with_same_branch_attr.ndim == 1:
+            with_same_branch_attr = with_same_branch_attr[:, None]
 
-        same_label = with_same_label[incident_branches[:, 0]] == with_same_label[incident_branches[:, 1]]
+        same_label = np.all(
+            with_same_branch_attr[incident_branches[:, 0]] == with_same_branch_attr[incident_branches[:, 1]], axis=1
+        )
         nodes_to_fuse = nodes_to_fuse[same_label]
         incident_branches = incident_branches[same_label]
 

@@ -14,6 +14,8 @@ from fundus_toolkits import FundusData
 from fundus_toolkits.utils.geometric import Rect
 from fundus_toolkits.utils.typing import Bool1DArray, Int1DArray
 
+from fundus_vessels_toolkit.utils.profiling import watch
+
 from ..utils.cluster import reduce_clusters
 from ..utils.data_io import load_numpy_dict, save_numpy_dict
 from ..utils.lookup_array import invert_complete_lookup
@@ -568,6 +570,7 @@ def read_branch_topology(
         curves = graph.geometric_data().branch_curve()
         curves_tensor: list[torch.Tensor] = []
 
+        # with watch("Prepare branch curves"):
         for b in graph.branches():
             curve = curves[b.id]
             if curve is None or len(curve) < 3:
@@ -577,6 +580,7 @@ def read_branch_topology(
                 curve = curve.copy()
             with warnings.catch_warnings(action="ignore"):
                 curves_tensor.append(torch.from_numpy(curve).int())
+        # with watch("Read branches topology"):
         out = read_branches_topology(
             curves_tensor,
             topology.shape,
@@ -587,6 +591,7 @@ def read_branch_topology(
             min_rank_threshold,
             max_rank_tolerance,
         )
+        # with watch("Convert output to numpy"):
         branch_label, branch_dir, branch_plausibility, tips_label, tips_rank = [_.numpy() for _ in out]
         return branch_label, branch_dir, branch_plausibility, tips_label, tips_rank
 
@@ -700,7 +705,7 @@ def read_branch_topology(
     return branch_label, branch_dir, branch_plausibility, tips_label, tips_rank
 
 
-def optimal_lines(branches_topology: BranchesTopo, lines: npt.NDArray[np.int_]) -> npt.NDArray[np.bool_]:
+def optimal_lines(branches_topology: BranchesTopo, lines: npt.NDArray[np.int_]) -> Bool1DArray:
     """
     Determine which lines between branch tips are valid based on the topological labels.
 

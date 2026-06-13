@@ -612,7 +612,9 @@ class ReviewTool:
         if dist > 20 or node.id in tree.root_nodes_ids():
             return False
 
-        _, node = disconnect_crossing(tree, node.id, return_new_nodes=True, inplace=True)
+        _, node = disconnect_crossing(
+            tree, node.id, return_new_nodes=True, inplace=True, redefined_subtree_by="TANGENT"
+        )
         self.infer_roots(tree, ctx, inplace=True, simplify_nodes=node)
         return True
 

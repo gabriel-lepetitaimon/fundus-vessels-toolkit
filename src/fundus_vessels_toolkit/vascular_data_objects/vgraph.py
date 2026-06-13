@@ -147,7 +147,11 @@ class VGraphNode:
             _, branch_dirs = self._update_adjacent_branch_cache()
         return [bool(_) for _ in branch_dirs]
 
-    def adjacent_branches(self) -> Iterable[VGraphBranch]:
+    @overload
+    def adjacent_branches(self, id: None = None) -> Generator[VGraphBranch, None, None]: ...
+    @overload
+    def adjacent_branches(self, id: int) -> VGraphBranch: ...
+    def adjacent_branches(self, id: Optional[int] = None) -> Iterable[VGraphBranch] | VGraphBranch:
         """Return the branches incident to this node.
 
         ..warning::
@@ -157,7 +161,14 @@ class VGraphNode:
             return ()
         if (branch_ids := self._ibranch_ids) is None:
             branch_ids, _ = self._update_adjacent_branch_cache()
-        return (VGraphBranch(self.__graph, i) for i in branch_ids)
+        if id is not None:
+            if id < 0 or id >= len(branch_ids):
+                raise IndexError(
+                    f"Branch index out of range. Got {id} but expected a value between 0 and {len(branch_ids) - 1}."
+                )
+            return VGraphBranch(self.__graph, int(branch_ids[id]))
+        else:
+            return (VGraphBranch(self.__graph, i) for i in branch_ids)
 
     @property
     def degree(self) -> int:
