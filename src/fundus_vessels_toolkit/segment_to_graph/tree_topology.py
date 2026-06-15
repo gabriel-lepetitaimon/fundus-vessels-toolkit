@@ -13,7 +13,6 @@ from skimage.segmentation import expand_labels
 from fundus_toolkits import FundusData
 from fundus_toolkits.utils.geometric import Rect
 from fundus_toolkits.utils.typing import Bool1DArray, Int1DArray
-
 from fundus_vessels_toolkit.utils.profiling import watch
 
 from ..utils.cluster import reduce_clusters
@@ -134,6 +133,7 @@ class TreeTopology:
         boundaries_field: VBranchGeoData.Key = VBranchGeoData.Fields.BOUNDARIES,
         sparse: bool = False,
         discard_tree: bool = False,
+        crop_roi: Optional[Rect] = None,
     ) -> Self:
         """
         Rasterize the given vessel tree into a binary mask and a distance map.
@@ -173,6 +173,12 @@ class TreeTopology:
             topo_map = expand_labels(topo_map, distance=expand_labels_by)
 
         skeleton = tree.geometric_data().skeleton_label_map(connect_nodes=True, interpolate=True) > 0
+
+        if crop_roi is not None:
+            labels_map = crop_roi.crop_pad_image(labels_map, origin=-geodata.domain.top_left, copy=False)
+            topo_map = crop_roi.crop_pad_image(topo_map, origin=-geodata.domain.top_left, copy=False)
+            skeleton = crop_roi.crop_pad_image(skeleton, origin=-geodata.domain.top_left, copy=False)
+
         if expand_labels_by > 0:
             terminal_branch, terminal_tip = tree.terminal_tips().T
             geodata = tree.geometric_data()

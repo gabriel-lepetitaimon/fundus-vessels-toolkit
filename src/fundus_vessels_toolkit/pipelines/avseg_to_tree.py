@@ -14,9 +14,10 @@ from skimage.morphology import binary_erosion, disk
 
 from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.geometric import Point
-from fundus_vessels_toolkit.segment_to_graph.vbranch_digraph import VBranchDigraph
+from fundus_toolkits.utils.safe_import import import_cv2
 
 from ..segment_to_graph.graph_simplification import GraphSimplifyArg, ReconnectEndpointsArg
+from ..segment_to_graph.vbranch_digraph import VBranchDigraph
 from ..utils import if_none
 from ..vascular_data_objects import VGraph, VTree
 from .seg_to_graph import SegToGraph
@@ -200,7 +201,9 @@ class AVSegToTree(AVSegToTreeBase):
     ):
         fundus = self.prepare_data(fundus, av=av, od=od)
         if self.mask_optic_disc and fundus.has_od:
-            mask = ~binary_erosion(fundus.od, disk(fundus.od_diameter * 0.2, dtype=np.bool_))  # type: ignore
+            cv2 = import_cv2()
+
+            mask = cv2.distanceTransform(fundus.od.astype(np.uint8), cv2.DIST_L2, 5) < 0.2 * fundus.od_diameter
         else:
             mask = None
 

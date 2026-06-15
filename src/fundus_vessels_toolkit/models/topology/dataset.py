@@ -23,16 +23,14 @@ from skimage.morphology import binary_erosion, disk
 from torch_geometric.data import Dataset as PygDataset
 
 from fundus_toolkits import AVLabel, FundusData
-from fundus_toolkits.transform import ResizeTranslation
+from fundus_toolkits.transform import ResizeTranslation, import_cv2
 from fundus_toolkits.utils.data_io import most_common_image_ext, overwrite_or_newer
 from fundus_toolkits.utils.geometric import Point, Rect
 from fundus_toolkits.utils.typing import Bool1DArray, Int1DArray, Int1DArrayLike
 
-from fundus_vessels_toolkit.segment_to_graph.tree_simplification import disconnect_crossing
-from fundus_vessels_toolkit.utils.profiling import watch
-
 from ...pipelines.avseg_to_tree import AVSegToTreeBase, GNNAVSegToTree
 from ...segment_to_graph.graph_simplification import merge_nodes_by_distance, simplify_passing_nodes
+from ...segment_to_graph.tree_simplification import disconnect_crossing
 from ...segment_to_graph.vbranch_digraph import (
     TreeTopology,
     VBranchDigraph,
@@ -72,7 +70,7 @@ type DatasetType = Literal["train", "validation", "test"] | None
 
 @pydantic_dataclass
 class SampleInfo:
-    """Data class representing a processed sample of a BranchDigraphDataset."""
+    """Data class representing a processed sample of a BranchDigraphDataset stored on disk."""
 
     name: str
     fundus: Path
@@ -132,11 +130,11 @@ class SampleInfo:
         sample.graphes = {k: p.relative_to(path) for k, p in sample.graphes.items()}
         return sample
 
-    def all_files(self, relative_to: Optional[Path | str] = None) -> list[Path]:
+    def all_files(self, prefix_path: Optional[Path | str] = None) -> list[Path]:
         """Return a list of all files associated with this sample, optionally relative to a given path."""
 
         paths = [self.fundus, self.od, self.macula, self.art_topology, self.vei_topology] + list(self.graphes.values())
-        return [p.relative_to(relative_to) for p in paths] if relative_to is not None else paths
+        return [prefix_path / p for p in paths] if prefix_path is not None else paths
 
     MANIFEST_FILENAME = "manifest.json"
 
@@ -196,7 +194,7 @@ class SampleInfo:
 
 @dataclass
 class SampleSource:
-    """Data class representing the source files of a sample of a BranchDigraphDataset, and providing methods to process them into a BranchDigraphSampleInfo."""  # noqa: E501
+    """Data class representing the source files of a sample of a BranchDigraphDataset, and providing methods to process them into a ``SampleInfo``."""  # noqa: E501
 
     fundus: Path
     """Path to the fundus image file."""
@@ -303,13 +301,14 @@ class SampleSource:
         self,
         existing_samples: dict[str, SampleInfo] | SampleInfo,
         overwrite: Optional[bool | datetime] = None,
+        output_dir: Optional[Path] = None,
     ) -> SampleInfo | None:
         """Check if the sample is already processed and up-to-date in the output directory, based on the existing samples and the overwrite policy."""  # noqa: E501
         existing_sample = existing_samples.get(self.name) if isinstance(existing_samples, dict) else existing_samples
 
         # A sample will not be reprocessed if:
         # 1. A sample exist and all its files exist on disk
-        if existing_sample is None or not all(f.exists() for f in existing_sample.all_files()):
+        if existing_sample is None or not all(f.exists() for f in existing_sample.all_files(prefix_path=output_dir)):
             return None
 
         # 2. All graphes versions are present in the existing sample
@@ -332,17 +331,14 @@ class SampleSource:
 
     def compute_od_mac(self, overwrite: Optional[bool | datetime] = None) -> Self:
         """Compute the optic disc and macula centers from the fundus image if they are not already provided."""
-        from fundus_odmac_toolkit.models.segmentation import segment as segment_od_mac
-        from fundus_data_toolkit.functional import open_image
+        from fundus_odmac_toolkit import segment_od_mac
 
         fundus = FundusData.empty_like(self.fundus)
 
         save_od = overwrite_or_newer(self.fundus, self.od, overwrite)
         save_mac = overwrite_or_newer(self.fundus, self.macula, overwrite)
         if save_od or save_mac:
-            od_mac = segment_od_mac(open_image(self.fundus)).numpy(force=True).argmax(axis=0)  # type: ignore
-            fundus.update(od=od_mac == 1, macula=od_mac == 2, reshape_method="resize", inplace=True)
-            assert fundus.od_center is not None and fundus.macula_center is not None
+            segment_od_mac(fundus)
 
             if save_od:
                 fundus.write_image(od=self.od, on_exists="overwrite")
@@ -402,15 +398,16 @@ class SampleSource:
         # === 1. Load and crop fundus image ===
         fundus = FundusData(self.fundus)
 
-        r, roi = None, None
+        r, src_roi = None, None
         if resize_to is not None:
-            fundus, roi = fundus.crop_to_roi(return_roi=True, ensure_square=True)
-            r = resize_to / roi.w
+            fundus, src_roi = fundus.crop_to_roi(return_roi=True, ensure_square=True)
+            r = resize_to / src_roi.w
             fundus = fundus.resize(r)
 
         transform: Optional[ResizeTranslation] = None
-        if roi is not None and r is not None:
-            transform = ResizeTranslation(r, -roi.top_left.numpy() * r)
+        if src_roi is not None and r is not None:
+            transform = ResizeTranslation(r, -src_roi.top_left.numpy() * r)
+        dst_roi = Rect.from_size(fundus.shape)
 
         if overwrite_or_newer(self.fundus, output_paths.fundus, overwrite):
             fundus.write_image(image=output_paths.fundus, on_exists="overwrite")
@@ -421,11 +418,11 @@ class SampleSource:
         overwrite_od = overwrite_or_newer(self.od, output_paths.od, overwrite)
 
         if mask_optic_disc or overwrite_od:  # Load, crop and save OD
-            fundus.update(od=self.od, inplace=True, crop_pad=roi, reshape_method="resize")
+            fundus.update(od=self.od, inplace=True, crop_pad=src_roi, reshape_method="resize")
             if overwrite_od:
                 fundus.write_image(od=output_paths.od, on_exists="overwrite")
         if overwrite_or_newer(self.macula, output_paths.macula, overwrite):  # Load, crop and save macula
-            fundus.update(macula=self.macula, inplace=True, crop_pad=roi, reshape_method="resize")
+            fundus.update(macula=self.macula, inplace=True, crop_pad=src_roi, reshape_method="resize")
             fundus.write_image(macula=output_paths.macula, on_exists="overwrite")
 
         # === 3. Load, preprocess and save graphes ===
@@ -443,16 +440,20 @@ class SampleSource:
                 # Load from graph file
                 graph = VGraph.load(graph_path, check_integrity=False)
                 if transform is not None and resize_to is not None:
-                    graph.transform(transform, inplace=True)
-                    graph.geometric_data()._domain = Rect.from_size((resize_to, resize_to))
+                    graph.transform(transform, warped_domain=dst_roi, inplace=True)
             else:
                 # Parse AV segmentation to graph
                 if av2tree is None:
                     av2tree = GNNAVSegToTree()
-                fundus.update(av=graph_path, crop_pad=roi, reshape_method="resize", inplace=True)
+                fundus.update(av=graph_path, crop_pad=src_roi, reshape_method="resize", inplace=True)
                 if mask_optic_disc:
-                    selem = disk(fundus.od_diameter * 0.2, dtype=bool)  # type: ignore
-                    mask = ~binary_erosion(fundus.od, selem)  # type: ignore
+                    cv2 = import_cv2()
+                    if fundus.od_diameter > 0.25 * fundus.shape[1]:
+                        warnings.warn(
+                            f"Optic disc diameter is larger than 25% of the image width in sample {self.name}, which may indicate an error in the optic disc segmentation.",  # noqa: E501
+                            stacklevel=1,
+                        )
+                    mask = cv2.distanceTransform(fundus.od.astype(np.uint8), cv2.DIST_L2, 5) < 0.2 * fundus.od_diameter
                     fundus.update(av=fundus.av * mask, inplace=True)
                 graph = av2tree.to_vgraph(fundus)
 
@@ -474,8 +475,8 @@ class SampleSource:
             for tree_path in self.target_topologies:
                 tree = VTree.load(tree_path, check_integrity=True)
                 if transform is not None and resize_to is not None:
-                    tree.transform(transform, inplace=True)
-                    tree.geometric_data()._domain = Rect.from_size((resize_to, resize_to))
+                    tree.transform(transform, warped_domain=dst_roi, inplace=True)
+                    # tree.geometric_data()._domain = Rect.from_size((resize_to, resize_to))
                 merge_nodes_by_distance(tree, max_distance=0.5, inplace=True)
                 if len(tree.branch_duplicates()):
                     warnings.warn(f"Tree in sample {self.name} has duplicate branches after processing", stacklevel=1)
@@ -686,7 +687,7 @@ class BranchDigraphDataset(PygDataset):
 
         samples: list[SampleInfo] = []
         for i, sample_src in reversed(list(enumerate(samples_src))):
-            existing_sample = sample_src.already_processed(existing_samples, overwrite)
+            existing_sample = sample_src.already_processed(existing_samples, overwrite=overwrite, output_dir=output_dir)
             if existing_sample is not None:
                 samples.append(existing_sample)
                 samples_src.pop(i)
@@ -705,12 +706,17 @@ class BranchDigraphDataset(PygDataset):
                 overwrite=overwrite,
             )
             if n_workers == 0:
-                new_samples: list[SampleInfo] = [
-                    process(sample_src)
-                    for sample_src in tqdm.tqdm(
-                        samples_src, total=len(samples_src), desc="Processing samples", disable=not verbose
-                    )
-                ]  # type: ignore
+                new_samples: list[SampleInfo] = []
+                for i, sample_src in enumerate(
+                    tqdm.tqdm(samples_src, total=len(samples_src), desc="Processing samples", disable=not verbose)
+                ):
+                    new_samples.append(process(sample_src))
+                # new_samples: list[SampleInfo] = [
+                #     process(sample_src)
+                #     for sample_src in tqdm.tqdm(
+                #         samples_src, total=len(samples_src), desc="Processing samples", disable=not verbose
+                #     )
+                # ]  # type: ignore
             else:
                 run_parallel = Parallel(n_jobs=-2, return_as="generator_unordered")
                 new_samples: list[SampleInfo] = list(
@@ -882,8 +888,8 @@ class BranchDigraphDataset(PygDataset):
             3,
             cols_titles=[sample_data.name, "with GT Topology", "Ground Truth"],
             cell_height=700,
-            background=sample.fundus.image,
         )
+        sample.fundus.draw(view=m.views[0])
         draw_graph(
             sample.graphes[graph_version],
             view=m.views[0],
@@ -950,14 +956,14 @@ class BranchDigraphDataset(PygDataset):
         B = len(parent_pred)
 
         # === Draw GT tree ===
-        gt_tree = gt_digraph.optimize_tree(keep_missing_branch=True)
+        gt_tree = gt_digraph.optimize_tree(keep_missing_branch=True, assign_av="subtree")
         if show_gt_graph:
             shown_gt_tree = gt_tree
             if simplify:
                 shown_gt_tree = shown_gt_tree.delete_branch(np.where(gt_digraph.branch_fp())[0])
                 disconnect_crossing(shown_gt_tree, inplace=True)
                 simplify_passing_nodes(shown_gt_tree, min_angle=90, with_same_branch_attr="av")
-            draw_tree(gt_tree, view=m[2], branch_color="subtree", bspline_dir=True, interactive=True)
+            draw_tree(gt_tree, view=m[2], branch_color="av", bspline_dir=True, interactive=True)
 
         # === Draw Predicted tree ===
         tree = gt_digraph.compute_tree_from_arborescence(

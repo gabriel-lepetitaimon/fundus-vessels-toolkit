@@ -1,5 +1,4 @@
 from __future__ import annotations
-from types import ClassMethodDescriptorType
 
 __all__ = ["VGraph"]
 
@@ -46,6 +45,7 @@ from fundus_toolkits.utils.typing import (
     PointArrayLike,
     as_float_pairs,
     as_int_pairs,
+    as_points,
 )
 
 from ..utils.bezier import BSpline
@@ -2782,7 +2782,7 @@ class VGraph:
     def split_branch(
         self,
         branch_id: int,
-        split_curve_id: Int1DArrayLike | Float1DArrayLike,
+        split_curve_id: Float1DArrayLike,
         split_coord: Optional[PointArrayLike] = None,
         *,
         return_branch_ids: Literal[True],
@@ -2793,7 +2793,7 @@ class VGraph:
     def split_branch(
         self,
         branch_id: int,
-        split_curve_id: Int1DArrayLike | Float1DArrayLike,
+        split_curve_id: Float1DArrayLike,
         split_coord: Optional[PointArrayLike] = None,
         *,
         return_branch_ids: Literal[False] = False,
@@ -2804,7 +2804,7 @@ class VGraph:
     def split_branch(
         self,
         branch_id: int,
-        split_curve_id: Int1DArrayLike | Float1DArrayLike,
+        split_curve_id: Float1DArrayLike,
         split_coord: Optional[PointArrayLike] = None,
         *,
         return_branch_ids: Literal[True],
@@ -2814,7 +2814,7 @@ class VGraph:
     def split_branch(
         self,
         branch_id: int,
-        split_curve_id: Int1DArrayLike | Float1DArrayLike,
+        split_curve_id: Float1DArrayLike,
         split_coord: Optional[PointArrayLike] = None,
         *,
         return_branch_ids=False,
@@ -2885,7 +2885,7 @@ class VGraph:
         n_split = len(split_curve_id)
 
         if split_coord is not None:
-            split_coord = np.atleast_2d(split_coord)
+            split_coord = as_points(split_coord)
             assert split_coord.ndim == 2 and split_coord.shape[1] == 2, "split_coord must be a 2D array of shape (N, 2)"
             assert len(split_coord) == n_split, "split_coord and split_curve_id must have the same length."
 
@@ -2899,22 +2899,23 @@ class VGraph:
             gdata._split_branch(branch_id, split_curve_id, split_coord, new_branchIds, new_nodeIds)
 
         # === Insert new nodes and branches ... ===
-        # 1. ... in the branch list
+        # 1. ... in the branch list and nodes count
         graph._branch_list[branch_id, 1] = new_nodeIds[0]
         new_branches = []
         for nPrev, nNext in itertools.pairwise(np.concatenate([new_nodeIds, [nEnd]])):
             new_branches.append((nPrev, nNext))
-        graph._branch_list = np.concatenate((graph._branch_list, new_branches), axis=0)
+        graph._branch_list = np.concatenate((graph._branch_list, new_branches), axis=0)  # type: ignore
+        graph._node_count += len(new_nodeIds)
+
         # 2. ... in the branches attributes
         if graph._branch_attr is not None:
-            new_df = graph._branch_attr.reindex(pd.RangeIndex(len(graph._branch_list)), copy=False)
+            new_df = graph._branch_attr.reindex(pd.RangeIndex(len(graph._branch_list)), copy=False)  # type: ignore (copy=False)
             new_df.iloc[new_branchIds] = new_df.iloc[branch_id]
             graph._branch_attr = new_df
 
         # 3. ... in the nodes attributes
         if graph._node_attr is not None:
-            graph._node_count += len(new_nodeIds)
-            graph._node_attr = graph._node_attr.reindex(pd.RangeIndex(graph.node_count), copy=False)
+            graph._node_attr = graph._node_attr.reindex(pd.RangeIndex(graph.node_count), copy=False)  # type: ignore (copy=False)
 
         # === Update the nodes and branches references ===
         for node in graph._node_refs:

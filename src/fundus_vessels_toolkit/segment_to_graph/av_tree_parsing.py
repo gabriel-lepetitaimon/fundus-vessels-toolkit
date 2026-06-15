@@ -11,7 +11,7 @@ from fundus_toolkits.utils.typing import Bool1DArray, Indices
 from ..pipelines.seg_to_graph import SegToGraph
 from ..utils.cluster import cluster_by_distance, reduce_clusters
 from ..utils.math import extract_splits, quantized_higher
-from ..vascular_data_objects import BranchIndicesLike, NodeIndicesLike, VBranchGeoData, VGraph, VTree
+from ..vascular_data_objects import BranchIndicesLike, VBranchGeoData, VGraph, VTree
 from .graph_simplification import simplify_passing_nodes
 
 
@@ -63,7 +63,8 @@ def assign_av_label(
         branch_curve = branch.curve()
         if len(branch_curve) <= 2:
             continue
-
+        if not np.issubdtype(branch_curve.dtype, np.integer):
+            branch_curve = np.round(branch_curve).astype(int)
         # 0. Check the AV labels under each pixel of the skeleton and boundaries of the branch
         bound = branch.geodata(VBranchGeoData.Fields.BOUNDARIES, geodata).data
         valid_bound = geodata.domain.contains(bound).all(axis=1)
@@ -414,7 +415,7 @@ def simplify_av_graph(
 
     # === Remove passing nodes of same type ===
     graph.node_connected_components()
-    simplify_passing_nodes(graph, min_angle=passing_node_min_angle, with_same_label=av_attr, inplace=True)
+    simplify_passing_nodes(graph, min_angle=passing_node_min_angle, with_same_branch_attr=av_attr, inplace=True)
 
     # === Delete self-loop undefined branches ===
     self_loop = graph.self_loop_branches()
