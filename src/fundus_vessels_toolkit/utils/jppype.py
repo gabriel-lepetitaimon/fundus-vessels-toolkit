@@ -133,20 +133,14 @@ def draw_tree(
             if artery is True:
                 node_cmap = {i: AV_COLORS[AVLabel.ART] for i in range(tree.node_count)}
                 main_color = AV_COLORS[AVLabel.ART]
-                root_color = "#7a1a1a"
-                leaf_color = "#da7676"
             elif artery is False:
                 main_color = AV_COLORS[AVLabel.VEI]
                 node_cmap = {i: AV_COLORS[AVLabel.VEI] for i in range(tree.node_count)}
-                root_color = "#1a1a7a"
-                leaf_color = "#7676da"
             else:
                 node_cmap = {i: main_color for i in range(tree.node_count)}
 
-        # nodes_color = pd.Series(main_color, index=tree.node_attr.index)
-        # nodes_color[tree.root_nodes_ids()] = root_color
-        # nodes_color[tree.leaf_nodes_ids()] = leaf_color
     if node_dim_roots:
+        assert node_cmap is not None
         for node_id in tree.root_nodes_ids():
             node_cmap[int(node_id)] = darken_hex(node_cmap.get(node_id, main_color), 0.3)
         for node_id in tree.leaf_nodes_ids():
@@ -202,6 +196,7 @@ def draw_tree(
             nonlocal _last_cmap, cmap_cache
             if cmap_cache is None or _last_cmap is not layer.edges_cmap:
                 cmap_cache = layer.edges_cmap.copy()  # type: ignore
+            assert cmap_cache is not None
 
             yx = (event["y"], event["x"])
             gdata = tree.geometric_data()
@@ -226,7 +221,7 @@ def draw_tree(
             _last_cmap = layer.edges_cmap
 
             if callable(interactive):
-                interactive(branch_id)
+                interactive(int(branch_id))
 
         (view.views[0] if isinstance(view, View2dGroup) else view).on_click(handle_click)
 
@@ -243,7 +238,7 @@ def draw_trees(
     edge: Literal["bspline", "line", "skeleton"] = "bspline",
     branch_color: Literal["av", "rank", "subtree"] = "rank",
     node_cmap: Optional[dict[int, str]] = None,
-    bspline_dir: bool = False,
+    bspline_dir: bool | Literal["blood"] = False,
     interactive: bool = False,
 ) -> None:
     """
@@ -266,7 +261,7 @@ def draw_trees(
         edge=edge,
         node_cmap=node_cmap,
         branch_color=branch_color,
-        bspline_dir=bspline_dir,
+        bspline_dir=bspline_dir is not False,
         interactive=interactive,
     )
     draw_tree(
@@ -279,7 +274,8 @@ def draw_trees(
         edge=edge,
         node_cmap=node_cmap,
         branch_color=branch_color,
-        bspline_dir=bspline_dir,
+        bspline_dir=bspline_dir is not False,
+        invert_bspline_dir=bspline_dir == "blood",
         interactive=interactive,
     )
 
@@ -338,8 +334,8 @@ def draw_graph(
             else:
                 return Color("srgb", cmap(np.clip(c, 0, 1))[:3]).to_string(hex=True)
 
-        branch_color = {k: parse_color(c) for k, c in branch_color.items()}
-        branch_color[None] = "grey"
-        layer.edges_cmap = branch_color
+        branch_color_: dict[int | None, str] = {k: parse_color(c) for k, c in branch_color.items()}
+        branch_color_[None] = "grey"
+        layer.edges_cmap = branch_color_
 
     view[name] = layer

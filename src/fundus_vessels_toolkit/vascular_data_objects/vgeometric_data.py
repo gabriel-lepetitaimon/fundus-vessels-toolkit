@@ -482,7 +482,7 @@ class VGeometricData:
         ids, is_single = as_1d_array(ids)
         internal_id = self._graph_to_internal_branch_ids(ids, graph_index=graph_index, check_valid=False)
         if is_single:
-            return (c := self._branch_curve[int(internal_id)]) is not None and len(c) > 0
+            return (c := self._branch_curve[int(internal_id.item())]) is not None and len(c) > 0
         else:
             return np.array(
                 [(c := self._branch_curve[int(i)]) is not None and len(c) > 0 for i in internal_id], dtype=bool
