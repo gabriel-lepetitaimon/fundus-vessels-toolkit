@@ -131,6 +131,47 @@ class RotationCfg(BaseModel):
 type RotationField = Annotated[Optional[RotationCfg], BoolDefaultValidator(RotationCfg)]
 
 
+class HSVJitterCfg(BaseModel):
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
+    hue_shift: FloatHyperParam = Field(default=0.02)
+    """Maximum absolute hue shift """
+
+    saturation_shift: FloatHyperParam = Field(default=0.2)
+    """Maximum absolute saturation shift"""
+
+    value_shift: FloatHyperParam = Field(default=0.2)
+    """Maximum absolute value shift"""
+
+    saturation_scale_range: FloatHyperParam = Field(default=0.2)
+    """Range for random saturation scaling (1-saturation_scale_range, 1+saturation_scale_range)"""
+
+    value_scale_range: FloatHyperParam = Field(default=0.2)
+    """Range for random value scaling (1-value_scale_range, 1+value_scale_range)"""
+
+    def apply(self, img: npt.NDArray, rng: Optional[np.random.Generator] = None) -> npt.NDArray:
+        from skimage import color
+
+        if rng is None:
+            rng = np.random.default_rng()
+
+        img_hsv = color.rgb2hsv(img)
+        img_hsv[..., 0] += rng.uniform(-self.hue_shift, self.hue_shift)
+        img_hsv[..., 0] %= 1.0  # Wrap hue values to [0, 1]
+
+        img_hsv[..., 1] *= rng.uniform(1 - self.saturation_scale_range, 1 + self.saturation_scale_range)
+        img_hsv[..., 1] += rng.uniform(-self.saturation_shift, self.saturation_shift)
+        img_hsv[..., 1] = np.clip(img_hsv[..., 1], 0, 1)
+
+        img_hsv[..., 2] += rng.uniform(-self.value_shift, self.value_shift)
+        img_hsv[..., 2] *= rng.uniform(1 - self.value_scale_range, 1 + self.value_scale_range)
+        img_hsv[..., 2] = np.clip(img_hsv[..., 2], 0, 1)
+        return color.hsv2rgb(img_hsv)
+
+
+type HSVJitterField = Annotated[Optional[HSVJitterCfg], BoolDefaultValidator(HSVJitterCfg)]
+
+
 class AugmentationCfg(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True)
 
@@ -145,6 +186,8 @@ class AugmentationCfg(BaseModel):
 
     deteriorate_graph: DeteriorationField = Field(default_factory=DeteriorationCfg)
     """Whether to apply topological deterioration to the graph"""
+
+    hsv_jitter: HSVJitterField = Field(default=None)
 
     @property
     def geometric(self) -> bool:
@@ -183,7 +226,7 @@ class AugmentationCfg(BaseModel):
         if data is True:
             return cls()
         elif data is False:
-            return cls(elastic=None, rotate=None, horizontal_flip=False, deteriorate_graph=None)
+            return cls(elastic=None, rotate=None, horizontal_flip=False, deteriorate_graph=None, hsv_jitter=None)
         else:
             return data
 

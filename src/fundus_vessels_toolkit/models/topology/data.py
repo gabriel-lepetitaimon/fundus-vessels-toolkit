@@ -458,7 +458,10 @@ class BranchDigraphData(PygData):
             od_yx, mac_yx = t.transform(np.array([od_center, mac_center]))
         else:
             od_yx, mac_yx = od_center.numpy(), mac_center.numpy()
-            # with p.sub("recompute tangents"):
+        if augment_opts.hsv_jitter is not None:
+            # with p.sub("Color Augmentation"):
+            fundus_img = augment_opts.hsv_jitter.apply(fundus_img)
+        # with p.sub("recompute tangents"):
         populate_tangent(branch_digraph.graph, tips=True, inplace=True)
 
         data = cls.from_branch_digraph(
