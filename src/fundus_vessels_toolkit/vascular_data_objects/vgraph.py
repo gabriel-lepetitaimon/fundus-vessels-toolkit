@@ -1492,10 +1492,8 @@ class VGraph:
         branch_ids = np.split(node_branches[:, 1], node_split[1:])  # type: ignore
 
         if return_branch_direction:
-            bdir: Bool1DArray = np.array(
-                [self._branch_list[b][:, 0] == n for b, n in zip(branch_ids, node_ids, strict=True)], dtype=bool
-            )  # type: ignore
-            return branch_ids, bdir
+            bdir = [self._branch_list[b][:, 0] == n for b, n in zip(branch_ids, node_ids, strict=True)]  # type: ignore
+            return branch_ids, bdir  # type: ignore
         else:
             return branch_ids
 

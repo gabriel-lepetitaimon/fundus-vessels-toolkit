@@ -1104,9 +1104,11 @@ class VBranchDigraph(LineDigraph):
 
     def optimize_tree(
         self,
+        *,
         keep_missing_branch: bool = False,
         assign_av: Literal["subtree", "branch", False] = False,
         method: DigraphSolver = "approx",
+        detect_major_av_error: bool = False,
     ) -> VTree:
         """Resolve the directed graph into an arborescence (a directed tree).
 
@@ -1116,9 +1118,14 @@ class VBranchDigraph(LineDigraph):
             The tree representation of the directed graph.
         """
         # === Solve Optimal Arborescence ===
-        branch_parents, branch_dir = self.solve_optimal_arborescence(method=method)
+        branch_parents, branch_dir = self.solve_optimal_arborescence(
+            method=method, detect_major_av_error=detect_major_av_error
+        )
         return self.compute_tree_from_arborescence(
-            branch_parents, branch_dir, keep_missing_branch=keep_missing_branch, assign_av=assign_av
+            branch_parents,
+            branch_dir,
+            keep_missing_branch=keep_missing_branch,
+            assign_av=assign_av,
         )
 
     # === UTILS ===

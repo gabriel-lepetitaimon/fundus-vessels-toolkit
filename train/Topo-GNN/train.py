@@ -236,6 +236,12 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
                 for k, d in test_set.split_by_dataset().items()
                 for v in test_set.list_versions()
             }
+        elif cfg.test_version == "training" and isinstance(train_set.cfg.graph_version, dict):
+            test_loaders = {
+                f"{k}-{v}": PyGDataLoader(d.use_version(v), **test_args)  # type: ignore
+                for k, d in test_set.split_by_dataset().items()
+                for v in train_set.cfg.graph_version.keys()
+            }
         else:
             test_version = cfg.test_version if cfg.test_version != "training" else cfg.dataset.graph_version
             test_set.cfg.graph_version = test_version

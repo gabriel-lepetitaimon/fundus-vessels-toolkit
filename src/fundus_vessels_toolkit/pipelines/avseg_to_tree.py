@@ -122,6 +122,11 @@ class AVSegToTree(AVSegToTreeBase):
         tree = self.resolve_digraph_to_vtree(*lines_digraph_info)
         return self.split_av_tree(tree)
 
+    def graph_to_tree(self, graph: VGraph, fundus: FundusData) -> tuple[VTree, VTree]:
+        lines_digraph_info = self.build_line_digraph(graph, fundus, inplace=False)
+        tree = self.resolve_digraph_to_vtree(*lines_digraph_info)
+        return self.split_av_tree(tree)
+
     # --- Intermediate steps ---
     def assign_av_labels(
         self,
@@ -238,7 +243,7 @@ class GNNAVSegToTree(AVSegToTree):
         root = Path(__file__).parent.parent.parent.parent
         # checkpoint = torch.load(root / "train/Topo-GNN/GNN-Topo-v1/c2kx8j5h/checkpoints/epoch=239-step=8880.ckpt")
         # checkpoint = torch.load(root / "train/Topo-GNN/GNN-Topo-v1/ft6svpfg/checkpoints/epoch=179-step=3420.ckpt")
-        checkpoint = torch.load(root / "train/Topo-GNN/GNN-Topo-v1/96dxz1ex/checkpoints/epoch=99-step=1900.ckpt")
+        checkpoint = torch.load(root / "/home/gaby/Téléchargements/epoch=159-step=2080.ckpt")
 
         model = BranchDigraphModel(checkpoint["hyper_parameters"]["config"]["model"])
         model.load_state_dict({k[6:]: v for k, v in checkpoint["state_dict"].items() if k.startswith("model.")})
@@ -258,6 +263,11 @@ class GNNAVSegToTree(AVSegToTree):
         graph = self.to_vgraph(fundus, simplify=True)
         line_digraph = self.build_line_digraph(graph, fundus, inplace=True)
         tree = line_digraph.optimize_tree()
+        return self.split_av_tree(tree)
+
+    def graph_to_tree(self, graph: VGraph, fundus: FundusData) -> tuple[VTree, VTree]:
+        line_digraph = self.build_line_digraph(graph, fundus, inplace=False)
+        tree = line_digraph.optimize_tree(assign_av="subtree", detect_major_av_error=True)
         return self.split_av_tree(tree)
 
     # --- Intermediate steps ---
