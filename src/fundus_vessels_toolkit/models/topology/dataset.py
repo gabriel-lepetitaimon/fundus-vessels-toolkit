@@ -966,9 +966,7 @@ class BranchDigraphDataset(PygDataset):
             draw_tree(gt_tree, view=m[2], branch_color="av", bspline_dir=True, interactive=True)
 
         # === Draw Predicted tree ===
-        tree = gt_digraph.compute_tree_from_arborescence(
-            parent_pred, dir_pred, fp_pred, keep_missing_branch=True, assign_av="subtree"
-        )
+        tree = gt_digraph.compute_tree_from_arborescence(parent_pred, dir_pred, fp_pred, keep_missing_branch=True)
 
         def next_valid_branch(b_id: int) -> Optional[int]:
             while b_id >= B:
