@@ -30,8 +30,8 @@ parameters_grid:
 ---
 # yaml-language-server: $schema=config.schema.json
 epoch: 200
-lr: 1e-4~1e-2
-batch_size: 4:4:20
+lr: 5e-4~15e-4
+batch_size: 20
 dataset:
   augment:
     deteriorate_graph: true|false
