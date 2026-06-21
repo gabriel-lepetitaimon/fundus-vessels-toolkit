@@ -9,7 +9,6 @@ from typing import Annotated, Any, Literal, Optional, Sequence, Union, overload
 
 import numpy as np
 import optuna
-import pytorch_lightning as pl
 from pydantic import (
     BaseModel,
     BeforeValidator,
@@ -19,7 +18,6 @@ from pydantic import (
     StringConstraints,
     ValidationError,
     computed_field,
-    field_validator,
     model_validator,
 )
 from pydantic.json_schema import JsonSchemaValue
