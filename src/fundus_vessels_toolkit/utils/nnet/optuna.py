@@ -308,7 +308,7 @@ def attach_hyperparameter_validators(cls, fields: tuple[str, ...] | None = None)
                 field_info.annotation = Annotated[
                     param_type,
                     BeforeValidator(
-                        optuna_parse_literal,
+                        optuna_parse_literal(literals),
                         json_schema_input_type=param_type | Annotated[str, StringConstraints(pattern=pattern)],
                     ),
                 ]  # type: ignore
