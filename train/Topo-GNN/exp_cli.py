@@ -151,4 +151,4 @@ def sbatch(
 
 
 if __name__ == "__main__":
-    app()
+    check(EXP / "0b_gnn_archi.yaml")

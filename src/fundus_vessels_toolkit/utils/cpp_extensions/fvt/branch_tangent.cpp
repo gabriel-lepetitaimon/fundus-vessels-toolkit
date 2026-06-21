@@ -230,8 +230,9 @@ std::vector<std::size_t> curve_inflections_points(const std::vector<float>& sign
     // Search for the first decreasing point
     std::size_t i = 0;
     while (i < curveSize && K_quant[i] == 0) i++;
-    if (i > 0) root_intervals.push_back({0, i});
+    if (i == curveSize) return {};  // No inflection point
 
+    if (i > 0) root_intervals.push_back({0, i});
     int lastK = K_quant[i];
     // Search for the minimum intervals
     for (; i < curveSize - 1; i++) {

@@ -52,6 +52,7 @@ from ..utils.bezier import BSpline
 from ..utils.cluster import reduce_chains, reduce_clusters
 from ..utils.cpp_optimized import first_index_of, first_two_index_of
 from ..utils.data_io import NumpyDict, load_numpy_dict, pandas_to_numpy_dict, save_numpy_dict
+from ..utils.exceptions import CheckReport
 from ..utils.lookup_array import (
     add_empty_to_lookup,
     complete_lookup,
@@ -543,7 +544,8 @@ class VGraph:
 
         if check_integrity or node_count is None:
             self.check_integrity(
-                "warn" if check_integrity else "skip", stack_level=2 if check_integrity is True else check_integrity + 1
+                "warn" if check_integrity else "report",
+                stacklevel=2 if check_integrity is True else check_integrity + 1,
             )
 
         self._node_refs: WeakSet[VGraphNode] = WeakSet()
@@ -555,15 +557,7 @@ class VGraph:
         d.pop("_branch_refs", None)
         return d
 
-    @overload
-    def check_integrity(self, on_error: Literal["warn", "skip"] = "skip", *, stack_level=1) -> bool: ...
-    @overload
-    def check_integrity(self, on_error: Literal["raise"], *, stack_level=1) -> Literal[True]: ...
-    @overload
-    def check_integrity(self, on_error: Literal["report"], *, stack_level=1) -> str: ...
-    def check_integrity(
-        self, on_error: Literal["raise", "warn", "skip", "report"] = "skip", *, stack_level=1
-    ) -> bool | str:
+    def check_integrity(self, on_error: Literal["raise", "warn", "report"] = "report", *, stacklevel=1) -> CheckReport:
         """Check the integrity of the graph data.
 
         This method checks that all branches and nodes index are consistent.
@@ -573,41 +567,27 @@ class VGraph:
         ValueError
             If the graph data is not consistent.
         """
+        report = CheckReport(on_error=on_error, stacklevel=stacklevel + 1)
         N, B = self.node_count, self.branch_count
 
         if N == 0 and B == 0:
             # If both node and branch counts are zero, we can consider the graph empty
-            return "" if on_error == "report" else True
+            return report
 
-        errors = []
         # --- Check geometric data ---
-        branches_idx = set()
-        nodes_idx = set()
         for gdata in self._geometric_data:
-            # Check that each node has a distinct position
-            if (np.diff(gdata._nodes_coord[np.lexsort(gdata._nodes_coord.T)], axis=0) == 0).all(axis=1).any():
-                warnings.warn("The geometric data contains duplicated nodes coordinates.", stacklevel=stack_level + 1)
-            gdata.check_integrity(on_error=on_error)
-            branches_idx.update(gdata.branch_ids)
-            nodes_idx.update(gdata.node_ids)
-
-        branches_idx.difference_update(np.arange(B))
-        if len(branches_idx) != 0:
-            errors.append(f"Geometric data contains branches indices that are not in the branch list: {branches_idx}.")
-
-        nodes_idx.difference_update(np.arange(N))
-        if len(nodes_idx) != 0:
-            errors.append(f"Geometric data contains nodes indices that are above the nodes count: {nodes_idx}.")
+            report.extend(gdata.check_integrity(on_error=on_error, stacklevel=stacklevel + 1))
 
         # --- Check nodes attributes ---
         if self._node_attr is not None:
             if self._node_attr.index.inferred_type != "integer":
-                errors.append("The index of nodes_attr dataframe must be nodes Index.")
+                report.log_error("Node Attributes", "The index of nodes_attr dataframe must be nodes Index.")
 
             if self._node_attr.index.max() >= N or self._node_attr.index.min() < 0:
-                errors.append(
+                report.log_error(
+                    "Node Attributes",
                     "The maximum value in nodes_attr index must be lower than the number of nodes."
-                    f" Got {self._node_attr.index.max()} instead of {N}"
+                    f" Got {self._node_attr.index.max()} instead of {N}",
                 )
             if len(self._node_attr.index) != N:
                 self._node_attr.reindex(np.arange(N))
@@ -615,25 +595,18 @@ class VGraph:
         # --- Check branches attributes ---
         if self._branch_attr is not None:
             if self._branch_attr.index.inferred_type != "integer":
-                errors.append("The index of branches_attr dataframe must be branches Index.")
+                report.log_error("Branch Attributes", "The index of branches_attr dataframe must be branches Index.")
 
             if self._branch_attr.index.max() >= B or self._branch_attr.index.min() < 0:
-                errors.append(
+                report.log_error(
+                    "Branch Attributes",
                     "The maximum value in branches_attr index must be lower than the number of branches."
-                    f" Got {self._branch_attr.index.max()} instead of {B}"
+                    f" Got {self._branch_attr.index.max()} instead of {B}",
                 )
             if len(self._branch_attr.index) != B:
                 self._branch_attr.reindex(np.arange(B))
 
-        if len(errors) > 0:
-            msg = "Invalid graph:" + "\n - ".join(errors)
-            if on_error == "raise":
-                raise ValueError(msg)
-            elif on_error == "warn":
-                warnings.warn(msg, stacklevel=stack_level + 1)
-            elif on_error == "report":
-                return msg
-        return "" if on_error == "report" else True
+        return report
 
     def __eq__(self, other: object) -> bool:
         def equals_df_or_none(df1: Optional[pd.DataFrame], df2: Optional[pd.DataFrame]) -> bool:
@@ -3956,7 +3929,7 @@ class VGraph:
         return layer
 
     def branch_normals_map(self, segmentation, only_tips=False):
-        import cv2
+        from fundus_toolkits.utils.safe_import import cv2
 
         from ..utils.graph.measures import branch_boundaries
 

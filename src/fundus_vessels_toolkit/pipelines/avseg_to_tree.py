@@ -90,10 +90,7 @@ MINIMAL_FUNDUS_SEG_TO_GRAPH = SegToGraph(
 
 
 class AVSegToTree(AVSegToTreeBase):
-    def __init__(
-        self,
-        segToGraph: Optional[SegToGraph] = None,
-    ):
+    def __init__(self, segToGraph: Optional[SegToGraph] = None):
         """
 
         Parameters
@@ -103,7 +100,7 @@ class AVSegToTree(AVSegToTreeBase):
         """
 
         super(AVSegToTree, self).__init__()
-        self.segToGraph = if_none(segToGraph, MINIMAL_FUNDUS_SEG_TO_GRAPH)
+        self._segToGraph = segToGraph
         self.av_attr = "av"
 
     def __call__(
@@ -121,6 +118,26 @@ class AVSegToTree(AVSegToTreeBase):
         lines_digraph_info = self.build_line_digraph(graph, fundus, inplace=True)
         tree = self.resolve_digraph_to_vtree(*lines_digraph_info)
         return self.split_av_tree(tree)
+
+    def seg_to_graph(self, max_calibre: float) -> SegToGraph:
+        max_calibre = int(max_calibre)
+        return SegToGraph(
+            skeletonize_method="lee",
+            fix_hollow=True,
+            clean_branches_tips=max_calibre,
+            min_terminal_branch_length=3,
+            min_terminal_branch_calibre_ratio=1,
+            simplify_graph_arg=GraphSimplifyArg(
+                max_spurs_length=0,
+                reconnect_endpoints=False,
+                junctions_merge_distance=1,
+                min_orphan_branches_length=3,
+                max_cycles_length=max_calibre,
+                simplify_topology=False,
+            ),
+            parse_geometry=True,
+            adaptative_tangents=True,
+        )
 
     def graph_to_tree(self, graph: VGraph, fundus: FundusData) -> tuple[VTree, VTree]:
         lines_digraph_info = self.build_line_digraph(graph, fundus, inplace=False)
@@ -148,13 +165,15 @@ class AVSegToTree(AVSegToTreeBase):
             inplace=inplace,
         )
 
-    def simplify_av_graph(self, graph: VGraph, *, inplace: bool = False) -> VGraph:
+    def simplify_av_graph(self, graph: VGraph, *, inplace: bool = False, max_calibre: float = 20) -> VGraph:
         from ..segment_to_graph.av_tree_parsing import simplify_av_graph
 
         return simplify_av_graph(
             graph,
             av_attr=self.av_attr,
-            orphan_branch_min_length=self.segToGraph.simplify_graph_arg.min_orphan_branches_length,
+            orphan_branch_min_length=3,
+            node_merge_distance=max_calibre,
+            unknown_node_merge_distance=max_calibre * 1.5,
             inplace=inplace,
         )
 
@@ -212,14 +231,16 @@ class AVSegToTree(AVSegToTreeBase):
         else:
             mask = None
 
-        skel = self.segToGraph.skeletonize(fundus.vessels, mask=mask)
+        max_calibre = int(190 / fundus.scale)
+        seg2graph = self.seg_to_graph(max_calibre)
+        skel = seg2graph.skeletonize(fundus.vessels, mask=mask)
         vessels = fundus.vessels if mask is None else fundus.vessels * mask
 
-        graph = self.segToGraph.from_skel(skel=skel, vessels=vessels, parse_geometry=True, simplify=False)
+        graph = seg2graph.from_skel(skel=skel, vessels=vessels, parse_geometry=True, simplify=False)
         if label_av:
             self.assign_av_labels(graph, fundus.av, inplace=True)
             if simplify:
-                self.simplify_av_graph(graph, inplace=True)
+                self.simplify_av_graph(graph, inplace=True, max_calibre=max_calibre)
         return graph
 
 
@@ -237,15 +258,18 @@ class GNNAVSegToTree(AVSegToTree):
         """
         from ..models.topology.model import BranchDigraphModel
 
-        super(AVSegToTree, self).__init__()
+        super().__init__()
         self.segToGraph = if_none(segToGraph, MINIMAL_FUNDUS_SEG_TO_GRAPH)
         self.av_attr = "av"
         root = Path(__file__).parent.parent.parent.parent
         # checkpoint = torch.load(root / "train/Topo-GNN/GNN-Topo-v1/c2kx8j5h/checkpoints/epoch=239-step=8880.ckpt")
         # checkpoint = torch.load(root / "train/Topo-GNN/GNN-Topo-v1/ft6svpfg/checkpoints/epoch=179-step=3420.ckpt")
-        checkpoint = torch.load(root / "/home/gaby/Téléchargements/epoch=159-step=2080.ckpt")
-
-        model = BranchDigraphModel(checkpoint["hyper_parameters"]["config"]["model"])
+        checkpoint = torch.load(root / "train/Topo-GNN/tmp/models/epoch=159-step=2080.ckpt")
+        model = checkpoint["hyper_parameters"]["config"]["model"]
+        model["gcn"]["architecture"] = (
+            "InstNorm Conv64x8-DropOut InstNorm Conv128x8-DropOut Conv128x8 Conv256x4 Conv512x2"
+        )
+        model = BranchDigraphModel(model)
         model.load_state_dict({k[6:]: v for k, v in checkpoint["state_dict"].items() if k.startswith("model.")})
         self.model = model.cuda().eval()
 
@@ -288,6 +312,18 @@ class GNNAVSegToTree(AVSegToTree):
             av_attr=self.av_attr,
             propagate_labels=propagate_labels,
             discard_joint_branch_geometry=False,
+            inplace=inplace,
+        )
+
+    def simplify_av_graph(self, graph: VGraph, *, inplace: bool = False, max_calibre: float = 20) -> VGraph:
+        from ..segment_to_graph.av_tree_parsing import simplify_av_graph
+
+        return simplify_av_graph(
+            graph,
+            av_attr=self.av_attr,
+            orphan_branch_min_length=3,
+            node_merge_distance=max_calibre,
+            unknown_node_merge_distance=max_calibre,
             inplace=inplace,
         )
 

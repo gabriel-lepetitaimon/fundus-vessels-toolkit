@@ -4,12 +4,11 @@ from typing import Annotated, Any, Literal, Optional, Self
 
 import numpy as np
 import numpy.typing as npt
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
 from fundus_toolkits.transform import (
     AffineTransform,
     ElasticTransform,
-    ElasticTransformTorch,
     FlipTransform,
     IdentityTransform,
     Transform,
@@ -19,13 +18,13 @@ from fundus_toolkits.utils.geometric import Rect
 
 from ...segment_to_graph.graph_simplification import remove_orphan_nodes, simplify_passing_nodes
 from ...segment_to_graph.vbranch_digraph import VBranchDigraph
+from ...utils.nnet.experiment import ExpCfgBaseModel
 from ...utils.nnet.optuna import BoolDefaultValidator, BoolHyperParam, FloatHyperParam, IntHyperParam
+from ...utils.profiling import watch
 from ...vascular_data_objects import VBranchGeoData, VGraph, VGraphBranch, VTree
 
 
-class DeteriorationCfg(BaseModel):
-    model_config = ConfigDict(use_attribute_docstrings=True)
-
+class DeteriorationCfg(ExpCfgBaseModel):
     min_holes_count: IntHyperParam = Field(default=50)
     """Minimum number of holes to create disconnections"""
 
@@ -80,15 +79,13 @@ class DeteriorationCfg(BaseModel):
 type DeteriorationField = Annotated[Optional[DeteriorationCfg], BoolDefaultValidator(DeteriorationCfg)]
 
 
-class ElasticCfg(BaseModel):
+class ElasticCfg(ExpCfgBaseModel):
     """
     Options for elastic deformation.
 
     - displacement_std: Standard deviation of the displacement in pixels.
     - smoothing_size: Size of the Gaussian kernel for smoothing the displacement field.
     """
-
-    model_config = ConfigDict(use_attribute_docstrings=True)
 
     displacement_std: FloatHyperParam = Field(default=80.0)
     """Standard deviation of the displacement in pixels"""
@@ -109,9 +106,7 @@ class ElasticCfg(BaseModel):
 type ElasticField = Annotated[Optional[ElasticCfg], BoolDefaultValidator(ElasticCfg)]
 
 
-class RotationCfg(BaseModel):
-    model_config = ConfigDict(use_attribute_docstrings=True)
-
+class RotationCfg(ExpCfgBaseModel):
     min_angle: FloatHyperParam = Field(default=3.0)
     """Minimum absolute angle in degrees to apply rotation"""
 
@@ -131,11 +126,9 @@ class RotationCfg(BaseModel):
 type RotationField = Annotated[Optional[RotationCfg], BoolDefaultValidator(RotationCfg)]
 
 
-class HSVJitterCfg(BaseModel):
-    model_config = ConfigDict(use_attribute_docstrings=True)
-
-    hue_shift: FloatHyperParam = Field(default=0.02)
-    """Maximum absolute hue shift """
+class HSVJitterCfg(ExpCfgBaseModel):
+    hue_shift: FloatHyperParam = Field(default=0.02 * 360)
+    """Maximum absolute hue shift in degrees"""
 
     saturation_shift: FloatHyperParam = Field(default=0.2)
     """Maximum absolute saturation shift"""
@@ -150,31 +143,37 @@ class HSVJitterCfg(BaseModel):
     """Range for random value scaling (1-value_scale_range, 1+value_scale_range)"""
 
     def apply(self, img: npt.NDArray, rng: Optional[np.random.Generator] = None) -> npt.NDArray:
-        from skimage import color
+        from fundus_toolkits.utils.safe_import import cv2
 
         if rng is None:
             rng = np.random.default_rng()
 
-        img_hsv = color.rgb2hsv(img)
-        img_hsv[..., 0] += rng.uniform(-self.hue_shift, self.hue_shift)
-        img_hsv[..., 0] %= 1.0  # Wrap hue values to [0, 1]
+        with watch("RGB to HSV"):
+            img_hsv = cv2.cvtColor(img.transpose(1, 2, 0), cv2.COLOR_RGB2HSV)  # C,H,W -> H,W,C
 
-        img_hsv[..., 1] *= rng.uniform(1 - self.saturation_scale_range, 1 + self.saturation_scale_range)
-        img_hsv[..., 1] += rng.uniform(-self.saturation_shift, self.saturation_shift)
-        img_hsv[..., 1] = np.clip(img_hsv[..., 1], 0, 1)
+        with watch("hue jitter"):
+            img_hsv[..., 0] += rng.uniform(-self.hue_shift, self.hue_shift)
 
-        img_hsv[..., 2] += rng.uniform(-self.value_shift, self.value_shift)
-        img_hsv[..., 2] *= rng.uniform(1 - self.value_scale_range, 1 + self.value_scale_range)
-        img_hsv[..., 2] = np.clip(img_hsv[..., 2], 0, 1)
-        return color.hsv2rgb(img_hsv)
+        with watch("saturation jitter"):
+            img_hsv[..., 1] *= rng.uniform(1 - self.saturation_scale_range, 1 + self.saturation_scale_range)
+            img_hsv[..., 1] += rng.uniform(-self.saturation_shift, self.saturation_shift)
+            img_hsv[..., 1] = np.clip(img_hsv[..., 1], 0, 1)
+        with watch("value jitter"):
+            img_hsv[..., 2] += rng.uniform(-self.value_shift, self.value_shift)
+            img_hsv[..., 2] *= rng.uniform(1 - self.value_scale_range, 1 + self.value_scale_range)
+            img_hsv[..., 2] = np.clip(img_hsv[..., 2], 0, 1)
+
+        with watch("HSV to RGB"):
+            img_rgb = cv2.cvtColor(img_hsv, cv2.COLOR_HSV2RGB)  # H,W,C -> C,H,W
+        with watch("Mask background"):
+            img_rgb[np.all(img == 0, axis=0)] = 0  # Preserve black background
+        return img_rgb.transpose(2, 0, 1)
 
 
 type HSVJitterField = Annotated[Optional[HSVJitterCfg], BoolDefaultValidator(HSVJitterCfg)]
 
 
-class AugmentationCfg(BaseModel):
-    model_config = ConfigDict(use_attribute_docstrings=True)
-
+class AugmentationCfg(ExpCfgBaseModel):
     elastic: ElasticField = Field(default_factory=ElasticCfg)
     """Whether to apply elastic deformation"""
 
@@ -187,7 +186,7 @@ class AugmentationCfg(BaseModel):
     deteriorate_graph: DeteriorationField = Field(default_factory=DeteriorationCfg)
     """Whether to apply topological deterioration to the graph"""
 
-    hsv_jitter: HSVJitterField = Field(default=None)
+    hsv_jitter: HSVJitterField = Field(default_factory=HSVJitterCfg)
 
     @property
     def geometric(self) -> bool:
@@ -222,16 +221,16 @@ class AugmentationCfg(BaseModel):
         return TransformComposition(*transforms, sequential_warp=True)
 
     @classmethod
-    def parse(cls, data: Self | bool) -> Self:
+    def parse(cls, data: Optional[Self | bool]) -> Self:
         if data is True:
             return cls()
-        elif data is False:
+        elif data is False or data is None:
             return cls(elastic=None, rotate=None, horizontal_flip=False, deteriorate_graph=None, hsv_jitter=None)
         else:
             return data
 
 
-type AugmentationField = Annotated[AugmentationCfg, BoolDefaultValidator(AugmentationCfg)]
+type AugmentationField = Annotated[Optional[AugmentationCfg], BoolDefaultValidator(AugmentationCfg)]
 
 
 def deteriorate_trees(trees: tuple[VTree, VTree], opts: Optional[DeteriorationCfg] = None) -> tuple[VTree, VTree]:

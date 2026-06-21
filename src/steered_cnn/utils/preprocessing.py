@@ -4,7 +4,7 @@ from scipy.ndimage import gaussian_filter
 
 
 def fundus_preprocessing(x):
-    import cv2
+    from fundus_toolkits.utils.safe_import import cv2
 
     k = np.max(x.shape) // 20 * 2 + 1
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k // 2 + 1, k // 2 + 1))

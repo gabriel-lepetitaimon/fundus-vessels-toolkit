@@ -120,23 +120,25 @@ void fix_hollow_crosses(Tensor2DAcc<int>& parsedSkel, const std::vector<IntPoint
             if (parsedSkel[p.y + n.y][p.x + n.x] == SkeletonRank::ENDPOINT_RANK)
                 parsedSkel[p.y + n.y][p.x + n.x] = SkeletonRank::NONE;
         }
-        // Detect skeleton rank again on hollow crosses
+        // Check if removing the central pixel of the hollow cross disconnect incoming branches ...
         const uint8_t neighbors = get_neighborhood(parsedSkel, p.y, p.x);
-        bool removeThisCross = false;
-        for (int s = 0; s < 4; s++) {
-            auto const& rolledNeighbors = roll_neighbors(neighbors, s * 2);
-            if (hit_and_miss(rolledNeighbors, 0b01010000, 0b00000111) ||
-                hit_and_miss(rolledNeighbors, 0b11100000, 0b00001110)) {
-                removeThisCross = true;
-                break;
+        bool usefullCross = false;
+        if (__builtin_popcount(neighbors) > 1) {
+            for (int s = 0; s < 4; s++) {
+                auto const& rolledNeighbors = roll_neighbors(neighbors, s * 2);
+                if (hit_and_miss(rolledNeighbors, 0b00010000, 0b01101100) ||
+                    hit_and_miss(rolledNeighbors, 0b00100000, 0b01010000)) {
+                    usefullCross = true;
+                    break;
+                }
             }
         }
-        if (removeThisCross) {
+        if (!usefullCross) {  // ... if not remove it
             parsedSkel[p.y][p.x] = SkeletonRank::NONE;
-        } else {
-            SkeletonRank point = detect_skeleton_rank(true, neighbors);
-            parsedSkel[p.y][p.x] = point;
-            if (remove_single_endpoints && point == SkeletonRank::ENDPOINT_RANK) endpoints.push_back(p);
+        } else {  // ... otherwise compute its rank
+            SkeletonRank rank = detect_skeleton_rank(true, neighbors);
+            parsedSkel[p.y][p.x] = rank;
+            if (remove_single_endpoints && rank == SkeletonRank::ENDPOINT_RANK) endpoints.push_back(p);
         }
 
         // Detect skeleton rank again on the hollow crosses neighbors
@@ -144,9 +146,9 @@ void fix_hollow_crosses(Tensor2DAcc<int>& parsedSkel, const std::vector<IntPoint
             const IntPoint n_p = p + n;
             if (parsedSkel[n_p.y][n_p.x] >= SkeletonRank::BRANCH_RANK) {
                 const uint8_t n_neighbors = get_neighborhood(parsedSkel, n_p.y, n_p.x);
-                SkeletonRank point = detect_skeleton_rank(true, n_neighbors);
-                parsedSkel[n_p.y][n_p.x] = point;
-                if (remove_single_endpoints && point == SkeletonRank::ENDPOINT_RANK) endpoints.push_back(n_p);
+                SkeletonRank rank = detect_skeleton_rank(true, n_neighbors);
+                parsedSkel[n_p.y][n_p.x] = rank;
+                if (remove_single_endpoints && rank == SkeletonRank::ENDPOINT_RANK) endpoints.push_back(n_p);
             }
         }
     }
@@ -437,6 +439,7 @@ std::tuple<EdgeList, std::vector<CurveYX>, std::vector<IntPoint>> parse_skeleton
                     nodes.push_back({tracker.y, tracker.x, other_node_id});
                     nodes_coordinates.push_back({tracker.y, tracker.x});
                     skel_acc[tracker.y][tracker.x] = PixelRole::NODE;
+                    label_acc[tracker.y][tracker.x] = -other_node_id - 1;
                 } else
                     other_node_id = -label_acc[tracker.y][tracker.x] - 1;
 

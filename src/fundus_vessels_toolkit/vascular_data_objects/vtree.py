@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fundus_vessels_toolkit.utils.exceptions import CheckReport
+
 __all__ = ["VTree"]
 
 import itertools
@@ -31,7 +33,6 @@ from fundus_toolkits.utils.typing import (
     Bool1DArrayLike,
     Float1DArrayLike,
     Indices,
-    Int1DArray,
     Int1DArrayLike,
     IntPairArrayLike,
     PointArrayLike,
@@ -443,15 +444,9 @@ class VTree(VGraph):
             check_integrity=2 if check_integrity is True else (check_integrity + 1),
         )
 
-    @overload
-    def check_tree_integrity(self, on_error: Literal["warn", "skip"] = "skip", *, stack_level: int = 1) -> bool: ...
-    @overload
-    def check_tree_integrity(self, on_error: Literal["raise"], *, stack_level: int = 1) -> Literal[True]: ...
-    @overload
-    def check_tree_integrity(self, on_error: Literal["report"], *, stack_level: int = 1) -> str: ...
     def check_tree_integrity(
-        self, on_error: Literal["raise", "warn", "skip", "report"] = "skip", *, stack_level: int = 1
-    ) -> bool | str:
+        self, on_error: Literal["raise", "warn", "report"] = "report", *, stacklevel: int = 1
+    ) -> CheckReport:
         """Check the integrity of the tree.
 
         Raises
@@ -459,47 +454,32 @@ class VTree(VGraph):
         ValueError
             If the tree is not a tree (i.e. contains cycles).
         """
+        report = CheckReport(on_error=on_error, stacklevel=stacklevel + 1)
         B = self.branch_count
         if B == 0:
-            return "" if on_error == "report" else True
-        errors = []
-        if self.branch_tree.min() < -1:
-            errors.append("the provided branch parents contains invalid indices")
-        if self.branch_tree.max() >= B:
-            errors.append("the provided branch parents contains invalid indices")
-        if np.any(self.branch_tree == np.arange(B)):
-            errors.append("some branches are their own parent")
-        if has_cycle(self.branch_tree):
-            errors.append(
-                "it contains the cycles "
-                + "; ".join("{" + ", ".join(str(_) for _ in cycle) + "}" for cycle in find_cycles(self.branch_tree))
-            )
-        if len(errors) > 0:
-            msg = "Invalid tree:" + "\n - ".join(errors)
-            if on_error == "raise":
-                raise ValueError(msg)
-            elif on_error == "warn":
-                warnings.warn(msg, stacklevel=stack_level + 1)
-            elif on_error == "report":
-                return msg
-            return False
-        return "" if on_error == "report" else True
+            return report
 
-    @overload
-    def check_integrity(self, on_error: Literal["warn", "skip"] = "skip", *, stack_level: int = 1) -> bool: ...
-    @overload
-    def check_integrity(self, on_error: Literal["raise"], *, stack_level: int = 1) -> Literal[True]: ...
-    @overload
-    def check_integrity(self, on_error: Literal["report"], *, stack_level: int = 1) -> str: ...
+        if self.branch_tree.min() < -1:
+            report.log_error("Tree", "The provided branch parents contains invalid indices")
+        if self.branch_tree.max() >= B:
+            report.log_error("Tree", "The provided branch parents contains invalid indices")
+        if np.any(self.branch_tree == np.arange(B)):
+            report.log_error("Tree", "Some branches are their own parent")
+        if has_cycle(self.branch_tree):
+            report.log_error(
+                "Tree",
+                "Branch hierarchy contains cycles: "
+                + "; ".join("{" + ", ".join(str(_) for _ in cycle) + "}" for cycle in find_cycles(self.branch_tree)),
+            )
+        return report
+
     def check_integrity(
-        self, on_error: Literal["raise", "warn", "skip", "report"] = "skip", *, stack_level: int = 1
-    ) -> bool | str:
-        graph_out = super().check_integrity(on_error=on_error, stack_level=stack_level + 1)
-        tree_out = self.check_tree_integrity(on_error=on_error, stack_level=stack_level + 1)
-        if on_error == "report":
-            assert isinstance(graph_out, str) and isinstance(tree_out, str)
-            return (graph_out + "\n" + tree_out) if graph_out and tree_out else (graph_out + tree_out)
-        return graph_out and tree_out
+        self, on_error: Literal["raise", "warn", "report"] = "report", *, stacklevel: int = 1
+    ) -> CheckReport:
+        report = CheckReport(on_error=on_error, stacklevel=stacklevel + 1)
+        report.extend(super().check_integrity(on_error=on_error, stacklevel=stacklevel + 1))
+        report.extend(self.check_tree_integrity(on_error=on_error, stacklevel=stacklevel + 1))
+        return report
 
     def __eq__(self, other: object) -> bool:
         return (

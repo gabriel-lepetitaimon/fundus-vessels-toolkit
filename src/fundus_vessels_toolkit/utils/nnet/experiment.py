@@ -5,21 +5,33 @@ import tempfile
 from contextvars import ContextVar, Token
 from functools import cached_property
 from pathlib import Path
-from typing import Annotated, Any, Literal, Optional, Sequence, overload
+from typing import Annotated, Any, Literal, Optional, Sequence, Union, overload
 
 import numpy as np
 import optuna
 import pytorch_lightning as pl
-import wandb
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PrivateAttr, ValidationError, computed_field
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    StringConstraints,
+    ValidationError,
+    computed_field,
+    model_validator,
+)
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import CoreSchema
 from pytorch_lightning.callbacks import Callback
 from pytorch_lightning.loggers import WandbLogger
 from rich.console import Console
 from ruamel.yaml import YAML
 
+import wandb
 from fundus_toolkits.utils.typing import Int1DArray
 
-from .optuna import OptunaCfg, TrialContext
+from .optuna import OptunaCfg, TrialContext, current_trial
 from .pydantic_yaml import InvalidDocumentCountError, YamlDocument, YamlDocumentWithFile, pretty_validation_error_msg
 
 
@@ -32,22 +44,53 @@ class NoTrialsToRunError(RuntimeError):
         )
 
 
-def _validate_parameters_grid(value: dict[str, list] | list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if isinstance(value, dict):
-        k, v = list(value.keys()), list(value.values())
-        return [dict(zip(k, c, strict=True)) for c in itertools.product(*v)]
-    elif isinstance(value, list):
-        if len(value) == 0:
-            return []
-        if not all(isinstance(item, dict) for item in value):
-            raise ValueError("All items in the parameters_grid list must be dictionaries.")
-        keys0 = set(value[0].keys())
-        for item in value:
-            if set(item.keys()) != keys0:
+ParameterGridJSONInputType = Union[
+    list[
+        Annotated[
+            dict[Annotated[str, StringConstraints(pattern="^[a-zA-Z_][a-zA-Z0-9_]*$")], dict[str, Any]],
+            Field(min_length=1, max_length=1),
+        ]
+    ],
+    dict[str, list],
+]
+
+
+def _validate_parameters_grid(data: ParameterGridJSONInputType) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]]
+    if isinstance(data, dict):
+        keys, values = list(data.keys()), list(data.values())
+        values = [dict(zip(keys, v, strict=True)) for v in itertools.product(*values)]
+        out = {"|".join(f"{k}={v[k]}" for k in keys): v for v in values}
+        if len(out) == 1:
+            out = {"": next(iter(out.values()))}
+        return out
+    elif isinstance(data, list):
+        if len(data) == 0:
+            return {}
+        out = {}
+        keys0: None | set[str] = None
+        for d in data:
+            if len(d) != 1:
+                raise ValueError("Each dictionary in the parameters_grid list must have exactly one key.")
+            name, values = next(iter(d.items()))
+            if not isinstance(values, dict):
+                raise ValueError(
+                    "The value of each dictionary in the parameters_grid list must be another dictionary mapping parameter names to their values."  # noqa: E501
+                )
+            if keys0 is None:
+                keys0 = set(values.keys())
+            elif set(values.keys()) != keys0:
                 raise ValueError("All dictionaries in the parameters_grid list must have the same keys.")
-        return value
+            out[name] = values
+        return out
     else:
-        raise ValueError("parameters_grid must be either a dict of lists or a list of dicts.")
+        raise ValueError("parameters_grid must be either a dict of lists or a list of key-dicts pairs.")
+
+
+ParameterGridField = Annotated[
+    dict[str, dict[str, Any]],
+    BeforeValidator(_validate_parameters_grid, json_schema_input_type=ParameterGridJSONInputType),
+]
 
 
 class ExperimentHeader(BaseModel):
@@ -76,12 +119,30 @@ class ExperimentHeader(BaseModel):
     test_debug: bool = Field(default=False)
     """Whether this is a test/debug run. If True, the experiment will use a temporary Optuna storage and will log to Wandb Test & Debug project, to avoid polluting the experiment results with test runs."""  # noqa: E501
 
-    parameters_grid: Annotated[
-        list[dict[str, Any]],
-        BeforeValidator(_validate_parameters_grid, json_schema_input_type=dict[str, list] | list[dict[str, Any]]),
-    ] = Field(default_factory=list)
+    parameters_grid: ParameterGridField = Field(default_factory=dict)
     """Grid of parameters values to explore. This experiment will be run for each combination of parameters.
-    The value of the parameters defined here can be referred to in the configuration file as '$<parameter_name>'"""  # noqa: E501
+    The value of the parameters defined here can be referred to in the configuration file as '$<parameter_name>'
+    
+    This parameter can be defined in two formats:
+    1. As a dictionary of lists, where each key is a parameter name and the value is a list of values to try for that parameter. For example:
+    ```
+    parameters_grid:
+      learning_rate: [0.001, 0.01]
+      batch_size: [32, 64]
+    ```
+
+    2. As a list pairing a name to a dictionary of parameter values. This allows for more flexibility in defining the parameter combinations, as the parameter names can be different for each combination. For example:
+    ```
+    parameters_grid:
+      - experiment1:
+          learning_rate: 0.001
+          batch_size: 32
+      - experiment2:
+          learning_rate: 0.01
+          batch_size: 64
+    ```
+
+    """  # noqa: E501
 
     optuna: OptunaCfg = Field(default_factory=OptunaCfg)
     """Optuna configuration for hyperparameter optimization."""
@@ -136,23 +197,6 @@ class ExperimentHeader(BaseModel):
 
     @computed_field
     @cached_property
-    def parameters_hashes(self) -> list[str]:
-        """List of hashes for each parameter combination. This can be used to uniquely identify trials with specific parameter combinations."""  # noqa: E501
-
-        def parameter_hash(params: dict[str, Any]) -> str:
-            return "|".join(str(params[k]) for k in sorted(params.keys()))
-
-        return [parameter_hash(params) for params in self.parameters_grid]
-
-    @property
-    def parameters_grid_by_name(self) -> dict[str, dict[str, Any]]:
-        """Dictionary mapping parameter names to their values for each parameter combination."""  # noqa: E501
-        if len(self.parameters_grid) == 0:
-            return {self.experiment_name: {}}
-        return dict(zip(self._study_names(), self.parameters_grid, strict=True))
-
-    @computed_field
-    @cached_property
     def experiment_name(self) -> str:
         """Get the base experiment name without parameter or version information."""
         version = f"v{self.version}" if self.version is not None else ""
@@ -162,7 +206,7 @@ class ExperimentHeader(BaseModel):
         """List of Optuna study names for this experiment, based on the parameter combinations and the number of trials."""  # noqa: E501
         if len(self.parameters_grid) == 0:
             return [self.experiment_name]
-        return [self.experiment_name + "-" + param_hash for param_hash in self.parameters_hashes]
+        return [self.experiment_name + "-" + param_cfg_name for param_cfg_name in self.parameters_grid.keys()]
 
     @property
     def file(self) -> Optional[Path]:
@@ -217,7 +261,7 @@ class ExperimentHeader(BaseModel):
             console.print(msg)
             return False
 
-        for i, (study_name, parameters) in enumerate(exp.parameters_grid_by_name.items()):
+        for study_name, parameters in exp.parameters_grid.items():
             study = exp.optuna.load_study(study_name, temp_storage=True)
             trial = study.ask(fixed_parameters=parameters)
             with TrialContext(trial):
@@ -280,7 +324,7 @@ class ExperimentRunFactory[T: BaseModel]:
         """Get the next experiment run to execute, based on the current trial counts and parameter combinations. Returns None if all trials have been completed."""  # noqa: E501
 
         cfg = self.header
-        for i, (study_name, params) in enumerate(cfg.parameters_grid_by_name.items()):
+        for study_name, params in cfg.parameters_grid.items():
             study = cfg.optuna.load_study(study_name, temp_storage=self.header.test_debug)
             if study.valid_trials_count(only_completed=False) < cfg.n_trials:
                 trial = study.ask(fixed_parameters=params)
@@ -288,7 +332,7 @@ class ExperimentRunFactory[T: BaseModel]:
                     run_cfg = self.yaml.validate(self.model)
                     if self.yaml_override is not None:
                         run_cfg = run_cfg.model_copy(update=self.yaml_override)
-                    return ExperimentRun(self.header, run_cfg, study, trial, i)
+                    return ExperimentRun(self.header, run_cfg, study, trial, study_name)
         return None
 
     def __enter__(self) -> ExperimentRun[T]:
@@ -324,12 +368,10 @@ class ExperimentRunFactory[T: BaseModel]:
 class ExperimentRun[T: BaseModel]:
     """Context manager for setting the current experiment. This is used internally by the OptunaCfg to manage the experiment context during hyperparameter optimization."""  # noqa: E501
 
-    def __init__(
-        self, exp: ExperimentHeader, cfg: T, study: optuna.study.Study, trial: optuna.Trial, param_config_id: int
-    ):
+    def __init__(self, exp: ExperimentHeader, cfg: T, study: optuna.study.Study, trial: optuna.Trial, trial_name: str):
         self.header = exp
         self.cfg = cfg
-        self.param_config_id = param_config_id
+        self._trial_name = trial_name
         self.study = study
         self.trial = trial
         self.logger: Optional[WandbLogger] = None
@@ -344,16 +386,12 @@ class ExperimentRun[T: BaseModel]:
         """Get the current parameter combination for this run."""
         if len(self.header.parameters_grid) == 0:
             return {}
-        return self.header.parameters_grid[self.param_config_id]
+        return self.header.parameters_grid[self._trial_name]
 
     @property
     def trial_name(self) -> str:
         """Get the experiment name for this run, based on the experiment configuration and the parameter combination."""  # noqa: E501
-        trial_name = []
-        for k, v in self.parameters_grid.items():
-            trial_name.append(f"{k}={v},")
-        trial_name = f"[{self.param_config_id}|{';'.join(trial_name)}]" if trial_name else ""
-        return self.header.experiment_name + trial_name
+        return self.header.experiment_name + ("|" + self._trial_name if self._trial_name else "")
 
     @property
     def run_id(self) -> int:
@@ -433,7 +471,7 @@ class ExperimentRun[T: BaseModel]:
 
     def pruning_callback(self, monitor: str) -> Callback:
         """Optuna pruning callback to be called at the end of each epoch during training. This will report the intermediate value to Optuna and check if the trial should be pruned."""  # noqa: E501
-        from optuna.integration import PyTorchLightningPruningCallback
+        from optuna.integration import PyTorchLightningPruningCallback  # type: ignore
 
         if self.header.optuna.pruner is not None:
             return PyTorchLightningPruningCallback(self.trial, monitor=monitor)
@@ -442,3 +480,64 @@ class ExperimentRun[T: BaseModel]:
 
 
 _current_experiment: ContextVar[Optional[ExperimentRun]] = ContextVar("_current_experiment", default=None)
+
+
+####################################
+#   --- Experiment Cfg Base Model ---   #
+####################################
+class ExpCfgBaseModel(BaseModel):
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_experiment_variable(cls, data: Any) -> Any:
+        """
+        Intercept the validation process to resolve any terminal string fields that start with '$' as references to the current experiment's parameter grid.
+        """  # noqa: E501
+
+        for k, v in data.items():
+            if isinstance(v, str) and v.startswith("$"):
+                var_name = v[1:]  # Strip the '$'
+                value = current_trial().user_attrs.get("fixed_params", {}).get(var_name, ...)
+                if value is ...:
+                    raise ValueError(f"Parameter '{var_name}' was not defined in the parameter grid.")
+                data[k] = value
+
+        return data
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema: CoreSchema, handler) -> JsonSchemaValue:
+        """
+        Updates the JSON schema strictly for terminal primitive fields at the top level.
+        """
+        json_schema = handler(core_schema)  # type: ignore
+        json_schema = handler.resolve_ref_schema(json_schema)
+
+        # Inject the schema into the root '$defs'
+        VAR_TYPE_NAME, VAR_REF = handler.generate_json_schema.get_cache_defs_ref_schema("ExpParameterRef")
+        handler.generate_json_schema.definitions[VAR_TYPE_NAME] = {
+            "type": "string",
+            "pattern": r"^\$[a-zA-Z_]\w*$",
+            "description": "A reference to a parameter defined in the experiment's parameter grid. The variable name should be prefixed with '$'.",  # noqa: E501
+        }
+
+        # Modify model schema
+        if "properties" in json_schema:
+            for _, field_schema in json_schema["properties"].items():
+                if not isinstance(field_schema, dict):
+                    continue
+
+                if "anyOf" not in field_schema:
+                    # Extract original constraints (excluding title)
+                    original_type = {
+                        k: field_schema.pop(k)
+                        for k in list(field_schema.keys())
+                        if k not in ("title", "description", "default")
+                    }
+
+                    # Convert field into an anyOf union
+                    field_schema["anyOf"] = [original_type, VAR_REF]
+                elif VAR_REF not in field_schema["anyOf"]:
+                    # Append choice string option to top-level optional/union primitives
+                    field_schema["anyOf"].append(VAR_REF)
+        return json_schema

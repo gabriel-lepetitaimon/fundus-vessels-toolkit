@@ -3,12 +3,12 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from functools import cached_property
 from types import EllipsisType
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
 import numpy as np
 import torch
 import torch_geometric.nn as pyg_nn
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 from torch import Tensor, nn
 from torch_geometric.data import Batch as PyGBatch
 from torch_geometric.nn.conv import GATv2Conv
@@ -18,39 +18,42 @@ from torchvision.models import EfficientNet_V2_S_Weights
 from torchvision.models.efficientnet import efficientnet_v2_s
 from torchvision.transforms.functional import normalize
 
-from fundus_vessels_toolkit.segment_to_graph.vbranch_digraph import VBranchDigraph
-from fundus_vessels_toolkit.utils.tree import tree_connected_components
-
+from ...segment_to_graph.vbranch_digraph import VBranchDigraph
+from ...utils.nnet.experiment import ExpCfgBaseModel
+from ...utils.nnet.optuna import BoolHyperParam, IntHyperParam, LiteralHyperParam
 from ...utils.torch import groupby_mean, torch_interp_bilinear, unique_first
+from ...utils.tree import tree_connected_components
 from .bipolar_gcn import TransformerGCN, TransformerGCNOpt
 from .data import BranchDigraphBatch, BranchDigraphData, DigraphLines
 from .positionnal_embedding import APE
 
 
-class BranchDigraphModelCfg(BaseModel):
-    model_config = ConfigDict(use_attribute_docstrings=True)
+class BranchDigraphModelCfg(ExpCfgBaseModel):
+    type FEATURE_EXTRACTOR = Literal["efficientnet_v2_s"]
 
     gcn: TransformerGCNOpt = Field(default_factory=TransformerGCNOpt)
-    img_feature_extractor: Literal["efficientnet_v2_s"] = Field(default="efficientnet_v2_s")
+    img_feature_extractor: Annotated[FEATURE_EXTRACTOR, LiteralHyperParam(FEATURE_EXTRACTOR)] = Field(
+        default="efficientnet_v2_s"
+    )
 
-    absolute_position_embedding: bool = Field(default=False)
+    absolute_position_embedding: BoolHyperParam = Field(default=False)
     """If true, adds an absolute positional embedding to the branch features."""
 
-    oriented_affinity: bool = Field(default=True)
+    oriented_affinity: BoolHyperParam = Field(default=True)
     """If true, predicts a different embedding for parent and child branches when computing edge affinities."""
 
-    branch_embedding_dim: int = Field(default=128)
+    branch_embedding_dim: IntHyperParam = Field(default=128)
     """Dimension of the branch embedding used to compute edge affinities."""
 
-    class EdgeAttr(BaseModel):
-        model_config = ConfigDict(use_attribute_docstrings=True)
+    class EdgeAttr(ExpCfgBaseModel):
+        type SCALAR_ENCODING = Literal["scalar", "bins", "none"]
 
-        distance: Literal["scalar", "bins", "none"] = "bins"
-        angle: bool = True
-        calibre: Literal["scalar", "bins", "none"] = "none"
+        angle: BoolHyperParam = Field(default=True)
+        distance: Annotated[SCALAR_ENCODING, LiteralHyperParam(SCALAR_ENCODING)] = "bins"
+        calibre: Annotated[SCALAR_ENCODING, LiteralHyperParam(SCALAR_ENCODING)] = "none"
 
-        distance_bins: tuple[float, ...] = (4.0, 16.0, 64.0, 254.0)
-        calibre_bins: tuple[float, ...] = (2.0, 4.0, 16.0, 32.0)
+        distance_bins: tuple[float, ...] = Field(default=(4.0, 16.0, 64.0, 254.0))
+        calibre_bins: tuple[float, ...] = Field(default=(2.0, 4.0, 16.0, 32.0))
 
         def __post_init__(self):
             if self.distance == "bins":

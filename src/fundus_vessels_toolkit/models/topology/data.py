@@ -21,6 +21,7 @@ from ...segment_to_graph.vbranch_digraph import (
     _VBranchDigraphWithAVProba,
 )
 from ...utils import if_none
+from ...utils.profiling import watch
 from ...utils.tree import tree_connected_components
 from ...vascular_data_objects import VBranchGeoData
 from ...vascular_data_objects.vgeometric_data import VGeometricData
@@ -372,7 +373,7 @@ class BranchDigraphData(PygData):
         gt_topology: Optional[tuple[TreeTopology, TreeTopology]] = None,
         *,
         return_digraph: Literal[False] = False,
-        augment: bool | AugmentationCfg = False,
+        augment: Optional[AugmentationCfg] = None,
         name: Optional[str] = None,
         od_center: Optional[Point] = None,
         mac_center: Optional[Point] = None,
@@ -386,7 +387,7 @@ class BranchDigraphData(PygData):
         gt_topology: Optional[tuple[TreeTopology, TreeTopology]] = None,
         *,
         return_digraph: Literal[True],
-        augment: bool | AugmentationCfg = False,
+        augment: Optional[AugmentationCfg] = None,
         name: Optional[str] = None,
         od_center: Optional[Point] = None,
         mac_center: Optional[Point] = None,
@@ -399,70 +400,79 @@ class BranchDigraphData(PygData):
         gt_topology: Optional[tuple[TreeTopology, TreeTopology]] = None,
         *,
         return_digraph: bool = False,
-        augment: bool | AugmentationCfg = False,
+        augment: Optional[AugmentationCfg] = None,
         name: Optional[str] = None,
         od_center: Optional[Point] = None,
         mac_center: Optional[Point] = None,
     ) -> Self | tuple[Self, VBranchDigraph]:
         """Alternative constructor to create a BranchDigraphData from a VGraph and a fundus image. Note that this method will not be able to fill all the fields of the data, especially those related to the ground truth probabilities and the branch curves, which are not stored in the VGraph."""  # noqa: E501
-        # with watch("BranchDigraphData.from_graph") as p:
-        #    with p.sub("parse cfg"):
-        augment_opts = AugmentationCfg.parse(augment)
+        with watch("BranchDigraphData.from_graph") as p:
+            with p.sub("parse cfg"):
+                augment_opts = AugmentationCfg.parse(augment)
 
-        #    with p.sub("graph preprocessing"):
-        graph = graph.copy()
-        graph.clear_all_branch_attr()
-        graph.clear_all_branch_attr()
-        if augment_opts.deteriorate_graph:
-            #        with p.sub("graph deterioration"):
-            graph = deteriorate_graph(graph, opts=augment_opts.deterioration_opts, inplace=True)
+            with p.sub("graph preprocessing"):
+                graph = graph.copy()
+                graph.clear_all_branch_attr()
+                graph.clear_all_branch_attr()
+            if augment_opts.deteriorate_graph:
+                with p.sub("graph deterioration"):
+                    graph = deteriorate_graph(graph, opts=augment_opts.deterioration_opts, inplace=True)
 
-        #    with p.sub("VBranchDigraph.from_graph"):
-        branch_digraph = VBranchDigraph.from_graph(graph, check=False)
-        if gt_topology is not None:
-            # with p.sub("compute_p_from_gt"):
-            branch_digraph.compute_p_from_gt(*gt_topology, check=False)
+            with p.sub("VBranchDigraph.from_graph"):
+                branch_digraph = VBranchDigraph.from_graph(graph, check=False)
+            if gt_topology is not None:
+                with p.sub("compute_p_from_gt"):
+                    branch_digraph.compute_p_from_gt(*gt_topology, check=False)
 
-        # with p.sub("read fundus and preprocess"):
-        if isinstance(fundus, FundusData):
-            fundus_img = fundus.image
-            if od_center is None and fundus.has_od_center:
-                od_center = fundus.od_center
-            if mac_center is None:
-                mac_center = fundus.inferred_macula_center()
-        else:
-            fundus_img = fundus
-        fundus_shape = (fundus_img.shape[1], fundus_img.shape[2])
+            with p.sub("read fundus and preprocess"):
+                if isinstance(fundus, FundusData):
+                    fundus_img = fundus.image
+                    if od_center is None and fundus.has_od_center:
+                        od_center = fundus.od_center
+                    if mac_center is None:
+                        mac_center = fundus.inferred_macula_center()
+                else:
+                    fundus_img = fundus
+                fundus_shape = (fundus_img.shape[1], fundus_img.shape[2])
 
-        if od_center is None:
-            od_center = Point.from_tuple(fundus_shape) // 2
-            if mac_center is None:
-                mac_center = Point(fundus_shape[0] // 2, fundus_shape[1])  # Dummy position on the right of the OD
-        elif mac_center is None:
-            if od_center.x < fundus_shape[1] // 2:
-                mac_center = Point(od_center.y, od_center.x + fundus_shape[1] // 2)
+                if od_center is None:
+                    od_center = Point.from_tuple(fundus_shape) // 2
+                    if mac_center is None:
+                        mac_center = Point(
+                            fundus_shape[0] // 2, fundus_shape[1]
+                        )  # Dummy position on the right of the OD
+                elif mac_center is None:
+                    if od_center.x < fundus_shape[1] // 2:
+                        mac_center = Point(od_center.y, od_center.x + fundus_shape[1] // 2)
+                    else:
+                        mac_center = Point(od_center.y, od_center.x - fundus_shape[1] // 2)
+
+                branch_digraph.graph.geometric_data().clear_attribute(all_except="CALIBRE")
+            if augment_opts.hsv_jitter is not None:
+                with p.sub("Color Augmentation") as p_aug:
+                    if isinstance(fundus, FundusData):
+                        with p_aug.sub("compute roi mask"):
+                            roi_mask = fundus.roi_mask
+                        with p_aug.sub("mask roi"):
+                            fundus_img[:, ~roi_mask] = 0
+                    with p_aug.sub("hsv jitter"):
+                        fundus_img = augment_opts.hsv_jitter.apply(fundus_img)
+
+            if augment_opts.geometric:
+                with p.sub("Geometric Augmentation") as p_aug:
+                    with p_aug.sub("generate transform"):
+                        t = augment_opts.generate_transform(shape=fundus_shape)
+                    with p_aug.sub("transform graph"):
+                        branch_digraph.graph.transform(t, warped_domain="same", inplace=True)
+                    with p_aug.sub("warp fundus"):
+                        fundus_img, _ = t.warp(fundus_img.transpose((1, 2, 0)), warped_domain="same")
+                        fundus_img = fundus_img.transpose((2, 0, 1))
+                    with p_aug.sub("transform OD and macula centers"):
+                        od_yx, mac_yx = t.transform(np.array([od_center, mac_center]))
             else:
-                mac_center = Point(od_center.y, od_center.x - fundus_shape[1] // 2)
-
-        branch_digraph.graph.geometric_data().clear_attribute(all_except="CALIBRE")
-        if augment_opts.geometric:
-            # with p.sub("Geometric Augmentation") as p_aug:
-            # with p_aug.sub("generate transform"):
-            t = augment_opts.generate_transform(shape=fundus_shape)
-            # with p_aug.sub("transform graph"):
-            branch_digraph.graph.transform(t, warped_domain="same", inplace=True)
-            # with p_aug.sub("warp fundus"):
-            fundus_img, _ = t.warp(fundus_img.transpose((1, 2, 0)), warped_domain="same")
-            fundus_img = fundus_img.transpose((2, 0, 1))
-            # with p_aug.sub("transform OD and macula centers"):
-            od_yx, mac_yx = t.transform(np.array([od_center, mac_center]))
-        else:
-            od_yx, mac_yx = od_center.numpy(), mac_center.numpy()
-        if augment_opts.hsv_jitter is not None:
-            # with p.sub("Color Augmentation"):
-            fundus_img = augment_opts.hsv_jitter.apply(fundus_img)
-        # with p.sub("recompute tangents"):
-        populate_tangent(branch_digraph.graph, tips=True, inplace=True)
+                od_yx, mac_yx = od_center.numpy(), mac_center.numpy()
+            with p.sub("recompute tangents"):
+                populate_tangent(branch_digraph.graph, tips=True, inplace=True)
 
         data = cls.from_branch_digraph(
             digraph=branch_digraph,
@@ -500,8 +510,12 @@ class BranchDigraphData(PygData):
                 domain=Rect.from_size(self.img.shape[-2:]),  # type: ignore
             )
             digraph.graph = VGraph(
-                branch_list=self.branch_nodes.numpy(force=True), geometric_data=geodata, check_integrity=True
+                branch_list=self.branch_nodes.numpy(force=True), geometric_data=geodata, check_integrity=False
             )
+            report = digraph.graph.check_integrity()
+            if report:
+                print(f"=== Sample: {self.name} ===\n" + str(report))
+
         if BranchDigraphData.has_gt(self) and gt_proba is not False:
             digraph.line_p = self.line_p.numpy(force=True)
             digraph.branch_fp_p = self.branch_fp_p.numpy(force=True)

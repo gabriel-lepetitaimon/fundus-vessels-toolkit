@@ -1,13 +1,12 @@
 from typing import Literal, Optional
 
-from pydantic import BaseModel
 import torch
 from pytorch_metric_learning import distances as pml_distances
 from pytorch_metric_learning import losses as pml_losses
 from pytorch_metric_learning import miners as pml_miners
 from torch import Tensor
 
-from ...utils.torch import with_weight
+from ...utils.nnet.experiment import ExpCfgBaseModel
 from .model import BranchDigraphModel
 
 
@@ -159,7 +158,7 @@ class BranchDigraphMiner(pml_miners.BaseMiner):
         return mining_output
 
 
-class BranchContrastiveLossOpt(BaseModel):
+class BranchContrastiveLossOpt(ExpCfgBaseModel):
     contrastive_loss: bool = False
     contrastive_loss_weight: float = 0.2
     triplet_loss: bool = False
@@ -167,7 +166,7 @@ class BranchContrastiveLossOpt(BaseModel):
 
 
 class BranchContrastiveLoss(torch.nn.Module):
-    def __init__(self, opt: BranchContrastiveLossOpt = None):
+    def __init__(self, opt: BranchContrastiveLossOpt | None = None):
         super().__init__()
         if opt is None:
             opt = BranchContrastiveLossOpt()

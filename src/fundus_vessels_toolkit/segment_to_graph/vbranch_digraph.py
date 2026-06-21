@@ -20,8 +20,6 @@ from fundus_toolkits.utils.typing import (
     Int2DArrayLike,
 )
 
-from fundus_vessels_toolkit.utils.profiling import watch
-
 from ..utils.cluster import cluster_by_distance
 from ..utils.lookup_array import create_removal_lookup
 from ..utils.math import gaussian, sigmoid, softmax

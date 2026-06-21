@@ -9,8 +9,6 @@ from torch_geometric.nn.dense.linear import Linear
 from torch_geometric.typing import OptTensor
 from torch_geometric.utils import softmax
 
-from ...utils.torch import lru_cache
-
 SupportPattern = Literal["axial", "spiral"]
 
 

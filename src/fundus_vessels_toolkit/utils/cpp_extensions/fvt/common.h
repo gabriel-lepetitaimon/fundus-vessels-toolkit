@@ -652,14 +652,14 @@ uint8_t get_neighborhood_safe(const Tensor2DAcc<T>& z, int y, int x) {
 template <typename T>
 uint8_t get_neighborhood(const Tensor2DAcc<T>& z, int y, int x) {
     uint8_t neighbors = 0;
-    neighbors |= z[y - 1][x - 1] > 0 ? 0b10000000 : 0;
-    neighbors |= z[y - 1][x] > 0 ? 0b01000000 : 0;
-    neighbors |= z[y - 1][x + 1] > 0 ? 0b00100000 : 0;
-    neighbors |= z[y][x + 1] > 0 ? 0b00010000 : 0;
-    neighbors |= z[y + 1][x + 1] > 0 ? 0b00001000 : 0;
-    neighbors |= z[y + 1][x] > 0 ? 0b00000100 : 0;
-    neighbors |= z[y + 1][x - 1] > 0 ? 0b00000010 : 0;
-    neighbors |= z[y][x - 1] > 0 ? 0b00000001 : 0;
+    if (z[y - 1][x - 1] > 0) neighbors |= 0b10000000;
+    if (z[y - 1][x] > 0) neighbors |= 0b01000000;
+    if (z[y - 1][x + 1] > 0) neighbors |= 0b00100000;
+    if (z[y][x + 1] > 0) neighbors |= 0b00010000;
+    if (z[y + 1][x + 1] > 0) neighbors |= 0b00001000;
+    if (z[y + 1][x] > 0) neighbors |= 0b00000100;
+    if (z[y + 1][x - 1] > 0) neighbors |= 0b00000010;
+    if (z[y][x - 1] > 0) neighbors |= 0b00000001;
     return neighbors;
 }
 

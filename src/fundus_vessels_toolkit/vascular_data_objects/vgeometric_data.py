@@ -11,7 +11,7 @@ import numpy as np
 import numpy.typing as npt
 
 from fundus_toolkits import FundusData
-from fundus_toolkits.transform import Transform, Translation
+from fundus_toolkits.transform import IdentityTransform, Transform, Translation
 from fundus_toolkits.utils.geometric import Point, Rect
 from fundus_toolkits.utils.typing import (
     Bool1DArrayLike,
@@ -27,6 +27,8 @@ from fundus_toolkits.utils.typing import (
     PointArrayLike,
     as_float_pairs,
 )
+
+from fundus_vessels_toolkit.utils.exceptions import CheckReport
 
 from ..utils import if_none
 from ..utils.bezier import BSpline
@@ -1898,8 +1900,7 @@ class VGeometricData:
         """
 
         if apply_domain:
-            delta_yx = other.domain.top_left - self.domain.top_left
-            other = other.transform(Translation(delta_yx.numpy()))
+            other = other.transform(warped_domain=self.domain)
 
         # Append nodes
         self._nodes_coord = np.concatenate([self._nodes_coord, other._nodes_coord])
@@ -2141,91 +2142,69 @@ class VGeometricData:
             self.check_integrity()
 
     def check_integrity(
-        self, ignore_parent_data=False, on_error: Literal["raise", "warn", "skip", "report"] | None = None
-    ) -> bool:
+        self,
+        ignore_parent_data=False,
+        on_error: Literal["raise", "warn", "report"] | None = None,
+        stacklevel: int = 1,
+    ) -> CheckReport:
         """Check the integrity of the geometric fields."""
 
         check_parent = not ignore_parent_data and self._parent_graph is not None
         if on_error is None:
-            on_error = INTEGRITY_CHECK or "skip"
+            if INTEGRITY_CHECK is False:
+                return CheckReport()
+            on_error = INTEGRITY_CHECK or "report"
+        report = CheckReport(on_error=on_error, stacklevel=stacklevel + 1)
 
         # === NODES CHECK ===
         if check_parent and self._nodes_coord.shape[0] != self.parent_graph.node_count:
-            msg = (
-                f"Geometric data integrity check failed:\n"
-                f" - Invalid number of nodes: {self._nodes_coord.shape[0]} (expected: {self.parent_graph.node_count})\n"
+            report.log_error(
+                "Geometric Data",
+                f"Invalid nodes count: {self._nodes_coord.shape[0]} (expected: {self.parent_graph.node_count})",
             )
-            if on_error == "raise":
-                raise RuntimeError(msg)
-            else:
-                warnings.warn(msg, stacklevel=2)
-            return False
+        if (np.diff(self._nodes_coord[np.lexsort(self._nodes_coord.T)], axis=0) == 0).all(axis=1).any():
+            report.log_error(
+                "Geometric Data",
+                "The geometric data contains duplicated nodes coordinates.",
+            )
 
         # === BRANCHES CURVES CHECK ===
-        invalid = []
         for i, c in enumerate(self._branch_curve):
             if not c.ndim == 2 or c.shape[1] != 2:
-                invalid.append(f" - Invalid curve shape for branch {i}: {c.shape} (expected: (n, 2))")
-
-        if len(invalid):
-            msg = "Geometric data integrity check failed:\n" + "\n".join(invalid)
-            if on_error == "raise":
-                raise RuntimeError(msg)
-            else:
-                warnings.warn(msg, stacklevel=2)
-            return False
+                report.log_error("Geometric Data", f"Invalid curve shape for branch {i}: {c.shape} (expected: (n, 2))")
 
         if check_parent and len(self._branch_curve) != self.parent_graph.branch_count:
-            msg = (
-                "Geometric data integrity check failed:\n"
-                f" - Invalid number of branches curves: {len(self._branch_curve)} "
-                f"(expected: {self.parent_graph.branch_count})\n"
+            report.log_error(
+                "Geometric Data",
+                f"Invalid number of branches curves: {len(self._branch_curve)} "
+                f"(expected: {self.parent_graph.branch_count})",
             )
-            if on_error == "raise":
-                raise RuntimeError(msg)
-            else:
-                warnings.warn(msg, stacklevel=2)
-            return False
 
         # === BRANCH GEOMETRIC DATA CHECK ===
-        invalid = {}
         for attr_name, attr in self._branches_attrs_descriptors.items():
             attr_data = self._branch_data_dict[attr_name]
             if check_parent and len(attr_data) != self.parent_graph.branch_count:
-                msg = (
-                    f"Geometric data integrity check failed:\n"
-                    f" - Invalid number of branches for attribute '{attr_name}': {len(attr_data)} "
-                    f"(expected: {self.parent_graph.branch_count})\n"
+                report.log_error(
+                    "Geometric Data",
+                    f"Invalid number of branches for attribute '{attr_name}': {len(attr_data)} "
+                    f"(expected: {self.parent_graph.branch_count})",
                 )
-                if on_error == "raise":
-                    raise RuntimeError(msg)
-                else:
-                    warnings.warn(msg, stacklevel=2)
-                return False
 
             for i, data in enumerate(attr_data):
                 if data is None:
-                    invalid.setdefault(attr_name, {})[i] = "Missing data"
+                    report.log_error(
+                        "Geometric Data",
+                        f"Missing attribute '{attr_name}' for branch {i}.",
+                    )
                     continue
                 ctx = self._geodata_edit_ctx(i, attr_name)
                 is_invalid = data.is_invalid(ctx=ctx)
                 if is_invalid:
-                    if on_error == "raise":
-                        raise ValueError(f"Invalid attribute '{attr_name}' of branch {i}.\n{is_invalid}.")
-                    invalid.setdefault(attr_name, {})[i] = is_invalid
-        if len(invalid):
-            msg = "Geometric data integrity check failed:\n"
-            for attr_name, attr_invalid in invalid.items():
-                msg += f" --- Attribute '{attr_name}' --- \n"
-                for branch_id, reason in attr_invalid.items():
-                    msg += f"    - Branch {branch_id}: {reason}\n"
-            if on_error == "raise":
-                raise RuntimeError(msg)
-            else:
-                warnings.warn(msg, stacklevel=2)
-            return False
+                    report.log_error(
+                        "Geometric Data", f"Invalid attribute data '{attr_name}' for branch {i}.", is_invalid
+                    )
 
-        return True
+        return report
 
     def clear_branch_gdata(self, branch_id: Int1DArrayLike) -> None:
         """Clear the geometric data of a branch.
@@ -2266,7 +2245,7 @@ class VGeometricData:
 
     def transform(
         self,
-        projection: Transform,
+        projection: Transform | None = None,
         *,
         warped_domain: Rect | Literal["full", "same"] = "full",
         inplace: bool = False,
@@ -2293,7 +2272,8 @@ class VGeometricData:
         """  # noqa: E501
         if not inplace:
             self = self.copy()
-
+        if projection is None:
+            projection = IdentityTransform()
         if warped_domain == "full":
             new_domain = projection.transform_domain(self._domain)
         elif warped_domain == "same":

@@ -7,10 +7,10 @@ import numpy as np
 import numpy.typing as npt
 
 from fundus_toolkits.utils.geometric import Point
+from fundus_toolkits.utils.safe_import import is_torch_tensor
 
 from ..utils.data_io import load_image
 from ..utils.image import crop_pad_center
-from ..utils.safe_import import is_torch_tensor
 
 ABSENT = "ABSENT"
 

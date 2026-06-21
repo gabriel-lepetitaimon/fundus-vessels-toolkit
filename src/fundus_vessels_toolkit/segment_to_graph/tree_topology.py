@@ -4,7 +4,7 @@ import sys
 import warnings
 from copy import deepcopy
 from pathlib import Path
-from typing import List, Literal, Optional, Self, Sequence, Tuple, overload
+from typing import Any, List, Literal, Optional, Self, Sequence, Tuple, overload
 
 import numpy as np
 import numpy.typing as npt
@@ -13,7 +13,6 @@ from skimage.segmentation import expand_labels
 from fundus_toolkits import FundusData
 from fundus_toolkits.utils.geometric import Rect
 from fundus_toolkits.utils.typing import Bool1DArray, Int1DArray
-from fundus_vessels_toolkit.utils.profiling import watch
 
 from ..utils.cluster import reduce_clusters
 from ..utils.data_io import load_numpy_dict, save_numpy_dict

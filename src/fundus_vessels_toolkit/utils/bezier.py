@@ -345,7 +345,7 @@ class BezierCubic(NamedTuple):
         npt.NDArray[np.float32]
             A binary mask of shape `image_shape` with the rasterized Bezier curve.
         """
-        import cv2
+        from fundus_toolkits.utils.safe_import import cv2
 
         # Sample points along the Bezier curve
         n = int(self.arc_length(fast_approximation=True))

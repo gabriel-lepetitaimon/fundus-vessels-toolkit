@@ -61,24 +61,29 @@ std::tuple<torch::Tensor, torch::Tensor, std::vector<torch::Tensor>, torch::Tens
         }
     }
 
-    // --- Remove spurs ---
+    // --- Remove spurs and self-loop branches with empty curves ---
+    std::vector<Edge> branch_to_remove;
     double spurs_calibre_factor = get_if_exists(options, "spurs_calibre_factor", 0.);
     if (min_spurs_length > 0 || spurs_calibre_factor > 0) {
         double max_spurs_length = get_if_exists(options, "max_spurs_length", std::numeric_limits<double>::max());
-        auto const& spurs =
+        branch_to_remove =
             find_spurs(branches_curves, edge_list, seg_acc, min_spurs_length, spurs_calibre_factor, max_spurs_length);
-        if (spurs.size() > 0) {
-            remove_branches(spurs, branches_curves, labels_acc, edge_list);
-            if (tangents_calibres_tensor.size(0) > 0) {
-                std::vector<int> spurs_ids;
-                spurs_ids.reserve(spurs.size());
-                for (auto const& spur : spurs) spurs_ids.push_back(spur.id);
-                tangents_calibres_tensor = remove_rows(tangents_calibres_tensor, spurs_ids);
-            }
-            // !! The adj_list is not updated, but it is not used anymore !!
+    }
+    for (auto& edge : edge_list)
+        if (edge.start == edge.end && branches_curves[edge.id].size() == 0) branch_to_remove.push_back(edge);
+
+    if (branch_to_remove.size() > 0) {
+        remove_branches(branch_to_remove, branches_curves, labels_acc, edge_list);
+        if (tangents_calibres_tensor.size(0) > 0) {
+            std::vector<int> branch_ids;
+            branch_ids.reserve(branch_to_remove.size());
+            for (auto const& spur : branch_to_remove) branch_ids.push_back(spur.id);
+            tangents_calibres_tensor = remove_rows(tangents_calibres_tensor, branch_ids);
         }
+        // !! The adj_list is not updated, but it is not used anymore !!
     }
 
+    // --- Remove singleton nodes ---
     remove_singleton_nodes(edge_list, node_yx, labels_acc);
 
     return {edge_list_to_tensor(edge_list), vector_to_tensor(node_yx), vectors_to_tensors(branches_curves),

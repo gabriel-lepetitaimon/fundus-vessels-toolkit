@@ -309,20 +309,12 @@ def current_trial() -> Trial:
     return exp.trial
 
 
-VAR_SYMBOL = "$"
-VAR_PATTERN = rf"(\{VAR_SYMBOL}[a-zA-Z_]\w*)"
 ENUM_SYMBOL = "~"
 
 
 def optuna_parse_int(value: int | IntSearchSpace, info: ValidationInfo):
     if not isinstance(value, str):
         return value
-
-    if value.startswith(VAR_SYMBOL):
-        params = current_trial().user_attrs.get("fixed_params", {}).get(value[1:], ...)
-        if params is ...:
-            raise ValueError(f"Parameter '{value[1:]}' not found in fixed parameters of the current trial.")
-        return params
 
     if info.field_name is None:
         raise ValueError("Field name must be provided in ValidationInfo for optuna_parse_int.")
@@ -338,9 +330,7 @@ def optuna_parse_int(value: int | IntSearchSpace, info: ValidationInfo):
     return current_trial().suggest_int(info.field_name, int(low), int(high), log="~" in value, step=int(step))
 
 
-type IntSearchSpace = Annotated[
-    str, StringConstraints(pattern=r"^(?:((\+|-)?\d+(:|~)(\+|-)?\d+(?:(:|~)(\+|-)?\d+)?)|" + VAR_PATTERN + r")$")
-]
+type IntSearchSpace = Annotated[str, StringConstraints(pattern=r"^(\+|-)?\d+(:|~)(\+|-)?\d+(?:(:|~)(\+|-)?\d+)?$")]
 type IntHyperParam = Annotated[int, BeforeValidator(optuna_parse_int, json_schema_input_type=int | IntSearchSpace)]
 """
 An integer field accepting either a fixed integer or a string describing an integer search space. 
@@ -352,12 +342,6 @@ def optuna_parse_float(value: float | FloatSearchSpace, info: ValidationInfo):
     if not isinstance(value, str):
         return value
 
-    if value.startswith(VAR_SYMBOL):
-        params = current_trial().user_attrs.get("fixed_params", {}).get(value[1:], ...)
-        if params is ...:
-            raise ValueError(f"Parameter '{value[1:]}' not found in fixed parameters of the current trial.")
-        return params
-
     if info.field_name is None:
         raise ValueError("Field name must be provided in ValidationInfo for optuna_parse_float.")
 
@@ -366,7 +350,7 @@ def optuna_parse_float(value: float | FloatSearchSpace, info: ValidationInfo):
 
 
 type FloatSearchSpace = Annotated[
-    str, StringConstraints(pattern=rf"^(?:(\d+(\.\d+)?(e[+-]?\d+)?(:|~)\d+(\.\d+)?(e[+-]?\d+)?)|{VAR_PATTERN})$")
+    str, StringConstraints(pattern=r"^\d+(\.\d+)?(e[+-]?\d+)?(:|~)\d+(\.\d+)?(e[+-]?\d+)?$")
 ]
 type FloatHyperParam = Annotated[
     float, BeforeValidator(optuna_parse_float, json_schema_input_type=float | FloatSearchSpace)
@@ -380,12 +364,6 @@ Search space is defined as "low:high" for uniform sampling or "low~high" for log
 def optuna_parse_bool(value: bool | BoolSearchSpace, info: ValidationInfo):
     if not isinstance(value, str):
         return value
-
-    if value.startswith(VAR_SYMBOL):
-        params = current_trial().user_attrs.get("fixed_params", {}).get(value[1:], ...)
-        if params is ...:
-            raise ValueError(f"Parameter '{value[1:]}' not found in fixed parameters of the current trial.")
-        return params
 
     if info.field_name is None:
         raise ValueError("Field name must be provided in ValidationInfo for optuna_parse_bool.")
@@ -409,12 +387,6 @@ def optuna_parse_literal(literal_type, to_list: bool = False):
     def parser(value, info: ValidationInfo):
         if not isinstance(value, str):
             return value
-
-        if value.startswith(VAR_SYMBOL):
-            params = current_trial().user_attrs.get("fixed_params", {}).get(value[1:], ...)
-            if params is ...:
-                raise ValueError(f"Parameter '{value[1:]}' not found in fixed parameters of the current trial.")
-            value = params
 
         if ENUM_SYMBOL not in value:
             if to_list and isinstance(value, str):
@@ -460,7 +432,7 @@ class _LiteralSearchSpace:
         return rf"({literal_re})(\s*{ENUM_SYMBOL}\s*({literal_re}))*"
 
     def __class_getitem__(cls, T):
-        return Annotated[str, StringConstraints(pattern=rf"^(?:({cls.pattern(T)})|{VAR_PATTERN})$")]
+        return Annotated[str, StringConstraints(pattern=rf"^{cls.pattern(T)}$")]
 
 
 def LiteralHyperParam(literal_type):
@@ -493,7 +465,7 @@ class _ListLiteralSearchSpace:
 
     @classmethod
     def __class_getitem__(cls, T):
-        return Annotated[str, StringConstraints(pattern=rf"^(?:({cls.pattern(T)})|{VAR_PATTERN})$")]
+        return Annotated[str, StringConstraints(pattern=rf"^{cls.pattern(T)}$")]
 
 
 def ListLiteralHyperParam(literal_type):
