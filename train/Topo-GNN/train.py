@@ -37,13 +37,8 @@ from fundus_vessels_toolkit.models.topology.losses import (
     CrossEntropyLoss,
 )
 from fundus_vessels_toolkit.models.topology.model import BranchDigraphModel, BranchDigraphModelCfg
-from fundus_vessels_toolkit.utils.nnet.experiment import ExperimentRunFactory
-from fundus_vessels_toolkit.utils.nnet.optuna import (
-    FloatHyperParam,
-    IntHyperParam,
-    ListLiteralHyperParam,
-    LiteralHyperParam,
-)
+from fundus_vessels_toolkit.utils.nnet.experiment import ExpCfgBaseModel, ExperimentRunFactory
+from fundus_vessels_toolkit.utils.nnet.optuna import ListLiteralHyperParam
 from fundus_vessels_toolkit.utils.nnet.pydantic_yaml import model_validate_yaml_file
 
 # torch.set_float32_matmul_precision("medium")
@@ -57,28 +52,26 @@ type TrainingSets = Literal["FundusAV", "HRF", "LES-AV", "MAPLES-DR", "DRIVE_tra
 type GraphVersion = Literal["fvt", "automorph", "vesx", "all", "training"]
 
 
-class DigraphGNNTrainerConfig(BaseModel):
-    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
-
+class DigraphGNNTrainerConfig(ExpCfgBaseModel):
     dataset: BranchDigraphDatasetConfig = Field(default_factory=BranchDigraphDatasetConfig)
     model: BranchDigraphModelCfg = Field(default_factory=BranchDigraphModelCfg)
     contrastive_loss: BranchContrastiveLossOpt = Field(default_factory=BranchContrastiveLossOpt)
-    topo_losses_delay: IntHyperParam = 0
+    topo_losses_delay: int = 0
     """Number of epochs to delay the topology losses (line loss and contrastive loss) to allow the model to first learn to classify AV and direction before learning the topology. This can help stabilize the training and improve the final performance."""  # noqa: E501
 
     training_set: Annotated[list[TrainingSets], ListLiteralHyperParam(TrainingSets)] | None = Field(default=None)
     """Training set(s) to use. Can be a single dataset name, a list of dataset names, or None to use all datasets."""
 
-    test_version: Annotated[GraphVersion, LiteralHyperParam(GraphVersion)] = Field(default="training")
+    test_version: GraphVersion = Field(default="training")
     """Version of the test set to use. If None, the same version as the training set will be used."""
 
-    epoch: IntHyperParam = 160
+    epoch: int = 160
     """Maximum number of training epochs."""
 
-    lr: FloatHyperParam = 1e-2
+    lr: float = 1e-2
     """Learning rate."""
 
-    batch_size: IntHyperParam = 12
+    batch_size: int = 12
     """Batch size for training."""
 
 

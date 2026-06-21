@@ -19,60 +19,60 @@ from fundus_toolkits.utils.geometric import Rect
 from ...segment_to_graph.graph_simplification import remove_orphan_nodes, simplify_passing_nodes
 from ...segment_to_graph.vbranch_digraph import VBranchDigraph
 from ...utils.nnet.experiment import ExpCfgBaseModel
-from ...utils.nnet.optuna import BoolDefaultValidator, BoolHyperParam, FloatHyperParam, IntHyperParam
+from ...utils.nnet.optuna import BoolDefaultValidator
 from ...utils.profiling import watch
 from ...vascular_data_objects import VBranchGeoData, VGraph, VGraphBranch, VTree
 
 
 class DeteriorationCfg(ExpCfgBaseModel):
-    min_holes_count: IntHyperParam = Field(default=50)
+    min_holes_count: int = Field(default=50)
     """Minimum number of holes to create disconnections"""
 
-    max_holes_count: IntHyperParam = Field(default=70)
+    max_holes_count: int = Field(default=70)
     """Maximum number of holes to create disconnections"""
 
-    w_branch_base: FloatHyperParam = Field(default=8.0)
+    w_branch_base: float = Field(default=8.0)
     """Base weight for each branch"""
 
-    w_branch_inv_calibre_f: FloatHyperParam = Field(default=1.5)
+    w_branch_inv_calibre_f: float = Field(default=1.5)
     """Weighting branch calibre"""
 
-    w_branch_sqrt_length_f: FloatHyperParam = Field(default=2.0)
+    w_branch_sqrt_length_f: float = Field(default=2.0)
     """Weighting branch length"""
 
-    max_w_spread: FloatHyperParam = Field(default=0.5)
+    max_w_spread: float = Field(default=0.5)
     """Scale weighting so the min is max_w_spread * max"""
-    whole_branch_p: FloatHyperParam = Field(default=0.1)
+    whole_branch_p: float = Field(default=0.1)
     """Probability to drop an entire branch"""
 
-    whole_branch_max_calibre: FloatHyperParam = Field(default=10.0)
+    whole_branch_max_calibre: float = Field(default=10.0)
     """Maximum average calibre to consider dropping entire branch"""
 
-    whole_branch_max_length: IntHyperParam = Field(default=50)
+    whole_branch_max_length: int = Field(default=50)
     """Maximum length to consider dropping entire branch"""
 
-    tip_hole_p: FloatHyperParam = Field(default=0.4)
+    tip_hole_p: float = Field(default=0.4)
     """Probability to drop an endpoint branch"""
 
-    hole_avg_length: IntHyperParam = Field(default=10)
+    hole_avg_length: int = Field(default=10)
     """Average length of dropped segments (sampled from normal distribution)"""
 
-    hole_avg_length_f: FloatHyperParam = Field(default=0.2)
+    hole_avg_length_f: float = Field(default=0.2)
     """Factor of the branch length added to the average length of dropped segments"""
 
-    hole_std_length: IntHyperParam = Field(default=20)
+    hole_std_length: int = Field(default=20)
     """Standard deviation of the length of dropped segments"""
 
-    hole_min_length: IntHyperParam = Field(default=5)
+    hole_min_length: int = Field(default=5)
     """Minimum length of dropped segments"""
 
-    hole_min_length_f: FloatHyperParam = Field(default=0.1)
+    hole_min_length_f: float = Field(default=0.1)
     """Factor of the branch length added to the minimum length of dropped segments"""
 
-    segment_min_length: IntHyperParam = Field(default=5)
+    segment_min_length: int = Field(default=5)
     """Minimum length of left segments"""
 
-    segment_min_length_f: FloatHyperParam = Field(default=0.2)
+    segment_min_length_f: float = Field(default=0.2)
     """Factor of the branch length added to the minimum length left segments"""
 
 
@@ -87,10 +87,10 @@ class ElasticCfg(ExpCfgBaseModel):
     - smoothing_size: Size of the Gaussian kernel for smoothing the displacement field.
     """
 
-    displacement_std: FloatHyperParam = Field(default=80.0)
+    displacement_std: float = Field(default=80.0)
     """Standard deviation of the displacement in pixels"""
 
-    smoothing_size: FloatHyperParam = Field(default=200.0)
+    smoothing_size: float = Field(default=200.0)
     """Size of the Gaussian kernel for smoothing the displacement field"""
 
     def generate_projection(
@@ -107,10 +107,10 @@ type ElasticField = Annotated[Optional[ElasticCfg], BoolDefaultValidator(Elastic
 
 
 class RotationCfg(ExpCfgBaseModel):
-    min_angle: FloatHyperParam = Field(default=3.0)
+    min_angle: float = Field(default=3.0)
     """Minimum absolute angle in degrees to apply rotation"""
 
-    max_angle: FloatHyperParam = Field(default=30.0)
+    max_angle: float = Field(default=30.0)
     """Maximum absolute angle in degrees to apply rotation"""
 
     def generate_projection(self, shape: tuple[int, int], rng: Optional[np.random.Generator] = None) -> AffineTransform:
@@ -127,19 +127,19 @@ type RotationField = Annotated[Optional[RotationCfg], BoolDefaultValidator(Rotat
 
 
 class HSVJitterCfg(ExpCfgBaseModel):
-    hue_shift: FloatHyperParam = Field(default=0.02 * 360)
+    hue_shift: float = Field(default=0.02 * 360)
     """Maximum absolute hue shift in degrees"""
 
-    saturation_shift: FloatHyperParam = Field(default=0.2)
+    saturation_shift: float = Field(default=0.2)
     """Maximum absolute saturation shift"""
 
-    value_shift: FloatHyperParam = Field(default=0.2)
+    value_shift: float = Field(default=0.2)
     """Maximum absolute value shift"""
 
-    saturation_scale_range: FloatHyperParam = Field(default=0.2)
+    saturation_scale_range: float = Field(default=0.2)
     """Range for random saturation scaling (1-saturation_scale_range, 1+saturation_scale_range)"""
 
-    value_scale_range: FloatHyperParam = Field(default=0.2)
+    value_scale_range: float = Field(default=0.2)
     """Range for random value scaling (1-value_scale_range, 1+value_scale_range)"""
 
     def apply(self, img: npt.NDArray, rng: Optional[np.random.Generator] = None) -> npt.NDArray:
@@ -180,7 +180,7 @@ class AugmentationCfg(ExpCfgBaseModel):
     rotate: RotationField = Field(default_factory=RotationCfg)
     """Whether to apply rotation"""
 
-    horizontal_flip: BoolHyperParam = Field(default=True)
+    horizontal_flip: bool = Field(default=True)
     """Whether to apply horizontal flip"""
 
     deteriorate_graph: DeteriorationField = Field(default_factory=DeteriorationCfg)

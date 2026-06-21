@@ -20,7 +20,6 @@ from torchvision.transforms.functional import normalize
 
 from ...segment_to_graph.vbranch_digraph import VBranchDigraph
 from ...utils.nnet.experiment import ExpCfgBaseModel
-from ...utils.nnet.optuna import BoolHyperParam, IntHyperParam, LiteralHyperParam
 from ...utils.torch import groupby_mean, torch_interp_bilinear, unique_first
 from ...utils.tree import tree_connected_components
 from .bipolar_gcn import TransformerGCN, TransformerGCNOpt
@@ -32,25 +31,23 @@ class BranchDigraphModelCfg(ExpCfgBaseModel):
     type FEATURE_EXTRACTOR = Literal["efficientnet_v2_s"]
 
     gcn: TransformerGCNOpt = Field(default_factory=TransformerGCNOpt)
-    img_feature_extractor: Annotated[FEATURE_EXTRACTOR, LiteralHyperParam(FEATURE_EXTRACTOR)] = Field(
-        default="efficientnet_v2_s"
-    )
+    img_feature_extractor: FEATURE_EXTRACTOR = Field(default="efficientnet_v2_s")
 
-    absolute_position_embedding: BoolHyperParam = Field(default=False)
+    absolute_position_embedding: bool = Field(default=False)
     """If true, adds an absolute positional embedding to the branch features."""
 
-    oriented_affinity: BoolHyperParam = Field(default=True)
+    oriented_affinity: bool = Field(default=True)
     """If true, predicts a different embedding for parent and child branches when computing edge affinities."""
 
-    branch_embedding_dim: IntHyperParam = Field(default=128)
+    branch_embedding_dim: int = Field(default=128)
     """Dimension of the branch embedding used to compute edge affinities."""
 
     class EdgeAttr(ExpCfgBaseModel):
         type SCALAR_ENCODING = Literal["scalar", "bins", "none"]
 
-        angle: BoolHyperParam = Field(default=True)
-        distance: Annotated[SCALAR_ENCODING, LiteralHyperParam(SCALAR_ENCODING)] = "bins"
-        calibre: Annotated[SCALAR_ENCODING, LiteralHyperParam(SCALAR_ENCODING)] = "none"
+        angle: bool = Field(default=True)
+        distance: SCALAR_ENCODING = "bins"
+        calibre: SCALAR_ENCODING = "none"
 
         distance_bins: tuple[float, ...] = Field(default=(4.0, 16.0, 64.0, 254.0))
         calibre_bins: tuple[float, ...] = Field(default=(2.0, 4.0, 16.0, 32.0))

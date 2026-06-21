@@ -15,18 +15,18 @@ optuna:
 
 log_model: false
 parameters_grid: 
-  - simple-long: 
-      archi: InstNorm Conv64x8-DropOut InstNorm Conv128x8-DropOut Conv256x4 Conv128x8 Conv256x4 Conv128x8 Conv256x4 Conv512x2
-      bipole: false
-  - simple-short: 
-      archi: InstNorm Conv64x8-DropOut InstNorm Conv128x8 Conv256x4 Conv512x2
-      bipole: false
   - bipole-long: 
       archi: InstNorm Conv64x8-DropOut InstNorm Conv128x8-DropOut Conv256x4 Conv128x8 Conv256x4 Conv128x8 Conv256x4 Conv512x2
       bipole: true
   - bipole-short: 
       archi: InstNorm Conv64x8-DropOut InstNorm Conv128x8 Conv256x4 Conv512x2
       bipole: true
+  - simple-long: 
+      archi: InstNorm Conv64x8-DropOut InstNorm Conv128x8-DropOut Conv256x4 Conv128x8 Conv256x4 Conv128x8 Conv256x4 Conv512x2
+      bipole: false
+  - simple-short: 
+      archi: InstNorm Conv64x8-DropOut InstNorm Conv128x8 Conv256x4 Conv512x2
+      bipole: false
 ---
 # yaml-language-server: $schema=config.schema.json
 epoch: 200

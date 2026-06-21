@@ -19,6 +19,7 @@ from pydantic import (
     StringConstraints,
     ValidationError,
     computed_field,
+    field_validator,
     model_validator,
 )
 from pydantic.json_schema import JsonSchemaValue
@@ -291,6 +292,7 @@ class ExperimentHeader(BaseModel):
         strict: Optional[bool] = None,
         header_override: dict | None = None,
         override: dict | None = None,
+        param_grid_id: int | None = None,
     ) -> ExperimentRunFactory:
         """Load an experiment configuration from a YAML file and return an ExperimentRunFactory for executing the experiment. Raises an exception if the file is invalid.
 
@@ -313,26 +315,57 @@ class ExperimentHeader(BaseModel):
 
 
 class ExperimentRunFactory[T: BaseModel]:
-    def __init__(self, header: ExperimentHeader, yaml: YamlDocument, model: type[T], yaml_override: dict | None = None):
+    def __init__(
+        self,
+        header: ExperimentHeader,
+        yaml: YamlDocument,
+        model: type[T],
+        yaml_override: dict | None = None,
+        param_grid_id: int | None = None,
+    ):
         self.header = header
         self.model = model
         self.yaml = yaml
         self.yaml_override = yaml_override
+        self.param_grid_id = param_grid_id
         self.__ctx_token: Optional[Token[Optional[ExperimentRun]]] = None
 
     def next_run(self) -> Optional[ExperimentRun[T]]:
         """Get the next experiment run to execute, based on the current trial counts and parameter combinations. Returns None if all trials have been completed."""  # noqa: E501
 
         cfg = self.header
-        for study_name, params in cfg.parameters_grid.items():
+        param_grid_id = self.param_grid_id
+        study_names = cfg._study_names()
+
+        if param_grid_id is None:
+            # If param_grid_id is None, find the first parameter combination that has remaining trials to run.
+            for i, study_name in enumerate(study_names):
+                study = cfg.optuna.load_study(study_name, temp_storage=self.header.test_debug)
+                if study.valid_trials_count(only_completed=False) < cfg.n_trials:
+                    param_grid_id = i
+                    break
+            else:
+                return None
+        else:
+            # If param_grid_id is provided, check if it is valid and if there are remaining trials to run
+            if param_grid_id < 0 or param_grid_id >= len(study_names):
+                raise ValueError(
+                    f"Invalid param_grid_id {param_grid_id}. Must be between 0 and {len(study_names) - 1}."
+                )
+            study_name = study_names[param_grid_id]
             study = cfg.optuna.load_study(study_name, temp_storage=self.header.test_debug)
-            if study.valid_trials_count(only_completed=False) < cfg.n_trials:
-                trial = study.ask(fixed_parameters=params)
-                with TrialContext(trial):
-                    run_cfg = self.yaml.validate(self.model)
-                    if self.yaml_override is not None:
-                        run_cfg = run_cfg.model_copy(update=self.yaml_override)
-                    return ExperimentRun(self.header, run_cfg, study, trial, study_name)
+            if study.valid_trials_count(only_completed=False) >= cfg.n_trials:
+                return None
+
+        # Get the next trial with the appropriate fixed parameters
+        trial_name, trial_params = list(cfg.parameters_grid.items())[param_grid_id]
+        trial = study.ask(fixed_parameters=trial_params)
+        with TrialContext(trial):
+            # Parse the model and samples run hyperparameters values according to the current trial
+            run_cfg = self.yaml.validate(self.model)  # <- HyperParam values are sampled by validators in here
+            if self.yaml_override is not None:
+                run_cfg = run_cfg.model_copy(update=self.yaml_override)
+            return ExperimentRun(self.header, run_cfg, study, trial, trial_name)
         return None
 
     def __enter__(self) -> ExperimentRun[T]:
@@ -391,7 +424,7 @@ class ExperimentRun[T: BaseModel]:
     @property
     def trial_name(self) -> str:
         """Get the experiment name for this run, based on the experiment configuration and the parameter combination."""  # noqa: E501
-        return self.header.experiment_name + ("|" + self._trial_name if self._trial_name else "")
+        return self.header.experiment_name + ("__" + self._trial_name if self._trial_name else "")
 
     @property
     def run_id(self) -> int:
@@ -487,6 +520,19 @@ _current_experiment: ContextVar[Optional[ExperimentRun]] = ContextVar("_current_
 ####################################
 class ExpCfgBaseModel(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    @classmethod
+    def __init_subclass__(cls, hyperparams: tuple[str, ...] | None = None, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, hyperparams: tuple[str, ...] | None = None, **kwargs):
+        from .optuna import attach_hyperparameter_validators
+
+        super().__pydantic_init_subclass__(**kwargs)
+
+        attach_hyperparameter_validators(cls, fields=hyperparams)
+        cls.model_rebuild(force=True)
 
     @model_validator(mode="before")
     @classmethod

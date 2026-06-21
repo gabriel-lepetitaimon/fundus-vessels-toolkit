@@ -11,7 +11,7 @@ import typer
 from fundus_vessels_toolkit.utils.nnet.experiment import ExperimentHeader, NoTrialsToRunError
 from train import DigraphGNNTrainerConfig
 
-app = typer.Typer()
+app = typer.Typer(pretty_exceptions_show_locals=False)
 
 EXP = Path("EXP")
 
@@ -65,6 +65,7 @@ def check(file: Annotated[Path, typer.Argument(help="Path to the experiment conf
 def test_run(
     file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to check.")],
     max_epoch: int = 25,
+    config: int = 0,
 ):
     from train import train
 
@@ -152,3 +153,4 @@ def sbatch(
 
 if __name__ == "__main__":
     check(EXP / "0b_gnn_archi.yaml")
+    # app()

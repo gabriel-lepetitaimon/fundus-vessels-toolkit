@@ -13,7 +13,6 @@ from torch_geometric.typing import OptTensor
 from torch_geometric.utils import softmax
 
 from ...utils.nnet.experiment import ExpCfgBaseModel
-from ...utils.nnet.optuna import BoolHyperParam, FloatHyperParam, IntHyperParam, LiteralHyperParam
 from .positionnal_embedding import RoPE, SupportPattern, TransformerConvWithPosEncoding
 
 type SupportPatternOrNone = SupportPattern | Literal["none"]
@@ -33,19 +32,19 @@ class TransformerGCNOpt(ExpCfgBaseModel):
      - "Conv{out}x{heads}[-DropOut]" for a transformer convolution layer with {out} output channels and {heads} attention heads. If "x{heads}" is omitted, it defaults to 1 head. If "-DropOut" is present, dropout with the specified rate will be applied after the convolution.
      """  # noqa: E501
 
-    dropout: FloatHyperParam = Field(default=0.1, ge=0.0, le=1.0)
+    dropout: float = Field(default=0.1, ge=0.0, le=1.0)
     """Dropout rate to apply after convolution layers that have the "-DropOut" suffix in the architecture string."""
 
-    bipolar_node: BoolHyperParam = Field(default=True)
+    bipolar_node: bool = Field(default=True)
     """Whether to use bipolar nodes extending the state of every node with two additional feature vectors representing their two poles. If True, the model will use BipolarTransformerConv layers and the output dimension will be split between nodes and poles features."""  # noqa: E501
 
-    total_out_features: IntHyperParam = Field(default=512, ge=1)
+    total_out_features: int = Field(default=512, ge=1)
     """The total number of output features for the GNN. If bipolar_node is False, this will be the dimension of the node features output by the GNN. If bipolar_node is True, this will be the sum of the dimensions of the node features and the two pole features output by the GNN."""  # noqa: E501
 
-    pole_features_ratio: FloatHyperParam = Field(default=0.5, ge=0.0, le=1.0)
+    pole_features_ratio: float = Field(default=0.5, ge=0.0, le=1.0)
     """Ratio of the number of features dedicated to pole over the total number of features (including both pole and node). Only relevant if bipolar_node is True. For example, if total_n_out=100 and pole_features_ratio=0.66, then 66 features will be dedicated to poles (33 for each) and 33 features will be dedicated to nodes."""  # noqa: E501
 
-    pos_encoding: Annotated[SupportPatternOrNone, LiteralHyperParam(SupportPatternOrNone)] = Field(default="spiral")
+    pos_encoding: SupportPatternOrNone = Field(default="spiral")
     """The type of positional encoding to use. If "none", no positional encoding will be used. Otherwise, should be a support pattern supported by RoPESupportPattern, which will be used to compute RoPE positional encodings based on the relative positions of the nodes' poles."""  # noqa: E501
 
     @property

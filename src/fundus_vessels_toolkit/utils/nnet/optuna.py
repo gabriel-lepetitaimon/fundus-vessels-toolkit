@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import re
+import typing
 from abc import abstractmethod
 from contextvars import ContextVar, Token
 from pathlib import Path
-from typing import Annotated, Any, Callable, Literal, Optional, Self, get_args
+from typing import Annotated, Any, Callable, Literal, Optional, Self
 
 import optuna
 import yaml
@@ -275,6 +276,50 @@ class OptunaStudy(optuna.study.Study):
 ##############################################################################################################
 # === OPTUNA / PYDANTIC HYPERPARAMETERS ===
 ##############################################################################################################
+def attach_hyperparameter_validators(cls, fields: tuple[str, ...] | None = None):
+    """Attach Optuna hyperparameter parsing validators to the fields of a Pydantic model class based on the field annotations. This function modifies the field annotations in-place to add BeforeValidators that parse hyperparameter search space strings into actual hyperparameter values using the current Optuna trial context."""  # noqa: E501
+    infer_hyperparams = fields is None
+    if infer_hyperparams:
+        fields = tuple(cls.model_fields.keys())
+
+    if fields:
+        # 1. Assign each fields to its type group
+        for param in fields:
+            if param not in cls.model_fields:
+                raise ValueError(f"Hyperparameter '{param}' is not defined as a field in the model.")
+            field_info = cls.model_fields[param]
+            param_type = extract_type(field_info.annotation)
+
+            if param_type is bool:
+                field_info.annotation = Annotated[
+                    bool, BeforeValidator(optuna_parse_bool, json_schema_input_type=bool | BoolSearchSpace)
+                ]  # type: ignore
+            elif param_type is int:
+                field_info.annotation = Annotated[
+                    int, BeforeValidator(optuna_parse_int, json_schema_input_type=int | IntSearchSpace)
+                ]  # type: ignore
+            elif param_type is float:
+                field_info.annotation = Annotated[
+                    float, BeforeValidator(optuna_parse_float, json_schema_input_type=float | FloatSearchSpace)
+                ]  # type: ignore
+            elif (literals := extract_literals(param_type)) is not None:
+                literal_re = literal_pattern(literals)
+                pattern = rf"^({literal_re})(\s*{ENUM_SYMBOL}\s*({literal_re}))*$"
+                field_info.annotation = Annotated[
+                    param_type,
+                    BeforeValidator(
+                        optuna_parse_literal,
+                        json_schema_input_type=param_type | Annotated[str, StringConstraints(pattern=pattern)],
+                    ),
+                ]  # type: ignore
+
+            elif not infer_hyperparams:
+                raise TypeError(
+                    f"Unsupported type for hyperparameter '{param}'. "
+                    "Only bool, int, float and literal types are supported."
+                )
+
+
 _current_trial: ContextVar[Optional[Trial]] = ContextVar("current_trial", default=None)
 
 
@@ -315,7 +360,6 @@ ENUM_SYMBOL = "~"
 def optuna_parse_int(value: int | IntSearchSpace, info: ValidationInfo):
     if not isinstance(value, str):
         return value
-
     if info.field_name is None:
         raise ValueError("Field name must be provided in ValidationInfo for optuna_parse_int.")
 
@@ -331,7 +375,7 @@ def optuna_parse_int(value: int | IntSearchSpace, info: ValidationInfo):
 
 
 type IntSearchSpace = Annotated[str, StringConstraints(pattern=r"^(\+|-)?\d+(:|~)(\+|-)?\d+(?:(:|~)(\+|-)?\d+)?$")]
-type IntHyperParam = Annotated[int, BeforeValidator(optuna_parse_int, json_schema_input_type=int | IntSearchSpace)]
+# type IntHyperParam = Annotated[int, BeforeValidator(optuna_parse_int, json_schema_input_type=int | IntSearchSpace)]
 """
 An integer field accepting either a fixed integer or a string describing an integer search space. 
 Search space is defined as "low:high" for uniform sampling or "low~high" for log-uniform sampling.
@@ -352,9 +396,9 @@ def optuna_parse_float(value: float | FloatSearchSpace, info: ValidationInfo):
 type FloatSearchSpace = Annotated[
     str, StringConstraints(pattern=r"^\d+(\.\d+)?(e[+-]?\d+)?(:|~)\d+(\.\d+)?(e[+-]?\d+)?$")
 ]
-type FloatHyperParam = Annotated[
-    float, BeforeValidator(optuna_parse_float, json_schema_input_type=float | FloatSearchSpace)
-]
+# type FloatHyperParam = Annotated[
+#     float, BeforeValidator(optuna_parse_float, json_schema_input_type=float | FloatSearchSpace)
+# ]
 """
 A float field accepting either a fixed float or a string describing a float search space.
 Search space is defined as "low:high" for uniform sampling or "low~high" for log-uniform sampling.
@@ -364,7 +408,6 @@ Search space is defined as "low:high" for uniform sampling or "low~high" for log
 def optuna_parse_bool(value: bool | BoolSearchSpace, info: ValidationInfo):
     if not isinstance(value, str):
         return value
-
     if info.field_name is None:
         raise ValueError("Field name must be provided in ValidationInfo for optuna_parse_bool.")
 
@@ -376,7 +419,7 @@ def optuna_parse_bool(value: bool | BoolSearchSpace, info: ValidationInfo):
 type BoolSearchSpace = Annotated[
     str, StringConstraints(pattern=r"^(?:([tT]rue\s*\|\s*[fF]alse)|([fF]alse\s*\|\s*[tT]rue))$")
 ]
-type BoolHyperParam = Annotated[bool, BeforeValidator(optuna_parse_bool, json_schema_input_type=bool | BoolSearchSpace)]
+# type BoolHyperParam =
 """
 A boolean field accepting either a fixed boolean or a string describing a boolean search space. 
 Search space is defined as "low:high" for uniform sampling or "low~high" for log-uniform sampling.
@@ -404,62 +447,75 @@ def optuna_parse_literal(literal_type, to_list: bool = False):
                 values_.append(adapter.validate_python(v))
             except ValidationError as e:
                 raise ValueError(
-                    f"Invalid value in search space: {v}. Valid values are list of: {literal_pattern(literal_type)}"
+                    f"Invalid value in search space: {v}. Valid values are list of: {extract_literals(literal_type)}"
                 ) from None
         return values_[current_trial().suggest_int(info.field_name, 0, len(values_) - 1)]
 
     return parser
 
 
-def literal_pattern(literal_type) -> str:
-    literals = get_args(literal_type)
-    while literals == ():
-        if hasattr(literal_type, "__value__"):
-            literal_type = literal_type.__value__
-            literals = get_args(literal_type)
-        else:
-            break
-    literals = list(literals)
+def literal_pattern(literals) -> str:
     if None in literals:
         literals = [v for v in literals if v is not None] + ["null"]
     return "|".join(re.escape(str(v)) for v in literals)
 
 
-class _LiteralSearchSpace:
-    @classmethod
-    def pattern(cls, literal_type) -> str:
-        literal_re = literal_pattern(literal_type)
-        return rf"({literal_re})(\s*{ENUM_SYMBOL}\s*({literal_re}))*"
+def extract_literals(literal_type) -> list[Any] | None:
+    literal_type = extract_type(literal_type)
+    if (origin := typing.get_origin(literal_type)) is not None:
+        if origin is typing.Literal:
+            return list(typing.get_args(literal_type))
+        if origin is typing.Union:
+            union_literals = []
+            for t in typing.get_args(literal_type):
+                literals = extract_literals(t)
+                if literals is None:
+                    return None
+                union_literals.extend(literals)
+            return union_literals
+    return None
 
-    def __class_getitem__(cls, T):
-        return Annotated[str, StringConstraints(pattern=rf"^{cls.pattern(T)}$")]
+
+def extract_type(type_):
+    """Recursively extract the base type from a potentially nested Annotated or alias type."""
+    if hasattr(type_, "__value__"):
+        return extract_type(type_.__value__)
+    if (origin := typing.get_origin(type_)) is not None:
+        if origin is typing.Annotated:
+            return extract_type(typing.get_args(type_)[0])
+        if origin is typing.Union and len(union := typing.get_args(type_)) == 1:
+            return extract_type(union[0])
+    return type_
 
 
-def LiteralHyperParam(literal_type):
-    """Annotation for a hyperparameter that can be either a fixed literal value or a string describing a categorical search space.
-    Search space is defined as "value1~value2~value3" for categorical sampling.
+# def LiteralHyperParam(literal_type):
+#     """Annotation for a hyperparameter that can be either a fixed literal value or a string describing a categorical search space.
+#     Search space is defined as "value1~value2~value3" for categorical sampling.
 
-    Parameters
-    ----------
-    literal_type :
-        Literal type defining the allowed fixed values for the hyperparameter.
+#     Parameters
+#     ----------
+#     literal_type :
+#         Literal type defining the allowed fixed values for the hyperparameter.
 
-    Examples
-    --------
-    >>> CustomLiteral = Literal["a", "b", None]
-    >>> test_version: Annotated[CustomLiteral, LiteralHyperParam(CustomLiteral)] = Field(default=None)
+#     Examples
+#     --------
+#     >>> CustomLiteral = Literal["a", "b", None]
+#     >>> test_version: Annotated[CustomLiteral, LiteralHyperParam(CustomLiteral)] = Field(default=None)
 
-    """  # noqa: E501
-    return BeforeValidator(
-        optuna_parse_literal(literal_type),
-        json_schema_input_type=literal_type | _LiteralSearchSpace[literal_type],
-    )
+#     """  # noqa: E501
+#     return BeforeValidator(
+#         optuna_parse_literal(literal_type),
+#         json_schema_input_type=literal_type | _LiteralSearchSpace[literal_type],
+#     )
 
 
 class _ListLiteralSearchSpace:
     @classmethod
     def pattern(cls, literal_type) -> str:
-        literal_re = literal_pattern(literal_type)
+        literals = extract_literals(literal_type)
+        if literals is None:
+            raise TypeError("Literal type expected for _ListLiteralSearchSpace.")
+        literal_re = literal_pattern(literals)
         array_re = rf"\s*\[\s*({literal_re})\s*(?:,\s*({literal_re})\s*)*\]"
         return rf"({array_re})(\s*{ENUM_SYMBOL}\s*({array_re}))*"
 
@@ -489,6 +545,9 @@ def ListLiteralHyperParam(literal_type):
     )
 
 
+_BoolHyperParam = Annotated[bool, BeforeValidator(optuna_parse_bool, json_schema_input_type=bool | BoolSearchSpace)]
+
+
 def BoolDefaultValidator[T](return_type: type[T], default_factory: Optional[Callable[[], T]] = None) -> BeforeValidator:
     def validator(value: T | bool, info: ValidationInfo) -> Optional[T]:
         if isinstance(value, str):
@@ -501,4 +560,4 @@ def BoolDefaultValidator[T](return_type: type[T], default_factory: Optional[Call
             return None
         return value
 
-    return BeforeValidator(validator, json_schema_input_type=BoolHyperParam | Optional[return_type])
+    return BeforeValidator(validator, json_schema_input_type=_BoolHyperParam | Optional[return_type])
