@@ -7,17 +7,17 @@ n_trials: 20
 optuna:
   direction: maximize
   sampler:
-    type: TPE
-    n_startup_trials: 8
+    type: GP
+    n_startup_trials: 6
   pruner:
     type: Median
-    n_startup_trials: 8
+    n_startup_trials: 6
 
 log_model: false
 parameters_grid: 
-  - bipole-long: 
-      archi: InstNorm Conv64x8-DropOut InstNorm Conv128x8-DropOut Conv256x4 Conv128x8 Conv256x4 Conv128x8 Conv256x4 Conv512x2
-      bipole: true
+  # - bipole-long: 
+  #     archi: InstNorm Conv64x8-DropOut InstNorm Conv128x8-DropOut Conv256x4 Conv128x8 Conv256x4 Conv128x8 Conv256x4 Conv512x2
+  #     bipole: true
   - bipole-short: 
       archi: InstNorm Conv64x8-DropOut InstNorm Conv128x8 Conv256x4 Conv512x2
       bipole: true

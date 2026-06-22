@@ -45,8 +45,21 @@ class TPESamplerCfg(BaseSamplerCfg):
     n_startup_trials: int = Field(default=4)
     """Number of startup trials for the TPE sampler. Default is 4."""
 
+    n_ei_candidates: int = Field(default=8)
+    """Number of candidates for the expected improvement in the TPE sampler. Default is 8."""
+
     def create_sampler(self) -> optuna.samplers.TPESampler:
-        return optuna.samplers.TPESampler(n_startup_trials=self.n_startup_trials)
+        return optuna.samplers.TPESampler(n_startup_trials=self.n_startup_trials, n_ei_candidates=self.n_ei_candidates)
+
+
+class GPSamplerCfg(BaseSamplerCfg):
+    type: Literal["GP"] = "GP"
+
+    n_startup_trials: int = Field(default=4)
+    """Number of startup trials for the GP sampler. Default is 4."""
+
+    def create_sampler(self) -> optuna.samplers.GPSampler:
+        return optuna.samplers.GPSampler(n_startup_trials=self.n_startup_trials)
 
 
 class RandomSamplerCfg(BaseSamplerCfg):
@@ -66,8 +79,10 @@ class NSGASamplerCfg(BaseSamplerCfg):
         return optuna.samplers.NSGAIIISampler()
 
 
-SAMPLER_NAME = Literal["TPE", "Random", "NSGA"]
-type AnySamplerCfg = Annotated[TPESamplerCfg | RandomSamplerCfg | NSGASamplerCfg, Field(discriminator="type")]
+SAMPLER_NAME = Literal["TPE", "Random", "NSGA", "GP"]
+type AnySamplerCfg = Annotated[
+    TPESamplerCfg | RandomSamplerCfg | NSGASamplerCfg | GPSamplerCfg, Field(discriminator="type")
+]
 
 
 def samplers_by_name(sampler_type):
@@ -80,6 +95,8 @@ def samplers_by_name(sampler_type):
             return RandomSamplerCfg()
         case "NSGA":
             return NSGASamplerCfg()
+        case "GP":
+            return GPSamplerCfg()
     raise ValueError(f"Unsupported sampler type: {sampler_type}")
 
 

@@ -182,7 +182,7 @@ class ExperimentHeader(BaseModel):
             if study_name in existing_studies:
                 study = self.optuna.load_study(study_name)
                 counts[i] = study.valid_trials_count(only_completed=only_completed)
-        return counts if split_by_parameters else sum(counts)
+        return counts if split_by_parameters else int(sum(counts))
 
     @overload
     def trials_to_run(self, *, split_by_parameters: Literal[False] = False, ignore_running: bool = False) -> int: ...
@@ -190,9 +190,9 @@ class ExperimentHeader(BaseModel):
     def trials_to_run(self, *, split_by_parameters: Literal[True], ignore_running: bool = False) -> Int1DArray: ...
     def trials_to_run(self, *, split_by_parameters: bool = False, ignore_running: bool = False) -> int | Int1DArray:
         """Number of trials left to run for this experiment. If split_by_parameters is True, returns a list of counts for each parameter combination."""  # noqa: E501
-        c = self.current_trials_count(split_by_parameters=False, only_completed=ignore_running)
-        c = np.clip(self.n_trials - c, 0, None)
-        return c if split_by_parameters else c.sum()
+        c: Int1DArray = self.current_trials_count(split_by_parameters=True, only_completed=ignore_running)
+        c = np.clip(self.n_trials - c, 0, None, dtype=int)
+        return c if split_by_parameters else int(c.sum())
 
     @computed_field
     @cached_property
@@ -309,7 +309,7 @@ class ExperimentHeader(BaseModel):
                 console.print(
                     f"[yellow][bold]Warning:[/bold] All trials for this experiment have already been completed. No remaining trials to run for experiment defined in {file}.[/yellow]"  # noqa: E501
                 )
-        return ExperimentRunFactory(header, yaml_doc, model, override)
+        return ExperimentRunFactory(header, yaml_doc, model, override, param_grid_id=param_grid_id)
 
 
 class ExperimentRunFactory[T: BaseModel]:
