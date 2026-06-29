@@ -89,7 +89,7 @@ def rasterize_branch(
     bridge_gap_smaller_than: float = 2,
 ) -> torch.Tensor:
     """
-    Rasterizes a branch given its curve and boundaries.
+    Rasterize a branch given its curve and boundaries.
 
     Parameters
     ----------
@@ -100,23 +100,18 @@ def rasterize_branch(
     boundaries (torch.Tensor):
         The boundaries of the branch.
 
-    branchID (int):
-        The ID of the branch.
+    out (torch.Tensor | tuple[int, int]):
+        The output tensor or the shape of the output tensor.
 
-    branchRank (float):
-        The rank of the branch.
-
-    branchLabelsMap (torch.Tensor):
-        The map to store branch labels.
-
-    topoMap (torch.Tensor):
-        The topology map to update.
+    fill_value (int):
+        The value to fill the rasterized branch with.
 
     bridge_gap_smaller_than_sqr (float):
         Threshold for bridge gap.
 
     Returns:
-        None
+    torch.Tensor:
+        The map with the rasterized branch.
     """
     if isinstance(out, torch.Tensor):
         assert out.dtype == torch.int32, "The output tensor must be of type torch.int32."

@@ -3866,7 +3866,7 @@ class VGraph:
 
         geodata = self.geometric_data()
         if boundaries is not None:
-            calibre = "tip" if only_tip else False
+            calibre = "tip" if boundaries_only_tip else True
         else:
             calibre = False
         layer = LayerGraph(

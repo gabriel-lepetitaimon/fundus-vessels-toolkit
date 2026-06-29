@@ -27,7 +27,6 @@ from fundus_toolkits.utils.typing import (
     PointArrayLike,
     as_float_pairs,
 )
-
 from fundus_vessels_toolkit.utils.exceptions import CheckReport
 
 from ..utils import if_none
@@ -919,7 +918,7 @@ class VGeometricData:
                         branch_label_map[line(*p0, *p1)] = color
 
             if boundaries:
-                bounds_lr = [_.data.astype(np.int32) for _ in boundaries_data if _.data.size > 0]
+                bounds_lr = [_.data.astype(np.int32) for _ in boundaries_data]
                 bounds_l = [torch.from_numpy(bound[:, 0]) for bound in bounds_lr]
                 bounds_r = [torch.from_numpy(bound[:, 1]) for bound in bounds_lr]
                 empty = torch.empty(0, 2, dtype=torch.int)
@@ -928,6 +927,27 @@ class VGeometricData:
                 draw_skeleton_labels(bounds_r, branch_label_map_torch, empty, empty, interpolate)
 
         return branch_label_map  # type: ignore
+
+    def branch_label_map(self) -> Int2DArray:
+        """Return a label map of the branches.
+
+        Returns
+        -------
+        np.ndarray
+            An array of the same shape as the image where each pixel is labeled with the id of the branch it belongs to.
+        """
+        from ..utils.rasterization import rasterize_branch
+
+        out: Int2DArray = np.zeros(self.domain.shape, dtype=np.int32)  # type: ignore
+        for i, curve in enumerate(self.branch_curve()):
+            if curve is not None and len(curve) > 0:
+                boundaries = self.branch_data(VBranchGeoData.Fields.BOUNDARIES, i)
+                if boundaries is None:
+                    continue
+
+                rasterize_branch(curve, boundaries.data, out, fill_value=i + 1)
+
+        return out
 
     @overload
     def branch_arc_length(self, graph_ids: int, fast_approximation=True) -> float: ...
