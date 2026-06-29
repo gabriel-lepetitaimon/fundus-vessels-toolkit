@@ -287,12 +287,12 @@ class GNNAVSegToTree(AVSegToTree):
             raise NotImplementedError("Parsing tree of image without optic disc is not implemented.")
         graph = self.to_vgraph(fundus, simplify=True)
         line_digraph = self.build_line_digraph(graph, fundus, inplace=True)
-        tree = line_digraph.optimize_tree()
+        tree = line_digraph.optimize_tree(assign_av="subtree", fix_major_av_error=True, fix_branch_skip=False)
         return self.split_av_tree(tree)
 
     def graph_to_tree(self, graph: VGraph, fundus: FundusData) -> tuple[VTree, VTree]:
         line_digraph = self.build_line_digraph(graph, fundus, inplace=False)
-        tree = line_digraph.optimize_tree(assign_av="subtree", detect_major_av_error=True)
+        tree = line_digraph.optimize_tree(assign_av="subtree", fix_major_av_error=True, fix_branch_skip=True)
         return self.split_av_tree(tree)
 
     # --- Intermediate steps ---

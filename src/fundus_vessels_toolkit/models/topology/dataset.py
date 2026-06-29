@@ -128,6 +128,10 @@ class SampleInfo:
     def target_topologies(self) -> tuple[Path, Path]:
         return self.art_topology, self.vei_topology
 
+    @property
+    def full_name(self):
+        return self.name if self.dataset == "" else f"{self.dataset}/{self.name}"
+
     def load(
         self,
         image: bool = True,
@@ -137,10 +141,15 @@ class SampleInfo:
         """Load the sample from disk into memory."""
         if image:
             fundus = FundusData(
-                image=self.fundus, roi_specs=self.fundus_roi, od=self.od, macula=self.macula, immutable=True
+                image=self.fundus,
+                roi_specs=self.fundus_roi,
+                od=self.od,
+                macula=self.macula,
+                immutable=True,
+                name=self.name,
             )
         else:
-            fundus = FundusData.empty_like(self.fundus, immutable=True)
+            fundus = FundusData.empty_like(self.fundus, name=self.name, immutable=True)
             fundus._roi_specs = self.fundus_roi
         if self.od_center is not None:
             fundus = fundus.update(od_center=Point(*self.od_center))
@@ -152,7 +161,7 @@ class SampleInfo:
             av_maps = None
 
         return BranchDigraphSample(
-            name=self.name,
+            name=self.full_name,
             fundus=fundus,
             art_topology=TreeTopology.load(self.art_topology, tree=not discard_gt_tree, sparse=True),
             vei_topology=TreeTopology.load(self.vei_topology, tree=not discard_gt_tree, sparse=True),

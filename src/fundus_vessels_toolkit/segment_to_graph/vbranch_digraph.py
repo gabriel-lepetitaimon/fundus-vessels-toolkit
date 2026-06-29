@@ -12,6 +12,7 @@ from networkx import maximum_branching
 
 from fundus_toolkits.utils.typing import (
     Bool1DArray,
+    Bool1DArrayLike,
     Float1DArray,
     Indices,
     IndicesLike,
@@ -22,7 +23,13 @@ from fundus_toolkits.utils.typing import (
 )
 
 from ..utils.cluster import cluster_by_distance
-from ..utils.lookup_array import create_removal_lookup
+from ..utils.lookup_array import (
+    add_empty_to_lookup,
+    complete_lookup,
+    create_removal_lookup,
+    invert_complete_lookup,
+    invert_lookup,
+)
 from ..utils.math import gaussian, sigmoid, softmax
 from ..utils.numpy import np_first_true, np_group_by, np_groupby_mean
 from ..utils.tree import (
@@ -35,6 +42,7 @@ from ..utils.tree import (
 )
 from ..vascular_data_objects import VBranchGeoData, VGraph
 from ..vascular_data_objects.fundus_data import AVLabel
+from ..vascular_data_objects.vgraph import BranchIndicesLike
 from ..vascular_data_objects.vtree import VTree
 from .geometry_parsing import derive_tips_geometry_from_curve_geometry
 from .graph_simplification import find_facing_tips
@@ -294,6 +302,35 @@ class VBranchDigraph(LineDigraph):
             branch_av_logit=self._branch_av_logit,
             graph=self.graph,
             branch_count=self.branch_count,
+        )
+
+    def branch_reindex(self, b_idx: Bool1DArray | Indices) -> Self:
+        """Get a subgraph of the directed graph containing only the lines whose b0 and b1 are in the b_mask and reindex the b0 and b1 indices to match the new branch indices."""  # noqa: E501
+        if b_idx.dtype == np.bool_:
+            assert len(b_idx) == self.branch_count, "b_mask must be of shape (branch_count,)"
+            b_idx_ = np.flatnonzero(b_idx)
+        else:
+            b_idx_ = np.asarray(b_idx, dtype=np.int_)
+        branch_lookup = invert_lookup(b_idx_, max_index=self.branch_count - 1)
+
+        branch_lookup[branch_lookup == -1] = -2
+        branch_lookup = add_empty_to_lookup(branch_lookup, increment_index=False)
+        line_list = self.line_list.copy()
+        line_list[:, 0] = branch_lookup[line_list[:, 0] + 1]
+        line_list[:, 2] = branch_lookup[line_list[:, 2] + 1]
+        line_mask = (line_list[:, 0] != -2) & (line_list[:, 2] != -2)
+
+        return self.__class__(
+            line_list=line_list[line_mask],
+            line_p=self.line_p[line_mask] if self.line_p is not None else None,
+            branch_dir_p=self._branch_dir_p[b_idx_] if self._branch_dir_p is not None else None,
+            branch_fp_p=self._branch_fp_p[b_idx_] if self._branch_fp_p is not None else None,
+            branch_av_p=self._branch_av_p[b_idx_] if self._branch_av_p is not None else None,
+            branch_dir_logit=self._branch_dir_logit[b_idx_] if self._branch_dir_logit is not None else None,
+            branch_fp_logit=self._branch_fp_logit[b_idx_] if self._branch_fp_logit is not None else None,
+            branch_av_logit=self._branch_av_logit[b_idx_] if self._branch_av_logit is not None else None,
+            graph=self.graph.reindex_branches(b_idx_) if self.graph is not None else None,
+            branch_count=len(b_idx_),
         )
 
     # === BRANCH PROPERTIES ===
@@ -1015,8 +1052,10 @@ class VBranchDigraph(LineDigraph):
                 """Get the tail node of a branch, taking into account its direction."""
                 return graph.branch_list[branch_idx, np.where(branch_dir[branch_idx], 0, 1)]
 
+            line_digraph = self
+            if branch_lookup is not None:
+                line_digraph = self.branch_reindex(branch_lookup[1:])
             subtree = tree_connected_components(branch_parents)
-
             for b1, b0 in enumerate(branch_parents):
                 # If branches are not adjacent (namely if the nodes b0_head != b1_tail) ...
                 if b0 != -1 and head(b0) != (b1_tail := tail(b1)):
@@ -1026,10 +1065,10 @@ class VBranchDigraph(LineDigraph):
                     adj_branches = related_branches[related_branches_head == b1_tail]
                     if len(adj_branches):
                         # ... then select the adjacent branch with the highest probability to be the parent of b1
-                        lines_mask = self.search_lines(b0=adj_branches, b1=b1, b_dirs=branch_dir)
-                        adj_branches = self.b0[lines_mask]
+                        lines_mask = line_digraph.search_lines(b0=adj_branches, b1=b1, b_dirs=branch_dir)
+                        adj_branches = line_digraph.b0[lines_mask]
                         if len(adj_branches):
-                            branch_parents[b1] = adj_branches[self.line_p[lines_mask].argmax()]
+                            branch_parents[b1] = adj_branches[line_digraph.line_p[lines_mask].argmax()]
 
         if remove_missing_branch or branch_lookup is None:
             return branch_parents, branch_dir
@@ -1146,7 +1185,8 @@ class VBranchDigraph(LineDigraph):
         keep_missing_branch: bool = False,
         assign_av: Literal["subtree", "branch", False] = False,
         method: DigraphSolver = "approx",
-        detect_major_av_error: bool = False,
+        fix_major_av_error: bool = False,
+        fix_branch_skip: bool = False,
     ) -> VTree:
         """Resolve the directed graph into an arborescence (a directed tree).
 
@@ -1157,7 +1197,7 @@ class VBranchDigraph(LineDigraph):
         """
         # === Solve Optimal Arborescence ===
         branch_parents, branch_dir = self.solve_optimal_arborescence(
-            method=method, fix_major_av_error=detect_major_av_error
+            method=method, fix_major_av_error=fix_major_av_error, fix_branch_skip=fix_branch_skip
         )
         return self.compute_tree_from_arborescence(
             branch_parents,

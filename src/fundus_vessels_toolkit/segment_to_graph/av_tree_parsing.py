@@ -485,10 +485,13 @@ def split_av_graph_by_subtree(
     vei_branches = tree.as_branch_ids(tree.branch_attr[av_attr] == AVLabel.VEI)
     geodata = tree.geometric_data()
 
-    total_calibres = [
-        c.data[np.isfinite(c.data)].sum() if c is not None else 0
-        for c in geodata.branch_data(VBranchGeoData.Fields.CALIBRES)
-    ]
+    if geodata.has_branch_data(VBranchGeoData.Fields.CALIBRES):
+        total_calibres = [
+            c.data[np.isfinite(c.data)].sum() if c is not None else 0
+            for c in geodata.branch_data(VBranchGeoData.Fields.CALIBRES)
+        ]
+    else:
+        total_calibres = geodata.branch_arc_length()
     total_calibres = np.array(total_calibres)
 
     def subtree_av_weight(subtree):
@@ -781,7 +784,7 @@ def naive_infer_roots(
 
     if reorder_branches:
         new_order = [b.id for b in vtree.walk_branches(traversal="dfs")]
-        vtree.reindex_branches(new_order, inverse_lookup=True)
+        vtree.reindex_branches(new_order, inverse_lookup=True, inplace=True)
 
     return vtree
 
