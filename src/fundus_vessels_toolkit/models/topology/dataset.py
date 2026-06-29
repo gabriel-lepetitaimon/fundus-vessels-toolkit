@@ -26,7 +26,7 @@ from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.transform import ResizeTranslation
 from fundus_toolkits.utils.data_io import most_common_image_ext, overwrite_or_newer
 from fundus_toolkits.utils.geometric import Point, Rect
-from fundus_toolkits.utils.typing import Bool1DArray, Int1DArray, Int1DArrayLike
+from fundus_toolkits.utils.typing import Bool1DArray, Bool2DArray, Int1DArray, Int1DArrayLike
 
 from ...pipelines.avseg_to_tree import AVSegToTreeBase, GNNAVSegToTree
 from ...segment_to_graph.graph_simplification import merge_nodes_by_distance, simplify_passing_nodes
@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 GRAPH_EXT, ART_EXT, VEI_EXT = ".npz", "_art.npz", "_vei.npz"
 
 
-@dataclass
+@dataclass(frozen=True)
 class BranchDigraphSample:
     """Data class storing in-memory a sample of a BranchDigraphDataset."""
 
@@ -62,6 +62,11 @@ class BranchDigraphSample:
     vei_topology: TreeTopology
     graphes: dict[str, VGraph]
     _av_maps: dict[str, npt.NDArray] | None = None
+
+    def __post_init__(self):
+        self.fundus._set_immutable_flag(True)
+        self.art_topology.freeze()
+        self.vei_topology.freeze()
 
     @property
     def target_topologies(self) -> tuple[TreeTopology, TreeTopology]:
@@ -84,6 +89,17 @@ class BranchDigraphSample:
             fundus.draw(vessels_on_top=True, view=v)
             draw_graph(self.graphes[g], view=v)
         return m
+
+    def with_fundus(self, fundus: FundusData) -> Self:
+        """Return a new BranchDigraphSample with the given fundus image."""
+        return self.__class__(
+            name=self.name,
+            fundus=fundus.copy(mutable=False),
+            art_topology=self.art_topology,
+            vei_topology=self.vei_topology,
+            graphes=self.graphes,
+            _av_maps=self._av_maps,
+        )
 
 
 type DatasetType = Literal["train", "validation", "test"] | None
@@ -120,9 +136,11 @@ class SampleInfo:
     ) -> BranchDigraphSample:
         """Load the sample from disk into memory."""
         if image:
-            fundus = FundusData(image=self.fundus, roi_specs=self.fundus_roi, od=self.od, macula=self.macula)
+            fundus = FundusData(
+                image=self.fundus, roi_specs=self.fundus_roi, od=self.od, macula=self.macula, immutable=True
+            )
         else:
-            fundus = FundusData.empty_like(self.fundus)
+            fundus = FundusData.empty_like(self.fundus, immutable=True)
             fundus._roi_specs = self.fundus_roi
         if self.od_center is not None:
             fundus = fundus.update(od_center=Point(*self.od_center))
@@ -532,7 +550,7 @@ class SampleSource:
                                 av_map_out_path = output_sample.av_maps[graph_version]
                                 fundus.write_image(av=av_map_out_path, on_exists="overwrite")
                         with watch("av2tree.to_vgraph"):
-                            graph = av2tree.to_vgraph(fundus)
+                            graph = av2tree.to_vgraph(fundus, simplify=False)
 
                     # Remove duplicated branches and nodes, and remove useless attributes
                     with watch("Clean graph"):
@@ -595,6 +613,7 @@ class SampleSource:
                     # Rasterize topologies
                     with watch("Rasterize topologies"):
                         art_topo = TreeTopology.from_tree(trees[0], expand_labels_by=5)
+                    with watch("Rasterize topologies"):
                         vei_topo = TreeTopology.from_tree(trees[1], expand_labels_by=5)
 
                     # Save processed topologies
@@ -653,6 +672,7 @@ class BranchDigraphDataset(PygDataset):
         self.src_path = src_path
         self.samples_info = SampleInfo.decode(src_path)
         self.cfg: BranchDigraphDatasetConfig = cfg or BranchDigraphDatasetConfig()
+        self.__roi_cache: tuple[FundusData.ROISpecs, Bool2DArray] | None = None
 
         if root is None:
             if src_path.is_dir():
@@ -680,14 +700,16 @@ class BranchDigraphDataset(PygDataset):
         else:
             self._preloaded_samples = None
 
-    def preload(self, with_image: bool = False) -> Self:
+    def preload(self, with_image: bool = False, discard_gt_tree: bool = True) -> Self:
         """Preload the samples into memory. If with_image is False, only the graph and topology data will be preloaded, and the fundus images will be loaded on demand when calling get_sample()."""  # noqa: E501
         progress_bar = run.header.progress_bar if (run := ExperimentRun.current()) is not None else True
 
         self._preloaded_samples = [
-            samples_info.load(image=with_image)
+            samples_info.load(image=with_image, discard_gt_tree=discard_gt_tree)
             for samples_info in progress.track(
-                self.samples_info, description="Preloading dataset", disable=not progress_bar
+                self.samples_info,
+                description="Preloading dataset" + (" (without images)" if not with_image else ""),
+                disable=not progress_bar,
             )
         ]
         return self
@@ -882,12 +904,32 @@ class BranchDigraphDataset(PygDataset):
         if isinstance(idx, str):
             idx = [s.name for s in self.samples_info].index(idx)
         if self._preloaded_samples is not None:
-            sample = copy.copy(self._preloaded_samples[idx])
-            if not sample.fundus.has_image:
-                sample.fundus = sample.fundus.update(image=self.samples_info[idx].fundus)
-            return sample
+            sample = self._preloaded_samples[idx]
         else:
-            return self.samples_info[idx].load(discard_gt_tree=discard_gt_tree)
+            sample = self.samples_info[idx].load(discard_gt_tree=discard_gt_tree)
+
+        fundus = sample.fundus
+        if not fundus.has_image:
+            fundus = fundus.update(image=self.samples_info[idx].fundus)
+        if fundus._roi_mask is None:
+            roi_specs = sample.fundus.roi_specs
+            if (
+                self.__roi_cache is None
+                or self.__roi_cache[0].radius != sample.fundus.roi_specs.radius
+                or self.__roi_cache[0].center != sample.fundus.roi_specs.center
+            ):
+                roi_mask = roi_specs.to_mask(sample.fundus.shape, disk_only=True)
+                self.__roi_cache = (roi_specs, roi_mask)
+            else:
+                roi_mask = self.__roi_cache[1]
+            if roi_specs.top or roi_specs.bottom:
+                roi_mask_ = roi_mask
+                roi_mask = np.zeros_like(roi_mask_, dtype=bool)
+                roi_mask[roi_specs.top : roi_specs.bottom, :] = roi_mask_[roi_specs.top : roi_specs.bottom, :]
+            fundus = fundus.update(roi_mask=roi_mask)
+        if fundus is not sample.fundus:
+            sample = sample.with_fundus(fundus)
+        return sample
 
     def list_versions(self) -> list[str]:
         """Return the list of available graph versions in the dataset."""
@@ -1003,7 +1045,9 @@ class BranchDigraphDataset(PygDataset):
         if isinstance(idx, str):
             if version is None:
                 idx, version = idx.split("/", 1)
+            idx = [s.name for s in self.samples_info].index(idx)
 
+        sample_info = self.samples_info[idx]
         sample = self.get_sample(idx, discard_gt_tree=False)
         if gt_digraph is None:
             _, gt_digraph = self.get(idx, return_digraph=True, version=version)
@@ -1011,7 +1055,7 @@ class BranchDigraphDataset(PygDataset):
 
         m = Mosaic(
             3 if show_gt_graph else 2,
-            cols_titles=[f"Reference Topology: {sample.name}", "Predicted Tree"]
+            cols_titles=[f"Reference Topology: {sample_info.dataset}/{sample.name}", "Predicted Tree"]
             + (["GT Tree"] if show_gt_graph else []),
             cell_height=700,
             background=sample.fundus.image,

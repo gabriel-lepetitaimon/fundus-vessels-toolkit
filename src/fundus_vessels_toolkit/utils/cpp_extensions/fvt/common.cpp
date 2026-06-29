@@ -643,10 +643,7 @@ std::list<std::vector<std::size_t>> solve_clusters(const std::list<SizePair>& ed
 /*******************************************************************************************************************
  *             === NEIGHBORS ===
  *******************************************************************************************************************/
-uint8_t count_neighbors(uint8_t neighborhood) {
-    static const uint8_t NIBBLE_LOOKUP[16] = {0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4};
-
-    return NIBBLE_LOOKUP[neighborhood & 0x0F] + NIBBLE_LOOKUP[neighborhood >> 4];
-}
-
-uint8_t roll_neighbors(uint8_t neighborhood, uint8_t n) { return (neighborhood << n) | (neighborhood >> (8 - n)); }
+// constexpr uint8_t count_neighbors(uint8_t neighborhood) {
+//  static const uint8_t NIBBLE_LOOKUP[16] = {0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4};
+//  return NIBBLE_LOOKUP[neighborhood & 0x0F] + NIBBLE_LOOKUP[neighborhood >> 4];
+//}

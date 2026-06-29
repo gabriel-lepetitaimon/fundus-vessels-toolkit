@@ -9,4 +9,6 @@ torch::Tensor vec_bilinear_interpolate(const torch::Tensor& vector_field, const 
 
 Point _vec_bilinear_interpolate(const Tensor3DAcc<float>& vec_acc, const Point& p, const IntPoint& field_size);
 
+torch::Tensor smooth_binary_mask(const torch::Tensor& mask, float sigma = 1.0, const float tol = 1e-3);
+
 #endif  // VECTOR_FIELDS_H

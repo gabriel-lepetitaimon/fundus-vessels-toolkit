@@ -110,3 +110,50 @@ Point _vec_bilinear_interpolate(const Tensor3DAcc<float>& vec_acc, const Point& 
     }
     return Point{out[0], out[1]};
 }
+
+torch::Tensor smooth_binary_mask(const torch::Tensor& mask, float sigma, const float tol) {
+    // Ensure the input is a binary mask
+    TORCH_CHECK_VALUE(mask.dim() == 2, "mask must be a 2D tensor");
+    TORCH_CHECK_VALUE(mask.dtype() == torch::kBool, "mask must be of type uint8 or bool");
+
+    // Create a Gaussian kernel
+    std::list<std::pair<IntPoint, float>> gaussian_kernel;
+    sigma = 2.0 * sigma * sigma;  // Precompute for efficiency
+    float sum = 0.0f;
+    int max_x = 0;
+    for (int y = 1; y <= 3 * sigma; ++y) {
+        for (int x = 1; x <= 3 * sigma; ++x) {
+            float value = std::exp(-(x * x + y * y) / sigma);
+            if (value < tol) continue;  // Skip negligible values
+            gaussian_kernel.emplace_back(IntPoint{y, x}, value);
+            sum += (y == 0 && x == 0) ? value : 2 * value;  // Account for symmetry
+            if (x > max_x) max_x = x;
+        }
+    }
+
+    // Normalize the kernel
+    float inv_sum = 1.0f / (sum * 4 + 1);  // Include the center point
+    for (auto& [point, value] : gaussian_kernel) value *= inv_sum;
+
+    // Apply the Gaussian kernel to the binary mask
+    torch::Tensor smoothed_mask = torch::zeros({mask.size(0) + 2 * max_x, mask.size(1) + 2 * max_x}, torch::kFloat32);
+    auto mask_acc = mask.accessor<bool, 2>();
+    auto smoothed_acc = smoothed_mask.accessor<float, 2>();
+
+    for (int64_t y = 0; y < mask.size(0); ++y) {
+        for (int64_t x = 0; x < mask.size(1); ++x) {
+            if (!mask_acc[y][x]) continue;
+            int yy = static_cast<int>(y) + max_x;
+            int xx = static_cast<int>(x) + max_x;
+            smoothed_acc[yy][xx] += inv_sum;  // Add the center point contribution
+            for (const auto& [offset, value] : gaussian_kernel) {
+                smoothed_acc[yy + offset.y][xx + offset.x] += value;
+                smoothed_acc[yy - offset.y][xx + offset.x] += value;
+                smoothed_acc[yy + offset.y][xx - offset.x] += value;
+                smoothed_acc[yy - offset.y][xx - offset.x] += value;
+            }
+        }
+    }
+
+    return smoothed_mask.squeeze();
+}

@@ -18,6 +18,7 @@ from fundus_toolkits.utils.typing import (
     Int1DArray,
     Int1DArrayLike,
     Int2DArrayLike,
+    as_int_1d,
 )
 
 from ..utils.cluster import cluster_by_distance
@@ -174,40 +175,46 @@ class LineDigraph:
         b: Optional[Int1DArrayLike] = None,
         b0: Optional[Int1DArrayLike] = None,
         b1: Optional[Int1DArrayLike] = None,
+        b_dirs: Optional[Bool1DArray] = None,
     ) -> Bool1DArray:
         """Search for lines in the directed graph based on their b0 and b1 indices.
 
         Parameters
         ----------
         b : Int1DArrayLike, optional
-            A list of branch indices to search for in the b0 and b1 columns.
+            Branch indices to search for in the b0 and b1 columns.
 
         b0 : Int1DArrayLike, optional
-            A list of branch indices to search for in the b0 column.
+            Branch indices to search for in the b0 column.
 
         b1 : Int1DArrayLike, optional
-            A list of branch indices to search for in the b1 column.
+            Branch indices to search for in the b1 column.
+
+        b_dirs : Bool1DArray, optional
+            An array of boolean of size (self.branch_count,) indicating the direction of each branch. If provided, only lines with the correct direction will be returned.
 
         Returns
         -------
         npt.NDArray[np.bool_]
             A boolean array of shape (M,) indicating which lines match the search criteria.
-        """
+        """  # noqa: E501
 
         if b0 is not None or b1 is not None:
             concerned_lines = np.ones(len(self.line_list), dtype=bool)
             if b0 is not None:
-                b0 = np.asarray(b0, dtype=np.int_)
-                concerned_lines &= np.isin(self.b0, b0)
+                concerned_lines &= np.isin(self.b0, as_int_1d(b0))
             if b1 is not None:
-                b1 = np.asarray(b1, dtype=np.int_)
-                concerned_lines &= np.isin(self.b1, b1)
+                concerned_lines &= np.isin(self.b1, as_int_1d(b1))
         else:
             concerned_lines = np.zeros(len(self.line_list), dtype=bool)
 
         if b is not None:
-            b = np.asarray(b, dtype=np.int_)
-            concerned_lines |= np.isin(self.b0b1, b).any(axis=1)
+            concerned_lines |= np.isin(self.b0b1, as_int_1d(b)).any(axis=1)
+
+        if b_dirs is not None:
+            b0b1_dir = self.b0b1_dir
+            concerned_lines &= b0b1_dir[:, 0] == b_dirs[self.b0]
+            concerned_lines &= b0b1_dir[:, 1] == b_dirs[self.b1]
 
         return concerned_lines
 
@@ -545,7 +552,7 @@ class VBranchDigraph(LineDigraph):
         """  # noqa: E501
         if (av_logit := self.branch_av_logit) is None:
             return None
-        return sigmoid(av_logit[self.b0]) * sigmoid(av_logit[self.b1])
+        return sigmoid(av_logit[self.b0] + av_logit[self.b1])
 
     @classmethod
     def has_fp_av_p(cls, instance: Self) -> TypeGuard[_VBranchDigraphWithAVProba]:
@@ -911,7 +918,12 @@ class VBranchDigraph(LineDigraph):
         return max_lines
 
     def solve_optimal_arborescence(
-        self, *, remove_missing_branch=False, detect_major_av_error=False, method: DigraphSolver = "approx"
+        self,
+        *,
+        remove_missing_branch=False,
+        fix_major_av_error=False,
+        fix_branch_skip=False,
+        method: DigraphSolver = "approx",
     ) -> tuple[Int1DArray, Bool1DArray]:
         """Compute the optimal arborescence of the directed graph. Missing branches are ignored in the optimization and can optionally be removed from the output.
 
@@ -961,7 +973,7 @@ class VBranchDigraph(LineDigraph):
             if self.branch_dir_p is None:
                 branch_dir: Bool1DArray = np.ones((self.branch_count,), dtype=np.bool_)
             else:
-                branch_dir = self.branch_dir_p > 0.5
+                branch_dir = self.branch_dir_p > 0.5  # type: ignore
             return branch_parents, branch_dir
 
         if method == "exact":
@@ -976,7 +988,7 @@ class VBranchDigraph(LineDigraph):
                 ignore_branch_dir_in_MSA=dir_p is None,
             )
 
-        if detect_major_av_error and VBranchDigraph.has_fp_av_p(self):
+        if fix_major_av_error and VBranchDigraph.has_fp_av_p(self):
             av_local = 2 - self.branch_av_class()[~fp_branch]
             branch_rank = tree_node_rank(branch_parents)
             cumulative_av = np.zeros_like(branch_rank)
@@ -990,6 +1002,34 @@ class VBranchDigraph(LineDigraph):
             cumulative_av *= np.sign(av_subtree).astype(int)
 
             branch_parents[(cumulative_av < -5) & (cumulative_av[branch_parents] >= 0)] = -1
+
+        if fix_branch_skip:
+            graph = self.graph
+            assert graph is not None, "The graph attribute must be set to fix branch skips"
+
+            def head(branch_idx):
+                """Get the head node of a branch, taking into account its direction."""
+                return graph.branch_list[branch_idx, np.where(branch_dir[branch_idx], 1, 0)]
+
+            def tail(branch_idx):
+                """Get the tail node of a branch, taking into account its direction."""
+                return graph.branch_list[branch_idx, np.where(branch_dir[branch_idx], 0, 1)]
+
+            subtree = tree_connected_components(branch_parents)
+
+            for b1, b0 in enumerate(branch_parents):
+                # If branches are not adjacent (namely if the nodes b0_head != b1_tail) ...
+                if b0 != -1 and head(b0) != (b1_tail := tail(b1)):
+                    # ... and if adjacent branches are related to b1 (part of the same subtree)
+                    related_branches = np.argwhere(subtree == subtree[b1]).flatten()
+                    related_branches_head = head(related_branches)
+                    adj_branches = related_branches[related_branches_head == b1_tail]
+                    if len(adj_branches):
+                        # ... then select the adjacent branch with the highest probability to be the parent of b1
+                        lines_mask = self.search_lines(b0=adj_branches, b1=b1, b_dirs=branch_dir)
+                        adj_branches = self.b0[lines_mask]
+                        if len(adj_branches):
+                            branch_parents[b1] = adj_branches[self.line_p[lines_mask].argmax()]
 
         if remove_missing_branch or branch_lookup is None:
             return branch_parents, branch_dir
@@ -1117,7 +1157,7 @@ class VBranchDigraph(LineDigraph):
         """
         # === Solve Optimal Arborescence ===
         branch_parents, branch_dir = self.solve_optimal_arborescence(
-            method=method, detect_major_av_error=detect_major_av_error
+            method=method, fix_major_av_error=detect_major_av_error
         )
         return self.compute_tree_from_arborescence(
             branch_parents,

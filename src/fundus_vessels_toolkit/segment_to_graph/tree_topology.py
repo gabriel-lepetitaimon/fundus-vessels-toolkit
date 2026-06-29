@@ -12,13 +12,15 @@ from skimage.segmentation import expand_labels
 
 from fundus_toolkits import FundusData
 from fundus_toolkits.utils.geometric import Rect
-from fundus_toolkits.utils.typing import Bool1DArray, Int1DArray
+from fundus_toolkits.utils.typing import Bool1DArray, Bool2DArray, Int1DArray
 
 from ..utils.cluster import reduce_clusters
+from ..utils.cpp_optimized import smooth_binary_mask
 from ..utils.data_io import load_numpy_dict, save_numpy_dict
 from ..utils.lookup_array import invert_complete_lookup
 from ..utils.math import gaussian_kernel2d
 from ..utils.numpy import Sparse2DAccessor, binary_sparse_conv2d, bit_invert
+from ..utils.profiling import watch
 from ..utils.rasterization import draw_lines, rasterize_line, rasterize_topology
 from ..vascular_data_objects.vbranch_geodata import VBranchGeoData
 from ..vascular_data_objects.vgraph import VGraph
@@ -153,47 +155,55 @@ class TreeTopology:
         """
         geodata = tree.geometric_data()
 
-        labels_map, topo_map = rasterize_topology(
-            branch_list=tree.branch_list,
-            branch_tree=tree.branch_tree,
-            branch_dirs=tree.branch_dirs(),
-            curves=geodata.branch_curve(),
-            boundaries=[
-                _.data if _ is not None else np.empty((0, 2, 2), dtype=np.int_)
-                for _ in geodata.branch_data(boundaries_field)
-            ],
-            nodes_yx=geodata.node_coord(),
-            shape=geodata.domain.shape,
-            bezier_interpolate=bezier_interpolate,
-            fill_junctions=fill_junctions,
-        )
+        # TODO: include fuzzy_skeleton rasterization in the C++ rasterize_topology along with expand_labels_by (use fuzzy_skeleton to arbitrate between overlapping branches)  # noqa: E501
+        # TODO: pass branch_mapping as an argument to rasterize_topology
+        with watch("rasterize_cpp"):
+            labels_map, topo_map = rasterize_topology(
+                branch_list=tree.branch_list,
+                branch_tree=tree.branch_tree,
+                branch_dirs=tree.branch_dirs(),
+                curves=geodata.branch_curve(),
+                boundaries=[
+                    _.data if _ is not None else np.empty((0, 2, 2), dtype=np.int_)
+                    for _ in geodata.branch_data(boundaries_field)
+                ],
+                nodes_yx=geodata.node_coord(),
+                shape=geodata.domain.shape,
+                bezier_interpolate=bezier_interpolate,
+                fill_junctions=fill_junctions,
+            )
         if expand_labels_by > 0:
-            labels_map = expand_labels(labels_map, distance=expand_labels_by)
-            topo_map = expand_labels(topo_map, distance=expand_labels_by)
+            with watch("expand_labels"):
+                labels_map = expand_labels(labels_map, distance=expand_labels_by)
+                topo_map = expand_labels(topo_map, distance=expand_labels_by)
 
-        skeleton = tree.geometric_data().skeleton_label_map(connect_nodes=True, interpolate=True) > 0
+        skeleton: Bool2DArray
+        with watch("draw skeleton"):
+            skeleton = tree.geometric_data().skeleton_label_map(connect_nodes=True, interpolate=True) > 0  # type: ignore
 
         if crop_roi is not None:
             labels_map = crop_roi.crop_pad_image(labels_map, origin=-geodata.domain.top_left, copy=False)
             topo_map = crop_roi.crop_pad_image(topo_map, origin=-geodata.domain.top_left, copy=False)
-            skeleton = crop_roi.crop_pad_image(skeleton, origin=-geodata.domain.top_left, copy=False)
+            skeleton = crop_roi.crop_pad_image(skeleton, origin=-geodata.domain.top_left, copy=False)  # type: ignore
 
         if expand_labels_by > 0:
-            terminal_branch, terminal_tip = tree.terminal_tips().T
-            geodata = tree.geometric_data()
-            tip_coord = geodata.tip_coord(terminal_branch, terminal_tip)
-            tip_tan = geodata.tip_tangent(terminal_branch, terminal_tip)
-            draw_lines(tip_coord, tip_coord - (tip_tan * expand_labels_by), skeleton)
+            with watch("expand skeleton"):
+                terminal_branch, terminal_tip = tree.terminal_tips().T
+                geodata = tree.geometric_data()
+                tip_coord = geodata.tip_coord(terminal_branch, terminal_tip)
+                tip_tan = geodata.tip_tangent(terminal_branch, terminal_tip)
+                draw_lines(tip_coord, tip_coord - (tip_tan * expand_labels_by), skeleton)
 
-        gaussian_kernel = gaussian_kernel2d(expand_labels_by / 2 + 4)
-        gaussian_kernel /= gaussian_kernel[gaussian_kernel.shape[0] // 2].sum()  # Normalize so lines sum to 1
-        fuzzy_skeleton_map = binary_sparse_conv2d(skeleton, gaussian_kernel) * (labels_map > 0)
+        with watch("smooth skeleton"):
+            fuzzy_skeleton_map = smooth_binary_mask(skeleton, expand_labels_by / 2 + 4, 1e-2) * (labels_map > 0)
 
-        branch_mapping = branch_topological_mapping(tree)
-        labels_map = branch_mapping[labels_map].astype(TopologicalLabel)
-        tree_opt = dict(tree=tree, branch_mapping=branch_mapping) if not discard_tree else dict()
+        with watch("compute mapping"):
+            branch_mapping = branch_topological_mapping(tree)
+            labels_map = branch_mapping[labels_map].astype(TopologicalLabel)
+            tree_opt = dict(tree=tree, branch_mapping=branch_mapping) if not discard_tree else dict()
 
-        return cls(labels_map, topo_map, fuzzy_skeleton_map, sparse=sparse, **tree_opt)  # type: ignore
+        with watch("create TreeTopology"):
+            return cls(labels_map, topo_map, fuzzy_skeleton_map, sparse=sparse, **tree_opt)  # type: ignore
 
     def save(self, file_path: str | Path, *, on_exists: Literal["raise", "warn", "skip", "overwrite"] = "warn") -> None:
         """Export the tree topology (branch_map, rank_map and fuzzy_skeleton_map)"""
@@ -330,6 +340,21 @@ class TreeTopology:
         topo_map = art_topo.overlay(topo_map, main_color="ART")
         topo_map = vei_topo.overlay(topo_map, main_color="VEI")
         return topo_map
+
+    def freeze(self) -> None:
+        """Freeze the TreeTopology to prevent further modifications."""
+        if isinstance(self._branch_map, Sparse2DAccessor):
+            self._branch_map.freeze()
+        else:
+            self._branch_map.setflags(write=False)
+        if isinstance(self._rank_map, Sparse2DAccessor):
+            self._rank_map.freeze()
+        else:
+            self._rank_map.setflags(write=False)
+        if isinstance(self._fuzzy_skeleton_map, Sparse2DAccessor):
+            self._fuzzy_skeleton_map.freeze()
+        else:
+            self._fuzzy_skeleton_map.setflags(write=False)
 
 
 class DenseTreeTopology(TreeTopology):

@@ -586,13 +586,15 @@ inline bool hit(uint8_t neighborhood, uint8_t positive_mask) { return (neighborh
 
 inline bool miss(uint8_t neighborhood, uint8_t negative_mask) { return (neighborhood & negative_mask) == 0; }
 
-inline bool hit_and_miss(uint8_t neighborhood, uint8_t positive_mask, uint8_t negative_mask) {
+constexpr inline bool hit_and_miss(uint8_t neighborhood, uint8_t positive_mask, uint8_t negative_mask) {
     return (neighborhood & positive_mask) == positive_mask && (neighborhood & negative_mask) == 0;
 }
 
-uint8_t count_neighbors(uint8_t neighborhood);
+constexpr inline uint8_t count_neighbors(uint8_t neighborhood) { return __builtin_popcount(neighborhood); }
 
-uint8_t roll_neighbors(uint8_t neighborhood, uint8_t n);
+inline uint8_t roll_neighbors(uint8_t neighborhood, uint8_t n) {
+    return (neighborhood << n) | (neighborhood >> (8 - n));
+}
 
 /**
  * @brief Read the value of the 8 neighbors of a pixel in a binary image.

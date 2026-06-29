@@ -1,5 +1,6 @@
 from ast import List
 from enum import auto
+from typing import Literal
 
 import numpy as np
 import torch
@@ -45,3 +46,21 @@ def discontiguous_index(curve) -> list[int]:
 def split_by(array, key, n=-1):
     assert array.shape == key.shape and array.ndim == 1, "Only 1D arrays of the same shape are supported"
     return fvt_cpp.split_by(array.cpu().int(), key.cpu().int(), int(n))
+
+
+@autocast_torch
+def smooth_binary_mask(
+    mask: torch.Tensor, sigma: float = 1.0, tol: float = 1e-3, mode: Literal["full", "safe", "same"] = "same"
+) -> torch.Tensor:
+    """Smooth a binary mask with a Gaussian kernel."""
+    assert mask.ndim == 2, "Only 2D masks are supported"
+    assert mask.dtype == torch.bool, "Mask must be of type torch.bool"
+    smooth_mask = fvt_cpp.smooth_binary_mask(mask, float(sigma), float(tol))
+    if mode == "full":
+        return smooth_mask
+    H, W = smooth_mask.shape
+    p = (H - mask.shape[0]) // 2
+    if mode == "same":
+        return smooth_mask[p : H - p, p : W - p]
+    elif mode == "safe":
+        return smooth_mask[2 * p : H - 2 * p, 2 * p : W - 2 * p]

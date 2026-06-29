@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import math
 from contextvars import ContextVar
 from pathlib import Path
@@ -195,6 +196,7 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
             batch_size=hdw_cfg.test_batch_size,
             num_workers=hdw_cfg.test_num_workers,
         )
+        gc.freeze()
 
         # Setup the logger and trainer
         n_step_per_epoch = math.ceil(len(train_loader) / grad_acc)

@@ -779,6 +779,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // === Skeleton.h ===
     m.def("detect_skeleton_nodes", &detect_skeleton_nodes, "Detect junctions and endpoints in a skeleton.");
     m.def("detect_skeleton_nodes_debug", &detect_skeleton_nodes_debug, "Detect junctions and endpoints in a skeleton.");
+    m.def("skeletonize", &skeletonize, "Skeletonize a binary image.");
+    m.def("skeletonize_av", &skeletonize_av, "Skeletonize a uint8 image of AV labels.");
 
     // === Branch.h ===
     m.def("find_branch_endpoints", &find_branch_endpoints, "Find the first and last endpoint of each branch.");
@@ -820,4 +822,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // === vector_fields.h ===
     m.def("vec_bilinear_interpolate", &vec_bilinear_interpolate, "Bilinear interpolation of a vector field.");
     m.def("inverse_displacement", &inverse_displacement, "Inverse vector displacement at given sample coordinates.");
+    m.def("smooth_binary_mask", &smooth_binary_mask, "Smooth a binary mask with a Gaussian kernel.");
 }

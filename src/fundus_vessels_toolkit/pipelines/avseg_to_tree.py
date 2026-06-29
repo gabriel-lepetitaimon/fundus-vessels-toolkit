@@ -67,6 +67,7 @@ class AVSegToTreeBase(metaclass=ABCMeta):
         *,
         av: npt.NDArray[np.uint8] | torch.Tensor | str | Path | EllipsisType = ...,
         od: npt.NDArray[np.bool_] | torch.Tensor | str | Path | EllipsisType = ...,
+        simplify: bool = True,
     ) -> VGraph: ...
 
 
