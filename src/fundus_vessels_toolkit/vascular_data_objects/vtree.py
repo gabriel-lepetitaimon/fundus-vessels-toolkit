@@ -1544,7 +1544,9 @@ class VTree(VGraph):
     ####################################################################################################################
     #  === TREE MANIPULATION ===
     ####################################################################################################################
-    def reindex_branches(self, indices: Int1DArrayLike | Mapping[int, int], inverse_lookup=False) -> VTree:
+    def reindex_branches(
+        self, indices: Int1DArrayLike | Mapping[int, int], inverse_lookup=False, inplace=False
+    ) -> VTree:
         """Reindex the branches of the tree.
 
         Parameters
@@ -1569,15 +1571,15 @@ class VTree(VGraph):
         indices = complete_lookup(indices, max_index=self.branch_count - 1)
         if inverse_lookup:
             indices = invert_complete_lookup(indices)
-
-        super().reindex_branches(indices, inverse_lookup=False)
-        self._branch_tree[indices] = self._branch_tree
-        if self._branch_dir is not None:
-            self._branch_dir[indices] = self._branch_dir
+        tree = self.copy() if not inplace else self
+        super(VTree, tree).reindex_branches(indices, inverse_lookup=False, inplace=True)
+        tree._branch_tree[indices] = tree._branch_tree
+        if tree._branch_dir is not None:
+            tree._branch_dir[indices] = tree._branch_dir
 
         indices = add_empty_to_lookup(indices, increment_index=False)
-        self._branch_tree = indices[self.branch_tree + 1]
-        return self
+        tree._branch_tree = indices[tree._branch_tree + 1]
+        return tree
 
     def reindex_nodes(
         self, indices: Int1DArrayLike | Mapping[int, int], *, inverse_lookup=False, inplace=False
@@ -1605,7 +1607,7 @@ class VTree(VGraph):
             The modified tree.
         """
         tree = self.copy() if not inplace else self
-        super(tree.__class__, tree).reindex_nodes(indices, inverse_lookup=inverse_lookup, inplace=True)  # type: ignore
+        super(VTree, tree).reindex_nodes(indices, inverse_lookup=inverse_lookup, inplace=True)  # type: ignore
         return tree
 
     def append(self, other: VGraph, *, inplace=False) -> Self:

@@ -2340,7 +2340,9 @@ class VGraph:
                 branch_ref._node_ids = indices[branch_ref._node_ids]  # type: ignore
         return graph
 
-    def reindex_branches(self, indices: Int1DArrayLike | Mapping[int, int], inverse_lookup=False) -> Self:
+    def reindex_branches(
+        self, indices: Int1DArrayLike | Mapping[int, int], inverse_lookup=False, inplace=False
+    ) -> Self:
         """Reindex the branches of the graph.
 
         Parameters
@@ -2354,6 +2356,9 @@ class VGraph:
             - If True, indices is sorted by new indices and contains the old one: indices[new_index] -> old_index.
 
             By default: False.
+
+        inplace : bool, optional
+            If True, the graph is modified in place. Otherwise (by default), a modified copy of the graph is returned.
 
         Returns
         -------
@@ -2379,6 +2384,7 @@ class VGraph:
         [[0, 1], [1, 2], [2, 3], [3, 4]]
 
         """
+        graph = self if inplace else self.copy()
         if isinstance(indices, Mapping):
             indices = lookup_from_mapping(indices, self.branch_count)
         indices = complete_lookup(indices, max_index=self.branch_count - 1)
@@ -2386,22 +2392,22 @@ class VGraph:
             indices = invert_complete_lookup(indices)
 
         # Update branches indices in ...
-        self._branch_list[indices, :] = self._branch_list.copy()  # ... branch list
-        if self._branch_attr is not None:
-            self._branch_attr = self._branch_attr.set_index(indices).reindex(
-                pd.RangeIndex(self.branch_count), copy=False
+        graph._branch_list[indices, :] = graph._branch_list.copy()  # ... branch list
+        if graph._branch_attr is not None:
+            graph._branch_attr = graph._branch_attr.set_index(indices).reindex(
+                pd.RangeIndex(graph.branch_count), copy=False
             )  # ... branches attributes
-        for gdata in self._geometric_data:
+        for gdata in graph._geometric_data:
             gdata._reindex_branches(indices)
 
         # Update branches indices in ...
         indices = add_empty_to_lookup(indices, increment_index=False)  # Insert -1 in lookup for missing branches
-        for branch_ref in self._branch_refs:  # ... branches references
+        for branch_ref in graph._branch_refs:  # ... branches references
             branch_ref._id = indices[branch_ref._id + 1]
-        for node_ref in self._node_refs:  # ... incident branches stored in nodes references
+        for node_ref in graph._node_refs:  # ... incident branches stored in nodes references
             if node_ref._ibranch_ids is not None:
                 node_ref._ibranch_ids = indices[node_ref._ibranch_ids + 1]
-        return self
+        return graph
 
     def flip_branch_direction(self, branch_id: BranchIndicesLike, inplace=False) -> Self:
         """Flip the direction of the branches in the graph.

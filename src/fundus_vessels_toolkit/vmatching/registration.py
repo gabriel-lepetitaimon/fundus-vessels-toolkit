@@ -425,7 +425,7 @@ class TreeRegistrationResult:
                 branch_lookup += [np.stack([list(bs), np.full(len(bs), i)], axis=1)]
             branch_lookup = np.concatenate(branch_lookup, axis=0)
 
-            tree = tree.reindex_branches(branch_lookup[:, 0], inverse_lookup=True)
+            tree = tree.reindex_branches(branch_lookup[:, 0], inverse_lookup=True, inplace=True)
             tree = tree.delete_branch(np.arange(len(branch_lookup), tree.branch_count))
 
             nodes_to_fuse, incident_branches = tree.passing_nodes_with_branch_index(exclude_loop=True)
