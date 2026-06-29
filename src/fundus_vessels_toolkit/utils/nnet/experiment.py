@@ -146,7 +146,7 @@ class ExperimentHeader(BaseModel):
     optuna: OptunaCfg = Field(default_factory=OptunaCfg)
     """Optuna configuration for hyperparameter optimization."""
 
-    progress_bar: bool = Field(default=True)
+    progress_bar: bool = Field(default=False)
     """Whether to show a progress bar during training. This can be set to False to reduce console output when running many trials."""  # noqa: E501
 
     verbose: bool = Field(default=True)

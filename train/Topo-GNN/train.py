@@ -10,6 +10,7 @@ import psutil
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
+import wandb
 from lightning_fabric.plugins.precision.precision import _PRECISION_INPUT_STR
 from pydantic import BaseModel, ConfigDict, Field
 from pytorch_lightning.callbacks import ModelCheckpoint
@@ -17,7 +18,6 @@ from torch_geometric.loader import DataLoader as PyGDataLoader
 from torchmetrics import MetricCollection, Specificity
 from torchmetrics.classification import Accuracy, Precision, Recall
 
-import wandb
 from fundus_vessels_toolkit.models.metrics.tree import (
     MetricCollectionDict,
     ParentAcc,
