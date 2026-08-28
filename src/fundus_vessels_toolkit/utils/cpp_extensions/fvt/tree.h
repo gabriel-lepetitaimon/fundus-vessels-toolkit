@@ -14,9 +14,8 @@ inline int32_t get_subtree(const TopoLabel& label) { return static_cast<int32_t>
 TopoLabel parent(const TopoLabel& label);
 uint64_t branching_bit_mask(const uint8_t& rank);
 bool is_ancestor(const TopoLabel& ancestor, const TopoLabel& descendant, const bool& strict = false);
-bool is_between(const TopoLabel& label, const TopoLabel& start, const TopoLabel& end, const bool& strict = false,
-                const float& rank = -1, const float& start_rank = -1, const float& end_rank = -1,
-                bool strict_rank = true);
+bool is_between(const TopoLabel& label, const TopoLabel& start, const TopoLabel& end, const float& rank,
+                const float& start_rank, const float& end_rank, bool strict_start = true, bool strict_end = true);
 
 std::array<torch::Tensor, 5> read_branches_topology(const std::vector<torch::Tensor>& branch_curves,
                                                     const IntPair& domain, const torch::Tensor& topo_idxs,
@@ -24,7 +23,7 @@ std::array<torch::Tensor, 5> read_branches_topology(const std::vector<torch::Ten
                                                     const torch::Tensor& fuzzy_skeleton, float min_rank_threshold,
                                                     float max_rank_tolerance);
 
-std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 2>> read_branch_topology(
+std::tuple<TopoLabel, float, float, int, std::array<TopoLabel, 2>, std::array<float, 2>> read_branch_topology(
     const Tensor2DAcc<int32_t>& curve, const IntPair& domain, const Tensor2DAcc<uint32_t>& topo_idxs,
     const Tensor1DAcc<TopoLabel>& topo_labels, const Tensor1DAcc<float>& topo_ranks,
     const Tensor1DAcc<at::Half>& fuzzy_skeleton, float min_rank_threshold, float max_rank_tolerance, int b_id);

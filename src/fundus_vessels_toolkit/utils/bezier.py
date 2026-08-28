@@ -37,11 +37,12 @@ class BezierCubic(NamedTuple):
         if self.p0.is_nan() or self.c0.is_nan() or self.c1.is_nan() or self.p1.is_nan():
             return ""
         oy, ox = offset if offset is not None else (0, 0)
-        return (
+        path = (
             f"M {self.p0.x - ox},{self.p0.y - oy} "
             f"C {self.c0.x - ox},{self.c0.y - oy} {self.c1.x - ox},{self.c1.y - oy} "
             f"{self.p1.x - ox},{self.p1.y - oy}"
         )
+        return path
 
     def to_array(self) -> npt.NDArray[np.float64]:
         return np.array([self.p0, self.c0, self.c1, self.p1])
@@ -403,8 +404,19 @@ class BSpline(tuple[BezierCubic, ...]):
             return False
         return all(c1 == c2 for c1, c2 in zip(self, other, strict=True))
 
-    def to_path(self, offset: Optional[Point] = None) -> str:
-        return "\n".join(curve.to_path(offset) for curve in self)
+    def to_path(self, offset: Optional[Point] = None, mid_arrow: Optional[str] = None, arrow_size: float = 10.0) -> str:
+        path = "\n".join(curve.to_path(offset) for curve in self)
+        if mid_arrow is not None:
+            u = self.relative_pos_to_t(0.5)
+            p = Point(*self.evaluate(u))
+            if offset is not None:
+                p -= offset
+            tan = Point(*self.evaluate_tangent(u, normalized=True)) * arrow_size
+            if mid_arrow == "reverse":
+                tan = -tan
+            left, right = p - tan.rotate(np.pi / 4), p - tan.rotate(-np.pi / 4)
+            path += f"\nM {left.x:.2f} {left.y:.2f} L {p.x:.2f} {p.y:.2f} L {right.x:.2f} {right.y:.2f}"
+        return path
 
     def __add__(self, other: Iterable[BezierCubic]) -> Self:
         return self.__class__(super().__add__(tuple(other)))

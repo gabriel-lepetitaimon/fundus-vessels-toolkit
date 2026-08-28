@@ -1853,7 +1853,7 @@ class VGraph:
         incident_branches: npt.NDArray = first_two_index_of(self._branch_list.flatten(), passing_nodes)  # type: ignore
         branch_index = incident_branches // 2
         if return_branch_direction:
-            branch_dirs: Bool1DArray = incident_branches < self._branch_list.shape[0]  # type: ignore
+            branch_dirs: Bool1DArray = incident_branches % 2  # type: ignore
             return passing_nodes, branch_index, branch_dirs
         else:
             return passing_nodes, branch_index
@@ -2184,7 +2184,7 @@ class VGraph:
     ####################################################################################################################
     #  === GRAPH MANIPULATION ===
     ####################################################################################################################
-    def append(self, other: VGraph, *, inplace=False) -> Self | tuple[Self, npt.NDArray[np.int32]]:
+    def append(self, other: VGraph, *, inplace=False) -> Self:
         """Append another graph to this one.
 
         Parameters
@@ -2196,7 +2196,7 @@ class VGraph:
             If True, the graph is modified in place. Otherwise (by default), a modified copy of the graph is returned.
 
         Returns
-        -------
+        ------s-
         VGraph
             The modified graph.
 

@@ -103,7 +103,7 @@ class SegToGraph:
 
     def __call__(
         self,
-        vessel_mask: npt.NDArray[np.bool_] | torch.Tensor | str | Path,
+        vessel_mask: npt.NDArray[np.bool_] | npt.NDArray[np.uint8] | torch.Tensor | str | Path,
         simplify: Optional[bool] = None,
         parse_geometry: Optional[bool] = None,
     ) -> VGraph:
@@ -150,13 +150,13 @@ class SegToGraph:
 
     def skeletonize(
         self,
-        vessel_seg: npt.NDArray[np.bool_] | torch.Tensor,
-        mask: Optional[npt.NDArray[np.bool_] | torch.Tensor] = None,
-    ) -> npt.NDArray[np.bool_] | torch.Tensor:
+        vessel_seg: npt.NDArray[np.bool_] | npt.NDArray[np.uint8],
+        mask: Optional[npt.NDArray[np.bool_]] = None,
+    ) -> npt.NDArray[np.bool_]:
         from ..segment_to_graph.skeleton_parsing import detect_skeleton_nodes
         from ..segment_to_graph.skeletonize import skeletonize
 
-        binary_skel = skeletonize(vessel_seg, method=self.skeletonize_method).astype(np.bool_)
+        binary_skel = skeletonize(vessel_seg, method="fvt").astype(np.bool_)
         if mask is not None:
             binary_skel[~mask] = 0
         remove_endpoint_branches = self.min_terminal_branch_length > 0 or self.min_terminal_branch_calibre_ratio > 0

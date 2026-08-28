@@ -16,6 +16,9 @@ from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.geometric import Point
 from fundus_toolkits.utils.safe_import import import_cv2
 
+from fundus_vessels_toolkit.segment_to_graph.av_tree_parsing import assign_av_label, assign_av_label_centerline
+from fundus_vessels_toolkit.segment_to_graph.skeleton_parsing import detect_skeleton_nodes
+
 from ..segment_to_graph.graph_simplification import GraphSimplifyArg, ReconnectEndpointsArg
 from ..segment_to_graph.vbranch_digraph import VBranchDigraph
 from ..utils import if_none
@@ -123,11 +126,11 @@ class AVSegToTree(AVSegToTreeBase):
     def seg_to_graph(self, max_calibre: float) -> SegToGraph:
         max_calibre = int(max_calibre)
         return SegToGraph(
-            skeletonize_method="lee",
+            skeletonize_method="fvt",
             fix_hollow=True,
             clean_branches_tips=max_calibre,
             min_terminal_branch_length=3,
-            min_terminal_branch_calibre_ratio=1,
+            min_terminal_branch_calibre_ratio=0.5,
             simplify_graph_arg=GraphSimplifyArg(
                 max_spurs_length=0,
                 reconnect_endpoints=False,
@@ -234,7 +237,8 @@ class AVSegToTree(AVSegToTreeBase):
 
         max_calibre = int(190 / fundus.scale)
         seg2graph = self.seg_to_graph(max_calibre)
-        skel = seg2graph.skeletonize(fundus.vessels, mask=mask)
+
+        skel = seg2graph.skeletonize(fundus.av, mask=mask)
         vessels = fundus.vessels if mask is None else fundus.vessels * mask
 
         graph = seg2graph.from_skel(skel=skel, vessels=vessels, parse_geometry=True, simplify=False)
@@ -265,11 +269,13 @@ class GNNAVSegToTree(AVSegToTree):
         root = Path(__file__).parent.parent.parent.parent
         # checkpoint = torch.load(root / "train/Topo-GNN/GNN-Topo-v1/c2kx8j5h/checkpoints/epoch=239-step=8880.ckpt")
         # checkpoint = torch.load(root / "train/Topo-GNN/GNN-Topo-v1/ft6svpfg/checkpoints/epoch=179-step=3420.ckpt")
-        checkpoint = torch.load(root / "train/Topo-GNN/tmp/models/epoch=159-step=2080.ckpt")
+        # checkpoint = torch.load(root / "train/Topo-GNN/tmp/models/epoch=159-step=2080.ckpt")
+        # model = checkpoint["hyper_parameters"]["config"]["model"]
+        # model["gcn"]["architecture"] = (
+        #    "InstNorm Conv64x8-DropOut InstNorm Conv128x8-DropOut Conv128x8 Conv256x4 Conv512x2"
+        # )
+        checkpoint = torch.load(root / "train/Topo-GNN/tmp/models/short.ckpt")
         model = checkpoint["hyper_parameters"]["config"]["model"]
-        model["gcn"]["architecture"] = (
-            "InstNorm Conv64x8-DropOut InstNorm Conv128x8-DropOut Conv128x8 Conv256x4 Conv512x2"
-        )
         model = BranchDigraphModel(model)
         model.load_state_dict({k[6:]: v for k, v in checkpoint["state_dict"].items() if k.startswith("model.")})
         self.model = model.cuda().eval()
@@ -296,37 +302,87 @@ class GNNAVSegToTree(AVSegToTree):
         return self.split_av_tree(tree)
 
     # --- Intermediate steps ---
-    def assign_av_labels(
+    def to_vgraph(
         self,
-        graph: VGraph,
-        av_map: npt.NDArray[np.uint8],
+        fundus=None,
+        /,
         *,
-        propagate_labels=True,
-        inplace: bool = False,
-    ) -> VGraph:
-        from ..segment_to_graph.av_tree_parsing import assign_av_label
+        av: npt.NDArray[np.uint8] | torch.Tensor | str | Path | EllipsisType = ...,
+        od: npt.NDArray[np.bool_] | torch.Tensor | str | Path | EllipsisType = ...,
+        simplify=True,
+    ):
+        from ..utils.cpp_extensions import fvt_cpp
 
-        return assign_av_label(
-            graph,
-            av_map=av_map,
-            split_av_branch=True,
-            av_attr=self.av_attr,
-            propagate_labels=propagate_labels,
-            discard_joint_branch_geometry=False,
-            inplace=inplace,
+        fundus = self.prepare_data(fundus, av=av, od=od)
+        av = fundus.av
+
+        # === Skeletonize and build graph independently for Art and Vei===
+        max_calibre = int(190 / fundus.scale)
+        seg2graph = SegToGraph(
+            skeletonize_method="fvt",
+            fix_hollow=True,
+            clean_branches_tips=max_calibre,
+            min_terminal_branch_length=3,
+            min_terminal_branch_calibre_ratio=0.5,
+            simplify_graph_arg=GraphSimplifyArg(
+                max_spurs_length=0,
+                reconnect_endpoints=False,
+                junctions_merge_distance=1,
+                min_orphan_branches_length=3,
+                max_cycles_length=max_calibre,
+                simplify_topology=False,
+            ),
+            parse_geometry=True,
+            adaptative_tangents=True,
         )
+
+        art = (av == AVLabel.ART) | (av == AVLabel.BOTH)
+        a_graph = seg2graph(art)
+        a_graph.branch_attr["av"] = a_graph.node_attr["av"] = AVLabel.ART
+
+        vei = (av == AVLabel.VEI) | (av == AVLabel.BOTH)
+        v_graph = seg2graph(vei)
+        v_graph.branch_attr["av"] = v_graph.node_attr["av"] = AVLabel.VEI
+
+        # === Label graph with AV labels and split branches with varying labels ===
+        assign_av_label_centerline(a_graph, av, default_label=AVLabel.ART, split_av_branch=True, inplace=True)
+        assign_av_label_centerline(
+            v_graph,
+            av,
+            default_label=AVLabel.VEI,
+            min_branch_length=1,
+            median_filter_size=9,
+            split_av_branch=True,
+            inplace=True,
+        )
+
+        # Delete branch with BOTH label in the vein graph and merge graphes
+        branch_to_delete = []
+        for branch in v_graph.branches(v_graph.branch_attr["av"] == AVLabel.BOTH, filter="endpoint"):
+            branch_to_delete.append(branch.id)
+        v_graph.delete_branch(branch_to_delete, inplace=True)
+
+        # Merge the two graphs into one and clean AV labels
+        for branch in a_graph.branches(a_graph.branch_attr["av"] == AVLabel.BOTH, filter="non-endpoint"):
+            branch.attr["av"] = AVLabel.ART
+            a_graph.node_attr.loc[branch.node_ids, "av"] = AVLabel.ART
+        v_graph.branch_attr["av"] = AVLabel.VEI
+        v_graph.node_attr["av"] = AVLabel.VEI
+        graph = a_graph.append(v_graph)
+
+        if simplify:
+            self.simplify_av_graph(graph, inplace=True, max_calibre=max_calibre)
+        return graph
 
     def simplify_av_graph(self, graph: VGraph, *, inplace: bool = False, max_calibre: float = 20) -> VGraph:
-        from ..segment_to_graph.av_tree_parsing import simplify_av_graph
+        from ..segment_to_graph.graph_simplification import simplify_passing_nodes
 
-        return simplify_av_graph(
-            graph,
-            av_attr=self.av_attr,
-            orphan_branch_min_length=3,
-            node_merge_distance=max_calibre,
-            unknown_node_merge_distance=max_calibre,
-            inplace=inplace,
-        )
+        if not inplace:
+            graph = graph.copy()
+
+        simplify_passing_nodes(graph, min_angle=110, with_same_branch_attr="av", inplace=True)
+
+        return graph
 
     def build_line_digraph(self, graph: VGraph, fundus_data: FundusData, inplace: bool = False) -> VBranchDigraph:
         from ..models.topology.data import BranchDigraphData

@@ -10,7 +10,9 @@ std::array<torch::Tensor, 2> shortest_secondary_path(const torch::Tensor& edge_l
 
     auto edge_list_acc = edge_list.accessor<int, 2>();
     auto primary_acc = primary_nodes.accessor<int, 1>();
-    auto primary_sorted = tensor_to_vector<int>(primary_nodes);
+
+    std::vector<int> primary_sorted;
+    tensor_to_vector<int>(primary_nodes, primary_sorted);
     std::sort(primary_sorted.begin(), primary_sorted.end());
     // auto secondary_acc = secondary_nodes.accessor<int, 1>();
 
@@ -103,7 +105,9 @@ std::vector<std::list<int>> backtrack_edges(const torch::Tensor& backtrack_edge_
                                             const torch::Tensor& src_dst_nodes, const torch::Tensor& primary_nodes) {
     auto backtrack_acc = backtrack_edge_node.accessor<int, 3>();
     auto src_dst_acc = src_dst_nodes.accessor<int, 2>();
-    auto primary_acc = tensor_to_vector<int>(primary_nodes);
+
+    std::vector<int> primary_acc;
+    tensor_to_vector(primary_nodes, primary_acc);
 
     const std::size_t n_paths = src_dst_nodes.size(0), n_nodes = backtrack_edge_node.size(1);
     std::vector<std::list<int>> paths(n_paths);

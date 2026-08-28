@@ -111,7 +111,8 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_curves(
     std::vector<torch::Tensor> branch_curves, const torch::Tensor& segmentation,
     std::map<std::string, double> options = {}) {
     auto const& seg_acc = segmentation.accessor<bool, 2>();
-    auto curves = tensors_to_curves(branch_curves);
+    std::vector<CurveYX> curves;
+    tensors_to_curves(branch_curves, curves);
     auto const& [cleanedCurves, curveSplits, tangents, calibres, boundaries, curvatures, curv_roots, bsplines] =
         extract_branches_geometry(curves, seg_acc, options);
 
@@ -155,7 +156,9 @@ std::vector<std::vector<torch::Tensor>> extract_branches_geometry_from_skeleton(
     int clean_branches_tips = get_if_exists(options, "clean_branches_tips", 0.);
     bool adaptativeTangent = get_if_exists(options, "adaptative_tangents", 1.) > 0;
     if (clean_branches_tips > 0) {
-        auto const& adj_list = edge_list_to_adjlist(tensor_to_vectorIntPair(branch_list), node_yx.size(0));
+        std::vector<IntPair> branch_list_vec;
+        tensor_to_vectorIntPair(branch_list, branch_list_vec);
+        auto const& adj_list = edge_list_to_adjlist(branch_list_vec, node_yx.size(0));
         clean_branches_skeleton(curves, labels_acc, seg_acc, adj_list, clean_branches_tips, adaptativeTangent);
     }
 
@@ -232,7 +235,8 @@ torch::Tensor fast_branch_calibre_torch(const torch::Tensor& curveYX, const torc
 
 torch::Tensor compute_curvature(const torch::Tensor& curveYX, const torch::Tensor& tangents) {
     const CurveYX& curve = tensor_to_curve(curveYX);
-    const PointList& tangents_vec = tensor_to_pointList(tangents);
+    PointList tangents_vec;
+    tensor_to_pointList(tangents, tangents_vec);
     auto const& contiguousCurvesStartEnd = split_contiguous_curves(curve);
 
     torch::Tensor curvatures_tensor = torch::empty({(long)curve.size()}, torch::kFloat);
@@ -247,7 +251,8 @@ torch::Tensor compute_curvature(const torch::Tensor& curveYX, const torch::Tenso
 }
 
 torch::Tensor find_inflections_points(const torch::Tensor& curvatures, float K_threshold = 0.05) {
-    auto const& curvatures_vec = tensor_to_scalars(curvatures);
+    Scalars curvatures_vec;
+    tensor_to_scalars(curvatures, curvatures_vec);
     auto const& inflections = curve_inflections_points(curvatures_vec, K_threshold);
     return vector_to_tensor(inflections);
 }
@@ -257,7 +262,8 @@ std::tuple<torch::Tensor, double, torch::Tensor> fit_bezier_cubic(const torch::T
                                                                   double bspline_max_error, float tangent_std = 2,
                                                                   std::size_t start = 0, std::size_t end = 0) {
     const CurveYX& curve = tensor_to_curve(curveYX);
-    PointList tangents_vec = tensor_to_pointList(tangents);
+    PointList tangents_vec;
+    tensor_to_pointList(tangents, tangents_vec);
     if (tangents_vec.empty()) tangents_vec = fast_curve_tangent(curve, gaussianHalfKernel1D(tangent_std));
     auto const& curvatures = tangents_to_curvature(tangents_vec, true, 5, start, end);
     auto const& [bezier, maxError, sqrError, u] = fit_bezier(curve, tangents_vec, bspline_max_error, start, end);
@@ -273,7 +279,8 @@ std::tuple<torch::Tensor, double> fit_bspline(const torch::Tensor& curveYX_tenso
     float bspline_targetSqrError = pow(get_if_exists(options, "bspline_target_error", 3.0), 2);
     float ignoreGapsSqr = pow(get_if_exists(options, "ignore_gaps", 2.0), 2);
 
-    PointList tangents = tensor_to_pointList(tangents_tensor);
+    PointList tangents;
+    tensor_to_pointList(tangents_tensor, tangents);
     if (tangents.size() != curve.size()) {
         // If tangents are not provided, compute them
         tangents.clear();
@@ -382,12 +389,15 @@ std::vector<torch::Tensor> compute_intercepts(const std::vector<torch::Tensor>& 
                                               const torch::Tensor& startsTensor, const torch::Tensor& dirsTensor,
                                               float maxDist, float startMaxAngle, float endMaxAngle, float minSnapDist,
                                               float maxSnapDist, float maxSnapAngle, bool interpolateCurves = true) {
-    const std::vector<CurveYX>& branchCurves = tensors_to_curves(branchCurvesTensor);
-    const std::vector<IntPair>& branchList = tensor_to_vectorIntPair(branchListTensor);
+    std::vector<CurveYX> branchCurves;
+    tensors_to_curves(branchCurvesTensor, branchCurves);
+    std::vector<IntPair> branchList;
+    tensor_to_vectorIntPair(branchListTensor, branchList);
     const GraphAdjList& graph = edge_list_to_adjlist(branchList);
     const std::vector<IntPoint>& nodesYX = tensor_to_curve(nodesYXTensor);
     const std::vector<IntPoint>& starts = tensor_to_curve(startsTensor);
-    const PointList& dirs = tensor_to_pointList(dirsTensor);
+    PointList dirs;
+    tensor_to_pointList(dirsTensor, dirs);
 
     const auto& interceptPoints =
         intercept_curves(branchCurves, branchList, graph, nodesYX, starts, dirs, maxDist * maxDist,
@@ -642,7 +652,9 @@ torch::Tensor terminal_tips(const torch::Tensor& branch_list, std::size_t N_node
 
     if (branch_subgraph.numel() == 0) {
         // If no subgraph ids are provided, consider all branches belong to the same subgraph
-        const auto& tips = terminal_nodes(tensor_to_vectorIntPair(branch_list), N_nodes);
+        std::vector<IntPair> branch_list_vec;
+        tensor_to_vectorIntPair(branch_list, branch_list_vec);
+        const auto& tips = terminal_nodes(branch_list_vec, N_nodes);
         return vector_to_tensor(tips);
     }
 
@@ -781,11 +793,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("detect_skeleton_nodes_debug", &detect_skeleton_nodes_debug, "Detect junctions and endpoints in a skeleton.");
     m.def("skeletonize", &skeletonize, "Skeletonize a binary image.");
     m.def("skeletonize_av", &skeletonize_av, "Skeletonize a uint8 image of AV labels.");
+    m.def("dilate_av_labels", &dilate_av_labels, "Dilate AV labels in a uint8 image.");
 
     // === Branch.h ===
     m.def("find_branch_endpoints", &find_branch_endpoints, "Find the first and last endpoint of each branch.");
     m.def("find_closest_branches", &find_closest_branches, "Find the closest branches to a set of points.");
     m.def("draw_skeleton_labels", &draw_skeleton_labels, "Draw the branches on a tensor.");
+    m.def("branch_connexion_candidates", &branch_connexion_candidates, "Find the closest branches to a set of points.");
 
     // === EditDistance.h ===
     m.def("shortest_secondary_path", &shortest_secondary_path, "Compute the shortest path between two sets of nodes.");

@@ -57,6 +57,7 @@ class BranchDigraphSample:
     """Data class storing in-memory a sample of a BranchDigraphDataset."""
 
     name: str
+    dataset: str
     fundus: FundusData
     art_topology: TreeTopology
     vei_topology: TreeTopology
@@ -72,33 +73,96 @@ class BranchDigraphSample:
     def target_topologies(self) -> tuple[TreeTopology, TreeTopology]:
         return self.art_topology, self.vei_topology
 
-    def show(self, graph_version: Optional[str | list[str]] = None, height: int = 650):
+    def show(self, graph_version: Optional[str | list[str]] = None, height: int = 650, view=None):
         from ...utils.jppype import Mosaic, draw_graph
 
         if graph_version is None:
             graph_version = list(self.graphes.keys())
         elif not isinstance(graph_version, list):
             graph_version = [graph_version]
-        m = Mosaic(len(graph_version), cols_titles=graph_version, cell_height=height)
+
+        mosaic = None
+        if view is not None:
+            if isinstance(view, list):
+                assert len(view) == len(graph_version), "Number of views must match number of graph versions"
+            else:
+                graph_version = graph_version[:1]
+                view = [view]
+        else:
+            mosaic = Mosaic(len(graph_version), cols_titles=graph_version, cell_height=height)
+            view = mosaic.views
 
         for i, g in enumerate(graph_version):
-            v = m.views[i]
+            v = view[i]
             fundus = self.fundus
             if self._av_maps is not None and g in self._av_maps:
                 fundus = fundus.update(av=self._av_maps[g])
             fundus.draw(vessels_on_top=True, view=v)
             draw_graph(self.graphes[g], view=v)
-        return m
+        return mosaic
+
+    def draw_target_topo(self, view=None):
+        from ...utils.jppype import draw_trees
+
+        topo_map = TreeTopology.av_overlay(self.fundus.image, self.art_topology, self.vei_topology)
+        if view is None:
+            from ...utils.jppype import Mosaic
+
+            view = Mosaic(1, cell_height=650).views[0]
+
+        view.add_image(topo_map, name="background")
+        draw_trees((self.art_topology.tree, self.vei_topology.tree), view=view, bspline_dir=True)
+        return view
 
     def with_fundus(self, fundus: FundusData) -> Self:
         """Return a new BranchDigraphSample with the given fundus image."""
         return self.__class__(
             name=self.name,
+            dataset=self.dataset,
             fundus=fundus.copy(mutable=False),
             art_topology=self.art_topology,
             vei_topology=self.vei_topology,
             graphes=self.graphes,
             _av_maps=self._av_maps,
+        )
+
+    @overload
+    def to_tensor(
+        self,
+        graph_version: Optional[str] = None,
+        *,
+        augment: Optional[AugmentationCfg] = None,
+        return_digraph: Literal[False] = False,
+    ) -> BranchDigraphData: ...
+    @overload
+    def to_tensor(
+        self,
+        graph_version: Optional[str] = None,
+        *,
+        augment: Optional[AugmentationCfg] = None,
+        return_digraph: Literal[True],
+    ) -> tuple[BranchDigraphData, VBranchDigraph]: ...
+    def to_tensor(
+        self,
+        graph_version: Optional[str] = None,
+        *,
+        augment: Optional[AugmentationCfg] = None,
+        return_digraph: bool = False,
+    ) -> BranchDigraphData | tuple[BranchDigraphData, VBranchDigraph]:
+        """Return a BranchDigraphData object containing the data of this sample, with the specified graph version(s)."""
+        if graph_version is None:
+            graph_version = next(iter(self.graphes.keys()))
+        graph = self.graphes[graph_version]
+        return BranchDigraphData.from_graph(
+            graph,
+            self.fundus,
+            self.target_topologies,
+            return_digraph=return_digraph,
+            augment=augment,
+            name=self.name,
+            graph_version=graph_version,
+            od_center=self.fundus.od_center if self.fundus.has_od_center else None,
+            mac_center=self.fundus.macula_center if self.fundus.has_macula_center else None,
         )
 
 
@@ -130,7 +194,7 @@ class SampleInfo:
 
     @property
     def full_name(self):
-        return self.name if self.dataset == "" else f"{self.dataset}/{self.name}"
+        return self.name if self.dataset == "" else f"{self.dataset}::{self.name}"
 
     def load(
         self,
@@ -161,7 +225,8 @@ class SampleInfo:
             av_maps = None
 
         return BranchDigraphSample(
-            name=self.full_name,
+            name=self.name,
+            dataset=self.dataset,
             fundus=fundus,
             art_topology=TreeTopology.load(self.art_topology, tree=not discard_gt_tree, sparse=True),
             vei_topology=TreeTopology.load(self.vei_topology, tree=not discard_gt_tree, sparse=True),
@@ -550,16 +615,20 @@ class SampleSource:
                         if av2tree is None:
                             av2tree = GNNAVSegToTree()
                         with watch("Load AV map"):
-                            fundus.update(av=graph_path, crop_pad=src_roi, reshape_method="resize", inplace=True)
+                            with watch("FundusData.update"):
+                                fundus.update(av=graph_path, crop_pad=src_roi, reshape_method="resize", inplace=True)
                             if mask_optic_disc:
-                                fundus.remove_od_from_vessels(shrink_factor=0.2, mask_roi=True, inplace=True)
+                                with watch("remove OD from vessels"):
+                                    fundus.remove_od_from_vessels(shrink_factor=0.2, mask_roi=True, inplace=True)
                             else:
                                 fundus.apply_roi_mask(inplace=True)
                             if graph_version in output_sample.av_maps:
                                 av_map_out_path = output_sample.av_maps[graph_version]
-                                fundus.write_image(av=av_map_out_path, on_exists="overwrite")
+                                with watch("save AV map"):
+                                    av_map_out_path.parent.mkdir(parents=True, exist_ok=True)
+                                    fundus.write_image(av=av_map_out_path, on_exists="overwrite")
                         with watch("av2tree.to_vgraph"):
-                            graph = av2tree.to_vgraph(fundus, simplify=False)
+                            graph = av2tree.to_vgraph(fundus, simplify=True)
 
                     # Remove duplicated branches and nodes, and remove useless attributes
                     with watch("Clean graph"):
@@ -601,6 +670,7 @@ class SampleSource:
 
                         with watch("Clean"):
                             merge_nodes_by_distance(tree, max_distance=0.5, inplace=True)
+
                             if len(tree.branch_duplicates()):
                                 report.log_error(
                                     "Tree Topology",
@@ -733,7 +803,7 @@ class BranchDigraphDataset(PygDataset):
         return new
 
     @classmethod
-    def load_from_dirs(
+    def process_dirs(
         cls,
         fundus_dir: Path | list[Path],
         target_topology_dir: Path | list[Path],
@@ -855,67 +925,32 @@ class BranchDigraphDataset(PygDataset):
     def len(self):
         return len(self.samples_info)
 
-    @overload
-    def get(
-        self,
-        idx: int | str,
-        *,
-        version: Optional[str] = None,
-        augment: Optional[AugmentationCfg] = None,
-        return_digraph: Literal[False] = False,
-    ) -> BranchDigraphData: ...
-    @overload
-    def get(
-        self,
-        idx: int | str,
-        *,
-        version: Optional[str] = None,
-        augment: Optional[AugmentationCfg] = None,
-        return_digraph: Literal[True],
-    ) -> tuple[BranchDigraphData, VBranchDigraph]: ...
-    def get(
-        self,
-        idx: int | str,
-        *,
-        version: Optional[str] = None,
-        augment: Optional[AugmentationCfg] = None,
-        return_digraph: bool = False,
-    ) -> BranchDigraphData | tuple[BranchDigraphData, VBranchDigraph]:
+    def get(self, idx: int) -> BranchDigraphData:
         sample = self.get_sample(idx)
-        graphes = list(sample.graphes.values())
+
+        N_versions = len(sample.graphes)
         versions = list(sample.graphes.keys())
-        if version is not None and version in versions:
-            graph_version = version
-        elif isinstance(self.cfg.graph_version, dict):
+        if isinstance(self.cfg.graph_version, dict):
             pick_p = [self.cfg.graph_version.get(v, 0.0) for v in versions]
             p_total = sum(pick_p)
             if p_total == 0.0:
-                graph_version = versions[np.random.randint(len(graphes))]
+                graph_version = versions[np.random.randint(N_versions)]
             else:
-                graph_version = versions[np.random.choice(len(graphes), p=np.array(pick_p) / p_total)]
+                graph_version = versions[np.random.choice(N_versions, p=np.array(pick_p) / p_total)]
         elif self.cfg.graph_version is None or self.cfg.graph_version not in sample.graphes:
-            graph_version = versions[np.random.randint(len(graphes))]
+            graph_version = versions[np.random.randint(N_versions)]
         else:  # version is a valid key in sample.graphes
             graph_version = self.cfg.graph_version
-        graph = sample.graphes[graph_version]
-        return BranchDigraphData.from_graph(
-            graph,
-            sample.fundus,
-            sample.target_topologies,
-            return_digraph=return_digraph,
-            augment=self.cfg.augment if augment is None else augment,
-            name=sample.name + (f"/{graph_version}" if graph_version else ""),
-            od_center=sample.fundus.od_center if sample.fundus.has_od_center else None,
-            mac_center=sample.fundus.macula_center if sample.fundus.has_macula_center else None,
-        )
 
-    def get_sample(self, idx: int | str, *, discard_gt_tree: bool = True) -> BranchDigraphSample:
+        return sample.to_tensor(graph_version, augment=self.cfg.augment)
+
+    def get_sample(self, idx: int | str, *, discard_gt_tree: bool = True, load_av_maps=False) -> BranchDigraphSample:
         if isinstance(idx, str):
             idx = [s.name for s in self.samples_info].index(idx)
         if self._preloaded_samples is not None:
             sample = self._preloaded_samples[idx]
         else:
-            sample = self.samples_info[idx].load(discard_gt_tree=discard_gt_tree)
+            sample = self.samples_info[idx].load(discard_gt_tree=discard_gt_tree, load_av_maps=load_av_maps)
 
         fundus = sample.fundus
         if not fundus.has_image:
@@ -957,7 +992,7 @@ class BranchDigraphDataset(PygDataset):
         idx: int | str,
         *,
         version: Optional[str] = None,
-        augment: Optional[bool | AugmentationCfg] = None,
+        augment: Optional[AugmentationCfg | EllipsisType] = ...,
         branch_label=False,
         node_label=False,
     ) -> tuple[Mosaic, BranchDigraphSample, BranchDigraphData]:
@@ -968,8 +1003,8 @@ class BranchDigraphDataset(PygDataset):
             Index of the sample to draw, or the name of the fundus image (without extension).
         test : bool, optional
             Whether to run checks and optimizations on the graph before drawing, by default False.
-        augment : bool, optional
-            Whether to apply data augmentation to the sample before drawing, by default False.
+        augment : AugmentationCfg | None, optional
+            If provided, apply the specified augmentation to the sample before drawing. If None, no augmentation is applied. By default, use the dataset's default augmentation configuration.
         gt_topo : bool, optional
             Whether to draw the ground truth topology in a separate view, by default True.
         branch_label : bool, optional
@@ -988,30 +1023,29 @@ class BranchDigraphDataset(PygDataset):
             The (y, x) coordinates of the optic disc center.
         mac_yx: npt.NDArray
             The (y, x) coordinates of the macula center.
-        """
+        """  # noqa: E501
         from ...utils.jppype import Mosaic, draw_graph, draw_tree, draw_trees
 
-        sample = self.get_sample(idx, discard_gt_tree=False)
-        sample_data = self.get(idx, augment=augment, version=version)
+        sample = self.get_sample(idx, discard_gt_tree=False, load_av_maps=True)
 
-        if "/" in sample_data.name:
-            name, graph_version = sample_data.name.split("/", 1)
-        else:
-            name, graph_version = sample_data.name, ""
+        if augment is ...:
+            augment = self.cfg.augment
+        sample_data = sample.to_tensor(version, augment=augment)
 
         m = Mosaic(
             3,
-            cols_titles=[sample_data.name, "with GT Topology", "Ground Truth"],
+            cols_titles=[sample_data.name + "/" + sample_data.graph_version, "with GT Topology", "Ground Truth"],
             cell_height=700,
         )
-        sample.fundus.draw(view=m.views[0])
-        draw_graph(
-            sample.graphes[graph_version],
-            view=m.views[0],
-            edge="bspline",
-            edge_labels=branch_label,
-            node_labels=node_label,
-        )
+        # sample.fundus.draw(view=m.views[0])
+        # draw_graph(
+        #    sample.graphes[graph_version],
+        #    view=m.views[0],
+        #    edge="bspline",
+        #    edge_labels=branch_label,
+        #    node_labels=node_label,
+        # )
+        sample.show(view=m.views[0], graph_version=sample_data.graph_version)
 
         digraph = sample_data.to_digraph(graph=True)
         assert digraph.graph is not None
@@ -1056,15 +1090,14 @@ class BranchDigraphDataset(PygDataset):
                 idx, version = idx.split("/", 1)
             idx = [s.name for s in self.samples_info].index(idx)
 
-        sample_info = self.samples_info[idx]
         sample = self.get_sample(idx, discard_gt_tree=False)
         if gt_digraph is None:
-            _, gt_digraph = self.get(idx, return_digraph=True, version=version)
+            _, gt_digraph = sample.to_tensor(version, return_digraph=True)
         assert VBranchDigraph.has_all_p(gt_digraph)
 
         m = Mosaic(
             3 if show_gt_graph else 2,
-            cols_titles=[f"Reference Topology: {sample_info.dataset}/{sample.name}", "Predicted Tree"]
+            cols_titles=[f"Reference Topology: {sample.name}", "Predicted Tree"]
             + (["GT Tree"] if show_gt_graph else []),
             cell_height=700,
             background=sample.fundus.image,

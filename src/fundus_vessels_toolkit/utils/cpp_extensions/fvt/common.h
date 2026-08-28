@@ -88,15 +88,20 @@ struct IntPoint {
     IntPoint operator*(int f) const;
     Point operator*(double f) const;
     Point operator/(double f) const;
+    IntPoint& operator+=(const IntPoint& p);
+    IntPoint& operator-=(const IntPoint& p);
+    IntPoint& operator*=(const int& f);
+    IntPoint& operator/=(const double& f);
     bool operator==(const IntPoint& p) const;
     bool operator!=(const IntPoint& p) const;
+    bool operator<(const IntPoint& p) const;
 
     bool is_inside(int H, int W) const;
     bool is_inside(int y0, int x0, int y1, int x1) const;
     bool is_inside(const IntPoint& p) const;
     inline bool is_valid() const { return y != INT_MIN && x != INT_MAX; }
     bool is_adjacent(const IntPoint& p) const;
-    bool is_null();
+    bool is_null() const;
 
     IntPair toIntPair() const;
     int max() const;
@@ -108,6 +113,7 @@ struct IntPoint {
     int cross(const IntPoint& p) const;
     int dot(const IntPoint& p) const;
     double cosSim(const IntPoint& p) const;
+    double distance(const IntPoint& p) const;
 
     IntPoint clamp(IntPoint max) const;
     IntPoint clamp(IntPoint min, IntPoint max) const;
@@ -197,14 +203,17 @@ struct Point {
 };
 
 #pragma omp declare reduction(merge : std::vector<Point> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
+#pragma omp declare reduction(merge : std::list<Point> : omp_out.splice(omp_out.end(), omp_in))
 #pragma omp declare reduction( \
         merge : std::vector<std::vector<Point>> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
 
 #pragma omp declare reduction( \
         merge : std::vector<IntPoint> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
+#pragma omp declare reduction(merge : std::list<IntPoint> : omp_out.splice(omp_out.end(), omp_in))
 #pragma omp declare reduction( \
         merge : std::vector<std::vector<IntPoint>> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
 #pragma omp declare reduction(merge : std::vector<int> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
+#pragma omp declare reduction(merge : std::list<int> : omp_out.splice(omp_out.end(), omp_in))
 
 using CurveYX = std::vector<IntPoint>;
 using Vector = Point;
@@ -420,19 +429,51 @@ std::vector<torch::Tensor> vectors_to_tensors(const std::vector<std::list<T>>& v
 }
 
 template <typename T>
-std::vector<T> tensor_to_vector(const torch::Tensor& tensor) {
+void tensor_to_vector(const torch::Tensor& tensor, std::vector<T>& vec) {
+    TORCH_CHECK(tensor.dim() == 1, "Expected 1D tensors for conversion to vector.");
     auto accessor = tensor.accessor<T, 1>();
-    std::vector<T> vec;
+    vec.clear();
     vec.reserve(tensor.size(0));
     for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) vec.push_back(accessor[i]);
-    return vec;
+}
+
+template <>
+void tensor_to_vector<Point>(const torch::Tensor& tensor, std::vector<Point>& vec);
+
+template <>
+void tensor_to_vector<IntPoint>(const torch::Tensor& tensor, std::vector<IntPoint>& vec);
+
+template <typename T, std::size_t N>
+void tensor_to_vector(const torch::Tensor& tensor, std::vector<std::array<T, N>>& vec) {
+    TORCH_CHECK(tensor.dim() == 2, "Expected 2D tensors for conversion to vector of arrays.");
+    TORCH_CHECK(tensor.size(1) == N, "Expected tensors with second dimension of size ", N);
+    vec.clear();
+    vec.reserve(tensor.size(0));
+    auto acc = tensor.accessor<T, 2>();
+    for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) {
+        std::array<T, N> v;
+        for (std::size_t j = 0; j < N; j++) v[j] = acc[i][j];
+        vec.push_back(v);
+    }
+}
+
+template <typename T>
+void tensors_to_vectors(const std::vector<torch::Tensor>& tensors, std::vector<std::vector<T>>& vec) {
+    vec.clear();
+    vec.reserve(tensors.size());
+    for (const auto& tensor : tensors) {
+        std::vector<T> v;
+        tensor_to_vector(tensor, v);
+        vec.push_back(v);
+    }
 }
 
 CurveYX tensor_to_curve(const torch::Tensor& tensor, bool reverse = false);
-std::vector<CurveYX> tensors_to_curves(const std::vector<torch::Tensor>& tensors);
-std::vector<IntPair> tensor_to_vectorIntPair(const torch::Tensor& tensor);
-PointList tensor_to_pointList(const torch::Tensor& tensor);
-Scalars tensor_to_scalars(const torch::Tensor& tensor);
+void tensor_to_curve(const torch::Tensor& tensor, CurveYX& curveYX, bool reverse = false);
+void tensors_to_curves(const std::vector<torch::Tensor>& tensors, std::vector<CurveYX>& curves, bool reverse = false);
+void tensor_to_vectorIntPair(const torch::Tensor& tensor, std::vector<IntPair>& vec);
+void tensor_to_pointList(const torch::Tensor& tensor, PointList& vec);
+void tensor_to_scalars(const torch::Tensor& tensor, Scalars& vec);
 
 /*******************************************************************************************************************
  *             === GRAPH ===

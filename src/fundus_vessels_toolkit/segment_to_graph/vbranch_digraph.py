@@ -22,6 +22,8 @@ from fundus_toolkits.utils.typing import (
     as_int_1d,
 )
 
+from fundus_vessels_toolkit.utils.profiling import watch
+
 from ..utils.cluster import cluster_by_distance
 from ..utils.lookup_array import (
     add_empty_to_lookup,
@@ -45,7 +47,7 @@ from ..vascular_data_objects.fundus_data import AVLabel
 from ..vascular_data_objects.vgraph import BranchIndicesLike
 from ..vascular_data_objects.vtree import VTree
 from .geometry_parsing import derive_tips_geometry_from_curve_geometry
-from .graph_simplification import find_facing_tips
+from .graph_simplification import extend_topology, extend_topology, find_facing_tips
 from .tree_topology import TreeTopology, highest_topo_plausibility
 
 
@@ -612,11 +614,10 @@ class VBranchDigraph(LineDigraph):
         cls,
         graph: VGraph,
         *,
-        max_distance=200,
+        max_distance=150,
         max_angle=30,
         tan_max_angle=110,
-        tan_to_hyp_max_angle=90,
-        pos_tolerance=25,
+        pos_tolerance=15,
         check: bool = True,
         split_for_reconnections: bool = True,
     ) -> _VBranchDigraphWithGraph:
@@ -632,51 +633,72 @@ class VBranchDigraph(LineDigraph):
         Self
             The BranchDigraph instance.
         """
-        graph = graph.copy()
-        if split_for_reconnections:
-            _, candidates = prepare_graph_for_reconnections(
-                graph, max_distance=max_distance, max_angle=max_angle, av_attr="av", inplace=True
-            )
-            derive_tips_geometry_from_curve_geometry(graph, tangent=True, inplace=True)
-        else:
-            candidates = np.empty((0, 4), dtype=int)
+        with watch("VBranchDigraph.from_graph()") as p:
+            with p.sub("graph copy"):
+                graph = graph.copy()
 
-        facing_tips = find_facing_tips(
-            graph=graph,
-            max_distance=max_distance,
-            max_angle=max_angle,
-            tan_max_angle=tan_max_angle,
-            tan_to_hyp_max_angle=tan_to_hyp_max_angle,
-            pos_tolerance=pos_tolerance,
-            as_mask=True,
-        )
+            if split_for_reconnections:
+                with p.sub("extend_topology"):
+                    _, candidates = extend_topology(
+                        graph,
+                        max_distance=max_distance,
+                        nearConeAngle=max_angle * 1.5,
+                        farConeAngle=max_angle,
+                        maxTanAngle=tan_max_angle,
+                        snapDist=pos_tolerance,
+                        minSpaceBetweenSplits=pos_tolerance * 2,
+                        inplace=True,
+                    )
+                    derive_tips_geometry_from_curve_geometry(graph, tangent=True, inplace=True)
 
-        for b0, tip0, b1, tip1 in candidates:
-            facing_tips[b0, tip0, b1, tip1] = True
-            facing_tips[b1, tip1, b0, tip0] = True
+                with p.sub("create line_list"):
+                    B = graph.branch_count
+                    line_list = [
+                        candidates,
+                        np.stack([candidates[:, 2], candidates[:, 3], candidates[:, 0], candidates[:, 1]], axis=-1),
+                        np.stack([np.full(B, -1), np.zeros(B), np.arange(B), np.zeros(B)], axis=-1).astype(np.int_),
+                        np.stack([np.full(B, -1), np.zeros(B), np.arange(B), np.ones(B)], axis=-1).astype(np.int_),
+                    ]
+                    line_list = np.vstack(line_list)
+                    line_list = np.unique(line_list, axis=0)
 
-        graph.branch_tips_connectivity_matrix(facing_tips, erase_opposite_tips=True)
+            else:
+                with p.sub("find facing tips"):
+                    facing_tips = find_facing_tips(
+                        graph=graph,
+                        max_distance=max_distance,
+                        max_angle=max_angle,
+                        tan_max_angle=tan_max_angle,
+                        tan_to_hyp_max_angle=tan_to_hyp_max_angle,
+                        pos_tolerance=pos_tolerance,
+                        as_mask=True,
+                    )
+                    facing_tips_backup = facing_tips[:]
 
-        B = graph.branch_count
-        Bidx = np.arange(B)
-        facing_tips[Bidx, 0, Bidx, 0] = False
-        facing_tips[Bidx, 1, Bidx, 1] = False
+                with p.sub("Add graph skeleton connections"):
+                    graph.branch_tips_connectivity_matrix(facing_tips, erase_opposite_tips=True)
 
-        line_list = np.argwhere(facing_tips)
-        line_list = [
-            line_list,
-            np.stack([np.full(B, -1), np.zeros(B), np.arange(B), np.zeros(B)], axis=-1).astype(np.int_),
-            np.stack([np.full(B, -1), np.zeros(B), np.arange(B), np.ones(B)], axis=-1).astype(np.int_),
-        ]
-        line_list = np.vstack(line_list)
+                B = graph.branch_count
+                Bidx = np.arange(B)
+                facing_tips[Bidx, 0, Bidx, 0] = False
+                facing_tips[Bidx, 1, Bidx, 1] = False
 
-        geodata = graph.geometric_data()
-        geodata.clear_branch_gdata(np.argwhere(geodata.branch_arc_length() <= 2).flatten())
+                with p.sub("Enumerate lines"):
+                    line_list = np.argwhere(facing_tips)
+                    line_list = [
+                        line_list,
+                        np.stack([np.full(B, -1), np.zeros(B), np.arange(B), np.zeros(B)], axis=-1).astype(np.int_),
+                        np.stack([np.full(B, -1), np.zeros(B), np.arange(B), np.ones(B)], axis=-1).astype(np.int_),
+                    ]
+                    line_list = np.vstack(line_list)
 
-        digraph = cls(graph=graph, line_list=line_list)
-        if check:
-            digraph.check_lines(on_invalid="warn")
-        return digraph  # type: ignore[return-value]
+            geodata = graph.geometric_data()
+            geodata.clear_branch_gdata(np.argwhere(geodata.branch_arc_length() <= 2).flatten())
+
+            digraph = cls(graph=graph, line_list=line_list)
+            if check:
+                digraph.check_lines(on_invalid="warn")
+            return digraph  # type: ignore[return-value]
 
     def compute_p_from_gt(
         self,

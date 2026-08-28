@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from functools import cached_property
 from types import EllipsisType
-from typing import Annotated, Literal, Optional
+from typing import Literal, Optional
 
 import numpy as np
 import torch

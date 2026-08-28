@@ -189,7 +189,7 @@ def quantified_local_minimum(x, dthreshold=None):
     return np.array(roots).astype(int)
 
 
-def extract_splits(x, medfilt_size=5) -> Dict[Tuple[int, int], float | int]:
+def extract_splits(x, medfilt_size=5, min_size=0) -> Dict[Tuple[int, int], float | int]:
     from scipy.signal import medfilt
 
     if len(x) > medfilt_size:
@@ -199,11 +199,25 @@ def extract_splits(x, medfilt_size=5) -> Dict[Tuple[int, int], float | int]:
     if len(change) == 0:
         return {(0, len(x)): x[0]}
 
-    return {
+    splits = {
         (0, change[0]): x[0],
         **{(change[i], change[i + 1]): x[change[i]] for i in range(len(change) - 1)},
         (change[-1], len(x)): x[change[-1]],
     }
+
+    if min_size == 0:
+        return splits
+
+    # Merge too small splits
+    merged_splits = []
+    for (start, end), value in splits.items():
+        if not merged_splits or merged_splits[-1][1] - merged_splits[-1][0] >= min_size:
+            merged_splits.append([start, end, {value: end - start}])
+        else:
+            merged_splits[-1][1] = end
+            merged_splits[-1][2][value] = merged_splits[-1][2].setdefault(value, 0) + end - start
+
+    return {(start, end): max(value_counts, key=value_counts.get) for start, end, value_counts in merged_splits}
 
 
 def modulo_pi(x):

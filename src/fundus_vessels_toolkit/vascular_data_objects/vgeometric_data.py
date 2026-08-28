@@ -2319,9 +2319,12 @@ class VGeometricData:
             curve = all_curves_transformed[start_idx : start_idx + len(curve)]
             new_curve_delta_d = np.linalg.norm(np.diff(curve, axis=0), axis=1)
 
-            local_scale = new_curve_delta_d / (prev_curve_delta_d + 1e-8)
-            local_scale = np.concatenate([local_scale[:1], local_scale, local_scale[-1:]])
-            local_scale = (local_scale[1:] + local_scale[:-1]) / 2
+            if new_curve_delta_d.shape[0] != 0:
+                local_scale = new_curve_delta_d / (prev_curve_delta_d + 1e-8)
+                local_scale = np.concatenate([local_scale[:1], local_scale, local_scale[-1:]])
+                local_scale = (local_scale[1:] + local_scale[:-1]) / 2
+            else:
+                local_scale = np.ones(len(curve), dtype=np.float64)
             curve = np.round(curve).astype(np.int_)
 
             if not isinstance(projection, Translation):

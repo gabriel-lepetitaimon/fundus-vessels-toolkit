@@ -4,21 +4,59 @@
 #include "branch.h"
 #include "ray_iterators.h"
 
+void expand_boundaries(IntPointPair& b, float expand, const Point& t) {
+    IntPoint offset;
+    if (b[0] == b[1])
+        offset = (t.rot90() * expand).toInt();
+    else {
+        RayIterator ray(b[0] - b[1]);
+        offset = ray.extrapolate(ray.stepsCountTo(expand));
+    }
+    b[0] += offset;
+    b[1] -= offset;
+}
+
 void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& branch_parents,
                         const torch::Tensor& branch_dirs, std::vector<torch::Tensor> curves_tensor,
                         std::vector<torch::Tensor> boundaries, const torch::Tensor& nodes_yx_tensor,
-                        float bezier_interpolate, bool fill_junctions, torch::Tensor& branchLabelsMap,
-                        torch::Tensor& topoMap) {
+                        float bezier_interpolate, bool fill_junctions, int expand, const torch::Tensor& branchMapping,
+                        torch::Tensor& branchLabelsMap, torch::Tensor& topoMap, torch::Tensor& fuzzySkeletonMap) {
     // Ensure the branchLabelsMap and topoMap are initialized correctly
     TORCH_CHECK(branchLabelsMap.dim() == 2 && topoMap.dim() == 2, "branchLabelsMap and topoMap must be 2D tensors.");
     TORCH_CHECK(branchLabelsMap.size(0) == topoMap.size(0) && branchLabelsMap.size(1) == topoMap.size(1),
                 "branchLabelsMap and topoMap must have the same shape.");
-    TORCH_CHECK(branchLabelsMap.scalar_type() == torch::kInt32 && topoMap.scalar_type() == torch::kFloat32,
-                "branchLabelsMap and topoMap must be of type Int32.");
+    TORCH_CHECK(branchLabelsMap.scalar_type() == torch::kInt64 && topoMap.scalar_type() == torch::kFloat32,
+                "branchLabelsMap and topoMap must be of type Int64.");
+    TORCH_CHECK(fuzzySkeletonMap.dim() == 2, "fuzzySkeletonMap must be a 2D tensor.");
+    TORCH_CHECK(fuzzySkeletonMap.size(0) == topoMap.size(0) && fuzzySkeletonMap.size(1) == topoMap.size(1),
+                "fuzzySkeletonMap must have the same shape as topoMap.");
+    TORCH_CHECK(fuzzySkeletonMap.scalar_type() == torch::kFloat32, "fuzzySkeletonMap must be of type Float32.");
 
-    auto branchLabelsMapAcc = branchLabelsMap.accessor<int, 2>();
+    // Check provided inputs
+    TORCH_CHECK(branch_list.dim() == 2 && branch_list.size(1) == 2,
+                "branch_list must be a 2D tensor with shape (num_branches, 2).");
+    TORCH_CHECK(branch_parents.dim() == 1 && branch_parents.size(0) == branch_list.size(0),
+                "branch_parents must be a 1D tensor with the same length as branch_list.");
+    TORCH_CHECK(branch_dirs.dim() == 1 && branch_dirs.size(0) == branch_list.size(0),
+                "branch_dirs must be a 1D tensor with the same length as branch_list.");
+    TORCH_CHECK(nodes_yx_tensor.dim() == 2 && nodes_yx_tensor.size(1) == 2,
+                "nodes_yx_tensor must be a 2D tensor with shape (num_nodes, 2).");
+    TORCH_CHECK(curves_tensor.size() == (std::size_t)branch_list.size(0),
+                "curves_tensor must have the same number of elements as branch_list.");
+    TORCH_CHECK(boundaries.size() == (std::size_t)branch_list.size(0),
+                "boundaries must have the same number of elements as branch_list.");
+    if (branchMapping.numel() > 0) {
+        TORCH_CHECK(branchMapping.dim() == 1 && branchMapping.size(0) == branch_list.size(0) + 1,
+                    "branchMapping must be a 1D tensor with the same length as branch_list.");
+        TORCH_CHECK(branchMapping.scalar_type() == torch::kInt64, "branchMapping must be of type Int64.");
+    }
+
+    auto branchLabelsMapAcc = branchLabelsMap.accessor<int64_t, 2>();
     auto topoMapAcc = topoMap.accessor<float, 2>();
+    auto fuzzySkeletonMapAcc = fuzzySkeletonMap.accessor<float, 2>();
     IntPoint maxShape = {(int)branchLabelsMap.size(0), (int)branchLabelsMap.size(1)};
+    auto branchMappingAcc = branchMapping.accessor<int64_t, 1>();
+    const bool useBranchMapping = branchMapping.numel() > 0;
 
     // === Initialize the adjacency list for the topology ===
     const auto& branchListAcc = branch_list.accessor<int, 2>();
@@ -40,8 +78,15 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
         }
         boundariesAcc.push_back(boundaries[b].accessor<int, 3>());
     }
-    const auto& curves = tensors_to_curves(curves_tensor);
+
+    std::vector<CurveYX> curves;
+    tensors_to_curves(curves_tensor, curves);
+    std::vector<std::vector<Point>> tangents(curves.size());
+    std::vector<std::vector<float>> calibres(curves.size());
     const auto& nodes_yx = tensor_to_curve(nodes_yx_tensor);
+
+    Scalars smoothKernel;
+    if (expand > 0) smoothKernel = gaussianHalfKernel1D(expand, ceil(expand * 3) + 1);
 
     // === Compute Tips info ===
     struct TipInfo {
@@ -51,20 +96,51 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
         float w = -1;
     };
     std::vector<std::array<TipInfo, 2>> tips(N_branches);
-    for (auto branches = branchByRank.rbegin(); branches != branchByRank.rend(); ++branches) {
-        for (const int branchID : *branches) {
-            const CurveYX& curve = curves[branchID];
-            const auto& boundary = boundariesAcc[branchID];
-            if (curve.size() == 0) continue;
-            for (const auto headTip : {0, 1}) {
-                std::size_t i = headTip ? curve.size() - 1 : 0;
-                tips[branchID][headTip].yx = curve[i];
+
+#pragma omp parallel for
+    for (std::size_t branchID = 0; branchID < N_branches; ++branchID) {
+        const CurveYX& curve = curves[branchID];
+        const auto& boundary = boundariesAcc[branchID];
+        std::vector<Point>& tangent = tangents[branchID];
+        std::vector<float>& calibre = calibres[branchID];
+        if (curve.size() != (std::size_t)boundary.size(0)) {
+            throw std::runtime_error("Curve, boundary, and tangent sizes do not match for branch " +
+                                     std::to_string(branchID));
+        }
+        if (expand > 0) {
+            // If the tangent vector is not provided or has a different size, recompute it
+            tangent.resize(curve.size());
+            std::vector<Point> rawTangent;
+            rawTangent.reserve(curve.size());
+            std::vector<float> rawCalibre;
+            rawCalibre.reserve(curve.size());
+            for (std::size_t i = 0; i < curve.size(); ++i) {
+                const auto& bounds = boundary[i];
+                float w = distance(bounds[0], bounds[1]);
+                rawTangent.push_back(adaptative_curve_tangent(curve, i, w, true, true).normalize());
+                rawCalibre.push_back(w);
+            }
+
+            // Smooth the tangent vectors to avoid abrupt changes
+            for (std::size_t i = 0; i < curve.size(); ++i) tangent[i] = smooth_tangents(rawTangent, i, smoothKernel);
+            calibre = movingAvg(rawCalibre, smoothKernel);  // Smooth calibres as well
+        }
+
+        if (curve.size() == 0) continue;
+        for (const auto headTip : {0, 1}) {
+            std::size_t i = headTip ? curve.size() - 1 : 0;
+            tips[branchID][headTip].yx = curve[i];
+
+            if (expand <= 0) {
                 IntPointPair b = {IntPoint(boundary[i][0]), IntPoint(boundary[i][1])};
-                float w = distance(b[0], b[1]);
-                Point t = adaptative_curve_tangent(curve, i, w, headTip == 0, headTip == 1).normalize();
-                tips[branchID][headTip].t = t;
                 tips[branchID][headTip].b = b;
+                float w = distance(b[0], b[1]);
+                tips[branchID][headTip].t = adaptative_curve_tangent(curve, i, w, true, true).normalize();
                 tips[branchID][headTip].w = w;
+            } else {
+                tips[branchID][headTip].t = tangent[i];
+                tips[branchID][headTip].w = calibre[i] + 2 * expand;
+                tips[branchID][headTip].b = curve[i].left_right_pair(tangent[i], calibre[i] * 0.5 + expand);
             }
         }
     }
@@ -145,18 +221,30 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
             const auto& branch = hierarchy[branchID];
             const auto& curve = curves[branchID];
             const auto& boundary = boundariesAcc[branchID];
+            const auto& tangent = tangents[branchID];
+            const auto& calibre = calibres[branchID];
             const auto N = curve.size();
 
             // === DRAW THE BRANCH ===
-            auto drawTopo = [&](IntPoint pt, float u, int branchID, float rank) {
-                if (!pt.is_inside(maxShape)) return;
-                branchLabelsMapAcc[pt.y][pt.x] = branchID + 1;
+            auto drawTopo = [&](IntPoint pt, float u, float d, int branchID, float rank) {
+                d = 100 - d;  // Convert distance to fuzzy skeleton map value
+                if (!pt.is_inside(maxShape) || fuzzySkeletonMapAcc[pt.y][pt.x] > d) return;
                 float topoValue = rank + u;
-                if (topoMapAcc[pt.y][pt.x] < topoValue) topoMapAcc[pt.y][pt.x] = topoValue;
+                if (fuzzySkeletonMapAcc[pt.y][pt.x] == d && topoMapAcc[pt.y][pt.x] >= topoValue) return;
+
+                topoMapAcc[pt.y][pt.x] = topoValue;
+                fuzzySkeletonMapAcc[pt.y][pt.x] = d;
+                branchLabelsMapAcc[pt.y][pt.x] = useBranchMapping ? branchMappingAcc[branchID + 1] : branchID + 1;
             };
-            auto drawBranchTopo = [&](IntPoint pt, float u) { drawTopo(pt, 0.1 + 0.9 * u, branchID, branch.rank); };
+            auto drawBranchTopo = [&](IntPoint pt, float u, float d) {
+                drawTopo(pt, 0.1 + 0.85 * u, d, branchID, branch.rank);
+            };
             if (N != 0) {  // If the branch is not empty rasterize it
-                rasterize_branch_topo(curve, boundary, drawBranchTopo, maxShape, bezier_interpolate);
+                if (expand)
+                    rasterize_branch_topo(curve, tangent, calibre, drawBranchTopo, maxShape, bezier_interpolate,
+                                          expand);
+                else
+                    rasterize_branch_topo(curve, boundary, drawBranchTopo, maxShape, bezier_interpolate);
             } else {  // Otherwise draw bezier cubic interpolation
                 const auto &tailTip = tips[branchID][0], &headTip = tips[branchID][1];
                 if (tailTip.w >= 0 && headTip.w >= 0 && bezier_interpolate > 0.0f) {
@@ -170,30 +258,94 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
                 const auto& headTip = tips[branchID][1];
                 if (headTip.w < 0) continue;  // If the head tip is invalid, skip this filling
 
+                // Decided weither to draw the junction to each side as a quad or a bezier cubic interpolation
+                std::vector<int> near_children, far_children;
                 for (const auto& childID : branch.children) {
                     const auto& childTip = tips[childID][0];
                     if (childTip.w < 0) continue;  // If the child tip is invalid, skip this filling
+                    if (bezier_interpolate <= 0.0f || (distance(headTip.yx, childTip.yx) <= headTip.w * SQRT2))
+                        near_children.push_back(childID);
+                    else
+                        far_children.push_back(childID);
+                }
 
-                    auto drawJunctionTopo = [&](IntPoint pt, float u) {
-                        drawTopo(pt, 0.1 * u, childID, branch.rank + 1);
-                    };
-
-                    if ((distance(headTip.yx, childTip.yx) <= (headTip.w + childTip.w) &&
-                         headTip.t.dot(childTip.t) > 0.5) ||
-                        bezier_interpolate <= 0.0f) {
-                        // If tips are close enough, draw a simple quad
-                        auto it = QuadIterator(headTip.b[0], headTip.b[1], childTip.b[1], childTip.b[0], maxShape);
-                        it.precomputeInvDiffNorms();
-                        while (it.iter()) drawJunctionTopo(it.point(), it.fromP12toP34());
-                    } else {
-                        // Otherwise draw bezier cubic interpolation
-                        // const IntPoint& node_yx = nodes_yx[branch.head_node];
-                        double d = distance(Point(headTip.yx), Point(childTip.yx)) * bezier_interpolate;
-                        const Point c0 = headTip.yx + headTip.t * d;    // distance(Point(headTip.yx), Point(node_yx));
-                        const Point c1 = childTip.yx - childTip.t * d;  // distance(Point(childTip.yx), Point(node_yx));
-                        rasterize_bezier(drawJunctionTopo, {headTip.yx, c0, c1, childTip.yx}, headTip.b, childTip.b,
-                                         maxShape);
+                // Draw the connection to near children as quads
+                if (!near_children.empty()) {
+                    // Compute the junction center by averaging the curve tip of near children
+                    Point junctionBarycentre = headTip.yx * (headTip.w + 0.5f);
+                    float weightSum = headTip.w + 0.5f;
+                    for (const auto& childID : near_children) {
+                        junctionBarycentre += tips[childID][0].yx * (tips[childID][0].w + 0.5f);
+                        weightSum += tips[childID][0].w + 0.5f;
                     }
+                    IntPoint junctionCenter = (junctionBarycentre / weightSum).toInt();
+
+                    // Order children by clockwise position around the junction center
+                    std::vector<std::pair<float, int>> near_angles;
+                    Point v0 = headTip.yx - junctionCenter;
+                    for (const auto& childID : near_children) {
+                        const auto& childTip = tips[childID][0];
+                        float angle = v0.angle(childTip.yx - junctionCenter);
+                        if (angle < 0) angle += 2 * M_PI;
+                        near_angles.emplace_back(angle, childID);
+                    }
+                    std::sort(near_angles.begin(), near_angles.end(),
+                              [](const auto& a, const auto& b) { return a.first > b.first; });
+                    near_children.clear();
+                    for (const auto& [angle, childID] : near_angles) near_children.push_back(childID);
+
+                    // Compute quads coordinates by a pairwise average of the boundary points of near children
+                    std::vector<IntPoint> midB;
+                    IntPoint prevB = headTip.b[0];
+                    for (const auto& childID : near_children) {
+                        const auto& childTip = tips[childID][0];
+                        midB.push_back(((prevB + childTip.b[0]) / 2).toInt());
+                        prevB = childTip.b[1];
+                    }
+                    midB.push_back(((prevB + headTip.b[1]) / 2).toInt());
+
+                    // Draw the quad from the head tip to the junction center
+                    auto drawJunctionHeadQuad = [&](const IntPoint& bound, const IntPoint& midBound) {
+                        QuadIterator it(headTip.yx, bound, midBound, junctionCenter, maxShape);
+                        if (!it.isConvex()) it = QuadIterator(headTip.yx, bound, bound, junctionCenter, maxShape);
+                        it.precomputeInvDiffNorms();
+                        while (it.iter()) {
+                            const double u = it.fromP12toP34(), d = distance(headTip.yx, it.point());
+                            drawTopo(it.point(), 0.95 + u * 0.05, d, branchID, branch.rank);
+                        }
+                    };
+                    drawJunctionHeadQuad(headTip.b[0], midB.front());
+                    drawJunctionHeadQuad(headTip.b[1], midB.back());
+
+                    // Draw the quads from the junction center to each near child
+                    auto drawJunctionChildQuad = [&](int32_t childID, IntPoint p, IntPoint bound, IntPoint midBound) {
+                        QuadIterator it(p, bound, midBound, junctionCenter, maxShape);
+                        if (!it.isConvex()) it = QuadIterator(p, bound, bound, junctionCenter, maxShape);
+                        it.precomputeInvDiffNorms();
+                        while (it.iter()) {
+                            const double u = it.fromP12toP34(), d = distance(p, it.point());
+                            drawTopo(it.point(), 0.1 * u, d, childID, branch.rank + 1);
+                        }
+                    };
+                    for (std::size_t i = 0; i < near_children.size(); ++i) {
+                        const auto& childID = near_children[i];
+                        const auto& childTip = tips[childID][0];
+                        drawJunctionChildQuad(childID, childTip.yx, childTip.b[0], midB[i]);
+                        drawJunctionChildQuad(childID, childTip.yx, childTip.b[1], midB[i + 1]);
+                    }
+                }
+
+                // Draw the bezier cubic interpolation from the head branch to each far child
+                for (auto childID : far_children) {
+                    const auto& childTip = tips[childID][0];
+                    auto drawJunctionBezier = [&](IntPoint pt, float u, float d) {
+                        drawTopo(pt, 0.1 * u, distance(pt, childTip.yx), childID, branch.rank + 1);
+                    };
+                    double d = distance(headTip.yx, childTip.yx) * bezier_interpolate;
+                    const Point c0 = headTip.yx + headTip.t * d;
+                    const Point c1 = childTip.yx - childTip.t * d;
+                    rasterize_bezier(drawJunctionBezier, {headTip.yx, c0, c1, childTip.yx}, headTip.b, childTip.b,
+                                     maxShape);
                 }
             }
 
@@ -221,7 +373,7 @@ void rasterize_branch_topo(const torch::Tensor& curve, const torch::Tensor& boun
 
     auto branchLabelsMapAcc = branchLabelsMap.accessor<int, 2>();
     auto topoMapAcc = topoMap.accessor<float, 2>();
-    auto drawBranchTopo = [&](IntPoint pt, float u) {
+    auto drawBranchTopo = [&](IntPoint pt, float u, float d) {
         float topoValue = branchRank + 0.9 * u;
         if (topoMapAcc[pt.y][pt.x] >= topoValue) return;
         branchLabelsMapAcc[pt.y][pt.x] = branchID;
@@ -231,11 +383,13 @@ void rasterize_branch_topo(const torch::Tensor& curve, const torch::Tensor& boun
     IntPoint maxShape = {(int)branchLabelsMap.size(0), (int)branchLabelsMap.size(1)};
     const auto& curve_vec = tensor_to_curve(curve);
 
+    std::vector<Point> tangents_vec;
+
     return rasterize_branch_topo(curve_vec, boundaries.accessor<int, 3>(), drawBranchTopo, maxShape,
                                  bspline_interpolate);
 }
 
-void rasterize_bezier(std::function<void(IntPoint, float)> updater, const IntPoint& p0, const IntPoint& p1,
+void rasterize_bezier(std::function<void(IntPoint, float, float)> updater, const IntPoint& p0, const IntPoint& p1,
                       const Point& t0, const Point& t1, const IntPointPair& b0, const IntPointPair& b1,
                       float bezier_smoothness, const IntPoint& maxShape) {
     bezier_smoothness *= distance(Point(p0), Point(p1));
@@ -243,9 +397,9 @@ void rasterize_bezier(std::function<void(IntPoint, float)> updater, const IntPoi
     rasterize_bezier(updater, bezier, b0, b1, maxShape);
 }
 
-void rasterize_bezier(std::function<void(IntPoint, float)> updater, const BezierCubic& bezier, const IntPointPair& b0,
-                      const IntPointPair& b1, const IntPoint& maxShape) {
-    const float w0 = std::max(distance(b0[0], b0[1]), 1.0f), w1 = std::max(distance(b1[0], b1[1]), 1.0f);
+void rasterize_bezier(std::function<void(IntPoint, float, float)> updater, const BezierCubic& bezier,
+                      const IntPointPair& b0, const IntPointPair& b1, const IntPoint& maxShape) {
+    float w0 = std::max(distance(b0[0], b0[1]), 1.0f), w1 = std::max(distance(b1[0], b1[1]), 1.0f);
 
     // == Discretize Bezier ==
     auto [interpPoints, us] = discretizeBezier(bezier);
@@ -272,7 +426,7 @@ void rasterize_bezier(std::function<void(IntPoint, float)> updater, const Bezier
             nextW = w1;
             nextB = b1;
         }
-        updater(p, u);
+        updater(p, u, 0);
         auto externalError = t.angle(nextT) * w * 0.5;
         for (int lr = 0; lr < 2; ++lr) {  // Iterate over left and right quads
             int lr_sign = 1 - lr * 2;     // +1 for left, -1 for right
@@ -288,16 +442,16 @@ void rasterize_bezier(std::function<void(IntPoint, float)> updater, const Bezier
                     b = evaluate_bezier(bezier, s_u).toInt().left_right_pair(s_t, s_w)[lr];
                     QuadIterator it(p, prev_b, b, nextP, maxShape);
                     it.precomputeInvDiffNorms();
-                    while (it.iter()) updater(it.point(), lerp(u, nextU, it.fromP1toP4()));
+                    while (it.iter()) updater(it.point(), lerp(u, nextU, it.fromP1toP4()), it.fromP14());
                     prev_b = b;
                 }
                 QuadIterator it(p, prev_b, nextB[lr], nextP, maxShape);
                 it.precomputeInvDiffNorms();
-                while (it.iter()) updater(it.point(), lerp(u, nextU, it.fromP1toP4()));
+                while (it.iter()) updater(it.point(), lerp(u, nextU, it.fromP1toP4()), it.fromP14());
             } else {
                 QuadIterator it(p, b[lr], nextB[lr], nextP, maxShape);
                 it.precomputeInvDiffNorms();
-                while (it.iter()) updater(it.point(), lerp(u, nextU, it.fromP12toP34()));
+                while (it.iter()) updater(it.point(), lerp(u, nextU, it.fromP12toP34()), it.fromP14());
             }
         }
 
@@ -311,7 +465,7 @@ void rasterize_bezier(std::function<void(IntPoint, float)> updater, const Bezier
 }
 
 void rasterize_branch_topo(const CurveYX& curve, const Tensor3DAcc<int>& boundaries,
-                           std::function<void(IntPoint, float)> draw, const IntPoint& maxShape,
+                           std::function<void(IntPoint, float, float)> draw, const IntPoint& maxShape,
                            float bspline_interpolate) {
     auto N = curve.size();
 
@@ -324,18 +478,59 @@ void rasterize_branch_topo(const CurveYX& curve, const Tensor3DAcc<int>& boundar
         const auto& nextP = curve[nextI];
         IntPointPair nextB = {boundaries[nextI][0], boundaries[nextI][1]};
 
-        auto localDraw = [&](IntPoint pt, float u) { draw(pt, (u + i) / N); };
+        auto localDraw = [&](IntPoint pt, float u, float d) { draw(pt, (u + i) / N, d); };
 
         IntPoint diff = nextP - p;
         if (diff.squaredNorm() <= 9) {
             for (int lr = 0; lr < 2; ++lr) {
                 // Draw the center point
-                localDraw(p, 0.0f);
+                localDraw(p, 0.0f, 0.0f);
 
                 // Iterate over left and right quads
                 QuadIterator it(p, b[lr], nextB[lr], nextP, maxShape);
                 it.precomputeInvDiffNorms();
-                while (it.iter()) localDraw(it.point(), it.fromP12toP34());
+                while (it.iter()) localDraw(it.point(), it.fromP12toP34(), it.fromP14());
+            }
+        } else if (bspline_interpolate > 0.0f) {
+            // Rasterize a bezier curve between p and nextP
+            Point t = adaptative_curve_tangent(curve, i, distance(b[0], b[1]), false, true),
+                  nextT = adaptative_curve_tangent(curve, nextI, distance(nextB[0], nextB[1]), true, false);
+            rasterize_bezier(localDraw, p, nextP, t, nextT, b, nextB, bspline_interpolate, maxShape);
+        }
+
+        // Move to the next point
+        p = nextP;
+        b = nextB;
+    }
+}
+
+void rasterize_branch_topo(const CurveYX& curve, const std::vector<Point>& tangents, const std::vector<float>& calibres,
+                           std::function<void(IntPoint, float, float)> draw, const IntPoint& maxShape,
+                           float bspline_interpolate, float expand) {
+    auto N = curve.size();
+
+    auto last = N - 1;
+    IntPoint p = curve[0];
+    IntPointPair b = p.left_right_pair(tangents[0], calibres[0] * 0.5 + expand, true), nextB;
+
+    for (std::size_t i = 0; i != last; i++) {
+        auto nextI = i + 1;
+        const auto& nextP = curve[nextI];
+        IntPointPair nextB = nextP.left_right_pair(tangents[nextI], calibres[nextI] * 0.5 + expand, true);
+
+        auto localDraw = [&](IntPoint pt, float u, float d) { draw(pt, (u + i) / N, d); };
+
+        IntPoint diff = nextP - p;
+        if (diff.squaredNorm() <= 9) {
+            for (int lr = 0; lr < 2; ++lr) {
+                // Draw the center point
+                localDraw(p, 0.0f, 0.0f);
+
+                // Iterate over left and right quads
+                QuadIterator it(p, b[lr], nextB[lr], nextP, maxShape);
+                if (expand > 0) it.mergeP2P3IfNotConvex();
+                it.precomputeInvDiffNorms();
+                while (it.iter()) localDraw(it.point(), it.fromP12toP34(), it.fromP14());
             }
         } else if (bspline_interpolate > 0.0f) {
             // Rasterize a bezier curve between p and nextP
@@ -391,8 +586,8 @@ torch::Tensor& rasterize_branch(const torch::Tensor& curveTensor, const torch::T
             Point t = adaptative_curve_tangent(curve, i, distance(b[0], b[1]), false, true),
                   nextT = adaptative_curve_tangent(curve, nextI, distance(nextB[0], nextB[1]), true, false);
 
-            rasterize_bezier([&](IntPoint pt, float u) { out[pt.y][pt.x] = fill_value; }, p, nextP, t, nextT, b, nextB,
-                             bspline_interpolate, maxShape);
+            rasterize_bezier([&](IntPoint pt, float u, float d) { out[pt.y][pt.x] = fill_value; }, p, nextP, t, nextT,
+                             b, nextB, bspline_interpolate, maxShape);
         }
 
         // Move to the next point
@@ -436,7 +631,29 @@ QuadIterator::QuadIterator(const IntPoint& p1, const IntPoint& p2, const IntPoin
       pDiff{{p2 - p1, p2 - p3, p4 - p3, p4 - p1}},
       p(pMin.y, pMin.x - 1),
       _crossProd{0, 0, 0, 0},
-      hourGlassQuad(pDiff[0].dot(pDiff[2]) > 0) {}
+      _p23Inverted(d32().is_null() || d14().dot(d32()) > 0),
+      //_p34Inverted(d34().is_null() || d12().dot(d34()) > 0),
+      _p1p4Adjacent(p1.is_adjacent(p4)) {
+    int crossProd = d12().cross(d14());
+    if (crossProd != 0)
+        _positiveCrossProd = crossProd > 0;
+    else
+        _positiveCrossProd = d34().cross(d32()) > 0;
+
+    // fastIt = false;
+    // if (!_p34Inverted) {
+    //     _it12 = RayIterator(pDiff[0].x >= 0 ? pDiff[0] : -pDiff[0]);
+    //     _it34 = RayIterator(pDiff[2].x >= 0 ? pDiff[2] : -pDiff[2]);
+    //     fastIt = false;  // _it12.octant() == it34.octant();
+    //     // If the two rays are parallel we
+    //     if (fastIt) {
+    //         _it12.skip(_it12.stepsCountTo(pMin));
+    //         _it = RayIterator(_it12.point(), 0, rotOctant45(_it12.octant(), 2));
+    //         if (_it.stepsCountTo(_it34.point()) < 0) _it = _it.oppositeRay();
+    //         _it.skip(-1);
+    //     }
+    // }
+}
 
 bool QuadIterator::finished() const {
     // Check if the iterator has finished iterating over the quad
@@ -446,6 +663,17 @@ bool QuadIterator::finished() const {
 bool QuadIterator::iter() {
     while (true) {
         // === Move to the next point ===
+        // if (fastIt) {
+        //     _it.next();
+        //     if (_it34.stepsCountTo(_it.point()) < 0) {
+        //         if (_it12.stepsCountTo(pMax) <= 0) return false;
+        //         _it12.next();
+        //         _it34.next();
+        //         _it.reset(_it12.point());
+        //     }
+        //     p = _it.point();
+        //     if (!(p.x >= pMin.x && p.x <= pMax.x && p.y >= pMin.y && p.y <= pMax.y)) continue;
+        // } else {
         if (p.x < pMax.x) {
             p.x++;
         } else if (p.y < pMax.y) {
@@ -454,32 +682,87 @@ bool QuadIterator::iter() {
         } else {
             return false;  // No more points to iterate
         }
+        //}
 
         // === Check if the point is inside the quad ===
         // Compute the cross products
-        auto pp1 = p - p1, pp3 = p - p3;
-        _crossProd[0] = pDiff[0].cross(pp1);                      //  (p2-p1) x (p-p1)
-        _crossProd[1] = -pDiff[1].cross(pp3);                     // -(p2-p3) x (p-p3)
-        _crossProd[3] = -pDiff[3].cross(pp1);                     // -(p4-p1) x (p-p1)
-        if (!hourGlassQuad) _crossProd[2] = pDiff[2].cross(pp3);  //  (p4-p3) x (p-p3)
+        auto pp = p - p1;
+        _crossProd[0] = d12().cross(pp);  //  (p2-p1) x (p-p1)
+        // Early exit if the point is outside the first edge
+        if (_positiveCrossProd ? _crossProd[0] < 0 : _crossProd[0] > 0) continue;
 
-        // Check if the point is inside the quad using the cross products
-        if (isPointInQuad(_crossProd)) return true;
+        // Early exit if the point is outside the last edge
+        _crossProd[3] = -d14().cross(pp);  // -(p4-p1) x (p-p1)
+        if (_positiveCrossProd ? _crossProd[3] < 0 : _crossProd[3] > 0) continue;
+
+        pp = p - p3;
+        int cross34 = d34().cross(pp);  //  (p4-p3) x (p-p3)
+        // if (!_p34Inverted) {            // If the edge p3-p4 is not inverted check the point is on its correct side
+        _crossProd[2] = cross34;
+        if (_positiveCrossProd ? cross34 < 0 : cross34 > 0) continue;
+        //} else
+        //    _crossProd[2] = -cross34;  // Otherwise simply store the opposite value for fromP12toP34() computation
+
+        if (!_p23Inverted) {
+            _crossProd[1] = -d32().cross(pp);  // -(p2-p3) x (p-p3)
+            if (_positiveCrossProd ? _crossProd[1] < 0 : _crossProd[1] > 0) continue;
+        }
+
+        return true;
     }
+}
+
+bool QuadIterator::isConvex() const {
+    if (_positiveCrossProd) {  // d12 x d14 > 0
+        if (d34().cross(d32()) < 0 || d32().cross(d12()) < 0 || d14().cross(d34()) < 0) return false;
+    } else {  // d12 x d14 < 0
+        if (d34().cross(d32()) > 0 || d32().cross(d12()) > 0 || d14().cross(d34()) > 0) return false;
+    }
+    return true;
+}
+
+bool QuadIterator::mergeP2P3IfNotConvex() {
+    if (_positiveCrossProd ? d34().cross(d32()) < 0 : d34().cross(d32()) > 0) {
+        // p3 is inside p1-p2-p4: move p3 to p2
+        p3 = p2;
+        pDiff[2] = p4 - p3;
+    } else if (_positiveCrossProd ? d32().cross(d12()) < 0 : d32().cross(d12()) > 0) {
+        // p2 is inside p1-p3-p4: move p2 to p3
+        p2 = p3;
+        pDiff[1] = p2 - p1;
+    } else
+        return false;
+    pDiff[1] = {0, 0};  // Set p2-p3 to 0
+    _p23Inverted = true;
+    return true;
 }
 
 const IntPoint& QuadIterator::point() const { return p; }
 const std::array<int, 4>& QuadIterator::crossProd() const { return _crossProd; }
 
 double QuadIterator::fromP12toP34() const {
-    double d = abs(_crossProd[0]) * _invDiffNorm[0];
-    double D = abs(_crossProd[2]) * _invDiffNorm[3] + d;
+    double d = abs(cross12()) * invNorm12();
+    double D = abs(cross34()) * invNorm34() + d;
     return D > 0 ? d / D : 0;
+}
+
+double QuadIterator::fromP14() const {
+    // Compute the distance from point p to the line segment p1-p4
+    if (_p1p4Adjacent) {
+        // If p1 and p4 are adjacent, return the distance to the closest endpoint...
+        int sqrNormP1 = (p - p1).squaredNorm(), sqrNormP4 = (p - p4).squaredNorm();
+        return sqrNormP1 <= sqrNormP4 ? sqrt(sqrNormP1) : sqrt(sqrNormP4);
+    } else {
+        // ... otherwise find the closest point on the line segment p1-p4
+        double t = clip((p - p1).normalize().dot(d14()) * invNorm14(), 0.0, 1.0);
+        IntPoint closestPoint = p1 + (d14() * t).toInt();
+        return (p - closestPoint).norm();
+    }
 }
 
 double QuadIterator::fromP1toP4() const {
     IntPoint pp1 = p - p1;
-    return clip(pp1.normalize().dot(pDiff[3]) * _invDiffNorm[3], 0.0, 1.0);
+    return clip(pp1.normalize().dot(d14()) * invNorm14(), 0.0, 1.0);
 }
 
 void QuadIterator::precomputeInvDiffNorms() {

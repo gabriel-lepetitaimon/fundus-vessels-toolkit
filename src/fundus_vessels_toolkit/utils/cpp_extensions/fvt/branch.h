@@ -79,18 +79,6 @@ std::vector<std::array<IntPoint, 2>> find_branch_endpoints(const torch::Tensor& 
 std::vector<CurveYX> track_branches(const torch::Tensor& branch_labels, const torch::Tensor& node_yx,
                                     const torch::Tensor& branch_list);
 
-IntPoint track_nearest_edge(const IntPoint& start, const Point& direction, const Tensor2DAcc<bool>& segmentation,
-                            int max_distance = 40);
-
-enum class SearchStrategy { GlobalMinimum, FirstLocalMinimum, LastLocalMinimum, Bisection };
-std::tuple<int, float> find_closest_pixel(const CurveYX& curve, const Point& p, int start, int end,
-                                          SearchStrategy strategy = SearchStrategy::GlobalMinimum);
-
-std::pair<torch::Tensor, torch::Tensor> find_closest_branches(const torch::Tensor& branch_labels,
-                                                              const torch::Tensor& points,
-                                                              const torch::Tensor& direction, float max_dist,
-                                                              float angle = 10);
-
 std::list<SizePair> split_contiguous_curves(const CurveYX& curve);
 
 /*
@@ -114,11 +102,26 @@ torch::Tensor draw_skeleton_labels(const std::vector<torch::Tensor>& branchCurve
                                    const torch::Tensor& branchList = torch::empty({0, 2}, torch::kInt),
                                    bool interpolate = false);
 
+/**************************************************************************************
+ *              === BRANCH_INTERCEPT.CPP ===
+ **************************************************************************************/
 struct InterceptPoint {
     std::size_t curveID;
     int posInCurve;
     IntPoint point;
 };
+
+IntPoint track_nearest_edge(const IntPoint& start, const Point& direction, const Tensor2DAcc<bool>& segmentation,
+                            int max_distance = 40);
+
+enum class SearchStrategy { GlobalMinimum, FirstLocalMinimum, LastLocalMinimum, Bisection };
+std::tuple<int, float> find_closest_pixel(const CurveYX& curve, const Point& p, int start, int end,
+                                          SearchStrategy strategy = SearchStrategy::GlobalMinimum);
+
+std::pair<torch::Tensor, torch::Tensor> find_closest_branches(const torch::Tensor& branch_labels,
+                                                              const torch::Tensor& points,
+                                                              const torch::Tensor& direction, float max_dist,
+                                                              float angle = 10);
 
 std::vector<std::list<InterceptPoint>> intercept_curves(const std::vector<CurveYX>& branchCurves,
                                                         const std::vector<IntPair>& branchList,
@@ -127,6 +130,15 @@ std::vector<std::list<InterceptPoint>> intercept_curves(const std::vector<CurveY
                                                         float maxDistSqr, float startMinCosSim, float endMinCosSim,
                                                         float minSnapDistSqr, float maxSnapDistSqr,
                                                         float maxSnapCosAngle, bool interpolateCurves = true);
+
+typedef std::pair<int, IntPair> Split;
+typedef std::vector<Split> Splits;
+
+std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_candidates(
+    const std::vector<torch::Tensor>& branchCurves, const std::vector<torch::Tensor>& branchTangents,
+    const torch::Tensor& branchListTensor, const torch::Tensor& nodesYX, const IntPair& shape, float maxDist,
+    float nearConeAngle, float farConeAngle, float maxTanAngle, float maxHypAngle, float snapDist,
+    float minSpaceBetweenSplits);
 
 /**************************************************************************************
  *              === BRANCH_FIXING.CPP ===

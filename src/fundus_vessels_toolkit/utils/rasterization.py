@@ -1,3 +1,5 @@
+from typing import Optional
+
 import numpy as np
 import numpy.typing as npt
 import torch
@@ -18,17 +20,19 @@ def rasterize_topology(
     shape: tuple[int, int],
     fill_junctions: bool = True,
     bezier_interpolate: bool | float = 0.5,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    expand: float = 0.0,
+    branch_mapping: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Rasterizes the topology of branches given their curves and boundaries.
 
     Parameters
     ----------
     branch_list : torch.Tensor
-        A tensor containing the list of branches, where each branch is represented by its ID.
+        The branch list as a tensor of shape (num_branches, 2), where each row contains the (start_node_id, end_node_id) of a branch.
 
     branch_tree : torch.Tensor
-        A tensor containing the branch tree, where each branch's parent is represented by its ID.
+        The branch tree as a tensor of shape (num_branches,), where each row contains the index of the parent branch (or -1 if it's a root branch).
 
     branch_dirs : torch.Tensor
         A tensor containing the direction of each branch.
@@ -55,15 +59,26 @@ def rasterize_topology(
     fill_junctions : bool, optional
         A flag indicating whether to fill junctions in the topology. Default is True.
 
+    expand : float, optional
+        A float indicating the distance to expand (dilate) the branch boundaries. Default is 0.0
+
+    branch_mapping : Optional[torch.Tensor], optional
+        A tensor of shape (num_branches,) that maps each branch ID to a new label. If provided, the rasterized branch labels will be replaced with the corresponding values from this mapping.
+
     Returns
     -------
     tuple
-        A tuple containing two tensors:
+        A tuple containing three tensors:
         - branchLabelsMap: A tensor of shape `shape` containing the labels of the branches.
         - topoMap: A tensor of shape `shape` containing the topology information.
+        - fuzzySkeletonMap: A tensor of shape `shape` containing the distance to the skeleton.
     """  # noqa: E501
-    branchLabelsMap = torch.from_numpy(np.zeros(shape, dtype=np.int32)).int()
+    branchLabelsMap = torch.from_numpy(np.zeros(shape, dtype=np.int64)).long()
     topoMap = torch.from_numpy(np.zeros(shape, dtype=np.float32))
+    fuzzySkeletonMap = torch.from_numpy(np.zeros(shape, dtype=np.float32))
+
+    if branch_mapping is None:
+        branch_mapping = torch.empty((0,), dtype=torch.int64)
 
     rasterize_topology_cpp(
         branch_list.cpu().int(),
@@ -74,10 +89,13 @@ def rasterize_topology(
         nodes_yx.cpu().int(),
         bezier_interpolate if isinstance(bezier_interpolate, float) else (0.5 if bezier_interpolate else -1.0),
         fill_junctions,
+        expand,
+        branch_mapping.cpu().long(),
         branchLabelsMap,
         topoMap,
+        fuzzySkeletonMap,
     )
-    return branchLabelsMap, topoMap
+    return branchLabelsMap, topoMap, fuzzySkeletonMap
 
 
 @autocast_torch

@@ -165,8 +165,7 @@ class HSVJitterCfg(ExpCfgBaseModel):
 
         with watch("HSV to RGB"):
             img_rgb = cv2.cvtColor(img_hsv, cv2.COLOR_HSV2RGB)  # H,W,C -> C,H,W
-        with watch("Mask background"):
-            img_rgb[np.all(img == 0, axis=0)] = 0  # Preserve black background
+
         return img_rgb.transpose(2, 0, 1)
 
 

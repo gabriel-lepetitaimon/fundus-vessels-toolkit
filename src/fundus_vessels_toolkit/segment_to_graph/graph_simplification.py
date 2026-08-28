@@ -20,7 +20,7 @@ import numpy as np
 import numpy.typing as npt
 
 from fundus_toolkits.utils.geometric import distance_matrix
-from fundus_toolkits.utils.typing import IntPairArrayLike
+from fundus_toolkits.utils.typing import Int2DArray, IntPairArrayLike
 
 from ..utils import if_none
 from ..utils.cluster import cluster_by_distance, iterative_reduce_clusters, reduce_clusters
@@ -280,6 +280,7 @@ def cluster_nodes_by_distance(
         connected_nodes_id = graph.node_connected_components()
         # Filter the nodes type
         connected_nodes_id = [np.intersect1d(_, nodes_id, assume_unique=True) for _ in connected_nodes_id]
+        connected_nodes_id = [_ for _ in connected_nodes_id if len(_) > 0]
         # Compute the distance between all these nodes
         all_nodes_id = np.concatenate(connected_nodes_id)
         all_nodes_coord = graph.node_coord()[all_nodes_id]
@@ -654,6 +655,96 @@ def find_facing_endpoints(
             unique_pairs = endpoint_pairs[first_pos]
         endpoint_pairs = np.array(unique_pairs, dtype=int)
     return endp[endpoint_pairs]
+
+
+def extend_topology(
+    graph: VGraph,
+    *,
+    max_distance: float,
+    nearConeAngle: float,
+    farConeAngle: float,
+    maxTanAngle: float,
+    snapDist: float,
+    minSpaceBetweenSplits: float,
+    inplace: bool = False,
+) -> tuple[VGraph, Int2DArray]:
+    """
+    Search for potential reconnections between endpoints and branches of the graph. Rays are emitted from the endpoints in the direction of their tangent and the branches are checked for intercepts with these rays. If an intercept is found, the branch is split at the intercept point and a new branch is created between the endpoint and the intercept point.
+
+    Parameters
+    ----------
+    graph: VGraph
+        The vasculature graph.
+
+    max_distance: float
+        The maximum distance between the ray source and the point of intercept on a branch.
+
+    nearConeAngle: float
+        The angle of the intercept cone near the emitting endpoint.
+
+    farConeAngle: float
+        The angle of the intercept cone at the maximum distance from the emitting endpoint.
+
+    maxTanAngle: float
+        The maximum angle between the ray direction and the branch tangent for an intercept to be considered valid.
+
+    snapDist: float
+        The distance under which an intercept point is snapped to the nearest branch tip.
+
+    minSpaceBetweenSplits: float
+        The minimum distance between two splits on the same branch. Splits that are closer than this distance are clustered together.
+
+    inplace: bool
+        If True, the graph is modified in place. Otherwise, a copy of the graph is created and modified.
+
+    Returns
+    -------
+    graph: VGraph
+        The modified graph with the new nodes and branches added.
+
+    intercepts: Int2DArray
+        An integer array of shape (C, 4) where each row is in the form (b0, t0, b1, t1) where:
+        - b0 and b1 are the indices of the branches to connect in the modified graph
+        - t0 and t1 are the indices of the tips (0 for the first tip, 1 for the second tip)
+    """  # noqa: E501
+    import torch
+
+    from ..utils.cpp_extensions.fvt_cpp import branch_connexion_candidates
+
+    if not inplace:
+        graph = graph.copy()
+
+    gdata = graph.geometric_data()
+    branch_curves = [torch.from_numpy(_).round().int() for _ in gdata.branch_curve()]
+    branch_tangents = [
+        torch.from_numpy(_.data).float() if _ is not None else torch.empty(0, 2)
+        for _ in gdata.branch_data(VBranchGeoData.Fields.TANGENTS)
+    ]
+    branch_list = torch.from_numpy(graph.branch_list)
+    nodes_yx = torch.from_numpy(gdata.node_coord())
+
+    splits, candidates = branch_connexion_candidates(
+        branch_curves,
+        branch_tangents,
+        branch_list.int(),
+        nodes_yx.round().int(),
+        gdata.domain.shape,
+        float(max_distance),
+        float(nearConeAngle),
+        float(farConeAngle),
+        float(maxTanAngle),
+        float(maxTanAngle),
+        float(snapDist),
+        float(minSpaceBetweenSplits),
+    )
+
+    for b, b_splits in splits:
+        split_curve_id = [_[0] for _ in b_splits]
+        split_coord = [_[1] for _ in b_splits]
+        graph.split_branch(b, split_curve_id, split_coord, inplace=True)
+    merge_nodes_by_distance(graph, max_distance=1, nodes_type="junction", only_connected_nodes=False, inplace=True)
+
+    return graph, candidates.numpy()
 
 
 def find_reconnection_candidates(

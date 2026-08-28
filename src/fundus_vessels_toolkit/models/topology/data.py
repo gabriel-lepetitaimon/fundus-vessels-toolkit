@@ -89,6 +89,9 @@ class BranchDigraphData(PygData):
     name: str
     """Name of the sample, usually the original fundus image file name without extension. (For debug and logging purposes)."""  # noqa: E501
 
+    graph_version: str
+    """Name of the algorithm used to generate the graph."""
+
     edge_attr: None
 
     BRANCH_ATTR = {
@@ -129,6 +132,7 @@ class BranchDigraphData(PygData):
         branch_dir_p: Optional[Tensor] = None,
         branch_subtree_idx: Optional[Tensor] = None,
         name: str = "",
+        graph_version: str = "",
     ):
         """Store branch digraph data in PyG format.
 
@@ -272,6 +276,7 @@ class BranchDigraphData(PygData):
             vnode_count=vnode_count,
             vnode_coord=vnode_coord,
             name=name,
+            graph_version=graph_version,
         )
         self.num_nodes = B
 
@@ -301,6 +306,7 @@ class BranchDigraphData(PygData):
         od_yx: npt.NDArray,
         mac_yx: npt.NDArray,
         name: str,
+        graph_version: str = "",
     ) -> Self:
         # assert VBranchDigraph.has_all_p(digraph), "branch_digraph must have branch_fp_p and branch_av_p"
         assert digraph.graph is not None, "branch_digraph must have graph constructed"
@@ -362,6 +368,7 @@ class BranchDigraphData(PygData):
             branch_tip_calibre=torch.from_numpy(branch_tip_calibre).float() if branch_tip_calibre is not None else None,
             **asdict(gt_info),
             name=name,
+            graph_version=graph_version,
         )
 
     @overload
@@ -375,6 +382,7 @@ class BranchDigraphData(PygData):
         return_digraph: Literal[False] = False,
         augment: Optional[AugmentationCfg] = None,
         name: Optional[str] = None,
+        graph_version: Optional[str] = None,
         od_center: Optional[Point] = None,
         mac_center: Optional[Point] = None,
     ) -> Self: ...
@@ -389,6 +397,7 @@ class BranchDigraphData(PygData):
         return_digraph: Literal[True],
         augment: Optional[AugmentationCfg] = None,
         name: Optional[str] = None,
+        graph_version: Optional[str] = None,
         od_center: Optional[Point] = None,
         mac_center: Optional[Point] = None,
     ) -> tuple[Self, VBranchDigraph]: ...
@@ -402,6 +411,7 @@ class BranchDigraphData(PygData):
         return_digraph: bool = False,
         augment: Optional[AugmentationCfg] = None,
         name: Optional[str] = None,
+        graph_version: Optional[str] = None,
         od_center: Optional[Point] = None,
         mac_center: Optional[Point] = None,
     ) -> Self | tuple[Self, VBranchDigraph]:
@@ -450,13 +460,13 @@ class BranchDigraphData(PygData):
                 branch_digraph.graph.geometric_data().clear_attribute(all_except="CALIBRE")
             if augment_opts.hsv_jitter is not None:
                 with p.sub("Color Augmentation") as p_aug:
+                    with p_aug.sub("hsv jitter"):
+                        fundus_img = augment_opts.hsv_jitter.apply(fundus_img)
                     if isinstance(fundus, FundusData):
                         with p_aug.sub("compute roi mask"):
                             roi_mask = fundus.roi_mask
                         with p_aug.sub("mask roi"):
                             fundus_img[:, ~roi_mask] = 0
-                    with p_aug.sub("hsv jitter"):
-                        fundus_img = augment_opts.hsv_jitter.apply(fundus_img)
 
             if augment_opts.geometric:
                 with p.sub("Geometric Augmentation") as p_aug:
@@ -479,7 +489,8 @@ class BranchDigraphData(PygData):
             fundus_img=fundus_img,
             od_yx=od_yx,
             mac_yx=mac_yx,
-            name=if_none(name, "graph_based_sample"),
+            name=if_none(name, "sample"),
+            graph_version=if_none(graph_version, ""),
         )
         return (data, branch_digraph) if return_digraph else data
 

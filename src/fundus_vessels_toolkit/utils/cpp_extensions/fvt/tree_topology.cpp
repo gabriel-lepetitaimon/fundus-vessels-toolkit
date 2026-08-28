@@ -21,9 +21,8 @@ bool is_ancestor(const TopoLabel& ancestor, const TopoLabel& descendant, const b
     auto ancestor_rank_mask = branching_bit_mask(get_rank(ancestor));
     return (ancestor & ancestor_rank_mask) == (descendant & ancestor_rank_mask);
 }
-bool is_between(const TopoLabel& label, const TopoLabel& start, const TopoLabel& end, const bool& strict,
-                const float& rank, const float& start_rank, const float& end_rank, bool strict_rank) {
-    if (strict && (label == start || label == end)) return false;
+bool is_between(const TopoLabel& label, const TopoLabel& start, const TopoLabel& end, const float& rank,
+                const float& start_rank, const float& end_rank, bool strict_start, bool strict_end) {
     if (label < start || label > end) return false;
 
     const uint64_t& start_rank_mask = branching_bit_mask(get_rank(start));
@@ -32,8 +31,8 @@ bool is_between(const TopoLabel& label, const TopoLabel& start, const TopoLabel&
     const uint64_t& rank_mask = branching_bit_mask(get_rank(label));
     if ((label & rank_mask) != (end & rank_mask)) return false;
 
-    if (rank == -1) return true;
-    if (rank == start_rank || rank == end_rank) return strict_rank ? false : true;
+    if (rank == start_rank) return strict_start ? false : true;
+    if (rank == end_rank) return strict_end ? false : true;
     return start_rank < rank && rank < end_rank;
 }
 
@@ -60,6 +59,7 @@ std::array<torch::Tensor, 5> read_branches_topology(const std::vector<torch::Ten
     std::vector<TopoLabel> branch_labels(B);
     std::vector<float> branch_dir(B);
     std::vector<float> branch_plausibility(B);
+    std::vector<int> branch_length(B);
     std::vector<std::array<TopoLabel, 2>> tips_label(B);
     std::vector<std::array<float, 2>> tips_rank(B);
 
@@ -72,9 +72,9 @@ std::array<torch::Tensor, 5> read_branches_topology(const std::vector<torch::Ten
         TORCH_CHECK_VALUE(curveTensor.dtype() == torch::kInt32, "Each branch curve must be of dtype int32");
 
         auto curve_acc = curveTensor.accessor<int32_t, 2>();
-        std::tie(branch_labels[b], branch_dir[b], branch_plausibility[b], tips_label[b], tips_rank[b]) =
-            read_branch_topology(curve_acc, domain, topo_idxs_acc, topo_labels_acc, topo_ranks_acc, fuzzy_skeleton_acc,
-                                 min_rank_threshold, max_rank_tolerance, b);
+        std::tie(branch_labels[b], branch_dir[b], branch_plausibility[b], branch_length[b], tips_label[b],
+                 tips_rank[b]) = read_branch_topology(curve_acc, domain, topo_idxs_acc, topo_labels_acc, topo_ranks_acc,
+                                                      fuzzy_skeleton_acc, min_rank_threshold, max_rank_tolerance, b);
     }
 
     // → Filter branches that overlap on gt to keep only the most plausible one
@@ -89,10 +89,10 @@ std::array<torch::Tensor, 5> read_branches_topology(const std::vector<torch::Ten
             auto [tail1_r, head1_r] = tips_rank[b1];
             if (branch_dir[b1] < 0) std::swap(head1_l, tail1_l), std::swap(head1_r, tail1_r);
 
-            if (is_between(tail0_l, tail1_l, head1_l, false, tail0_r, tail1_r, head1_r, true) ||
-                is_between(head0_l, tail1_l, head1_l, false, head0_r, tail1_r, head1_r, true) ||
-                is_between(tail1_l, tail0_l, head0_l, false, tail1_r, tail0_r, head0_r, true) ||
-                is_between(head1_l, tail0_l, head0_l, false, head1_r, tail0_r, head0_r, true))
+            if (is_between(tail0_l, tail1_l, head1_l, tail0_r, tail1_r, head1_r, false, true) ||
+                is_between(head0_l, tail1_l, head1_l, head0_r, tail1_r, head1_r, true, false) ||
+                is_between(tail1_l, tail0_l, head0_l, tail1_r, tail0_r, head0_r, false, true) ||
+                is_between(head1_l, tail0_l, head0_l, head1_r, tail0_r, head0_r, true, false))
                 overlapping_branch_pairs.emplace_back(SizePair{b0, b1});
         }
     }
@@ -109,14 +109,17 @@ std::array<torch::Tensor, 5> read_branches_topology(const std::vector<torch::Ten
             }
         }
 
-        // Iteratively remove the least plausible branch until no overlap remains
-        std::sort(cluster.begin(), cluster.end(), [&branch_plausibility](std::size_t a, std::size_t b) {
-            return branch_plausibility[a] < branch_plausibility[b];
-        });
+        // Iteratively remove the branch that overlaps the most with other branches in the cluster
+        while (cluster_pairs.size() > 0) {
+            std::map<std::size_t, float> branch_opposite_plausibility;
+            for (const auto& pair : cluster_pairs) {
+                branch_opposite_plausibility[pair[0]] += branch_plausibility[pair[1]];
+                branch_opposite_plausibility[pair[1]] += branch_plausibility[pair[0]];
+            }
+            std::size_t b = std::max_element(branch_opposite_plausibility.begin(), branch_opposite_plausibility.end(),
+                                             [](const auto& a, const auto& b) { return a.second < b.second; })
+                                ->first;
 
-        auto b_it = cluster.begin();
-        while (cluster_pairs.size() > 0 && b_it != cluster.end()) {
-            std::size_t b = *b_it++;
             branch_labels[b] = 0;
             branch_plausibility[b] = 0.0f;
 
@@ -124,11 +127,14 @@ std::array<torch::Tensor, 5> read_branches_topology(const std::vector<torch::Ten
         }
     }
 
+    for (std::size_t b = 0; b < B; ++b)
+        if (branch_length[b] > 0) branch_plausibility[b] /= branch_length[b];
+
     return {vector_to_tensor(branch_labels), vector_to_tensor(branch_dir), vector_to_tensor(branch_plausibility),
             vector_to_tensor(tips_label), vector_to_tensor(tips_rank)};
 }
 
-std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 2>> read_branch_topology(
+std::tuple<TopoLabel, float, float, int, std::array<TopoLabel, 2>, std::array<float, 2>> read_branch_topology(
     const Tensor2DAcc<int32_t>& curve_acc, const IntPair& domain, const Tensor2DAcc<uint32_t>& topo_idxs,
     const Tensor1DAcc<TopoLabel>& topo_labels, const Tensor1DAcc<float>& topo_ranks,
     const Tensor1DAcc<at::Half>& fuzzy_skeleton, float min_rank_threshold, float max_rank_tolerance, int b_id) {
@@ -147,7 +153,7 @@ std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 
         if (topo_idx < max_size) curve.push_back(topo_idx);
     }
     float known_label_ratio = static_cast<float>(curve.size()) / static_cast<float>(N);
-    if (curve.size() < 3) return {0, 0.0f, 0.0f, {0, 0}, {0.0f, 0.0f}};
+    if (curve.size() < 3) return {0, 0.0f, 0.0f, 0, {0, 0}, {0.0f, 0.0f}};
 
     // → Search points descendant of the main ancestor ...
     const auto& main_ancestor = most_present_ancestor(curve, topo_labels);
@@ -155,7 +161,7 @@ std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 
     curveTmp.reserve(curve.size());
     for (const auto& idx : curve)
         if (is_ancestor(main_ancestor, topo_labels[idx], false)) curveTmp.push_back(idx);
-    if (curveTmp.size() < 3) return {0, 0.0f, 0.0f, {0, 0}, {0.0f, 0.0f}};
+    if (curveTmp.size() < 3) return {0, 0.0f, 0.0f, 0, {0, 0}, {0.0f, 0.0f}};
     float valid_ancestor_ratio = static_cast<float>(curveTmp.size()) / static_cast<float>(curve.size());
     curve = curveTmp;
     curveTmp.clear();
@@ -172,7 +178,7 @@ std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 
 
     // → Skip branch if not enough valid ancestor points or low directionality
     if (known_label_ratio < 0.33f || valid_ancestor_ratio < 0.66f || abs(direction) < 0.66f)
-        return {0, direction, sum(fuzzy_skeleton, curve) / static_cast<float>(N), {0, 0}, {0.0f, 0.0f}};
+        return {0, direction, sum(fuzzy_skeleton, curve), N, {0, 0}, {0.0f, 0.0f}};
 
     // → Exclude starting curve points which are part of the transition between labels
     float min_rank = int(std::floor(minimum(topo_ranks, curve)));
@@ -221,7 +227,7 @@ std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 
     }
 
     // → Average fuzzy skeleton value as plausibility score
-    float plausibility = sum(fuzzy_skeleton, curve) / static_cast<float>(N);
+    float plausibility = sum(fuzzy_skeleton, curve);
 
     // → Get tip labels and ranks
     std::array<TopoLabel, 2> tip_labels;
@@ -237,7 +243,7 @@ std::tuple<TopoLabel, float, float, std::array<TopoLabel, 2>, std::array<float, 
         }
     }
 
-    return {branch_label, direction, plausibility, tip_labels, tip_ranks};
+    return {branch_label, direction, plausibility, N, tip_labels, tip_ranks};
 }
 
 TopoLabel most_present_ancestor(const std::vector<int32_t>& curve, const Tensor1DAcc<TopoLabel>& topo_labels) {

@@ -2,6 +2,7 @@
 #define _FITCURVE_H_
 
 #include "common.h"
+#include "ray_iterators.h"
 
 using BezierCubic = std::array<Point, 4>;
 using BSpline = std::vector<BezierCubic>;
@@ -19,6 +20,27 @@ Point evaluate_bezier(const BezierCubic& bezCurve, const double& u);
 PointList evaluate_bezier_tangent(const BezierCubic& bezCurve, const std::vector<double>& u);
 
 Point infer_bezier_t0(const Point& p0, const Point& p1, const Point& t1, double smoothness = 0.5);
+
+class BezierIterator {
+   public:
+    BezierIterator(const BezierCubic& bezCurve, const std::vector<double>& u);
+    BezierIterator(const BezierCubic& bezCurve, float flatness = 8.0);
+    BezierIterator(const Point& p0, const Point& p1, float flatness = 8.0);
+    BezierIterator(const Point& p0, const Point& t0, const Point& p1, const Point& t1, float flatness = 8.0);
+
+    bool next();
+
+    double u() const;
+    const IntPoint& p() const;
+    Point t() const;
+
+   private:
+    BezierCubic bezCurve;
+    CurveYX points;
+    std::vector<double> us;
+    std::size_t bezierStep = 0, rayMaxStep = 0;
+    RayIterator ray;
+};
 
 std::tuple<CurveYX, std::vector<double>> discretizeBezier(const BezierCubic& bezCurve, float flatness = 8.0);
 void _recursiveDiscretizeBezier(const BezierCubic& curveSegment, double u_start, double u_end, CurveYX& points,
