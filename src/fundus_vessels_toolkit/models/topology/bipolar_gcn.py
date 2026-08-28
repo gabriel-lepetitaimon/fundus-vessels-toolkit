@@ -44,6 +44,8 @@ class TransformerGCNOpt(ExpCfgBaseModel):
     pole_features_ratio: float = Field(default=0.5, ge=0.0, le=1.0)
     """Ratio of the number of features dedicated to pole over the total number of features (including both pole and node). Only relevant if bipolar_node is True. For example, if total_n_out=100 and pole_features_ratio=0.66, then 66 features will be dedicated to poles (33 for each) and 33 features will be dedicated to nodes."""  # noqa: E501
 
+    legacy_pole_features_ratio: bool = Field(default=False)
+
     pos_encoding: SupportPatternOrNone = Field(default="spiral")
     """The type of positional encoding to use. If "none", no positional encoding will be used. Otherwise, should be a support pattern supported by RoPESupportPattern, which will be used to compute RoPE positional encodings based on the relative positions of the nodes' poles."""  # noqa: E501
 
@@ -78,13 +80,23 @@ class TransformerGCN(torch.nn.Module):
         # --- Create layers based on architecture specification string ---
         def ConvBlock(in_channels, out_channels, heads, dropout: float = 0, first=False):
             if opt.bipolar_node:
-                if first:
-                    in_channels_pole = in_channels_node = in_channels // 3
+                if opt.legacy_pole_features_ratio:
+                    if first:
+                        in_channels_pole = in_channels_node = in_channels // 3
+                    else:
+                        in_channels_pole = int((in_channels * opt.pole_features_ratio) / 2)
+                        in_channels_node = in_channels - 2 * in_channels_pole
+                    out_channels_pole = int((out_channels * opt.pole_features_ratio) / 2)
+                    out_channels_node = out_channels - 2 * out_channels_pole
                 else:
-                    in_channels_pole = int((in_channels * opt.pole_features_ratio) / 2)
-                    in_channels_node = in_channels - 2 * in_channels_pole
-                out_channels_pole = int((out_channels * opt.pole_features_ratio) / 2)
-                out_channels_node = out_channels - 2 * out_channels_pole
+                    if first:
+                        in_channels_pole = in_channels_node = in_channels // 3
+                    else:
+                        in_channels_pole = int(in_channels * opt.pole_features_ratio)
+                        in_channels_node = in_channels - in_channels_pole
+                    out_channels_pole = int(out_channels * opt.pole_features_ratio)
+                    out_channels_node = out_channels - out_channels_pole
+                    in_channels_pole = int(in_channels * opt.pole_features_ratio)
                 conv = BipolarTransformerConv(
                     in_channels_node=in_channels_node,
                     in_channels_pole=in_channels_pole,
