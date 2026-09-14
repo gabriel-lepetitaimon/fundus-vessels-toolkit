@@ -23,7 +23,7 @@ class SegToGraph:
 
     def __init__(
         self,
-        skeletonize_method: SkeletonizeMethod | str = "lee",
+        skeletonize_method: SkeletonizeMethod = "lee",
         fix_hollow=True,
         clean_branches_tips=20,
         min_terminal_branch_length=4,
@@ -86,7 +86,7 @@ class SegToGraph:
         bspline_target_error:
             Target error for the bspline interpolation of the branches. Default is 3.
         """  # noqa: E501
-        self.skeletonize_method: SkeletonizeMethod | str = skeletonize_method
+        self.skeletonize_method: SkeletonizeMethod = skeletonize_method
 
         self.fix_hollow = fix_hollow
         self.clean_branches_tips = clean_branches_tips
@@ -103,7 +103,7 @@ class SegToGraph:
 
     def __call__(
         self,
-        vessel_mask: npt.NDArray[np.bool_] | torch.Tensor | str | Path,
+        vessel_mask: npt.NDArray[np.bool_] | npt.NDArray[np.uint8] | torch.Tensor | str | Path,
         simplify: Optional[bool] = None,
         parse_geometry: Optional[bool] = None,
     ) -> VGraph:
@@ -150,13 +150,13 @@ class SegToGraph:
 
     def skeletonize(
         self,
-        vessel_seg: npt.NDArray[np.bool_] | torch.Tensor,
-        mask: Optional[npt.NDArray[np.bool_] | torch.Tensor] = None,
-    ) -> npt.NDArray[np.bool_] | torch.Tensor:
+        vessel_seg: npt.NDArray[np.bool_] | npt.NDArray[np.uint8],
+        mask: Optional[npt.NDArray[np.bool_]] = None,
+    ) -> npt.NDArray[np.bool_]:
         from ..segment_to_graph.skeleton_parsing import detect_skeleton_nodes
         from ..segment_to_graph.skeletonize import skeletonize
 
-        binary_skel = skeletonize(vessel_seg, method=self.skeletonize_method) > 0
+        binary_skel = skeletonize(vessel_seg, method="fvt").astype(np.bool_)
         if mask is not None:
             binary_skel[~mask] = 0
         remove_endpoint_branches = self.min_terminal_branch_length > 0 or self.min_terminal_branch_calibre_ratio > 0
@@ -197,7 +197,7 @@ class SegToGraph:
 
         graph = populate_geometry(
             graph,
-            vessels_segmentation,
+            vessels_segmentation.astype(np.bool_),
             adaptative_tangents=self.adaptative_tangents,
             bspline_target_error=self.bspline_target_error,
             inplace=inplace,

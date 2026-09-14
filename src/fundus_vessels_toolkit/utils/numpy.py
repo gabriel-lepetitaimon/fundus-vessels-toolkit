@@ -337,6 +337,11 @@ class Sparse2DAccessor[T: np.generic, K: np.generic]:
         self.data = values
         self._key_gen = Sparse2DAccessor.KeyGen(self.idxs)
 
+    def freeze(self) -> None:
+        """Freeze the Sparse2DAccessor to prevent further modifications."""
+        self.idxs.setflags(write=False)
+        self.data.setflags(write=False)
+
     @property
     def shape(self) -> Tuple[int, ...]:
         return self.idxs.shape

@@ -13,8 +13,7 @@ from torch_geometric.typing import OptTensor
 from fundus_toolkits import FundusData
 from fundus_toolkits.utils.geometric import Point, Rect
 
-from fundus_vessels_toolkit.segment_to_graph.geometry_parsing import populate_tangent
-
+from ...segment_to_graph.geometry_parsing import populate_tangent
 from ...segment_to_graph.vbranch_digraph import (
     TreeTopology,
     VBranchDigraph,
@@ -22,10 +21,11 @@ from ...segment_to_graph.vbranch_digraph import (
     _VBranchDigraphWithAVProba,
 )
 from ...utils import if_none
+from ...utils.profiling import watch
 from ...utils.tree import tree_connected_components
 from ...vascular_data_objects import VBranchGeoData
 from ...vascular_data_objects.vgeometric_data import VGeometricData
-from .data_augmentation import AugmentationOpts, deteriorate_graph
+from .data_augmentation import AugmentationCfg, deteriorate_graph
 
 
 class BranchDigraphData(PygData):
@@ -89,6 +89,9 @@ class BranchDigraphData(PygData):
     name: str
     """Name of the sample, usually the original fundus image file name without extension. (For debug and logging purposes)."""  # noqa: E501
 
+    graph_version: str
+    """Name of the algorithm used to generate the graph."""
+
     edge_attr: None
 
     BRANCH_ATTR = {
@@ -129,6 +132,7 @@ class BranchDigraphData(PygData):
         branch_dir_p: Optional[Tensor] = None,
         branch_subtree_idx: Optional[Tensor] = None,
         name: str = "",
+        graph_version: str = "",
     ):
         """Store branch digraph data in PyG format.
 
@@ -272,6 +276,7 @@ class BranchDigraphData(PygData):
             vnode_count=vnode_count,
             vnode_coord=vnode_coord,
             name=name,
+            graph_version=graph_version,
         )
         self.num_nodes = B
 
@@ -301,10 +306,11 @@ class BranchDigraphData(PygData):
         od_yx: npt.NDArray,
         mac_yx: npt.NDArray,
         name: str,
+        graph_version: str = "",
     ) -> Self:
         # assert VBranchDigraph.has_all_p(digraph), "branch_digraph must have branch_fp_p and branch_av_p"
         assert digraph.graph is not None, "branch_digraph must have graph constructed"
-
+        # with watch("BranchDigraphData.from_branch_digraph") as p:
         if isinstance(fundus_img, np.ndarray):
             fundus_img = torch.from_numpy(fundus_img)
 
@@ -362,6 +368,7 @@ class BranchDigraphData(PygData):
             branch_tip_calibre=torch.from_numpy(branch_tip_calibre).float() if branch_tip_calibre is not None else None,
             **asdict(gt_info),
             name=name,
+            graph_version=graph_version,
         )
 
     @overload
@@ -373,10 +380,12 @@ class BranchDigraphData(PygData):
         gt_topology: Optional[tuple[TreeTopology, TreeTopology]] = None,
         *,
         return_digraph: Literal[False] = False,
-        augment: bool | AugmentationOpts = False,
+        augment: Optional[AugmentationCfg] = None,
         name: Optional[str] = None,
+        graph_version: Optional[str] = None,
         od_center: Optional[Point] = None,
         mac_center: Optional[Point] = None,
+        clear_geometric_data: bool = False,
     ) -> Self: ...
     @overload
     @classmethod
@@ -387,10 +396,12 @@ class BranchDigraphData(PygData):
         gt_topology: Optional[tuple[TreeTopology, TreeTopology]] = None,
         *,
         return_digraph: Literal[True],
-        augment: bool | AugmentationOpts = False,
+        augment: Optional[AugmentationCfg] = None,
         name: Optional[str] = None,
+        graph_version: Optional[str] = None,
         od_center: Optional[Point] = None,
         mac_center: Optional[Point] = None,
+        clear_geometric_data: bool = False,
     ) -> tuple[Self, VBranchDigraph]: ...
     @classmethod
     def from_graph(
@@ -400,61 +411,87 @@ class BranchDigraphData(PygData):
         gt_topology: Optional[tuple[TreeTopology, TreeTopology]] = None,
         *,
         return_digraph: bool = False,
-        augment: bool | AugmentationOpts = False,
+        augment: Optional[AugmentationCfg] = None,
         name: Optional[str] = None,
+        graph_version: Optional[str] = None,
         od_center: Optional[Point] = None,
         mac_center: Optional[Point] = None,
+        clear_geometric_data: bool = False,
     ) -> Self | tuple[Self, VBranchDigraph]:
         """Alternative constructor to create a BranchDigraphData from a VGraph and a fundus image. Note that this method will not be able to fill all the fields of the data, especially those related to the ground truth probabilities and the branch curves, which are not stored in the VGraph."""  # noqa: E501
-        augment_opts = AugmentationOpts.parse(augment)
+        with watch("BranchDigraphData.from_graph") as p:
+            with p.sub("parse cfg"):
+                augment_opts = AugmentationCfg.parse(augment)
 
-        graph = graph.copy()
-        graph.clear_all_branch_attr()
-        graph.clear_all_branch_attr()
-        if augment_opts.deteriorate_graph:
-            graph = deteriorate_graph(graph, opts=augment_opts.deterioration_opts, inplace=True)
+            if augment_opts.deteriorate_graph:
+                with p.sub("graph deterioration"):
+                    graph = deteriorate_graph(graph, opts=augment_opts.deterioration_opts, inplace=True)
 
-        branch_digraph = VBranchDigraph.from_graph(graph, check=False)
-        if gt_topology is not None:
-            branch_digraph.compute_p_from_gt(*gt_topology, check=False)
+            with p.sub("VBranchDigraph.from_graph"):
+                branch_digraph = VBranchDigraph.from_graph(graph, check=False)
+            if gt_topology is not None:
+                with p.sub("compute_p_from_gt"):
+                    # gt_topology = gt_topology[0].as_dense(), gt_topology[1].as_dense()
+                    branch_digraph.compute_p_from_gt(*gt_topology, check=False)
 
-        if isinstance(fundus, FundusData):
-            fundus_img = fundus.image
-            if od_center is None and fundus.has_od_center:
-                od_center = fundus.od_center
-            if mac_center is None:
-                mac_center = fundus.inferred_macula_center()
-        else:
-            fundus_img = fundus
-        fundus_shape = (fundus_img.shape[1], fundus_img.shape[2])
+            with p.sub("read fundus and preprocess"):
+                if isinstance(fundus, FundusData):
+                    fundus_img = fundus.image
+                    if od_center is None and fundus.has_od_center:
+                        od_center = fundus.od_center
+                    if mac_center is None:
+                        mac_center = fundus.inferred_macula_center()
+                else:
+                    fundus_img = fundus
+                fundus_shape = (fundus_img.shape[1], fundus_img.shape[2])
 
-        if od_center is None:
-            od_center = Point.from_tuple(fundus_shape) // 2
-            if mac_center is None:
-                mac_center = Point(fundus_shape[0] // 2, fundus_shape[1])  # Dummy position on the right of the OD
-        elif mac_center is None:
-            if od_center.x < fundus_shape[1] // 2:
-                mac_center = Point(od_center.y, od_center.x + fundus_shape[1] // 2)
+                if od_center is None:
+                    od_center = Point.from_tuple(fundus_shape) // 2
+                    if mac_center is None:
+                        mac_center = Point(
+                            fundus_shape[0] // 2, fundus_shape[1]
+                        )  # Dummy position on the right of the OD
+                elif mac_center is None:
+                    if od_center.x < fundus_shape[1] // 2:
+                        mac_center = Point(od_center.y, od_center.x + fundus_shape[1] // 2)
+                    else:
+                        mac_center = Point(od_center.y, od_center.x - fundus_shape[1] // 2)
+
+            if clear_geometric_data:
+                branch_digraph.graph.geometric_data().clear_attribute(all_except=VBranchGeoData.Fields.CALIBRES)
+            if augment_opts.hsv_jitter is not None:
+                with p.sub("Color Augmentation") as p_aug:
+                    with p_aug.sub("hsv jitter"):
+                        fundus_img = augment_opts.hsv_jitter.apply(fundus_img)
+                    if isinstance(fundus, FundusData):
+                        with p_aug.sub("compute roi mask"):
+                            roi_mask = fundus.roi_mask
+                        with p_aug.sub("mask roi"):
+                            fundus_img[:, ~roi_mask] = 0
+
+            if augment_opts.geometric:
+                with p.sub("Geometric Augmentation") as p_aug:
+                    with p_aug.sub("generate transform"):
+                        t = augment_opts.generate_transform(shape=fundus_shape)
+                    with p_aug.sub("transform graph"):
+                        branch_digraph.graph.transform(t, warped_domain="same", inplace=True)
+                    with p_aug.sub("warp fundus"):
+                        fundus_img, _ = t.warp(fundus_img.transpose((1, 2, 0)), warped_domain="same")
+                        fundus_img = fundus_img.transpose((2, 0, 1))
+                    with p_aug.sub("transform OD and macula centers"):
+                        od_yx, mac_yx = t.transform(np.array([od_center, mac_center]))
             else:
-                mac_center = Point(od_center.y, od_center.x - fundus_shape[1] // 2)
-
-        graph.geometric_data().clear_attribute(all_except="CALIBRE")
-        if augment_opts.geometric:
-            t = augment_opts.generate_transform(shape=fundus_shape)
-            branch_digraph.graph.transform(t, warped_domain="same", inplace=True)
-            fundus_img, _ = t.warp(fundus_img.transpose((1, 2, 0)), warped_domain="same")
-            fundus_img = fundus_img.transpose((2, 0, 1))
-            od_yx, mac_yx = t.transform(np.array([od_center, mac_center]))
-        else:
-            od_yx, mac_yx = od_center.numpy(), mac_center.numpy()
-        populate_tangent(branch_digraph.graph, tips=True)
+                od_yx, mac_yx = od_center.numpy(), mac_center.numpy()
+            with p.sub("recompute tangents"):
+                populate_tangent(branch_digraph.graph, tips=True, inplace=True)
 
         data = cls.from_branch_digraph(
             digraph=branch_digraph,
             fundus_img=fundus_img,
             od_yx=od_yx,
             mac_yx=mac_yx,
-            name=if_none(name, "graph_based_sample"),
+            name=if_none(name, "sample"),
+            graph_version=if_none(graph_version, ""),
         )
         return (data, branch_digraph) if return_digraph else data
 
@@ -485,8 +522,12 @@ class BranchDigraphData(PygData):
                 domain=Rect.from_size(self.img.shape[-2:]),  # type: ignore
             )
             digraph.graph = VGraph(
-                branch_list=self.branch_nodes.numpy(force=True), geometric_data=geodata, check_integrity=True
+                branch_list=self.branch_nodes.numpy(force=True), geometric_data=geodata, check_integrity=False
             )
+            report = digraph.graph.check_integrity()
+            if report:
+                print(f"=== Sample: {self.name} ===\n" + str(report))
+
         if BranchDigraphData.has_gt(self) and gt_proba is not False:
             digraph.line_p = self.line_p.numpy(force=True)
             digraph.branch_fp_p = self.branch_fp_p.numpy(force=True)
@@ -526,6 +567,30 @@ class BranchDigraphData(PygData):
     def has_gt(cls, instance: Self) -> TypeGuard[_BranchDigraphDataWithGT]:
         """Check if the data instance has ground truth probabilities (i.e. if edge_p, branch_fp_p, branch_av_p and branch_dir_p are not None)."""  # noqa: E501
         return _BranchDigraphDataWithGT.check(instance)
+
+    def print_shape(self):
+        print(f"=== Sample: {self.name} ===")
+        print(f"Image shape: {self.img.shape}")
+        print(f"Optic disc center: {self.od_yx}")
+        print(f"Macula center: {self.mac_yx}")
+        print(f"Number of nodes: {self.vnode_count}")
+        print(f"Number of branches: {self.branch_count}")
+        print(f"Number of edges: {self.edge_index.shape[1]}")
+        print(f"Branch nodes shape: {self.branch_nodes.shape}")
+        print(f"Branch curves shape: {self.branch_curves.shape if self.branch_curves is not None else None}")
+        print(f"Branch root candidates shape: {self.branch_root_candidates.shape}")
+        print(f"Edge index shape: {self.edge_index.shape}")
+        print(f"Edge direction shape: {self.edge_dir.shape}")
+        if self.has_gt(self):
+            print("Ground truth probabilities are present.")
+            print(f"Edge probabilities shape: {self.edge_p.shape}")
+            print(f"Branch root probabilities shape: {self.branch_root_p.shape}")
+            print(f"Branch false positive probabilities shape: {self.branch_fp_p.shape}")
+            print(f"Branch artery/vein probabilities shape: {self.branch_av_p.shape}")
+            print(f"Branch direction probabilities shape: {self.branch_dir_p.shape}")
+            print(f"Branch subtree indices shape: {self.branch_subtree_idx.shape}")
+        else:
+            print("Ground truth probabilities are not present.")
 
 
 @dataclass(frozen=True)

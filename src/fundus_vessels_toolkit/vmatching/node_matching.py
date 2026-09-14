@@ -795,8 +795,8 @@ def _reindex_branch_matches(matches: np.ndarray, graph1: VGraph, graph2: VGraph)
     # Reindex the branches
     b1_lookup = complete_lookup(b1_match, graph1.branch_count - 1)
     b2_lookup = complete_lookup(b2_match, graph2.branch_count - 1)
-    graph1.reindex_branches(b1_lookup, inverse_lookup=True)
-    graph2.reindex_branches(b2_lookup, inverse_lookup=True)
+    graph1.reindex_branches(b1_lookup, inverse_lookup=True, inplace=True)
+    graph2.reindex_branches(b2_lookup, inverse_lookup=True, inplace=True)
 
     # Return the valid matches indices
     return matches_id

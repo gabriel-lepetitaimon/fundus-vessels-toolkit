@@ -16,9 +16,13 @@ DEFAULT_AUTOMORPH_PATH = Path(__file__).parent.parent.parent.parent.parent.paren
 
 
 @lru_cache(1)
-def automorph_prepost_processing(standard_resolution: int = 1024):
+def automorph_prepost_processing(standard_resolution: int = 720):
     prepost_process = basic_fundus_pre_postprocessing(
-        standard_resolution=standard_resolution, rgb_to_bgr=False, pad_to_multiple=32
+        standard_resolution=standard_resolution,
+        resize_with_PIL=True,
+        rgb_to_bgr=False,
+        pad_to_multiple=16,
+        ensure_square=True,
     )
 
     def preprocess(img: torch.Tensor, device: torch.device):
@@ -28,6 +32,7 @@ def automorph_prepost_processing(standard_resolution: int = 1024):
         # Normalization
         x = x.permute(0, 2, 3, 1)  # (B, C, H, W) -> (B, H, W, C)
         for i, img in enumerate(x):
+            img = img.round()
             mask = img[..., 0] > 0.0
             mean = img[mask].mean(dim=0)
             std = img[mask].std(dim=0)

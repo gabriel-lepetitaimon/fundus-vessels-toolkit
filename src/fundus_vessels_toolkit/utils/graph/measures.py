@@ -234,7 +234,7 @@ def _check_eval_for_point(eval_for):
     if isinstance(eval_for, int):
         eval_for = torch.Tensor([eval_for])
     elif eval_for is None:
-        eval_for = torch.Tensor([])
+        eval_for = torch.empty((0,), dtype=torch.int32)
     else:
         eval_for = torch.as_tensor(eval_for)
     return eval_for.int()

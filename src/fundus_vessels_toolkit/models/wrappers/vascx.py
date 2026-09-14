@@ -1,12 +1,11 @@
 # This file is adapted from https://github.com/Eyened/rtnls_vascx_models/blob/main/vascx_models/inference.py
 
+import warnings
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional
 from warnings import catch_warnings
-import warnings
 
-import cv2
 import numpy as np
 import numpy.typing as npt
 import torch
@@ -75,6 +74,8 @@ def vascx_prepost_processing(standard_resolution: int = 1024):
     )
 
     def preprocess(imgs: torch.Tensor, device: torch.device):
+        from fundus_toolkits.utils.safe_import import cv2
+
         (imgs,), preprocessing_info = prepost_process.preprocess(imgs, device=device)
 
         # Contrast Enhancement

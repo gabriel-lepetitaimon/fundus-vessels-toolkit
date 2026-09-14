@@ -370,7 +370,7 @@ def reorder_branch_by_bifurcations(
         recursive_reorder_successors(i, 0)
 
     if apply_branch_reordering:
-        vtree.reindex_branches(branch_lookup)
+        vtree.reindex_branches(branch_lookup, inplace=True)
 
     return branch_lookup
 

@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=experiment.schema.json
 project: Topo-GNN
 experiment: HP-Search
-version: 1
+version: 2
 tag: hp-search
 n_trials: 32
 optuna:
@@ -20,7 +20,6 @@ progress_bar: false
 epoch: 200
 lr: 1e-4~1e-2
 batch_size: 4:4:20
-topo_losses_delay: 10
 dataset:
   augment:
     deteriorate_graph: true|false

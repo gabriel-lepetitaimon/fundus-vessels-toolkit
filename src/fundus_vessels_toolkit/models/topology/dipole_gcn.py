@@ -1,9 +1,9 @@
 import math
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
 import torch
 import torch.nn.functional as F
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, Field, StringConstraints, model_validator
 from torch import Tensor
 from torch.nn import ModuleDict
 from torch_geometric import nn as pyg_nn
@@ -12,15 +12,19 @@ from torch_geometric.nn.dense.linear import Linear
 from torch_geometric.typing import OptTensor
 from torch_geometric.utils import softmax
 
+from ...utils.nnet.experiment import ExpCfgBaseModel
 from .positionnal_embedding import RoPE, SupportPattern, TransformerConvWithPosEncoding
 
+type SupportPatternOrNone = SupportPattern | Literal["none"]
 
-class TransformerGCNOpt(BaseModel):
-    model_config = ConfigDict(use_attribute_docstrings=True)
 
-    architecture: str = Field(
-        default="InstNorm Conv64x8-DropOut InstNorm Conv128x8-DropOut C256x4 Conv128x8 Conv256x4 Conv512x2"
-    )
+class TransformerGCNOpt(ExpCfgBaseModel):
+    architecture: Annotated[
+        str,
+        StringConstraints(
+            pattern=r"^(?:InstNorm|BatchNorm|Conv\d+(?:x\d+)?(?:-DropOut)?)(?:\s+(?:InstNorm|BatchNorm|Conv\d+(?:x\d+)?(?:-DropOut)?))*$"
+        ),
+    ] = Field(default="InstNorm Conv64x8-DropOut InstNorm Conv128x8-DropOut Conv256x4 Conv128x8 Conv256x4 Conv512x2")
     """Model architecture as a string. 
     The syntax is a sequence of layers separated by spaces and using the following format:
      - "InstNorm" for instance normalization
@@ -31,28 +35,58 @@ class TransformerGCNOpt(BaseModel):
     dropout: float = Field(default=0.1, ge=0.0, le=1.0)
     """Dropout rate to apply after convolution layers that have the "-DropOut" suffix in the architecture string."""
 
-    bipolar_node: bool = Field(default=True)
-    """Whether to use bipolar nodes extending the state of every node with two additional feature vectors representing their two poles. If True, the model will use BipolarTransformerConv layers and the output dimension will be split between nodes and poles features."""  # noqa: E501
+    bipolar_node: bool = Field(default=True, deprecated="Use dipole_node instead.")
+    dipole_node: bool = Field(default=True, validation_alias=AliasChoices("dipole_node", "bipolar_node"))
+    """Whether to use dipole nodes extending the state of every node with two additional feature vectors representing their two poles. If True, the model will use BipolarTransformerConv layers and the output dimension will be split between nodes and poles features."""  # noqa: E501
 
     total_out_features: int = Field(default=512, ge=1)
-    """The total number of output features for the GNN. If bipolar_node is False, this will be the dimension of the node features output by the GNN. If bipolar_node is True, this will be the sum of the dimensions of the node features and the two pole features output by the GNN."""  # noqa: E501
+    """The total number of output features for the GNN. If dipole_node is False, this will be the dimension of the node features output by the GNN. If dipole_node is True, this will be the sum of the dimensions of the node features and the two pole features output by the GNN."""  # noqa: E501
 
     pole_features_ratio: float = Field(default=0.5, ge=0.0, le=1.0)
-    """Ratio of the number of features dedicated to pole over the total number of features (including both pole and node). Only relevant if bipolar_node is True. For example, if total_n_out=100 and pole_features_ratio=0.66, then 66 features will be dedicated to poles (33 for each) and 33 features will be dedicated to nodes."""  # noqa: E501
+    """Ratio of the number of features dedicated to pole over the total number of features (including both pole and node). Only relevant if dipole_node is True. For example, if total_n_out=100 and pole_features_ratio=0.66, then 66 features will be dedicated to poles (33 for each) and 33 features will be dedicated to nodes."""  # noqa: E501
 
-    pos_encoding: SupportPattern | Literal["none"] = Field(default="spiral")
+    legacy_pole_features_ratio: bool = Field(default=False)
+
+    pos_encoding: SupportPatternOrNone = Field(default="spiral")
     """The type of positional encoding to use. If "none", no positional encoding will be used. Otherwise, should be a support pattern supported by RoPESupportPattern, which will be used to compute RoPE positional encodings based on the relative positions of the nodes' poles."""  # noqa: E501
 
     @property
     def n_out(self) -> int:
-        if self.bipolar_node:
-            return int(self.total_out_features * (1 - self.pole_features_ratio))
-        else:
-            return self.total_out_features
+        return self.features_count(self.total_out_features)[0]
 
     @property
     def n_out_pole(self) -> int:
-        return int(self.total_out_features * self.pole_features_ratio / 2) if self.bipolar_node else 0
+        return self.features_count(self.total_out_features)[1]
+
+    def features_count(self, n: int) -> tuple[int, int]:
+        """Compute the number of output features for nodes and poles based on the given options and total number of features n.
+
+        Parameters
+        ----------
+        opt : TransformerGCNOpt
+            The options for the TransformerGCN model.
+        n : int
+            The total number of output features.
+
+        Returns
+        -------
+        - n_out_node : int
+            The number of output features for nodes.
+        - n_out_pole : int
+            The number of output features for poles. If dipole_node is False, this will be 0.
+
+        """  # noqa: E501
+        if self.dipole_node:
+            if self.legacy_pole_features_ratio:
+                n_out_pole = int((n * self.pole_features_ratio) / 2)
+                n_out_node = n - 2 * n_out_pole
+            else:
+                n_out_pole = int(n * self.pole_features_ratio)
+                n_out_node = n - n_out_pole
+        else:
+            n_out_node = n
+            n_out_pole = 0
+        return n_out_node, n_out_pole
 
 
 class TransformerGCN(torch.nn.Module):
@@ -73,15 +107,14 @@ class TransformerGCN(torch.nn.Module):
 
         # --- Create layers based on architecture specification string ---
         def ConvBlock(in_channels, out_channels, heads, dropout: float = 0, first=False):
-            if opt.bipolar_node:
+            if opt.dipole_node:
                 if first:
-                    in_channels_pole = in_channels_node = in_channels // 3
+                    in_channels_pole = in_channels // 3
+                    in_channels_node = in_channels - in_channels_pole * 2
                 else:
-                    in_channels_pole = int((in_channels * opt.pole_features_ratio) / 2)
-                    in_channels_node = in_channels - 2 * in_channels_pole
-                out_channels_pole = int((out_channels * opt.pole_features_ratio) / 2)
-                out_channels_node = out_channels - 2 * out_channels_pole
-                conv = BipolarTransformerConv(
+                    in_channels_node, in_channels_pole = opt.features_count(in_channels)
+                out_channels_node, out_channels_pole = opt.features_count(out_channels)
+                conv = DipoleTransformerConv(
                     in_channels_node=in_channels_node,
                     in_channels_pole=in_channels_pole,
                     out_channels_node=out_channels_node,
@@ -131,10 +164,12 @@ class TransformerGCN(torch.nn.Module):
                 dropout = opt.dropout if dropout else 0
                 self.layers[f"conv{i}"] = ConvBlock(f, out_channels, heads, dropout=dropout, first=(i == 0))
                 f = out_channels * heads
+            else:
+                raise ValueError(f"Invalid layer specification: {layer_spec}")
 
         self.last_conv = ConvBlock(f, opt.total_out_features, heads=1, dropout=0)
 
-        if opt.bipolar_node:
+        if opt.dipole_node:
             self.n_out = int(self.last_conv.out_channels_node)  # type: ignore
             self.n_out_pole = int(self.last_conv.out_channels_pole)  # type: ignore
         else:
@@ -149,13 +184,13 @@ class TransformerGCN(torch.nn.Module):
             match layer:
                 case pyg_nn.InstanceNorm():
                     x = layer(x, batch_idx, batch_size=batch_size)
-                case BipolarTransformerConv():
+                case DipoleTransformerConv():
                     x = layer(x, edge_index, edge_pole, edge_attr=edge_attr, pos=pos).relu()
                 case TransformerConvWithPosEncoding():
                     x = layer(x, edge_index, edge_attr=edge_attr, pos=pos).relu()
 
         match self.last_conv:
-            case BipolarTransformerConv():
+            case DipoleTransformerConv():
                 x = self.last_conv(x, edge_index, edge_pole, edge_attr=edge_attr, pos=pos)
             case TransformerConvWithPosEncoding():
                 x = self.last_conv(x, edge_index, edge_attr=edge_attr, pos=pos)
@@ -163,7 +198,7 @@ class TransformerGCN(torch.nn.Module):
         return x
 
 
-class BipolarTransformerConv(MessagePassing):
+class DipoleTransformerConv(MessagePassing):
     _alpha: OptTensor
 
     def __init__(

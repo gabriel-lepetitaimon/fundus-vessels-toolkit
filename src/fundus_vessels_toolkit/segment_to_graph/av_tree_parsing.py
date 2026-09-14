@@ -1,5 +1,5 @@
 import warnings
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -11,7 +11,7 @@ from fundus_toolkits.utils.typing import Bool1DArray, Indices
 from ..pipelines.seg_to_graph import SegToGraph
 from ..utils.cluster import cluster_by_distance, reduce_clusters
 from ..utils.math import extract_splits, quantized_higher
-from ..vascular_data_objects import BranchIndicesLike, NodeIndicesLike, VBranchGeoData, VGraph, VTree
+from ..vascular_data_objects import BranchIndicesLike, VBranchGeoData, VGraph, VTree
 from .graph_simplification import simplify_passing_nodes
 
 
@@ -24,7 +24,7 @@ def assign_av_label(
     split_high_curvature=0,
     split_av_threshold=4 / 5,
     av_attr="av",
-    discard_joint_branch_geometry=True,
+    joint_branch_process: Literal["keep", "discard", "split"] = "discard",
     propagate_labels=True,
     inplace=False,
 ):
@@ -63,7 +63,8 @@ def assign_av_label(
         branch_curve = branch.curve()
         if len(branch_curve) <= 2:
             continue
-
+        if not np.issubdtype(branch_curve.dtype, np.integer):
+            branch_curve = np.round(branch_curve).astype(int)
         # 0. Check the AV labels under each pixel of the skeleton and boundaries of the branch
         bound = branch.geodata(VBranchGeoData.Fields.BOUNDARIES, geodata).data
         valid_bound = geodata.domain.contains(bound).all(axis=1)
@@ -118,10 +119,10 @@ def assign_av_label(
     propagate_av_labels(graph=graph, av_attr=av_attr, only_label_nodes=not propagate_labels, inplace=True)
 
     # === Remove or update geometry of branches with both type ===
-    if discard_joint_branch_geometry:
+    if joint_branch_process == "discard":
         # geodata.clear_branch_gdata(graph.as_branch_ids(graph.branch_attr[av_attr] == AVLabel.BOTH))
         ...
-    else:
+    elif joint_branch_process == "split":
         segToGraph = SegToGraph(max_spurs_length=5, clean_branches_tips=5)
         branch_to_delete = []
         for branch in graph.branches(graph.branch_attr[av_attr] == AVLabel.BOTH):
@@ -347,6 +348,84 @@ def propagate_av_labels(
     return graph
 
 
+def assign_av_label_centerline(
+    graph: VGraph,
+    av: Optional[npt.NDArray[np.uint8] | FundusData] = None,
+    *,
+    min_branch_length: int = 5,
+    median_filter_size: int | None = None,
+    split_av_branch=True,
+    split_high_curvature=0,
+    av_attr="av",
+    default_label=AVLabel.UNK,
+    inplace=False,
+):
+    if not inplace:
+        graph = graph.copy()
+
+    if av is None:
+        try:
+            av = graph.geometric_data().fundus_data.av
+        except AttributeError:
+            raise ValueError("The AV map is not provided and cannot be found in the geometric data.") from None
+    elif isinstance(av, FundusData):
+        av = av.av
+    av_map: npt.NDArray[np.uint8] = av
+
+    geodata = graph.geometric_data()
+    # === Split branches with high curvature ===
+    if split_high_curvature and geodata.has_branch_data(VBranchGeoData.Fields.CURVATURES):
+        curvatures = geodata.branch_data(VBranchGeoData.Fields.CURVATURES)
+        splits = []
+        for b in range(graph.branch_count):
+            if curvatures[b] is None or len(curvatures[b].data) < 10:
+                continue
+            curv = abs(curvatures[b].data)
+            b_splits = quantized_higher(curv, split_high_curvature, medfilt_size=5)
+            if len(b_splits) > 0:
+                splits.append((b, b_splits))
+
+        if len(splits) > 0:
+            for b, b_splits in splits:
+                graph.split_branch(b, split_curve_id=b_splits, inplace=True)
+
+    # === Assign the AV label to each branch based on the AV map ===
+    graph.branch_attr[av_attr] = default_label
+    branches_av_attr = graph.branch_attr[av_attr]
+    for branch in graph.branches():
+        branch_curve = branch.curve()
+        if len(branch_curve) <= 2:
+            continue
+        if not np.issubdtype(branch_curve.dtype, np.integer):
+            branch_curve = np.round(branch_curve).astype(int)
+        # 0. Check the AV labels under each pixel of the skeleton
+        branch_av = av_map[branch_curve[:, 0], branch_curve[:, 1]]  # type: ignore
+
+        if split_av_branch and len(branch_curve) > min_branch_length:
+            # 2. Split the branch into artery and veins sections
+            _, n_art, n_vei, n_both, n_unk = np.bincount(branch_av, minlength=5)[:5]
+            median_filter_size = median_filter_size or (min_branch_length * 2 - 1)
+            av_splits = extract_splits(branch_av, medfilt_size=median_filter_size, min_size=min_branch_length)
+            if len(av_splits) > 1:
+                splits = [int(_[1]) for _ in list(av_splits.keys())[:-1]]
+                _, new_ids = graph.split_branch(branch.id, split_curve_id=splits, inplace=True, return_branch_ids=True)
+                for new_id, new_value in zip(new_ids, av_splits.values(), strict=True):
+                    branches_av_attr[new_id] = new_value
+            else:
+                branches_av_attr[branch.id] = next(iter(av_splits.values()))
+        else:
+            _, n_art, n_vei, n_both, n_unk = np.bincount(branch_av, minlength=5)[:5]
+            main_av_label = [AVLabel.ART, AVLabel.VEI, AVLabel.BOTH][np.argmax([n_art, n_vei, n_both])]
+            branches_av_attr[branch.id] = main_av_label
+
+    graph.branch_attr[av_attr] = branches_av_attr  # Why is this line necessary?
+
+    # === Assign AV labels to nodes and propagate them through unknown passing nodes ===
+    propagate_av_labels(graph=graph, av_attr=av_attr, only_label_nodes=True, inplace=True)
+
+    return graph
+
+
 def simplify_av_graph(
     graph: VGraph,
     av_attr="av",
@@ -413,8 +492,7 @@ def simplify_av_graph(
     graph.delete_branch(twin_branches, inplace=True)
 
     # === Remove passing nodes of same type ===
-    graph.node_connected_components()
-    simplify_passing_nodes(graph, min_angle=passing_node_min_angle, with_same_label=av_attr, inplace=True)
+    simplify_passing_nodes(graph, min_angle=passing_node_min_angle, with_same_branch_attr=av_attr, inplace=True)
 
     # === Delete self-loop undefined branches ===
     self_loop = graph.self_loop_branches()
@@ -484,10 +562,13 @@ def split_av_graph_by_subtree(
     vei_branches = tree.as_branch_ids(tree.branch_attr[av_attr] == AVLabel.VEI)
     geodata = tree.geometric_data()
 
-    total_calibres = [
-        c.data[np.isfinite(c.data)].sum() if c is not None else 0
-        for c in geodata.branch_data(VBranchGeoData.Fields.CALIBRES)
-    ]
+    if geodata.has_branch_data(VBranchGeoData.Fields.CALIBRES):
+        total_calibres = [
+            c.data[np.isfinite(c.data)].sum() if c is not None else 0
+            for c in geodata.branch_data(VBranchGeoData.Fields.CALIBRES)
+        ]
+    else:
+        total_calibres = geodata.branch_arc_length()
     total_calibres = np.array(total_calibres)
 
     def subtree_av_weight(subtree):
@@ -780,7 +861,7 @@ def naive_infer_roots(
 
     if reorder_branches:
         new_order = [b.id for b in vtree.walk_branches(traversal="dfs")]
-        vtree.reindex_branches(new_order, inverse_lookup=True)
+        vtree.reindex_branches(new_order, inverse_lookup=True, inplace=True)
 
     return vtree
 

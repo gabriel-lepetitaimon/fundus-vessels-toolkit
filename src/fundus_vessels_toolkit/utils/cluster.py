@@ -37,12 +37,14 @@ def reduce_clusters(clusters: Iterable[Iterable[int]], drop_singleton=True) -> L
     return [c for c in solve_clusters_cpp(clusters, drop_singleton, -1) if len(c) > 0]
 
 
-def iterative_reduce_clusters(edge_list: TensorArray, edge_weight: TensorArray, max_weight: float) -> List[List[int]]:
+def iterative_reduce_clusters(
+    edge_list: TensorArray, edge_weight: TensorArray, max_weight: float, drop_singletons: bool = True
+) -> List[List[int]]:
     """
     Reduce the number of clusters by merging clusters that share at least one element.
     """
     clusters = iterative_reduce_clusters_cpp(
-        to_torch(edge_list, dtype=torch.int), to_torch(edge_weight, dtype=torch.float), max_weight
+        to_torch(edge_list, dtype=torch.int), to_torch(edge_weight, dtype=torch.float), max_weight, drop_singletons
     )
     return [list(_) for _ in clusters]
 
@@ -113,6 +115,7 @@ def cluster_by_distance(
     coords: TensorArray | List[Point],
     max_distance: float,
     edge_list: Optional[TensorArray | List[Tuple[int, int]]] = None,
+    inverted_edge_list: bool = False,
     iterative=False,
 ) -> List[List[int]]:
     """
@@ -128,6 +131,9 @@ def cluster_by_distance(
 
     edge_list : torch.Tensor | List[Tuple[int, int]], optional
         The edge list of the graph. If not provided, it will be computed from the coordinates. By default None.
+
+    inverted_edge_list : bool, optional
+        Whether the edge list contains all edges NOT in the graph.
 
     iterative : bool, optional
         Whether to use the iterative algorithm: at each step the algorithm will merge the two closest clusters until the clusters are at least `max_distance` apart (according to their barycenter). By default False.
@@ -156,7 +162,8 @@ def cluster_by_distance(
         edge_list_tensor = torch.empty(0, 2, dtype=torch.int32)
 
     if iterative:
-        clusters = iterative_cluster_by_distance_cpp(coords_tensor, max_distance, edge_list_tensor)
+        if inverted_edge_list:
+            raise ValueError("Iterative clustering does not support inverted edge lists.")
+        return iterative_cluster_by_distance_cpp(coords_tensor, max_distance, edge_list_tensor, True)
     else:
-        clusters = cluster_by_distance_cpp(coords_tensor, max_distance, edge_list_tensor)
-    return [list(_) for _ in clusters if len(_) >= 1]
+        return cluster_by_distance_cpp(coords_tensor, max_distance, edge_list_tensor, inverted_edge_list, True)

@@ -207,6 +207,78 @@ std::vector<double> chordLengthParameterize(const CurveYX& d, std::size_t first,
     return u;
 }
 
+BezierIterator::BezierIterator(const BezierCubic& bezCurve, const std::vector<double>& us)
+    : bezCurve(bezCurve), us(us) {
+    points.reserve(us.size());
+    for (const auto& u : us) points.push_back(evaluate_bezier(bezCurve, u).toInt());
+}
+
+BezierIterator::BezierIterator(const BezierCubic& bezCurve, float flatness) : bezCurve(bezCurve) {
+    std::tie(points, us) = discretizeBezier(bezCurve, flatness);
+}
+
+BezierIterator::BezierIterator(const Point& p0, const Point& p1, float flatness) : bezCurve({p0, p0, p1, p1}) {
+    std::tie(points, us) = discretizeBezier(bezCurve, flatness);
+}
+
+BezierIterator::BezierIterator(const Point& p0, const Point& t0, const Point& p1, const Point& t1, float flatness) {
+    float d = distance(p0, p1) * 0.5;
+    Point c1 = p0 + t0 * d;
+    Point c2 = p1 + t1 * d;
+    bezCurve = {p0, c1, c2, p1};
+    std::tie(points, us) = discretizeBezier(bezCurve, flatness);
+}
+
+bool BezierIterator::next() {
+    if (bezierStep == 0) {
+        IntPoint p0, p1;
+        if (points.size() < 2) {
+            p0 = bezCurve[0].toInt();
+            p1 = bezCurve[3].toInt();
+        } else {
+            p0 = points[0];
+            p1 = points[1];
+        }
+        const auto& line = Line(p0, p1);
+        ray = line.begin();
+        rayMaxStep = line.length();
+        bezierStep++;
+        return true;
+    } else {
+        ray++;
+        if ((std::size_t)ray.step() <= rayMaxStep) return true;
+
+        bezierStep++;
+        if (bezierStep >= points.size()) return false;
+        const auto& line = Line(points[bezierStep - 1], points[bezierStep], false, true);
+        ray = line.begin();
+        rayMaxStep = line.length();
+        return true;
+    }
+}
+
+double BezierIterator::u() const {
+    if (bezierStep <= 0) return 0;
+    if (bezierStep >= us.size()) return 1;
+    return lerp(us[bezierStep - 1], us[bezierStep], ray.step() / (float)rayMaxStep);
+}
+const IntPoint& BezierIterator::p() const { return ray.point(); }
+Point BezierIterator::t() const {
+    auto _u = u();
+    if (_u == 0 && (bezCurve[1] - bezCurve[0]).is_null()) {
+        if (us.size() > 1)
+            _u = us[1] * 0.5;
+        else
+            return (bezCurve[3] - bezCurve[0]).normalize();
+    } else if (_u == 1 && (bezCurve[2] - bezCurve[3]).is_null()) {
+        if (us.size() > 1)
+            _u = (us[us.size() - 2] + 1.0) * 0.5;
+        else
+            return (bezCurve[3] - bezCurve[0]).normalize();
+    }
+    return evaluate_bezier_tangent(bezCurve, {_u})[0].normalize();
+}
+
 /*
  *  DiscretizeBezier
  *	Discretize a bezier cubic curve into a succession of "flat" lines.

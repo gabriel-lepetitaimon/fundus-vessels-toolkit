@@ -14,34 +14,36 @@ from types import EllipsisType
 from typing import TYPE_CHECKING, Iterable, Literal, Optional, Self, Sequence, overload
 
 import numpy as np
-import tqdm
+import numpy.typing as npt
 from joblib import Parallel, delayed
 from numpy.random import MT19937, RandomState, SeedSequence
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from pydantic.dataclasses import dataclass as pydantic_dataclass
-from skimage.morphology import binary_erosion, disk
+from rich import progress
 from torch_geometric.data import Dataset as PygDataset
 
 from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.transform import ResizeTranslation
 from fundus_toolkits.utils.data_io import most_common_image_ext, overwrite_or_newer
 from fundus_toolkits.utils.geometric import Point, Rect
-from fundus_toolkits.utils.typing import Bool1DArray, Int1DArray, Int1DArrayLike
+from fundus_toolkits.utils.typing import Bool1DArray, Bool2DArray, Int1DArray, Int1DArrayLike
 
 from ...pipelines.avseg_to_tree import AVSegToTreeBase, GNNAVSegToTree
-from ...segment_to_graph.graph_simplification import merge_nodes_by_distance
+from ...segment_to_graph.graph_simplification import merge_nodes_by_distance, simplify_passing_nodes
+from ...segment_to_graph.tree_simplification import disconnect_crossing
 from ...segment_to_graph.vbranch_digraph import (
     TreeTopology,
     VBranchDigraph,
     VGraph,
 )
 from ...utils import if_none
+from ...utils.exceptions import CheckReport
 from ...utils.nnet.experiment import ExperimentRun
-from ...utils.nnet.optuna import BoolHyperParam
 from ...utils.numpy import np_group_by
+from ...utils.profiling import watch
 from ...vascular_data_objects import VBranchGeoData, VTree
 from .data import BranchDigraphData
-from .data_augmentation import AugmentationOpts
+from .data_augmentation import AugmentationCfg, AugmentationField
 
 if TYPE_CHECKING:
     from ...utils.jppype import Mosaic
@@ -50,19 +52,120 @@ if TYPE_CHECKING:
 GRAPH_EXT, ART_EXT, VEI_EXT = ".npz", "_art.npz", "_vei.npz"
 
 
-@dataclass
+@dataclass(frozen=True)
 class BranchDigraphSample:
     """Data class storing in-memory a sample of a BranchDigraphDataset."""
 
     name: str
+    dataset: str
     fundus: FundusData
     art_topology: TreeTopology
     vei_topology: TreeTopology
     graphes: dict[str, VGraph]
+    _av_maps: dict[str, npt.NDArray] | None = None
+
+    def __post_init__(self):
+        self.fundus._set_immutable_flag(True)
+        self.art_topology.freeze()
+        self.vei_topology.freeze()
 
     @property
     def target_topologies(self) -> tuple[TreeTopology, TreeTopology]:
         return self.art_topology, self.vei_topology
+
+    def show(self, graph_version: Optional[str | list[str]] = None, height: int = 650, view=None):
+        from ...utils.jppype import Mosaic, draw_graph
+
+        if graph_version is None:
+            graph_version = list(self.graphes.keys())
+        elif not isinstance(graph_version, list):
+            graph_version = [graph_version]
+
+        mosaic = None
+        if view is not None:
+            if isinstance(view, list):
+                assert len(view) == len(graph_version), "Number of views must match number of graph versions"
+            else:
+                graph_version = graph_version[:1]
+                view = [view]
+        else:
+            mosaic = Mosaic(len(graph_version), cols_titles=graph_version, cell_height=height)
+            view = mosaic.views
+
+        for i, g in enumerate(graph_version):
+            v = view[i]
+            fundus = self.fundus
+            if self._av_maps is not None and g in self._av_maps:
+                fundus = fundus.update(av=self._av_maps[g])
+            fundus.draw(vessels_on_top=True, view=v)
+            draw_graph(self.graphes[g], view=v)
+        return mosaic
+
+    def draw_target_topo(self, view=None):
+        from ...utils.jppype import draw_trees
+
+        topo_map = TreeTopology.av_overlay(self.fundus.image, self.art_topology, self.vei_topology)
+        if view is None:
+            from ...utils.jppype import Mosaic
+
+            view = Mosaic(1, cell_height=650).views[0]
+
+        view.add_image(topo_map, name="background")
+        draw_trees((self.art_topology.tree, self.vei_topology.tree), view=view, bspline_dir=True)
+        return view
+
+    def with_fundus(self, fundus: FundusData) -> Self:
+        """Return a new BranchDigraphSample with the given fundus image."""
+        return self.__class__(
+            name=self.name,
+            dataset=self.dataset,
+            fundus=fundus.copy(mutable=False),
+            art_topology=self.art_topology,
+            vei_topology=self.vei_topology,
+            graphes=self.graphes,
+            _av_maps=self._av_maps,
+        )
+
+    @overload
+    def to_tensor(
+        self,
+        graph_version: Optional[str] = None,
+        *,
+        augment: Optional[AugmentationCfg] = None,
+        return_digraph: Literal[False] = False,
+    ) -> BranchDigraphData: ...
+    @overload
+    def to_tensor(
+        self,
+        graph_version: Optional[str] = None,
+        *,
+        augment: Optional[AugmentationCfg] = None,
+        return_digraph: Literal[True],
+    ) -> tuple[BranchDigraphData, VBranchDigraph]: ...
+    def to_tensor(
+        self,
+        graph_version: Optional[str] = None,
+        *,
+        augment: Optional[AugmentationCfg] = None,
+        return_digraph: bool = False,
+    ) -> BranchDigraphData | tuple[BranchDigraphData, VBranchDigraph]:
+        """Return a BranchDigraphData object containing the data of this sample, with the specified graph version(s)."""
+        if graph_version is None:
+            graph_version = next(iter(self.graphes.keys()))
+        graph = self.graphes[graph_version].copy()
+        graph.clear_all_branch_attr()
+        return BranchDigraphData.from_graph(
+            graph,
+            self.fundus,
+            self.target_topologies,
+            return_digraph=return_digraph,
+            augment=augment,
+            name=self.name,
+            graph_version=graph_version,
+            od_center=self.fundus.od_center if self.fundus.has_od_center else None,
+            mac_center=self.fundus.macula_center if self.fundus.has_macula_center else None,
+            clear_geometric_data=True,
+        )
 
 
 type DatasetType = Literal["train", "validation", "test"] | None
@@ -70,7 +173,7 @@ type DatasetType = Literal["train", "validation", "test"] | None
 
 @pydantic_dataclass
 class SampleInfo:
-    """Data class representing a processed sample of a BranchDigraphDataset."""
+    """Data class representing a processed sample of a BranchDigraphDataset stored on disk."""
 
     name: str
     fundus: Path
@@ -80,6 +183,8 @@ class SampleInfo:
     vei_topology: Path
     graphes: dict[str, Path]
     date: datetime
+    av_maps: dict[str, Path] = Field(default_factory=dict)
+    fundus_roi: FundusData.ROISpecs | None = Field(default=None)
     od_center: tuple[float, float] | None = Field(default=None)
     macula_center: tuple[float, float] | None = Field(default=None)
     dataset: str = Field(default="")
@@ -89,23 +194,46 @@ class SampleInfo:
     def target_topologies(self) -> tuple[Path, Path]:
         return self.art_topology, self.vei_topology
 
-    def load(self, image: bool = True, discard_gt_tree: bool = True) -> BranchDigraphSample:
+    @property
+    def full_name(self):
+        return self.name if self.dataset == "" else f"{self.dataset}::{self.name}"
+
+    def load(
+        self,
+        image: bool = True,
+        discard_gt_tree: bool = True,
+        load_av_maps: bool = False,
+    ) -> BranchDigraphSample:
         """Load the sample from disk into memory."""
         if image:
-            fundus = FundusData(image=self.fundus, od=self.od, macula=self.macula)
+            fundus = FundusData(
+                image=self.fundus,
+                roi_specs=self.fundus_roi,
+                od=self.od,
+                macula=self.macula,
+                immutable=True,
+                name=self.name,
+            )
         else:
-            fundus = FundusData.empty_like(self.fundus)
+            fundus = FundusData.empty_like(self.fundus, name=self.name, immutable=True)
+            fundus._roi_specs = self.fundus_roi
         if self.od_center is not None:
             fundus = fundus.update(od_center=Point(*self.od_center))
         if self.macula_center is not None:
             fundus = fundus.update(macula_center=Point(*self.macula_center))
+        if self.av_maps and load_av_maps:
+            av_maps = {k: FundusData.load_av(p) for k, p in self.av_maps.items()}
+        else:
+            av_maps = None
 
         return BranchDigraphSample(
             name=self.name,
+            dataset=self.dataset,
             fundus=fundus,
-            art_topology=TreeTopology.load(self.art_topology, tree=not discard_gt_tree),
-            vei_topology=TreeTopology.load(self.vei_topology, tree=not discard_gt_tree),
+            art_topology=TreeTopology.load(self.art_topology, tree=not discard_gt_tree, sparse=True),
+            vei_topology=TreeTopology.load(self.vei_topology, tree=not discard_gt_tree, sparse=True),
             graphes={k: VGraph.load(p) for k, p in self.graphes.items()},
+            _av_maps=av_maps,
         )
 
     def prefix(self, prefix: Path | str) -> Self:
@@ -130,11 +258,13 @@ class SampleInfo:
         sample.graphes = {k: p.relative_to(path) for k, p in sample.graphes.items()}
         return sample
 
-    def all_files(self, relative_to: Optional[Path | str] = None) -> list[Path]:
+    def all_files(self, prefix_path: Optional[Path | str] = None) -> list[Path]:
         """Return a list of all files associated with this sample, optionally relative to a given path."""
 
         paths = [self.fundus, self.od, self.macula, self.art_topology, self.vei_topology] + list(self.graphes.values())
-        return [p.relative_to(relative_to) for p in paths] if relative_to is not None else paths
+        if self.av_maps:
+            paths += list(self.av_maps.values())
+        return [prefix_path / p for p in paths] if prefix_path is not None else paths
 
     MANIFEST_FILENAME = "manifest.json"
 
@@ -192,9 +322,9 @@ class SampleInfo:
         return json_bytes
 
 
-@dataclass
+@pydantic_dataclass
 class SampleSource:
-    """Data class representing the source files of a sample of a BranchDigraphDataset, and providing methods to process them into a BranchDigraphSampleInfo."""  # noqa: E501
+    """Data class representing the source files of a sample of a BranchDigraphDataset, and providing methods to process them into a ``SampleInfo``."""  # noqa: E501
 
     fundus: Path
     """Path to the fundus image file."""
@@ -217,8 +347,8 @@ class SampleSource:
     dataset: str
     """Optional name of the dataset this sample belongs to."""
 
-    _od_center: tuple[float, float] | None | EllipsisType = Field(default=..., repr=False)
-    _mac_center: tuple[float, float] | None | EllipsisType = Field(default=..., repr=False)
+    _od_center: tuple[float, float] | None | Literal["not-initialized"] = Field(default="not-initialized", repr=False)
+    _mac_center: tuple[float, float] | None | Literal["not-initialized"] = Field(default="not-initialized", repr=False)
 
     @property
     def name(self) -> str:
@@ -279,6 +409,10 @@ class SampleSource:
             )
             for version in self.graphes.keys()
         }
+        av_maps = {}
+        for version, graph_path in self.graphes.items():
+            if isinstance(graph_path, Path) and not graph_path.suffix == ".npz":
+                av_maps[version] = output_dir / "av_maps" / version / (name + graph_path.suffix)
         topo_path = {av: output_dir / "target-topo" / f"{name}_{av}.npz" for av in ["art", "vei"]}
         od = output_dir / "od" / (name + ".png")
         macula = output_dir / "macula" / (name + ".png")
@@ -291,6 +425,7 @@ class SampleSource:
             art_topology=topo_path["art"],
             vei_topology=topo_path["vei"],
             graphes=graphes,
+            av_maps=av_maps,
             od_center=None,
             macula_center=None,
             date=self.date,
@@ -301,13 +436,20 @@ class SampleSource:
         self,
         existing_samples: dict[str, SampleInfo] | SampleInfo,
         overwrite: Optional[bool | datetime] = None,
+        output_dir: Optional[Path] = None,
     ) -> SampleInfo | None:
         """Check if the sample is already processed and up-to-date in the output directory, based on the existing samples and the overwrite policy."""  # noqa: E501
         existing_sample = existing_samples.get(self.name) if isinstance(existing_samples, dict) else existing_samples
 
         # A sample will not be reprocessed if:
-        # 1. A sample exist and all its files exist on disk
-        if existing_sample is None or not all(f.exists() for f in existing_sample.all_files()):
+        # 0. The sample was not found
+        if existing_sample is None:
+            return None
+        if output_dir is not None:
+            existing_sample = existing_sample.prefix(output_dir)
+
+        # 1. All its files exist on disk
+        if not all(f.exists() for f in existing_sample.all_files()):
             return None
 
         # 2. All graphes versions are present in the existing sample
@@ -330,33 +472,29 @@ class SampleSource:
 
     def compute_od_mac(self, overwrite: Optional[bool | datetime] = None) -> Self:
         """Compute the optic disc and macula centers from the fundus image if they are not already provided."""
-        from fundus_odmac_toolkit.models.segmentation import segment as segment_od_mac
-        from fundus_data_toolkit.functional import open_image
+        from fundus_odmac_toolkit import segment_od_mac
 
-        fundus = FundusData.empty_like(self.fundus)
+        fundus = FundusData(self.fundus)
 
         save_od = overwrite_or_newer(self.fundus, self.od, overwrite)
         save_mac = overwrite_or_newer(self.fundus, self.macula, overwrite)
         if save_od or save_mac:
-            od_mac = segment_od_mac(open_image(self.fundus)).numpy(force=True).argmax(axis=0)  # type: ignore
-            fundus.update(od=od_mac == 1, macula=od_mac == 2, reshape_method="resize", inplace=True)
-            assert fundus.od_center is not None and fundus.macula_center is not None
+            with watch("Segment OD and Macula"):
+                segment_od_mac(fundus)
 
             if save_od:
                 fundus.write_image(od=self.od, on_exists="overwrite")
             if save_mac:
                 fundus.write_image(macula=self.macula, on_exists="overwrite")
-            self._od_center = fundus.od_center if not fundus.od_center.is_nan() else None
-            self._mac_center = fundus.macula_center if not fundus.macula_center.is_nan() else None
+            self._od_center = fundus.od_center
+            self._mac_center = fundus.macula_center
         else:
-            if self._od_center is ...:
+            if self._od_center == "not-initialized":
                 fundus.update(od=self.od, inplace=True)
-                assert fundus.od_center is not None
-                self._od_center = fundus.od_center if not fundus.od_center.is_nan() else None
-            if self._mac_center is ...:
+                self._od_center = fundus.od_center
+            if self._mac_center == "not-initialized":
                 fundus.update(macula=self.macula, inplace=True)
-                assert fundus.macula_center is not None
-                self._mac_center = fundus.macula_center if not fundus.macula_center.is_nan() else None
+                self._mac_center = fundus.macula_center
 
         return self
 
@@ -395,105 +533,174 @@ class SampleSource:
         BranchDigraphSampleInfo
             The information of the processed sample, including the paths to the processed files and the coordinates of the optic disc and macula centers.
         """  # noqa: E501
-        output_paths = self.output_paths(output_dir)
+        output_sample = self.output_paths(output_dir)
 
-        # === 1. Load and crop fundus image ===
-        fundus = FundusData(self.fundus)
+        with watch("SampleSource.process"):
+            # === 1. Load and crop fundus image ===
+            with watch("Load fundus image"):
+                with watch("Read image from disk"):
+                    fundus = FundusData(self.fundus)
 
-        r, roi = None, None
-        if resize_to is not None:
-            fundus, roi = fundus.crop_to_roi(return_roi=True, ensure_square=True)
-            r = resize_to / roi.w
-            fundus = fundus.resize(r)
+                with watch("Crop to ROI & resize"):
+                    r, src_roi = None, None
+                    if resize_to is not None:
+                        fundus, src_roi = fundus.crop_to_roi(return_roi=True, ensure_square=True)
+                        r = resize_to / src_roi.w
+                        fundus = fundus.resize(resize_to)
+                    output_sample.fundus_roi = fundus.roi_specs
+                    roi_mask = fundus.roi_specs.to_mask(fundus.shape)
+                    fundus = fundus.update(roi_mask=roi_mask).apply_roi_mask()
 
-        transform: Optional[ResizeTranslation] = None
-        if roi is not None and r is not None:
-            transform = ResizeTranslation(r, -roi.top_left.numpy() * r)
+                transform: Optional[ResizeTranslation] = None
+                if src_roi is not None and r is not None:
+                    transform = ResizeTranslation(r, -src_roi.top_left.numpy() * r)
+                dst_roi = Rect.from_size(fundus.shape)
 
-        if overwrite_or_newer(self.fundus, output_paths.fundus, overwrite):
-            fundus.write_image(image=output_paths.fundus, on_exists="overwrite")
+                if overwrite_or_newer(self.fundus, output_sample.fundus, overwrite):
+                    with watch("Write processed fundus image"):
+                        fundus.write_image(image=output_sample.fundus, on_exists="overwrite")
 
-        # === 2. Load or compute and crop od and macula ===
-        # Ensure the od and macula segmentation exists
-        self.compute_od_mac(overwrite=overwrite)
-        overwrite_od = overwrite_or_newer(self.od, output_paths.od, overwrite)
+            # === 2. Load or compute and crop od and macula ===
+            # Ensure the od and macula segmentation exists
+            with watch("Load or compute OD and Macula"):
+                self.compute_od_mac(overwrite=overwrite)
+                overwrite_od = overwrite_or_newer(self.od, output_sample.od, overwrite)
 
-        if mask_optic_disc or overwrite_od:  # Load, crop and save OD
-            fundus.update(od=self.od, inplace=True, crop_pad=roi, reshape_method="resize")
-            if overwrite_od:
-                fundus.write_image(od=output_paths.od, on_exists="overwrite")
-        if overwrite_or_newer(self.macula, output_paths.macula, overwrite):  # Load, crop and save macula
-            fundus.update(macula=self.macula, inplace=True, crop_pad=roi, reshape_method="resize")
-            fundus.write_image(macula=output_paths.macula, on_exists="overwrite")
+                if mask_optic_disc or overwrite_od:  # Load, crop and save OD
+                    fundus.update(od=self.od, inplace=True, crop_pad=src_roi, reshape_method="resize")
+                    if overwrite_od:
+                        fundus.write_image(od=output_sample.od, on_exists="overwrite")
+                if overwrite_or_newer(self.macula, output_sample.macula, overwrite):  # Load, crop and save macula
+                    fundus.update(macula=self.macula, inplace=True, crop_pad=src_roi, reshape_method="resize")
+                    fundus.write_image(macula=output_sample.macula, on_exists="overwrite")
 
-        # === 3. Load, preprocess and save graphes ===
-        GEO_ATTRS = [VBranchGeoData.Fields.TANGENTS, VBranchGeoData.Fields.TIPS_TANGENT, VBranchGeoData.Fields.CALIBRES]
-        graphes: dict[str, Path] = copy.copy(self.graphes) if isinstance(self.graphes, dict) else {"": self.graphes}
+            # === 3. Load, preprocess and save graphes ===
+            with watch("Load and preprocess graphes"):
+                GEO_ATTRS = [
+                    VBranchGeoData.Fields.TANGENTS,
+                    VBranchGeoData.Fields.TIPS_TANGENT,
+                    VBranchGeoData.Fields.CALIBRES,
+                ]
+                graphes: dict[str, Path] = (
+                    copy.copy(self.graphes) if isinstance(self.graphes, dict) else {"": self.graphes}
+                )
 
-        for graph_version, graph_path in graphes.items():
-            graphes[graph_version] = graph_out_path = output_paths.graphes[graph_version]
-            if not overwrite_or_newer(graph_path, graph_out_path, overwrite):
-                continue
+                for graph_version, graph_path in graphes.items():
+                    if (
+                        output_sample.av_maps
+                        and graph_version in output_sample.av_maps
+                        and isinstance(graph_path, Path)
+                        and not graph_path.suffix == ".npz"
+                    ):
+                        av_map_out_path = output_sample.av_maps[graph_version]
+                        if overwrite_or_newer(graph_path, av_map_out_path, overwrite):
+                            av_map_out_path.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy(graph_path, av_map_out_path)
 
-            if isinstance(graph_path, VGraph):
-                graph = graph_path.copy()
-            elif graph_path.suffix == ".npz":
-                # Load from graph file
-                graph = VGraph.load(graph_path, check_integrity=False)
-                if transform is not None and resize_to is not None:
-                    graph.transform(transform, inplace=True)
-                    graph.geometric_data()._domain = Rect.from_size((resize_to, resize_to))
-            else:
-                # Parse AV segmentation to graph
-                if av2tree is None:
-                    av2tree = GNNAVSegToTree()
-                fundus.update(av=graph_path, crop_pad=roi, reshape_method="resize", inplace=True)
-                if mask_optic_disc:
-                    selem = disk(fundus.od_diameter * 0.2, dtype=bool)  # type: ignore
-                    mask = ~binary_erosion(fundus.od, selem)  # type: ignore
-                    fundus.update(av=fundus.av * mask, inplace=True)
-                graph = av2tree.to_vgraph(fundus)
+                    graphes[graph_version] = graph_out_path = output_sample.graphes[graph_version]
+                    if not overwrite_or_newer(graph_path, graph_out_path, overwrite):
+                        continue
 
-            # Remove duplicated branches and nodes, and remove useless attributes
-            graph.geometric_data().clear_attribute(all_except=GEO_ATTRS)
-            merge_nodes_by_distance(graph, max_distance=0.5, inplace=True)
-            if len(duplicates := graph.branch_duplicates()):
-                graph.delete_branch([b for d in duplicates for b in d[1:]], inplace=True)
+                    if isinstance(graph_path, VGraph):
+                        graph = graph_path.copy()
+                    elif graph_path.suffix == ".npz":
+                        # Load from graph file
+                        with watch("Load from file"):
+                            graph = VGraph.load(graph_path, check_integrity=False)
+                        if transform is not None:
+                            with watch("Transform graph"):
+                                graph.transform(transform, warped_domain=dst_roi, inplace=True)
+                    else:
+                        # Parse AV segmentation to graph
+                        if av2tree is None:
+                            av2tree = GNNAVSegToTree()
+                        with watch("Load AV map"):
+                            with watch("FundusData.update"):
+                                fundus.update(av=graph_path, crop_pad=src_roi, reshape_method="resize", inplace=True)
+                            if mask_optic_disc:
+                                with watch("remove OD from vessels"):
+                                    fundus.remove_od_from_vessels(shrink_factor=0.2, mask_roi=True, inplace=True)
+                            else:
+                                fundus.apply_roi_mask(inplace=True)
+                            if graph_version in output_sample.av_maps:
+                                av_map_out_path = output_sample.av_maps[graph_version]
+                                with watch("save AV map"):
+                                    av_map_out_path.parent.mkdir(parents=True, exist_ok=True)
+                                    fundus.write_image(av=av_map_out_path, on_exists="overwrite")
+                        with watch("av2tree.to_vgraph"):
+                            graph = av2tree.to_vgraph(fundus, simplify=True)
 
-            # Save processed graph
-            graph.save(graph_out_path, on_exists="overwrite")
+                    # Remove duplicated branches and nodes, and remove useless attributes
+                    with watch("Clean graph"):
+                        graph.geometric_data().clear_attribute(all_except=GEO_ATTRS)
+                        merge_nodes_by_distance(graph, max_distance=0.5, inplace=True)
+                        if len(duplicates := graph.branch_duplicates()):
+                            graph.delete_branch([b for d in duplicates for b in d[1:]], inplace=True)
 
-        # === 4. Load and preprocess GT topology ===
-        if any(
-            overwrite_or_newer(src, dst, overwrite)
-            for src, dst in zip(self.target_topologies, output_paths.target_topologies, strict=True)
-        ):
-            trees: list[VTree] = []
-            for tree_path in self.target_topologies:
-                tree = VTree.load(tree_path, check_integrity=True)
-                if transform is not None and resize_to is not None:
-                    tree.transform(transform, inplace=True)
-                    tree.geometric_data()._domain = Rect.from_size((resize_to, resize_to))
-                merge_nodes_by_distance(tree, max_distance=0.5, inplace=True)
-                if len(tree.branch_duplicates()):
-                    warnings.warn(f"Tree in sample {self.name} has duplicate branches after processing", stacklevel=1)
-                trees.append(tree)
+                    # Check
+                    with watch("Check graph"):
+                        report = graph.check_integrity()
+                        if report:
+                            print(f"=== SAMPLE: {self.dataset}/{self.name}/{graph_version} ===")
+                            print(report)
 
-            # Test for common branch in Artery and Vein trees
-            merged_tree = trees[0].append(trees[1])
-            merge_nodes_by_distance(merged_tree, max_distance=0.5, inplace=True)
-            if len(merged_tree.branch_duplicates()):
-                warnings.warn(f"Sample {self.name} has duplicated branches in artery and vein trees", stacklevel=1)
+                    # Save processed graph
+                    with watch("Save processed graphes"):
+                        graph.save(graph_out_path, on_exists="overwrite")
 
-            # Rasterize topologies
-            art_topo = TreeTopology.from_tree(trees[0], expand_labels_by=5)
-            vei_topo = TreeTopology.from_tree(trees[1], expand_labels_by=5)
+                output_sample.av_maps = {v: path for v, path in output_sample.av_maps.items() if path.exists()}
 
-            # Save processed topologies
-            art_topo.save(output_paths.art_topology, on_exists="overwrite")
-            vei_topo.save(output_paths.vei_topology, on_exists="overwrite")
+            # === 4. Load and preprocess GT topology ===
+            if any(
+                overwrite_or_newer(src, dst, overwrite)
+                for src, dst in zip(self.target_topologies, output_sample.target_topologies, strict=True)
+            ):
+                with watch("Load and preprocess GT topology"):
+                    report = CheckReport()
+                    trees: list[VTree] = []
+                    for tree_path in self.target_topologies:
+                        with watch("VTree.load"):
+                            tree = VTree.load(tree_path, check_integrity=False)
+                        report.extend(tree.check_integrity())
 
-        return output_paths
+                        if transform is not None:
+                            with watch("Transform VTree"):
+                                tree.transform(transform, warped_domain=dst_roi, inplace=True)
+                            # tree.geometric_data()._domain = Rect.from_size((resize_to, resize_to))
+
+                        with watch("Clean"):
+                            merge_nodes_by_distance(tree, max_distance=0.5, inplace=True)
+
+                            if len(tree.branch_duplicates()):
+                                report.log_error(
+                                    "Tree Topology",
+                                    ("Artery" if tree_path == self.target_topologies[0] else "Vein")
+                                    + " tree has duplicated branches after processing",
+                                )
+                        trees.append(tree)
+
+                    # Test for common branch in Artery and Vein trees
+                    with watch("Check common branches"):
+                        merged_tree = trees[0].append(trees[1])
+                        merge_nodes_by_distance(merged_tree, max_distance=0.5, inplace=True)
+                        if len(merged_tree.branch_duplicates()):
+                            report.log_error("Tree Topology", "Duplicated branches in artery and vein trees")
+                        if report:
+                            print(f"=== SAMPLE: {self.dataset}/{self.name} ===")
+                            print(report)
+
+                    # Rasterize topologies
+                    with watch("Rasterize topologies"):
+                        art_topo = TreeTopology.from_tree(trees[0], expand_labels_by=5)
+                    with watch("Rasterize topologies"):
+                        vei_topo = TreeTopology.from_tree(trees[1], expand_labels_by=5)
+
+                    # Save processed topologies
+                    with watch("Save processed topologies"):
+                        art_topo.save(output_sample.art_topology, on_exists="overwrite")
+                        vei_topo.save(output_sample.vei_topology, on_exists="overwrite")
+
+        return output_sample
 
 
 class BranchDigraphDatasetConfig(BaseModel):
@@ -517,7 +724,7 @@ class BranchDigraphDatasetConfig(BaseModel):
     If a dict is provided, it should map graph version names to weights, and the corresponding graphs will be loaded and merged with the specified weights for each sample. If a version name in the dict is not found in a sample, that sample will be skipped with a warning.
     """  # noqa: E501
     preload: bool | Literal["without-image"] = Field(default=False)
-    augment: AugmentationOpts | BoolHyperParam = Field(default_factory=AugmentationOpts)
+    augment: AugmentationField = Field(default_factory=AugmentationCfg)
 
     # line_p_smoothing: NotRequired[float] = 0.0
 
@@ -530,6 +737,7 @@ class BranchDigraphDataset(PygDataset):
         *,
         transform=None,
         cfg: Optional[BranchDigraphDatasetConfig] = None,
+        use_all_graph_versions: bool = False,
     ):
         """Dataset of branch digraphs for fundus images, with multiple graph versions and target topologies.
 
@@ -539,11 +747,16 @@ class BranchDigraphDataset(PygDataset):
             Path to the processed dataset directory or archive, which should contain an appropriate manifest along with the processed data.
         root : Optional[str | Path], optional
             Root directory to store the dataset.
+
+        use_all_graph_versions : bool, optional
+            If true, the different versions in cfg.graph_version will be treated as separate samples, increasing this dataset's length. This is useful for testing on all graph versions.
         """  # noqa: E501
         src_path = Path(src_path)
         self.src_path = src_path
         self.samples_info = SampleInfo.decode(src_path)
         self.cfg: BranchDigraphDatasetConfig = cfg or BranchDigraphDatasetConfig()
+        self.__roi_cache: tuple[FundusData.ROISpecs, Bool2DArray] | None = None
+        self._use_all_graph_versions = use_all_graph_versions
 
         if root is None:
             if src_path.is_dir():
@@ -571,13 +784,17 @@ class BranchDigraphDataset(PygDataset):
         else:
             self._preloaded_samples = None
 
-    def preload(self, with_image: bool = False) -> Self:
+    def preload(self, with_image: bool = False, discard_gt_tree: bool = True) -> Self:
         """Preload the samples into memory. If with_image is False, only the graph and topology data will be preloaded, and the fundus images will be loaded on demand when calling get_sample()."""  # noqa: E501
         progress_bar = run.header.progress_bar if (run := ExperimentRun.current()) is not None else True
 
         self._preloaded_samples = [
-            samples_info.load(image=with_image)
-            for samples_info in tqdm.tqdm(self.samples_info, desc="Preloading dataset", disable=not progress_bar)
+            samples_info.load(image=with_image, discard_gt_tree=discard_gt_tree)
+            for samples_info in progress.track(
+                self.samples_info,
+                description="Preloading dataset" + (" (without images)" if not with_image else ""),
+                disable=not progress_bar,
+            )
         ]
         return self
 
@@ -591,7 +808,7 @@ class BranchDigraphDataset(PygDataset):
         return new
 
     @classmethod
-    def load_from_dirs(
+    def process_dirs(
         cls,
         fundus_dir: Path | list[Path],
         target_topology_dir: Path | list[Path],
@@ -611,62 +828,21 @@ class BranchDigraphDataset(PygDataset):
     ) -> Self:
         cfg = cfg or BranchDigraphDatasetConfig()
         verbose = run.header.verbose if (run := ExperimentRun.current()) is not None else True
+
         # === List source files ===
-        if isinstance(fundus_dir, list):
-            N = len(fundus_dir)
-            assert isinstance(target_topology_dir, list) and len(target_topology_dir) == N, (
-                "If fundus_dir is a list, target_topology_dir must be a list of the same length"
-            )
-            assert isinstance(graph_dir, list) and len(graph_dir) == N, (
-                "If fundus_dir is a list, graph_dir must be a list of the same length"
-            )
-            if isinstance(dataset_name, str):
-                dataset_name = [dataset_name] * N
-            elif dataset_name is None:
-                dataset_name = [f_dir.parent.name for f_dir in fundus_dir]
-            else:
-                assert isinstance(dataset_name, list) and len(dataset_name) == N, (
-                    "If fundus_dir is a list, dataset_name should be either a string or a list of the same length"
-                )
-
-            samples_src = []
-            for f_dir, t_dir, g_dir, d_name in zip(
-                fundus_dir, target_topology_dir, graph_dir, dataset_name, strict=True
-            ):
-                samples_src.extend(
-                    cls.discover_paths(
-                        f_dir,
-                        t_dir,
-                        g_dir,
-                        dataset=d_name,
-                        fundus_ext=fundus_ext,
-                        av_ext=av_ext,
-                        ignore_recent=ignore_recent,
-                    )
-                )
-        else:
-            assert not isinstance(target_topology_dir, list), (
-                "If fundus_dir is not a list, target_topology_dir should not be a list"
-            )  # noqa: E501
-            assert not isinstance(graph_dir, list), "If fundus_dir is not a list, graph_dir should not be a list"
-            if dataset_name is None:
-                dataset_name = ""
-            assert isinstance(dataset_name, str), "If fundus_dir is not a list, dataset_name should a string"
-
-            samples_src = cls.discover_paths(
-                fundus_dir,
-                target_topology_dir,
-                graph_dir,
-                dataset=dataset_name,
-                fundus_ext=fundus_ext,
-                av_ext=av_ext,
-                ignore_recent=ignore_recent,
-            )
-
+        samples_src = cls.discover_paths(
+            fundus_dir,
+            target_topology_dir,
+            graph_dir,
+            dataset_name=dataset_name,
+            fundus_ext=fundus_ext,
+            av_ext=av_ext,
+            ignore_recent=ignore_recent,
+        )
         if verbose:
             print(f"Found {len(samples_src)} branch digraphs...")
 
-        # === Generate output directory ===
+        # === Create output directory ===
         if output_dir is None:
             fundus_hash = hashlib.sha256(str(graph_dir).encode("utf-8")).hexdigest()
             if resize_to is not None:
@@ -684,14 +860,16 @@ class BranchDigraphDataset(PygDataset):
 
         samples: list[SampleInfo] = []
         for i, sample_src in reversed(list(enumerate(samples_src))):
-            existing_sample = sample_src.already_processed(existing_samples, overwrite)
+            existing_sample = sample_src.already_processed(existing_samples, overwrite=overwrite, output_dir=output_dir)
             if existing_sample is not None:
                 samples.append(existing_sample)
                 samples_src.pop(i)
 
         # Process remaining samples in parallel
         if len(samples_src) > 0:
-            for sample_src in tqdm.tqdm(samples_src, desc="Computing OD/Macula centers", disable=not verbose):
+            for sample_src in progress.track(
+                samples_src, description="Computing OD/Macula centers", disable=not verbose
+            ):
                 sample_src.compute_od_mac(overwrite=overwrite)
 
             process = partial(
@@ -705,17 +883,17 @@ class BranchDigraphDataset(PygDataset):
             if n_workers == 0:
                 new_samples: list[SampleInfo] = [
                     process(sample_src)
-                    for sample_src in tqdm.tqdm(
-                        samples_src, total=len(samples_src), desc="Processing samples", disable=not verbose
+                    for sample_src in progress.track(
+                        samples_src, total=len(samples_src), description="Processing samples", disable=not verbose
                     )
                 ]  # type: ignore
             else:
                 run_parallel = Parallel(n_jobs=-2, return_as="generator_unordered")
                 new_samples: list[SampleInfo] = list(
-                    tqdm.tqdm(
+                    progress.track(
                         run_parallel(delayed(process)(sample_src) for sample_src in samples_src),
                         total=len(samples_src),
-                        desc="Processing samples",
+                        description="Processing samples",
                         disable=not verbose,
                     )
                 )  # type: ignore
@@ -752,71 +930,56 @@ class BranchDigraphDataset(PygDataset):
     def len(self):
         return len(self.samples_info)
 
-    @overload
-    def get(
-        self,
-        idx: int | str,
-        *,
-        version: Optional[str] = None,
-        augment: Optional[bool | AugmentationOpts] = None,
-        return_digraph: Literal[False] = False,
-    ) -> BranchDigraphData: ...
-    @overload
-    def get(
-        self,
-        idx: int | str,
-        *,
-        version: Optional[str] = None,
-        augment: Optional[bool | AugmentationOpts] = None,
-        return_digraph: Literal[True],
-    ) -> tuple[BranchDigraphData, VBranchDigraph]: ...
-    def get(
-        self,
-        idx: int | str,
-        *,
-        version: Optional[str] = None,
-        augment: Optional[bool | AugmentationOpts] = None,
-        return_digraph: bool = False,
-    ) -> BranchDigraphData | tuple[BranchDigraphData, VBranchDigraph]:
-        sample = self.get_sample(idx)
-        graphes = list(sample.graphes.values())
+    def get(self, idx: int) -> BranchDigraphData:
+        sample = self.get_sample(idx % len(self.samples_info), discard_gt_tree=True, load_av_maps=False)
+
+        N_versions = len(sample.graphes)
         versions = list(sample.graphes.keys())
-        if version is not None and version in versions:
-            graph_version = version
-        elif isinstance(self.cfg.graph_version, dict):
+
+        if isinstance(self.cfg.graph_version, dict):
             pick_p = [self.cfg.graph_version.get(v, 0.0) for v in versions]
             p_total = sum(pick_p)
             if p_total == 0.0:
-                graph_version = versions[np.random.randint(len(graphes))]
+                graph_version = versions[np.random.randint(N_versions)]
             else:
-                graph_version = versions[np.random.choice(len(graphes), p=np.array(pick_p) / p_total)]
+                graph_version = versions[np.random.choice(N_versions, p=np.array(pick_p) / p_total)]
         elif self.cfg.graph_version is None or self.cfg.graph_version not in sample.graphes:
-            graph_version = versions[np.random.randint(len(graphes))]
+            graph_version = versions[np.random.randint(N_versions)]
         else:  # version is a valid key in sample.graphes
             graph_version = self.cfg.graph_version
-        graph = sample.graphes[graph_version]
 
-        return BranchDigraphData.from_graph(
-            graph,
-            sample.fundus,
-            sample.target_topologies,
-            return_digraph=return_digraph,
-            augment=self.cfg.augment if augment is None else augment,
-            name=sample.name + (f"/{graph_version}" if graph_version else ""),
-            od_center=sample.fundus.od_center if sample.fundus.has_od_center else None,
-            mac_center=sample.fundus.macula_center if sample.fundus.has_macula_center else None,
-        )
+        return sample.to_tensor(graph_version, augment=self.cfg.augment)
 
-    def get_sample(self, idx: int | str, *, discard_gt_tree: bool = True) -> BranchDigraphSample:
+    def get_sample(self, idx: int | str, *, discard_gt_tree: bool = True, load_av_maps=False) -> BranchDigraphSample:
         if isinstance(idx, str):
             idx = [s.name for s in self.samples_info].index(idx)
         if self._preloaded_samples is not None:
-            sample = copy.copy(self._preloaded_samples[idx])
-            if not sample.fundus.has_image:
-                sample.fundus = sample.fundus.update(image=self.samples_info[idx].fundus)
-            return sample
+            sample = self._preloaded_samples[idx]
         else:
-            return self.samples_info[idx].load(discard_gt_tree=discard_gt_tree)
+            sample = self.samples_info[idx].load(discard_gt_tree=discard_gt_tree, load_av_maps=load_av_maps)
+
+        fundus = sample.fundus
+        if not fundus.has_image:
+            fundus = fundus.update(image=self.samples_info[idx].fundus)
+        if fundus._roi_mask is None:
+            roi_specs = sample.fundus.roi_specs
+            if (
+                self.__roi_cache is None
+                or self.__roi_cache[0].radius != sample.fundus.roi_specs.radius
+                or self.__roi_cache[0].center != sample.fundus.roi_specs.center
+            ):
+                roi_mask = roi_specs.to_mask(sample.fundus.shape, disk_only=True)
+                self.__roi_cache = (roi_specs, roi_mask)
+            else:
+                roi_mask = self.__roi_cache[1]
+            if roi_specs.top or roi_specs.bottom:
+                roi_mask_ = roi_mask
+                roi_mask = np.zeros_like(roi_mask_, dtype=bool)
+                roi_mask[roi_specs.top : roi_specs.bottom, :] = roi_mask_[roi_specs.top : roi_specs.bottom, :]
+            fundus = fundus.update(roi_mask=roi_mask)
+        if fundus is not sample.fundus:
+            sample = sample.with_fundus(fundus)
+        return sample
 
     def list_versions(self) -> list[str]:
         """Return the list of available graph versions in the dataset."""
@@ -835,7 +998,7 @@ class BranchDigraphDataset(PygDataset):
         idx: int | str,
         *,
         version: Optional[str] = None,
-        augment: Optional[bool | AugmentationOpts] = None,
+        augment: Optional[AugmentationCfg | EllipsisType] = ...,
         branch_label=False,
         node_label=False,
     ) -> tuple[Mosaic, BranchDigraphSample, BranchDigraphData]:
@@ -846,8 +1009,8 @@ class BranchDigraphDataset(PygDataset):
             Index of the sample to draw, or the name of the fundus image (without extension).
         test : bool, optional
             Whether to run checks and optimizations on the graph before drawing, by default False.
-        augment : bool, optional
-            Whether to apply data augmentation to the sample before drawing, by default False.
+        augment : AugmentationCfg | None, optional
+            If provided, apply the specified augmentation to the sample before drawing. If None, no augmentation is applied. By default, use the dataset's default augmentation configuration.
         gt_topo : bool, optional
             Whether to draw the ground truth topology in a separate view, by default True.
         branch_label : bool, optional
@@ -866,30 +1029,29 @@ class BranchDigraphDataset(PygDataset):
             The (y, x) coordinates of the optic disc center.
         mac_yx: npt.NDArray
             The (y, x) coordinates of the macula center.
-        """
+        """  # noqa: E501
         from ...utils.jppype import Mosaic, draw_graph, draw_tree, draw_trees
 
-        sample = self.get_sample(idx, discard_gt_tree=False)
-        sample_data = self.get(idx, augment=augment, version=version)
+        sample = self.get_sample(idx, discard_gt_tree=False, load_av_maps=True)
 
-        if "/" in sample_data.name:
-            name, graph_version = sample_data.name.split("/", 1)
-        else:
-            name, graph_version = sample_data.name, ""
+        if augment is ...:
+            augment = self.cfg.augment
+        sample_data = sample.to_tensor(version, augment=augment)
 
         m = Mosaic(
             3,
-            cols_titles=[sample_data.name, "with GT Topology", "Ground Truth"],
+            cols_titles=[sample_data.name + "/" + sample_data.graph_version, "with GT Topology", "Ground Truth"],
             cell_height=700,
-            background=sample.fundus.image,
         )
-        draw_graph(
-            sample.graphes[graph_version],
-            view=m.views[0],
-            edge="bspline",
-            edge_labels=branch_label,
-            node_labels=node_label,
-        )
+        # sample.fundus.draw(view=m.views[0])
+        # draw_graph(
+        #    sample.graphes[graph_version],
+        #    view=m.views[0],
+        #    edge="bspline",
+        #    edge_labels=branch_label,
+        #    node_labels=node_label,
+        # )
+        sample.show(view=m.views[0], graph_version=sample_data.graph_version)
 
         digraph = sample_data.to_digraph(graph=True)
         assert digraph.graph is not None
@@ -924,16 +1086,19 @@ class BranchDigraphDataset(PygDataset):
         version: Optional[str] = None,
         gt_digraph: Optional[VBranchDigraph] = None,
         branch_label: bool = False,
+        simplify: bool = False,
+        blood_dir: bool = False,
     ) -> tuple[Mosaic, VTree]:
         from ...utils.jppype import AV_COLORS, Mosaic, draw_tree, draw_trees
 
         if isinstance(idx, str):
             if version is None:
                 idx, version = idx.split("/", 1)
+            idx = [s.name for s in self.samples_info].index(idx)
 
-        sample = self.get_sample(idx, discard_gt_tree=False)
+        sample = self.get_sample(idx, discard_gt_tree=False, load_av_maps=True)
         if gt_digraph is None:
-            _, gt_digraph = self.get(idx, return_digraph=True, version=version)
+            _, gt_digraph = sample.to_tensor(version, return_digraph=True)
         assert VBranchDigraph.has_all_p(gt_digraph)
 
         m = Mosaic(
@@ -946,72 +1111,126 @@ class BranchDigraphDataset(PygDataset):
 
         B = len(parent_pred)
 
-        # Draw GT tree
-        solved_tree = gt_digraph.optimize_tree(keep_missing_branch=True)
+        # === Draw GT tree ===
+        if sample._av_maps is not None and version in sample._av_maps:
+            av_map = sample._av_maps[version]
+            m[1].add_label(av_map, "AV Seg", colormap=AV_COLORS, opacity=0.3)
+        gt_tree = gt_digraph.optimize_tree(keep_missing_branch=True, assign_av="subtree")
         if show_gt_graph:
-            draw_tree(
-                solved_tree,
-                view=m[2],
-                branch_color="subtree",
-                bspline_dir=True,
-                interactive=True,
-            )
+            shown_gt_tree = gt_tree
+            if simplify:
+                shown_gt_tree = shown_gt_tree.delete_branch(np.where(gt_digraph.branch_fp())[0])
+                disconnect_crossing(shown_gt_tree, inplace=True)
+                simplify_passing_nodes(shown_gt_tree, min_angle=90, with_same_branch_attr="av")
+            draw_tree(gt_tree, view=m[2], branch_color="av", bspline_dir=True, interactive=True)
 
-        # Draw Predicted tree
+        # === Draw Predicted tree ===
         tree = gt_digraph.compute_tree_from_arborescence(parent_pred, dir_pred, fp_pred, keep_missing_branch=True)
-        branch_dir_cmap = {}
-        for b in range(gt_digraph.branch_count):
-            if tree.branch_dirs(b) != gt_digraph.branch_dir[b] and not gt_digraph.branch_fp()[b]:
-                branch_dir_cmap[b] = "#d2ff1d"
-        for b in range(gt_digraph.branch_count, tree.branch_count):
-            branch_dir_cmap[b] = AV_COLORS[AVLabel.BKG]
+
+        def next_valid_branch(b_id: int) -> Optional[int]:
+            while b_id >= B:
+                succs = tree.branch_successors(b_id)
+                if len(succs) == 0:
+                    return None
+                b_id = succs[0]
+            return b_id
+
+        INVALID = "#37be62"
+
+        # 1. Assign branch colors
         if av_pred is not None:
-            color_legend = {
-                (True, 1): AV_COLORS[AVLabel.ART],
-                (False, 2): AV_COLORS[AVLabel.VEI],
-                (True, 2): "#fc249b",
-                (False, 1): "#1c94e3",
-                (True, 0): "white",
-                (False, 0): "white",
-            }
-            branch_cmap = {i: color_legend[(av, gt_digraph.branch_av_class()[i])] for i, av in enumerate(av_pred)}
-            if fp_pred is not None:
-                for i in np.where(fp_pred)[0]:
-                    branch_cmap[i] = AV_COLORS[AVLabel.BKG]
-            for i in range(B, tree.branch_count):
-                if tree.branch_tree[i] >= 0:
-                    branch_cmap[i] = branch_cmap[tree.branch_tree[i]]
-                else:
-                    branch_cmap[i] = AV_COLORS[AVLabel.BKG]
-        node_cmap = {}
-        for node in tree.nodes():
-            if node.out_degree <= 0:
-                node_cmap[node.id] = branch_cmap[node.incoming_branch_ids[0]] if node.in_degree != 0 else "grey"
+            gt_av = gt_digraph.branch_av_class()
+            for b in tree.branches(np.arange(B)):
+                if b.id < B:
+                    # if gt_av[b.id] == 0:
+                    #     b.attr["color"] = "white"
+                    av = 2 - av_pred[b.id]
+                    b.attr["av"] = av
+                    if gt_av[b.id] == 0 or gt_av[b.id] == av:
+                        b.attr["color"] = AV_COLORS[av]
+                    else:
+                        b.attr["color"] = "#fc249b" if av_pred[b.id] else "#1c94e3"
+        else:
+            raise NotImplementedError("Visualization without AV prediction is not implemented yet")
+        if fp_pred is not None:
+            # Set false positive branches to background color
+            tree.branch_attr.loc[np.where(fp_pred)[0], "color"] = AV_COLORS[AVLabel.BKG]
+
+        # 2. Assign dir colors
+        for b in tree.branches(np.arange(B)):
+            if tree.branch_dirs(b.id) != gt_digraph.branch_dir[b.id] and not gt_digraph.branch_fp()[b.id]:
+                b.attr["dir_color"] = INVALID
             else:
-                for b in node.outgoing_branch_ids:
-                    if b >= B or gt_digraph.branch_fp()[b] or (fp_pred is not None and fp_pred[b]):
-                        continue
-                    parent = tree.branch_tree[b]
-                    while parent >= B:
-                        parent = tree.branch_tree[parent]
-                    gt_parent = solved_tree.branch_tree[b]
-                    while gt_parent >= B:
-                        gt_parent = solved_tree.branch_tree[gt_parent]
-                    if gt_parent != parent:
-                        node_cmap[node.id] = "#d2ff1d"
-                        break
+                b.attr["dir_color"] = b.attr["color"]
+
+        # 3. Check parent validity
+        tree.branch_attr["valid_parent"] = True
+        for b in tree.branches(np.arange(B)):
+            if fp_pred is not None and fp_pred[b.id] or gt_av[b.id] == 0:
+                continue
+            parent = tree.branch_tree[b.id]
+            while parent >= B:
+                parent = tree.branch_tree[parent]
+            gt_parent = gt_tree.branch_tree[b.id]
+            while gt_parent >= gt_digraph.branch_count:
+                gt_parent = gt_tree.branch_tree[gt_parent]
+            if gt_parent != parent:
+                b.attr["valid_parent"] = False
+
+        # 4. Propagate colors to added branches
+        for b in tree.branches(np.arange(B, tree.branch_count)):
+            if (next_b := next_valid_branch(b.id)) is not None:
+                next_b = tree.branch(next_b)
+                if not next_b.attr["valid_parent"]:
+                    b.attr["color"] = b.attr["dir_color"] = INVALID
                 else:
-                    node_cmap[node.id] = branch_cmap[node.outgoing_branch_ids[0]]
+                    b.attr["color"] = next_b.attr["color"]
+                    b.attr["dir_color"] = next_b.attr["dir_color"]
+                if av_pred is not None:
+                    b.attr["av"] = tree.branch_attr["av"].get(b.id, 0)
+            else:
+                b.attr["color"] = b.attr["dir_color"] = AV_COLORS[AVLabel.BKG]
+                if av_pred is not None:
+                    b.attr["av"] = AVLabel.BKG
+
+        # 4. Assign node colors
+        if simplify:
+            if fp_pred is not None:
+                tree.delete_branch(np.argwhere(fp_pred).flatten(), inplace=True)
+            disconnect_crossing(tree, inplace=True, fuse_passing_nodes=False)
+
+        tree.node_attr["valid"] = True
+        for node in tree.nodes():
+            if node.out_degree == 0:
+                node.attr["color"] = "grey" if node.in_degree == 0 else node.incoming_branch().attr["color"]
+            for b in node.outgoing_branches():
+                if not b.attr["valid_parent"]:
+                    node.attr["color"] = INVALID
+                    node.attr["valid"] = False
+                    break
+                else:
+                    node.attr["color"] = b.attr["color"]
+
+        if simplify:
+            simplify_passing_nodes(
+                tree,
+                only_fusable=tree.as_node_ids(tree.node_attr["valid"]),
+                min_angle=90,
+                with_same_branch_attr=["color", "dir_color"],
+                inplace=True,
+            )
 
         draw_tree(
             tree,
             view=m[1],
-            branch_color=branch_cmap,
+            branch_color=tree.branch_attr["color"].dropna().to_dict(),
             edge_labels=branch_label,
             node_labels=False,
-            node_cmap=node_cmap,
+            node_cmap=tree.node_attr["color"].dropna().to_dict(),
             interactive=True,
-            bspline_dir=branch_dir_cmap,
+            bspline_dir=tree.branch_attr["dir_color"].dropna().to_dict(),
+            node_dim_roots=False,
+            invert_bspline_dir=tree.branch_attr["av"].to_numpy() == 2 if blood_dir else False,
         )
 
         topo_map = TreeTopology.av_overlay(sample.fundus.image, *sample.target_topologies)
@@ -1109,7 +1328,7 @@ class BranchDigraphDataset(PygDataset):
         val_dataset = self.split(val_indices)
         test_dataset = self.split(test_indices)
         for test_set in (val_dataset, test_dataset):
-            test_set.cfg.augment = False
+            test_set.cfg.augment = None
 
         return train_dataset, val_dataset, test_dataset
 
@@ -1142,44 +1361,100 @@ class BranchDigraphDataset(PygDataset):
     @classmethod
     def discover_paths(
         cls,
-        fundus_dir: Path,
-        target_topology_dir: Path,
-        graph_dir: Path | dict[str, Path],
-        od_dir: Optional[Path] = None,
-        macula_dir: Optional[Path] = None,
+        fundus_dir: Path | list[Path],
+        target_topology_dir: Path | list[Path],
+        graph_dir: Path | dict[str, Path] | list[Path] | list[dict[str, Path]],
+        od_dir: Optional[Path | list[Path]] = None,
+        macula_dir: Optional[Path | list[Path]] = None,
         *,
-        dataset: str = "",
+        dataset_name: Optional[str | list[str]] = None,
         fundus_ext: str | None = None,
         av_ext: str | None = None,
         od_ext: str | None = None,
         macula_ext: str | None = None,
         ignore_recent: Optional[int | datetime] = None,
     ) -> list[SampleSource]:
-        if fundus_ext is None:
-            fundus_ext = most_common_image_ext(fundus_dir)
+        if isinstance(fundus_dir, list):
+            # === Handle multiple datasets ===
+            N = len(fundus_dir)
+            assert isinstance(target_topology_dir, list) and len(target_topology_dir) == N, (
+                "If fundus_dir is a list, target_topology_dir must be a list of the same length"
+            )
+            assert isinstance(graph_dir, list) and len(graph_dir) == N, (
+                "If fundus_dir is a list, graph_dir must be a list of the same length"
+            )
+            assert od_dir is None or (isinstance(od_dir, list) and len(od_dir) == N), (
+                "If fundus_dir is a list, od_dir should be either None or a list of the same length"
+            )
+            assert macula_dir is None or (isinstance(macula_dir, list) and len(macula_dir) == N), (
+                "If fundus_dir is a list, macula_dir should be either None or a list of the same length"
+            )
+            if isinstance(dataset_name, str):
+                dataset_name = [dataset_name] * N
+            elif dataset_name is None:
+                dataset_name = [f_dir.parent.name for f_dir in fundus_dir]
+            else:
+                assert isinstance(dataset_name, list) and len(dataset_name) == N, (
+                    "If fundus_dir is a list, dataset_name should be either a string or a list of the same length"
+                )
+
+            samples_src = []
+            for i in range(N):
+                samples_src.extend(
+                    cls.discover_paths(
+                        fundus_dir[i],
+                        target_topology_dir[i],
+                        graph_dir[i],
+                        dataset_name=dataset_name[i],
+                        od_dir=od_dir[i] if od_dir is not None else None,
+                        macula_dir=macula_dir[i] if macula_dir is not None else None,
+                        fundus_ext=fundus_ext,
+                        av_ext=av_ext,
+                        od_ext=od_ext,
+                        macula_ext=macula_ext,
+                        ignore_recent=ignore_recent,
+                    )
+                )
+            return samples_src
+
+        # === Single dataset ===
+        assert (
+            isinstance(fundus_dir, Path)
+            and isinstance(target_topology_dir, Path)
+            and isinstance(graph_dir, (Path, dict))
+            and (od_dir is None or isinstance(od_dir, Path))
+            and (macula_dir is None or isinstance(macula_dir, Path))
+            and isinstance(dataset_name, str)
+        ), "Incompatible types for fundus_dir, target_topology_dir, graph_dir, od_dir, macula_dir and dataset_name."
 
         if isinstance(ignore_recent, datetime):
             ignore_recent = int(ignore_recent.timestamp())
+
+        # --- Discover common files ---
+        # 1. discover fundus images
+        if fundus_ext is None:
+            fundus_ext = most_common_image_ext(fundus_dir)
 
         fundus_paths = fundus_dir.glob(f"*{fundus_ext}")
         if not isinstance(graph_dir, dict):
             graph_dir = {"": graph_dir}
 
+        # 2. discover graphes
         graphes = {}  # {"stem": {"graph_type": Path()} }
         for graph_type, dir_path in graph_dir.items():
             graph_files = dir_path.glob(f"*{GRAPH_EXT}")
-            if av_ext is None:
-                av_ext = most_common_image_ext(dir_path, raise_if_not_found=False)
-            if av_ext:
-                img_files = dir_path.glob(f"*{av_ext}")
+            av_ext_ = if_none(av_ext, most_common_image_ext(dir_path, raise_if_not_found=False))
+            if av_ext_:
+                img_files = dir_path.glob(f"*{av_ext_}")
                 graph_files = ({f.stem: f for f in img_files} | {f.stem: f for f in graph_files}).values()
             for file in graph_files:
                 graphes.setdefault(file.stem, {}).update({graph_type: file})
 
+        # 3. discover target topology files
         target_topo_art: Iterable[Path] = target_topology_dir.glob(f"*{ART_EXT}")
         target_topo_vei: Iterable[Path] = target_topology_dir.glob(f"*{VEI_EXT}")
 
-        if ignore_recent is not None:
+        if ignore_recent is not None:  # Discard existing topology files created before the ignore_recent timestamp
             target_topo_art = [_ for _ in target_topo_art if _.stat().st_mtime < ignore_recent]
 
         filenames = sorted(
@@ -1189,6 +1464,7 @@ class BranchDigraphDataset(PygDataset):
             & {t.stem[:-4] for t in target_topo_vei}
         )
 
+        # --- Generate paths for OD/Macula files ---
         if od_dir is None:
             od_dir = fundus_dir.parent / "1-od"
         if od_ext is None:
@@ -1204,7 +1480,7 @@ class BranchDigraphDataset(PygDataset):
                 fundus_path=fundus_dir / f"{name}{fundus_ext}",
                 target_topology_stem=target_topology_dir / name,
                 graphes_path=graphes[name],
-                dataset=dataset,
+                dataset=dataset_name,
                 od_path=od_dir / f"{name}{od_ext}",
                 macula_path=macula_dir / f"{name}{macula_ext}",
             )

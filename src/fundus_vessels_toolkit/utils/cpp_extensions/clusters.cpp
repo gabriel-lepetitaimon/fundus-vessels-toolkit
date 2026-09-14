@@ -83,7 +83,7 @@ std::list<std::vector<int>> solve_clusters(std::list<std::vector<int>> edges_lis
 }
 
 std::list<std::vector<int>> iterative_reduce_clusters(const torch::Tensor& edgeList, const torch::Tensor& edgeWeight,
-                                                      float maxWeight) {
+                                                      float maxWeight, bool drop_singletons = false) {
     // Sort edges by weight
     auto const& argsort = torch::argsort(edgeWeight, 0, false);
     auto const& sortedWeights = edgeWeight.index_select(0, argsort);
@@ -247,7 +247,8 @@ std::list<std::vector<int>> iterative_reduce_clusters(const torch::Tensor& edgeL
     // Remove empty clusters
     std::list<std::vector<int>> nonEmptyClusters;
     for (auto const& cluster : clusters) {
-        if (!cluster.empty()) nonEmptyClusters.push_back(std::vector<int>(cluster.begin(), cluster.end()));
+        if (!cluster.empty() && (!drop_singletons || cluster.size() > 1))
+            nonEmptyClusters.push_back(std::vector<int>(cluster.begin(), cluster.end()));
     }
 
     return nonEmptyClusters;
@@ -289,7 +290,8 @@ Cluster merge_clusters(const Cluster& c1, const Cluster& c2) {
     return merged;
 }
 
-std::list<std::vector<int>> cluster_by_distance(torch::Tensor pos, float max_distance, torch::Tensor edge_list_tensor) {
+std::list<std::vector<int>> cluster_by_distance(torch::Tensor pos, float max_distance, torch::Tensor edge_list_tensor,
+                                                bool inverted_edge_list, bool drop_singletons) {
     TORCH_CHECK_VALUE(pos.dim() == 2 && pos.size(1) == 2, "Input tensor must be of shape (N, 2).");
     auto const& pos_acc = pos.accessor<float, 2>();
     int N = (int)pos.size(0);
@@ -306,6 +308,26 @@ std::list<std::vector<int>> cluster_by_distance(torch::Tensor pos, float max_dis
             for (int j = i + 1; j < N; j++)
                 if (sqrDist(pos_acc[i], pos_acc[j]) <= max_dist_sqr) edge_list.push_back({i, j});
         }
+    } else if (inverted_edge_list) {
+        // sort edge list
+        std::vector<std::pair<int, int>> edges;
+        auto const& edgeAccessor = edge_list_tensor.accessor<int, 2>();
+        for (int i = 0; i < E; i++) {
+            int u = edgeAccessor[i][0], v = edgeAccessor[i][1];
+            if (u > v) std::swap(u, v);
+            edges.push_back({u, v});
+        }
+        std::sort(edges.begin(), edges.end());
+        auto it = edges.begin();
+        for (int i = 0; i < N; i++) {
+            for (int j = i + 1; j < N; j++) {
+                if (sqrDist(pos_acc[i], pos_acc[j]) <= max_dist_sqr) {
+                    const auto& edge = std::make_pair(i, j);
+                    while (it != edges.end() && *it < edge) it++;
+                    if (it == edges.end() || *it != edge) edge_list.push_back({i, j});
+                }
+            }
+        }
     } else {
         auto const& edgeAccessor = edge_list_tensor.accessor<int, 2>();
         for (int i = 0; i < E; i++) {
@@ -315,10 +337,11 @@ std::list<std::vector<int>> cluster_by_distance(torch::Tensor pos, float max_dis
         }
     }
 
-    return solve_clusters(edge_list, false, N);
+    return solve_clusters(edge_list, drop_singletons, N);
 }
 
-std::list<std::set<int>> iterative_cluster_by_distance(torch::Tensor pos, float max_distance, torch::Tensor edge_list) {
+std::list<std::set<int>> iterative_cluster_by_distance(torch::Tensor pos, float max_distance, torch::Tensor edge_list,
+                                                       bool drop_singletons = true) {
     TORCH_CHECK_VALUE(pos.dim() == 2 && pos.size(1) == 2, "Input tensor must be of shape (N, 2).");
     auto const& pos_acc = pos.accessor<float, 2>();
     int N = (int)pos.size(0);
@@ -366,7 +389,9 @@ std::list<std::set<int>> iterative_cluster_by_distance(torch::Tensor pos, float 
     }
 
     std::list<std::set<int>> clustersList;
-    for (auto const& cluster : clusters) clustersList.push_back(cluster.nodes);
+    for (auto const& cluster : clusters) {
+        if (!drop_singletons || cluster.nodes.size() > 1) clustersList.push_back(cluster.nodes);
+    }
     return clustersList;
 }
 

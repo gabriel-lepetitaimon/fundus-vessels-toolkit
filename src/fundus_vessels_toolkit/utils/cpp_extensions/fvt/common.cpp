@@ -22,12 +22,35 @@ IntPoint IntPoint::operator*(int f) const { return IntPoint(y * f, x * f); }
 Point IntPoint::operator*(double f) const { return Point(y * f, x * f); }
 Point IntPoint::operator/(double f) const { return Point(y / f, x / f); }
 
+IntPoint& IntPoint::operator+=(const IntPoint& p) {
+    this->x += p.x;
+    this->y += p.y;
+    return *this;
+}
+IntPoint& IntPoint::operator-=(const IntPoint& p) {
+    this->x -= p.x;
+    this->y -= p.y;
+    return *this;
+}
+IntPoint& IntPoint::operator*=(const int& f) {
+    this->x *= f;
+    this->y *= f;
+    return *this;
+}
+IntPoint& IntPoint::operator/=(const double& p) {
+    if (p == 0 && x == 0 && y == 0) return *this;
+    this->x /= p;
+    this->y /= p;
+    return *this;
+}
 bool IntPoint::operator==(const IntPoint& p) const { return (x == p.x && y == p.y); }
 bool IntPoint::operator!=(const IntPoint& p) const { return (x != p.x || y != p.y); }
+bool IntPoint::operator<(const IntPoint& p) const { return (y < p.y || (y == p.y && x < p.x)); }
 bool IntPoint::is_inside(int h, int w) const { return (x >= 0 && x < w && y >= 0 && y < h); }
 bool IntPoint::is_inside(int y0, int x0, int y1, int x1) const { return (x >= x0 && x < x1 && y >= y0 && y < y1); }
 bool IntPoint::is_inside(const IntPoint& p) const { return (x >= 0 && x < p.x && y >= 0 && y < p.y); }
 bool IntPoint::is_adjacent(const IntPoint& p) const { return (std::abs(x - p.x) <= 1 && std::abs(y - p.y) <= 1); }
+bool IntPoint::is_null() const { return (x == 0 && y == 0); }
 
 IntPair IntPoint::toIntPair() const { return {y, x}; }
 int IntPoint::max() const { return std::max(y, x); }
@@ -54,6 +77,13 @@ Point IntPoint::normalize() const {
 int IntPoint::cross(const IntPoint& p) const { return y * p.x - x * p.y; }
 int IntPoint::dot(const IntPoint& p) const { return y * p.y + x * p.x; }
 double IntPoint::cosSim(const IntPoint& p) const { return dot(p) / sqrt(squaredNorm() * p.squaredNorm()); }
+double IntPoint::distance(const IntPoint& p) const {
+    if (p.x == x) return std::abs(p.y - y);
+    if (p.y == y) return std::abs(p.x - x);
+    float dx = std::abs(p.x - x), dy = std::abs(p.y - y);
+    if (dx == dy) return dx * std::sqrt(2.0);
+    return std::sqrt(dx * dx + dy * dy);
+}
 
 IntPoint IntPoint::clamp(IntPoint max) const { return IntPoint(std::clamp(y, 0, max.y), std::clamp(x, 0, max.x)); }
 IntPoint IntPoint::clamp(IntPoint min, IntPoint max) const {
@@ -276,6 +306,15 @@ float distance(const Point& p1, const Point& p2) { return sqrt(pow(p1.y - p2.y, 
 float distance(const IntPoint& p1, const IntPoint& p2) { return sqrt(pow(p1.y - p2.y, 2) + pow(p1.x - p2.x, 2)); }
 float distanceSqr(const Point& p1, const Point& p2) { return pow(p1.y - p2.y, 2) + pow(p1.x - p2.x, 2); }
 float distanceSqr(const IntPoint& p1, const IntPoint& p2) { return pow(p1.y - p2.y, 2) + pow(p1.x - p2.x, 2); }
+float curveLength(const CurveYX& curve, std::size_t start, std::size_t end) {
+    if (end > curve.size())
+        end = curve.size();
+    else if (end == 0)
+        end = curve.size();
+    float length = 0;
+    for (std::size_t i = start + 1; i < end; i++) length += curve[i - 1].distance(curve[i]);
+    return length;
+}
 
 std::vector<std::size_t> arange(const std::size_t& start, const std::size_t& end, const std::size_t& step) {
     std::vector<std::size_t> vec;
@@ -390,46 +429,65 @@ torch::Tensor remove_rows(const torch::Tensor& tensor, std::vector<int> rows) {
     return new_tensor;
 }
 
-CurveYX tensor_to_curve(const torch::Tensor& tensor, bool reverse) {
+template <>
+void tensor_to_vector<Point>(const torch::Tensor& tensor, std::vector<Point>& vec) {
+    auto accessor = tensor.accessor<float, 2>();
+    vec.clear();
+    vec.reserve(tensor.size(0));
+    for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) vec.push_back(Point(accessor[i][0], accessor[i][1]));
+}
+
+template <>
+void tensor_to_vector(const torch::Tensor& tensor, std::vector<IntPoint>& vec) {
     auto accessor = tensor.accessor<int, 2>();
+    vec.clear();
+    vec.reserve(tensor.size(0));
+    for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++)
+        vec.push_back(IntPoint(accessor[i][0], accessor[i][1]));
+}
+
+CurveYX tensor_to_curve(const torch::Tensor& tensor, bool reverse) {
     CurveYX curveYX;
+    tensor_to_curve(tensor, curveYX, reverse);
+    return curveYX;
+}
+
+void tensor_to_curve(const torch::Tensor& tensor, CurveYX& curveYX, bool reverse) {
+    auto accessor = tensor.accessor<int, 2>();
+    curveYX.clear();
     curveYX.reserve(tensor.size(0));
     if (!reverse)
         for (int i = 0; i < tensor.size(0); i++) curveYX.push_back({accessor[i][0], accessor[i][1]});
     else
         for (int i = tensor.size(0) - 1; i >= 0; i--) curveYX.push_back({accessor[i][0], accessor[i][1]});
-    return curveYX;
 }
 
-std::vector<CurveYX> tensors_to_curves(const std::vector<torch::Tensor>& tensors) {
-    std::vector<CurveYX> curves;
-    curves.reserve(tensors.size());
-    for (const auto& tensor : tensors) curves.push_back(tensor_to_curve(tensor));
-    return curves;
+void tensors_to_curves(const std::vector<torch::Tensor>& tensors, std::vector<CurveYX>& curves, bool reverse) {
+    curves.resize(tensors.size());
+    for (std::size_t i = 0; i < tensors.size(); i++) {
+        tensor_to_curve(tensors[i], curves[i], reverse);
+    }
 }
 
-std::vector<IntPair> tensor_to_vectorIntPair(const torch::Tensor& tensor) {
+void tensor_to_vectorIntPair(const torch::Tensor& tensor, std::vector<IntPair>& vec) {
     auto accessor = tensor.accessor<int, 2>();
-    std::vector<IntPair> vec;
+    vec.clear();
     vec.reserve(tensor.size(0));
     for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) vec.push_back({accessor[i][0], accessor[i][1]});
-    return vec;
 }
 
-PointList tensor_to_pointList(const torch::Tensor& tensor) {
+void tensor_to_pointList(const torch::Tensor& tensor, PointList& curve) {
     auto accessor = tensor.accessor<float, 2>();
-    PointList curve;
+    curve.clear();
     curve.reserve(tensor.size(0));
     for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) curve.push_back({accessor[i][0], accessor[i][1]});
-    return curve;
 }
 
-Scalars tensor_to_scalars(const torch::Tensor& tensor) {
+void tensor_to_scalars(const torch::Tensor& tensor, Scalars& vec) {
     auto accessor = tensor.accessor<float, 1>();
-    Scalars vec;
+    vec.clear();
     vec.reserve(tensor.size(0));
     for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) vec.push_back(accessor[i]);
-    return vec;
 }
 
 /*******************************************************************************************************************
@@ -643,10 +701,7 @@ std::list<std::vector<std::size_t>> solve_clusters(const std::list<SizePair>& ed
 /*******************************************************************************************************************
  *             === NEIGHBORS ===
  *******************************************************************************************************************/
-uint8_t count_neighbors(uint8_t neighborhood) {
-    static const uint8_t NIBBLE_LOOKUP[16] = {0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4};
-
-    return NIBBLE_LOOKUP[neighborhood & 0x0F] + NIBBLE_LOOKUP[neighborhood >> 4];
-}
-
-uint8_t roll_neighbors(uint8_t neighborhood, uint8_t n) { return (neighborhood << n) | (neighborhood >> (8 - n)); }
+// constexpr uint8_t count_neighbors(uint8_t neighborhood) {
+//  static const uint8_t NIBBLE_LOOKUP[16] = {0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4};
+//  return NIBBLE_LOOKUP[neighborhood & 0x0F] + NIBBLE_LOOKUP[neighborhood >> 4];
+//}

@@ -58,6 +58,9 @@ enum class Octant { SEE = 0, SSE = 1, SSW = 2, SWW = 3, NWW = 4, NNW = 5, NNE = 
 inline bool isPositiveVertically(Octant octant) { return octant >= Octant::NWW; }
 inline bool isPositiveHorizontally(Octant octant) { return octant <= Octant::SSE || octant >= Octant::NNE; }
 inline Octant oppositeOctant(Octant octant) { return static_cast<Octant>((static_cast<int>(octant) + 4) % 8); }
+inline Octant rotOctant45(Octant octant, int step) {
+    return static_cast<Octant>((static_cast<int>(octant) + step) % 8);
+}
 
 struct Incrementor {
     void (*incr)(IntPoint& p, int primary, int secondary);
@@ -81,6 +84,7 @@ class RayIterator {
     using reference = const IntPoint&;
 
     RayIterator();
+    RayIterator(Point direction);
     RayIterator(const IntPoint& start, Point direction);
     RayIterator(const IntPoint& start, float delta, Octant octant = Octant::SEE);
     RayIterator(const IntPoint& start, float delta, Octant octant, Incrementor* incrementor);
@@ -102,11 +106,14 @@ class RayIterator {
     const Octant& octant() const;
     const float& error() const;
     int step() const;
+    Point direction() const;
 
     IntPoint previousHalfStep() const;
     IntPoint extrapolate(int step) const;
+    IntPoint extrapolateDistance(float distance) const;
     RayIterator& skip(int step);
     int stepsCountTo(const IntPoint& p) const;
+    int stepsCountTo(float dist) const;
     void reset();
     void reset(const IntPoint& start);
     void reset_error();

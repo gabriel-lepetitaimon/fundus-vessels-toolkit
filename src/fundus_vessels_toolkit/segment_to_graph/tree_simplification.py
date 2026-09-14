@@ -27,6 +27,7 @@ def disconnect_crossing(
     tree: VTree,
     nodes: Optional[NodeIndicesLike] = None,
     *,
+    redefined_subtree_by: Optional[Literal["TANGENT"] | str] = None,
     fuse_passing_nodes=True,
     return_new_nodes: Literal[False] = False,
     inplace=False,
@@ -36,6 +37,7 @@ def disconnect_crossing(
     tree: VTree,
     nodes: Optional[NodeIndicesLike] = None,
     *,
+    redefined_subtree_by: Optional[Literal["TANGENT"] | str] = None,
     fuse_passing_nodes=True,
     return_new_nodes: Literal[True],
     inplace=False,
@@ -44,23 +46,34 @@ def disconnect_crossing(
     tree: VTree,
     nodes: Optional[NodeIndicesLike] = None,
     *,
+    redefined_subtree_by: Optional[Literal["TANGENT"] | str] = None,
     fuse_passing_nodes=True,
     return_new_nodes=False,
     inplace=False,
 ) -> VTree | tuple[VTree, NodeIndices]:
     """
-    Merge crossing nodes of a vessel tree.
-
-    Crossing nodes are nodes with two or more incoming branches with successors.
+    Disconnect crossing nodes by splitting them into multiple nodes.
 
     Parameters
     ----------
-        vessel_graph:
-            The graph of the vasculature extracted from the vessel map.
+    tree : VTree
+        The tree to simplify.
+    nodes : Optional[NodeIndicesLike], optional
+        The nodes to disconnect. If None, all crossing nodes will be disconnected, by default None.
+    fuse_passing_nodes : bool, optional
+        Whether to fuse the resulting passing nodes after splitting, by default True.
+    return_new_nodes : bool, optional
+        Whether to return the new nodes created by the splitting, by default False.
+    inplace : bool, optional
+        Whether to modify the tree in place or return a new tree, by default False.
 
     Returns
     -------
-        The modified graph with the crossing nodes fused.
+    VTree
+        The simplified tree.
+
+    NodeIndices, optional
+        The new nodes created by the splitting, only returned if `return_new_nodes` is True
 
     """  # noqa: E501
     if not inplace:
@@ -95,7 +108,7 @@ def disconnect_crossing(
         clusters = [[b.id] for b in parent_branches]
 
         if len(clusters) < 2 and len(branches) >= 3:
-            # If there is only one incoming branch but more than 3 branches total,
+            # If there is only one incoming branch but more than 3 branches total (only for user defined nodes),
             assert len(clusters) == 1, "There at least one incoming branch"
             # set the closest branch to the incoming branch as a separate cluster
             t0 = tangents[clusters[0][0]]
@@ -103,13 +116,36 @@ def disconnect_crossing(
             closest_child = np.argmax(np.sum(t0[None, :] * child_t, axis=1))
             clusters.append([child_branches.pop(closest_child).id])
 
-        clusters_t = -np.array([tangents[cluster[0]] for cluster in clusters])
+        if redefined_subtree_by == "TANGENT":
+            clusters_t = -np.array([tangents[cluster[0]] for cluster in clusters])
 
-        # Clusters child branches based on tangents
-        for child_branch in child_branches:
-            t_child = tangents[child_branch.id]
-            closest_cluster = np.argmax(np.sum(clusters_t * t_child[None, :], axis=1))
-            clusters[closest_cluster].append(child_branch.id)
+            # Clusters child branches based on tangents
+            for child_branch in child_branches:
+                t_child = tangents[child_branch.id]
+                closest_cluster = np.argmax(np.sum(clusters_t * t_child[None, :], axis=1))
+                clusters[closest_cluster].append(child_branch.id)
+        elif redefined_subtree_by is not None:
+            if redefined_subtree_by not in tree.branch_attr:
+                raise ValueError(f"Branch attribute '{redefined_subtree_by}' not found in the tree.")
+            cluster_attr = tree.branch_attr.loc[[cluster[0] for cluster in clusters], redefined_subtree_by]
+            for child_branch in child_branches:
+                attr = tree.branch_attr.loc[child_branch.id, redefined_subtree_by]
+                for i, c_attr in enumerate(cluster_attr):
+                    if attr == c_attr:
+                        clusters[i].append(child_branch.id)
+                        break
+                else:
+                    raise ValueError(
+                        f"Branch attribute '{redefined_subtree_by}' value '{attr}' not found in any of the clusters."
+                    )
+        else:
+            cluster_by_in = {cluster[0]: c for c, cluster in enumerate(clusters)}
+            for child_branch in child_branches:
+                parent_id = tree.branch_tree[child_branch.id]
+                if parent_id == -1:
+                    clusters.append([child_branch.id])
+                else:
+                    clusters[cluster_by_in[parent_id]].append(child_branch.id)
 
         # Split nodes
         _, splitted_nodes_ids = tree.split_node(node.id, clusters, inplace=True, return_node_ids=True)

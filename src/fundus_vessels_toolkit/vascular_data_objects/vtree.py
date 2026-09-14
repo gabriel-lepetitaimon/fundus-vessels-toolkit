@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fundus_vessels_toolkit.utils.exceptions import CheckReport
+
 __all__ = ["VTree"]
 
 import itertools
@@ -31,7 +33,6 @@ from fundus_toolkits.utils.typing import (
     Bool1DArrayLike,
     Float1DArrayLike,
     Indices,
-    Int1DArray,
     Int1DArrayLike,
     IntPairArrayLike,
     PointArrayLike,
@@ -143,6 +144,17 @@ class VTreeNode(VGraphNode):
             branch_ids = self._update_incident_branch_cache()[0]
         return (VTreeBranch(self.graph, i) for i in branch_ids)
 
+    def incoming_branch(self, index: int = 0) -> VTreeBranch:
+        """Return the branch incoming to the node at the given index."""
+        if (branch_ids := self._incoming_branch_ids) is None:
+            branch_ids = self._update_incident_branch_cache()[0]
+        try:
+            return VTreeBranch(self.graph, branch_ids[index])
+        except IndexError:
+            raise IndexError(
+                f"Index {index} out of range for node {self.id} with {len(branch_ids)} incoming branches."
+            ) from None
+
     # __ Outgoing branches __
     @property
     def outgoing_branch_ids(self) -> npt.NDArray[np.int_]:
@@ -163,6 +175,17 @@ class VTreeNode(VGraphNode):
         if (branch_ids := self._outgoing_branch_ids) is None:
             branch_ids = self._update_incident_branch_cache()[1]
         return (VTreeBranch(self.graph, i) for i in branch_ids)
+
+    def outgoing_branch(self, index: int) -> VTreeBranch:
+        """Return the branch outgoing from the node at the given index."""
+        if (branch_ids := self._outgoing_branch_ids) is None:
+            branch_ids = self._update_incident_branch_cache()[1]
+        try:
+            return VTreeBranch(self.graph, branch_ids[index])
+        except IndexError:
+            raise IndexError(
+                f"Index {index} out of range for node {self.id} with {len(branch_ids)} outgoing branches."
+            ) from None
 
 
 class VTreeBranch(VGraphBranch):
@@ -421,15 +444,9 @@ class VTree(VGraph):
             check_integrity=2 if check_integrity is True else (check_integrity + 1),
         )
 
-    @overload
-    def check_tree_integrity(self, on_error: Literal["warn", "skip"] = "skip", *, stack_level: int = 1) -> bool: ...
-    @overload
-    def check_tree_integrity(self, on_error: Literal["raise"], *, stack_level: int = 1) -> Literal[True]: ...
-    @overload
-    def check_tree_integrity(self, on_error: Literal["report"], *, stack_level: int = 1) -> str: ...
     def check_tree_integrity(
-        self, on_error: Literal["raise", "warn", "skip", "report"] = "skip", *, stack_level: int = 1
-    ) -> bool | str:
+        self, on_error: Literal["raise", "warn", "report"] = "report", *, stacklevel: int = 1
+    ) -> CheckReport:
         """Check the integrity of the tree.
 
         Raises
@@ -437,47 +454,32 @@ class VTree(VGraph):
         ValueError
             If the tree is not a tree (i.e. contains cycles).
         """
+        report = CheckReport(on_error=on_error, stacklevel=stacklevel + 1)
         B = self.branch_count
         if B == 0:
-            return "" if on_error == "report" else True
-        errors = []
-        if self.branch_tree.min() < -1:
-            errors.append("the provided branch parents contains invalid indices")
-        if self.branch_tree.max() >= B:
-            errors.append("the provided branch parents contains invalid indices")
-        if np.any(self.branch_tree == np.arange(B)):
-            errors.append("some branches are their own parent")
-        if has_cycle(self.branch_tree):
-            errors.append(
-                "it contains the cycles "
-                + "; ".join("{" + ", ".join(str(_) for _ in cycle) + "}" for cycle in find_cycles(self.branch_tree))
-            )
-        if len(errors) > 0:
-            msg = "Invalid tree:" + "\n - ".join(errors)
-            if on_error == "raise":
-                raise ValueError(msg)
-            elif on_error == "warn":
-                warnings.warn(msg, stacklevel=stack_level + 1)
-            elif on_error == "report":
-                return msg
-            return False
-        return "" if on_error == "report" else True
+            return report
 
-    @overload
-    def check_integrity(self, on_error: Literal["warn", "skip"] = "skip", *, stack_level: int = 1) -> bool: ...
-    @overload
-    def check_integrity(self, on_error: Literal["raise"], *, stack_level: int = 1) -> Literal[True]: ...
-    @overload
-    def check_integrity(self, on_error: Literal["report"], *, stack_level: int = 1) -> str: ...
+        if self.branch_tree.min() < -1:
+            report.log_error("Tree", "The provided branch parents contains invalid indices")
+        if self.branch_tree.max() >= B:
+            report.log_error("Tree", "The provided branch parents contains invalid indices")
+        if np.any(self.branch_tree == np.arange(B)):
+            report.log_error("Tree", "Some branches are their own parent")
+        if has_cycle(self.branch_tree):
+            report.log_error(
+                "Tree",
+                "Branch hierarchy contains cycles: "
+                + "; ".join("{" + ", ".join(str(_) for _ in cycle) + "}" for cycle in find_cycles(self.branch_tree)),
+            )
+        return report
+
     def check_integrity(
-        self, on_error: Literal["raise", "warn", "skip", "report"] = "skip", *, stack_level: int = 1
-    ) -> bool | str:
-        graph_out = super().check_integrity(on_error=on_error, stack_level=stack_level + 1)
-        tree_out = self.check_tree_integrity(on_error=on_error, stack_level=stack_level + 1)
-        if on_error == "report":
-            assert isinstance(graph_out, str) and isinstance(tree_out, str)
-            return (graph_out + "\n" + tree_out) if graph_out and tree_out else (graph_out + tree_out)
-        return graph_out and tree_out
+        self, on_error: Literal["raise", "warn", "report"] = "report", *, stacklevel: int = 1
+    ) -> CheckReport:
+        report = CheckReport(on_error=on_error, stacklevel=stacklevel + 1)
+        report.extend(super().check_integrity(on_error=on_error, stacklevel=stacklevel + 1))
+        report.extend(self.check_tree_integrity(on_error=on_error, stacklevel=stacklevel + 1))
+        return report
 
     def __eq__(self, other: object) -> bool:
         return (
@@ -1542,7 +1544,9 @@ class VTree(VGraph):
     ####################################################################################################################
     #  === TREE MANIPULATION ===
     ####################################################################################################################
-    def reindex_branches(self, indices: Int1DArrayLike | Mapping[int, int], inverse_lookup=False) -> VTree:
+    def reindex_branches(
+        self, indices: Int1DArrayLike | Mapping[int, int], inverse_lookup=False, inplace=False
+    ) -> VTree:
         """Reindex the branches of the tree.
 
         Parameters
@@ -1567,15 +1571,15 @@ class VTree(VGraph):
         indices = complete_lookup(indices, max_index=self.branch_count - 1)
         if inverse_lookup:
             indices = invert_complete_lookup(indices)
-
-        super().reindex_branches(indices, inverse_lookup=False)
-        self._branch_tree[indices] = self._branch_tree
-        if self._branch_dir is not None:
-            self._branch_dir[indices] = self._branch_dir
+        tree = self.copy() if not inplace else self
+        super(VTree, tree).reindex_branches(indices, inverse_lookup=False, inplace=True)
+        tree._branch_tree[indices] = tree._branch_tree
+        if tree._branch_dir is not None:
+            tree._branch_dir[indices] = tree._branch_dir
 
         indices = add_empty_to_lookup(indices, increment_index=False)
-        self._branch_tree = indices[self.branch_tree + 1]
-        return self
+        tree._branch_tree = indices[tree._branch_tree + 1]
+        return tree
 
     def reindex_nodes(
         self, indices: Int1DArrayLike | Mapping[int, int], *, inverse_lookup=False, inplace=False
@@ -1603,7 +1607,7 @@ class VTree(VGraph):
             The modified tree.
         """
         tree = self.copy() if not inplace else self
-        super(tree.__class__, tree).reindex_nodes(indices, inverse_lookup=inverse_lookup, inplace=True)  # type: ignore
+        super(VTree, tree).reindex_nodes(indices, inverse_lookup=inverse_lookup, inplace=True)  # type: ignore
         return tree
 
     def append(self, other: VGraph, *, inplace=False) -> Self:

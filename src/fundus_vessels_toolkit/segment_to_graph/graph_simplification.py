@@ -20,12 +20,12 @@ import numpy as np
 import numpy.typing as npt
 
 from fundus_toolkits.utils.geometric import distance_matrix
-from fundus_toolkits.utils.typing import IntPairArrayLike
+from fundus_toolkits.utils.typing import Int2DArray, IntPairArrayLike
 
 from ..utils import if_none
 from ..utils.cluster import cluster_by_distance, iterative_reduce_clusters, reduce_clusters
 from ..utils.dataclass import UpdateableDataclass
-from ..utils.lookup_array import create_removal_lookup
+from ..utils.lookup_array import create_removal_lookup, invert_lookup
 from ..vascular_data_objects import VBranchGeoData, VGraph
 from ..vascular_data_objects.vgraph import BranchIndicesLike, NodeIndicesLike
 from .geometry_parsing import derive_tips_geometry_from_curve_geometry
@@ -178,8 +178,7 @@ def simplify_graph(
             graph,
             max_distance=arg.junctions_merge_distance,
             nodes_type="junction",
-            only_connected_nodes=True,
-            iterative_clustering=True,
+            relation="adjacent-iterative",
             inplace=True,
         )
 
@@ -206,9 +205,9 @@ def cluster_nodes_by_distance(
     graph: VGraph,
     max_distance: float,
     nodes_type: Literal["all", "junction", "endpoints"] = "all",
-    only_connected_nodes: Optional[bool] = None,
-    iterative_clustering: bool = False,
-) -> List[List[int]]:
+    relation: None
+    | Literal["adjacent", "adjacent-iterative", "not-adjacent", "same-subgraph", "different-subgraph"] = None,
+) -> list[list[int]]:
     """
     Cluster nodes of the vessel graph by distance.
 
@@ -219,18 +218,19 @@ def cluster_nodes_by_distance(
 
         max_distance:
             The maximum distance between two nodes to be considered in the same cluster.
+        relation:
+            The relation between clusterable nodes:
+            - ``'adjacent'``: only adjacent nodes;
+            - ``'adjacent-iterative'``: only adjacent nodes, using the iterative clustering algorithm;
+            - ``'not-adjacent'``: only non-adjacent nodes;
+            - ``'same-subgraph'``: only nodes in the same subtree;
+            - ``'different-subgraph'``: only nodes in different subtrees.
 
         nodes_type:
             The type of nodes to consider:`
             - ``'all'``: all nodes are considered;
             - ``'junction'``: only junctions and bifurcations are considered;
             - ``'endpoints'``: only endpoints are considered.
-
-        only_connected_nodes:
-            - If True, only nodes connected by a branch can be clustered.
-            - If False, only nodes not connected by a branch can be clustered.
-            - If None (by default), all nodes can be clustered.
-
 
     Returns
     -------
@@ -245,70 +245,105 @@ def cluster_nodes_by_distance(
     else:
         nodes_id = None
 
-    if only_connected_nodes:
-        # --- Cluster only connected nodes ---
-        # ... Only edges of the graph are considered
-        if nodes_id is None:
-            branches = graph.branch_list
-        else:
-            branch_id = np.argwhere(np.isin(graph.branch_list, nodes_id).all(axis=1)).flatten()
-            branches = graph.branch_list[branch_id]
-        # Exclude branches with the same start and end nodes
-        branches = branches[branches[:, 0] != branches[:, 1]]
-        nodes_coord = graph.node_coord()
-        # Compute the distance between the nodes of each branch
-        branch_dist = np.linalg.norm(nodes_coord[branches[:, 0]] - nodes_coord[branches[:, 1]], axis=1)
-        # Reduce the clusters
-        if iterative_clustering:
-            bmask = branch_dist < max_distance
-            return iterative_reduce_clusters(branches[bmask], branch_dist[bmask], max_distance)
-        return reduce_clusters(branches[branch_dist < max_distance])
+    match relation:
+        case "adjacent" | "adjacent-iterative":
+            # --- Cluster only adjacent nodes ---
+            if nodes_id is None:
+                branches = graph.branch_list
+            else:
+                branch_id = np.argwhere(np.isin(graph.branch_list, nodes_id).all(axis=1)).flatten()
+                branches = graph.branch_list[branch_id]
+            # TODO: Use not-adjacent logic and cpp optimized cluster_by_distance
+            # Exclude branches with the same start and end nodes
+            branches = branches[branches[:, 0] != branches[:, 1]]
+            nodes_coord = graph.node_coord()
+            # Compute the distance between the nodes of each branch
+            branch_dist = np.linalg.norm(nodes_coord[branches[:, 0]] - nodes_coord[branches[:, 1]], axis=1)
+            # Reduce the clusters
+            if relation == "adjacent-iterative":
+                bmask = branch_dist < max_distance
+                clusters = iterative_reduce_clusters(branches[bmask], branch_dist[bmask], max_distance)
+                return clusters
+            else:
+                return reduce_clusters(branches[branch_dist < max_distance])
+        case "not-adjacent":
+            # --- Cluster not adjacent nodes ---
+            nodes_coord = graph.node_coord()
+            branch_list = graph.branch_list
+            if nodes_id is not None:
+                nodes_coord = nodes_coord[nodes_id]
+                branch_list = invert_lookup(nodes_id, graph.node_count)[branch_list]  # Map node indices
+                branch_list = branch_list[np.all(branch_list >= 0, axis=1)]  # Remove branch with nodes not in nodes_id
+            clusters = cluster_by_distance(nodes_coord, max_distance, branch_list, inverted_edge_list=True)
+            return clusters if nodes_id is None else [[nodes_id[_] for _ in cluster] for cluster in clusters]
+        case "same-subgraph" | "different-subgraph":
+            # --- Cluster only nodes from same subgraph ---
+            subgraphs = graph.node_connected_components()
+            nodes_coord = graph.node_coord()
+            if nodes_id is not None:
+                nodes_coord = nodes_coord[nodes_id]
+                inv_lookup = invert_lookup(nodes_id, graph.node_count)
+                subgraphs = [inv_lookup[s] for s in subgraphs]  # Map node indices
+                subgraphs = [s[s >= 0] for s in subgraphs]  # Remove nodes not in nodes_id
+                subgraphs = [_ for _ in subgraphs if len(_) > 0]  # Remove empty subgraphs
+            edge_lists = []
+            for subgraph in subgraphs:
+                # List all combination of node pairs in the subgraph
+                i, j = np.triu_indices(len(subgraph), k=1)
+                edge_lists.append(np.column_stack((subgraph[i], subgraph[j])))
+            edge_list = np.concatenate(edge_lists, axis=0)
+            clusters = cluster_by_distance(
+                nodes_coord, max_distance, edge_list, inverted_edge_list=relation == "different-subgraph"
+            )
+            return clusters if nodes_id is None else [[nodes_id[_] for _ in cluster] for cluster in clusters]
 
-    elif only_connected_nodes is None:
-        # --- Cluster all nodes ---
-        if nodes_id is None:
-            return cluster_by_distance(graph.node_coord(), max_distance, iterative=iterative_clustering)
-        else:
-            nodes_coord = graph.node_coord()[nodes_id]
-            clusters = cluster_by_distance(nodes_coord, max_distance, iterative=iterative_clustering)
-            return [[nodes_id[_] for _ in cluster] for cluster in clusters]
-
-    else:
-        # --- Cluster only unconnected nodes ---
-        # ... For each pair of independent subgraphs of the vessel graph, only their closest nodes can be clustered
-        # Get the independent subgraphs of the vessel graph
-        connected_nodes_id = graph.node_connected_components()
-        # Filter the nodes type
-        connected_nodes_id = [np.intersect1d(_, nodes_id, assume_unique=True) for _ in connected_nodes_id]
-        # Compute the distance between all these nodes
-        all_nodes_id = np.concatenate(connected_nodes_id)
-        all_nodes_coord = graph.node_coord()[all_nodes_id]
-        distance = np.linalg.norm(all_nodes_coord[:, None] - all_nodes_coord, axis=-1)
-        # and create a short id for each subgraph
-        connected_nodes_short_id = []
-        n = 0
-        for connected_nodes in connected_nodes_id:
-            connected_nodes_short_id.append(np.arange(n, n + len(connected_nodes)))
-            n += len(connected_nodes)
-        # For each pair of independent subgraphs, find the closest nodes ...
-        clusters = []
-        for i, (id1, sid1) in enumerate(zip(connected_nodes_id, connected_nodes_short_id, strict=True)):
-            for j, (id2, sid2) in enumerate(
-                zip(connected_nodes_id[i + 1 :], connected_nodes_short_id[i + 1 :], strict=True)
-            ):
-                j += i + 1
-                argmin = np.argmin(distance[sid1][:, sid2])
-                closest1, closest2 = (argmin // len(sid2), argmin % len(sid2))
-                # ... and add them to the clusters if they are closer than max_distance
-                if distance[sid1[closest1], sid2[closest2]] < max_distance:
-                    clusters.append({id1[closest1], id2[closest2]})
-        return reduce_clusters(clusters)
+        case "different-subgraph-legacy":
+            # --- Cluster only nodes from different subgraph ---
+            # ... For each pair of independent subgraphs of the vessel graph, only their closest nodes can be clustered
+            # Get the independent subgraphs of the vessel graph
+            connected_nodes_id = graph.node_connected_components()
+            # Filter the nodes type
+            connected_nodes_id = [np.intersect1d(_, nodes_id, assume_unique=True) for _ in connected_nodes_id]
+            connected_nodes_id = [_ for _ in connected_nodes_id if len(_) > 0]
+            # Compute the distance between all these nodes
+            all_nodes_id = np.concatenate(connected_nodes_id)
+            all_nodes_coord = graph.node_coord()[all_nodes_id]
+            distance = np.linalg.norm(all_nodes_coord[:, None] - all_nodes_coord, axis=-1)
+            # and create a short id for each subgraph
+            connected_nodes_short_id = []
+            n = 0
+            for connected_nodes in connected_nodes_id:
+                connected_nodes_short_id.append(np.arange(n, n + len(connected_nodes)))
+                n += len(connected_nodes)
+            # For each pair of independent subgraphs, find the closest nodes ...
+            clusters = []
+            for i, (id1, sid1) in enumerate(zip(connected_nodes_id, connected_nodes_short_id, strict=True)):
+                for j, (id2, sid2) in enumerate(
+                    zip(connected_nodes_id[i + 1 :], connected_nodes_short_id[i + 1 :], strict=True)
+                ):
+                    j += i + 1
+                    argmin = np.argmin(distance[sid1][:, sid2])
+                    closest1, closest2 = (argmin // len(sid2), argmin % len(sid2))
+                    # ... and add them to the clusters if they are closer than max_distance
+                    if distance[sid1[closest1], sid2[closest2]] < max_distance:
+                        clusters.append({id1[closest1], id2[closest2]})
+            return reduce_clusters(clusters, drop_singleton=True)
+        case _:
+            # --- Cluster all nodes ---
+            if nodes_id is None:
+                return cluster_by_distance(graph.node_coord(), max_distance)
+            else:
+                nodes_coord = graph.node_coord()[nodes_id]
+                clusters = cluster_by_distance(nodes_coord, max_distance)
+                return [[nodes_id[_] for _ in cluster] for cluster in clusters]
 
 
 def merge_nodes_by_distance(
     graph: VGraph,
     max_distance: float,
     nodes_type: Literal["all", "junction", "endpoints"] = "all",
+    relation: None
+    | Literal["adjacent", "adjacent-iterative", "not-adjacent", "same-subgraph", "different-subgraph"] = None,
     only_connected_nodes: Optional[bool] = None,
     *,
     inplace=False,
@@ -331,18 +366,46 @@ def merge_nodes_by_distance(
             - ``'junction'``: only junctions and bifurcations are considered;
             - ``'endpoints'``: only endpoints are considered.
 
+        relation:
+            The relation between clusterable nodes:
+            - ``'adjacent'``: only adjacent nodes;
+            - ``'adjacent-iterative'``: only adjacent nodes, using the iterative clustering algorithm;
+            - ``'not-adjacent'``: only non-adjacent nodes;
+            - ``'same-subgraph'``: only nodes in the same subtree;
+            - ``'different-subgraph'``: only nodes in different subtrees.
+
     Returns
     -------
         The modified graph with the nodes merged.
 
     """  # noqa: E501
+    if relation is None and only_connected_nodes is not None:
+        warnings.warn(
+            "The 'only_connected_nodes' parameter is deprecated and will be removed in a future version. "
+            "Use the 'relation' parameter instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        relation = "adjacent" if only_connected_nodes else "different-subgraph"
+    if iterative_clustering:
+        warnings.warn(
+            "The 'iterative_clustering' parameter is deprecated and will be removed in a future version. "
+            "Use the 'relation' parameter instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if relation == "adjacent":
+            relation = "adjacent-iterative"
+        else:
+            raise ValueError(
+                "Iterative clustering is only supported for adjacent nodes. Use relation='adjacent-iterative'."
+            )
 
     clusters = cluster_nodes_by_distance(
         graph=graph,
         max_distance=max_distance,
         nodes_type=nodes_type,
-        only_connected_nodes=only_connected_nodes,
-        iterative_clustering=iterative_clustering,
+        relation=relation,
     )
     nodes_weight = None if nodes_type != "all" else (~graph.endpoint_nodes(as_mask=True)) * 1
     return graph.merge_nodes(clusters, nodes_weight=nodes_weight, inplace=inplace, assume_reduced=True)
@@ -486,7 +549,7 @@ def simplify_passing_nodes[T: VGraph](
     not_fusable: Optional[npt.ArrayLike] = None,
     only_fusable: Optional[npt.ArrayLike] = None,
     min_angle: float = 0,
-    with_same_label=None,
+    with_same_branch_attr: Optional[str | list[str] | np.ndarray] = None,
     inplace=False,
 ) -> T:
     """
@@ -508,9 +571,9 @@ def simplify_passing_nodes[T: VGraph](
 
             (Require the terminaison tangents field in `VBranchGeoData`)
 
-        with_same_label:
-            If not None, the nodes are merged only if they have the same label.
-            If a string, use ``graph.branch_attr[with_same_label]`` as the labels.
+        with_same_branch_attr:
+            If not None, the nodes are merged only if they have the same attribute.
+            If a string, use ``graph.branch_attr[with_same_branch_attr]`` as the attributes.
 
     Returns
     -------
@@ -557,13 +620,21 @@ def simplify_passing_nodes[T: VGraph](
         incident_branches = incident_branches[fuseable_nodes]
 
     # === Filter nodes which don't have the same label ===
-    if with_same_label is not None:
-        if isinstance(with_same_label, str):
+    if with_same_branch_attr is not None:
+        if isinstance(with_same_branch_attr, str):
             # Attempt to get the labels from the branches attributes
-            with_same_label = graph.branch_attr[with_same_label]
-        with_same_label = np.asarray(with_same_label)
+            with_same_branch_attr = graph.branch_attr[with_same_branch_attr].to_numpy()
+        elif isinstance(with_same_branch_attr, list) and all(isinstance(_, str) for _ in with_same_branch_attr):
+            # Attempt to get the labels from the branches attributes and combine them into a single label by concatenating them
+            with_same_branch_attr = np.stack([graph.branch_attr[_].to_numpy() for _ in with_same_branch_attr], -1)
+        else:
+            with_same_branch_attr = np.asarray(with_same_branch_attr)
+        if with_same_branch_attr.ndim == 1:
+            with_same_branch_attr = with_same_branch_attr[:, None]
 
-        same_label = with_same_label[incident_branches[:, 0]] == with_same_label[incident_branches[:, 1]]
+        same_label = np.all(
+            with_same_branch_attr[incident_branches[:, 0]] == with_same_branch_attr[incident_branches[:, 1]], axis=1
+        )
         nodes_to_fuse = nodes_to_fuse[same_label]
         incident_branches = incident_branches[same_label]
 
@@ -646,6 +717,105 @@ def find_facing_endpoints(
             unique_pairs = endpoint_pairs[first_pos]
         endpoint_pairs = np.array(unique_pairs, dtype=int)
     return endp[endpoint_pairs]
+
+
+def extend_topology(
+    graph: VGraph,
+    *,
+    max_distance: float,
+    nearConeAngle: float,
+    farConeAngle: float,
+    maxTanAngle: float,
+    snapDist: float,
+    minSpaceBetweenSplits: float,
+    nodeMergeDistance: float,
+    inplace: bool = False,
+) -> tuple[VGraph, Int2DArray]:
+    """
+    Search for potential reconnections between endpoints and branches of the graph. Rays are emitted from the endpoints in the direction of their tangent and the branches are checked for intercepts with these rays. If an intercept is found, the branch is split at the intercept point and a new branch is created between the endpoint and the intercept point.
+
+    Parameters
+    ----------
+    graph: VGraph
+        The vasculature graph.
+
+    max_distance: float
+        The maximum distance between the ray source and the point of intercept on a branch.
+
+    nearConeAngle: float
+        The angle of the intercept cone near the emitting endpoint.
+
+    farConeAngle: float
+        The angle of the intercept cone at the maximum distance from the emitting endpoint.
+
+    maxTanAngle: float
+        The maximum angle between the ray direction and the branch tangent for an intercept to be considered valid.
+
+    snapDist: float
+        The distance under which an intercept point is snapped to the nearest branch tip.
+
+    minSpaceBetweenSplits: float
+        The minimum distance between two splits on the same branch. Splits that are closer than this distance are clustered together.
+
+    nodeMergeDistance: float
+        The distance under which two unconnected nodes are "merged" together, meaning any of their adjacent branches are considered reconnectable.
+
+    inplace: bool
+        If True, the graph is modified in place. Otherwise, a copy of the graph is created and modified.
+
+    Returns
+    -------
+    graph: VGraph
+        The modified graph with the new nodes and branches added.
+
+    branch connections: Int2DArray
+        An integer array of shape (C, 4) where each row is in the form (b0, t0, b1, t1) where:
+        - b0 and b1 are the indices of the branches to connect in the modified graph
+        - t0 and t1 are the indices of the tips (0 for the first tip, 1 for the second tip)
+    """  # noqa: E501
+    import torch
+
+    from ..utils.cpp_extensions.fvt_cpp import branch_connexion_candidates
+
+    if not inplace:
+        graph = graph.copy()
+
+    gdata = graph.geometric_data()
+    branch_curves = [torch.from_numpy(_).round().int() for _ in gdata.branch_curve()]
+    branch_tangents = [
+        torch.from_numpy(_.data).float() if _ is not None else torch.empty(0, 2)
+        for _ in gdata.branch_data(VBranchGeoData.Fields.TANGENTS)
+    ]
+    branch_list = torch.from_numpy(graph.branch_list)
+    nodes_yx = torch.from_numpy(gdata.node_coord())
+
+    splits, candidates = branch_connexion_candidates(
+        branch_curves,
+        branch_tangents,
+        branch_list.int(),
+        nodes_yx.round().int(),
+        gdata.domain.shape,
+        float(max_distance),
+        float(nearConeAngle),
+        float(farConeAngle),
+        float(maxTanAngle),
+        float(maxTanAngle),
+        float(snapDist),
+        float(minSpaceBetweenSplits),
+        float(nodeMergeDistance),
+    )
+
+    for b, b_splits in splits:
+        split_curve_id = [_[0] for _ in b_splits]
+        split_coord = [_[1] for _ in b_splits]
+        graph.split_branch(b, split_curve_id, split_coord, inplace=True)
+
+    merge_nodes_by_distance(graph, max_distance=0.5, relation="not-adjacent", inplace=True)
+
+    if candidates.max() >= graph.branch_count:
+        raise RuntimeError("Some reconnection candidates are invalid.\nPlease report this issue to the developers.")
+
+    return graph, candidates.numpy()
 
 
 def find_reconnection_candidates(

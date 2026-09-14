@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, Self
+from typing import Annotated, Any, Literal, Optional, Self
 
 import numpy as np
 import numpy.typing as npt
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
 from fundus_toolkits.transform import (
     AffineTransform,
@@ -16,15 +16,19 @@ from fundus_toolkits.transform import (
 )
 from fundus_toolkits.utils.geometric import Rect
 
-from ...segment_to_graph.graph_simplification import remove_orphan_nodes, simplify_passing_nodes
+from ...segment_to_graph.graph_simplification import (
+    merge_nodes_by_distance,
+    remove_orphan_nodes,
+    simplify_passing_nodes,
+)
 from ...segment_to_graph.vbranch_digraph import VBranchDigraph
-from ...utils.nnet.optuna import BoolHyperParam
+from ...utils.nnet.experiment import ExpCfgBaseModel
+from ...utils.nnet.optuna import BoolDefaultValidator
+from ...utils.profiling import watch
 from ...vascular_data_objects import VBranchGeoData, VGraph, VGraphBranch, VTree
 
 
-class DeteriorationOpts(BaseModel):
-    model_config = ConfigDict(use_attribute_docstrings=True)
-
+class DeteriorationCfg(ExpCfgBaseModel):
     min_holes_count: int = Field(default=50)
     """Minimum number of holes to create disconnections"""
 
@@ -76,15 +80,16 @@ class DeteriorationOpts(BaseModel):
     """Factor of the branch length added to the minimum length left segments"""
 
 
-class ElasticOpts(BaseModel):
+type DeteriorationField = Annotated[Optional[DeteriorationCfg], BoolDefaultValidator(DeteriorationCfg)]
+
+
+class ElasticCfg(ExpCfgBaseModel):
     """
     Options for elastic deformation.
 
     - displacement_std: Standard deviation of the displacement in pixels.
     - smoothing_size: Size of the Gaussian kernel for smoothing the displacement field.
     """
-
-    model_config = ConfigDict(use_attribute_docstrings=True)
 
     displacement_std: float = Field(default=80.0)
     """Standard deviation of the displacement in pixels"""
@@ -102,9 +107,10 @@ class ElasticOpts(BaseModel):
         )
 
 
-class RotationOpts(BaseModel):
-    model_config = ConfigDict(use_attribute_docstrings=True)
+type ElasticField = Annotated[Optional[ElasticCfg], BoolDefaultValidator(ElasticCfg)]
 
+
+class RotationCfg(ExpCfgBaseModel):
     min_angle: float = Field(default=3.0)
     """Minimum absolute angle in degrees to apply rotation"""
 
@@ -121,36 +127,85 @@ class RotationOpts(BaseModel):
         return AffineTransform.rotate(angle, center)
 
 
-class AugmentationOpts(BaseModel):
-    model_config = ConfigDict(use_attribute_docstrings=True)
+type RotationField = Annotated[Optional[RotationCfg], BoolDefaultValidator(RotationCfg)]
 
-    elastic: ElasticOpts | bool = Field(default=True)
+
+class HSVJitterCfg(ExpCfgBaseModel):
+    hue_shift: float = Field(default=0.02 * 360)
+    """Maximum absolute hue shift in degrees"""
+
+    saturation_shift: float = Field(default=0.2)
+    """Maximum absolute saturation shift"""
+
+    value_shift: float = Field(default=0.2)
+    """Maximum absolute value shift"""
+
+    saturation_scale_range: float = Field(default=0.2)
+    """Range for random saturation scaling (1-saturation_scale_range, 1+saturation_scale_range)"""
+
+    value_scale_range: float = Field(default=0.2)
+    """Range for random value scaling (1-value_scale_range, 1+value_scale_range)"""
+
+    def apply(self, img: npt.NDArray, rng: Optional[np.random.Generator] = None) -> npt.NDArray:
+        from fundus_toolkits.utils.safe_import import cv2
+
+        if rng is None:
+            rng = np.random.default_rng()
+
+        with watch("RGB to HSV"):
+            img_hsv = cv2.cvtColor(img.transpose(1, 2, 0), cv2.COLOR_RGB2HSV)  # C,H,W -> H,W,C
+
+        with watch("hue jitter"):
+            img_hsv[..., 0] += rng.uniform(-self.hue_shift, self.hue_shift)
+
+        with watch("saturation jitter"):
+            img_hsv[..., 1] *= rng.uniform(1 - self.saturation_scale_range, 1 + self.saturation_scale_range)
+            img_hsv[..., 1] += rng.uniform(-self.saturation_shift, self.saturation_shift)
+            img_hsv[..., 1] = np.clip(img_hsv[..., 1], 0, 1)
+        with watch("value jitter"):
+            img_hsv[..., 2] += rng.uniform(-self.value_shift, self.value_shift)
+            img_hsv[..., 2] *= rng.uniform(1 - self.value_scale_range, 1 + self.value_scale_range)
+            img_hsv[..., 2] = np.clip(img_hsv[..., 2], 0, 1)
+
+        with watch("HSV to RGB"):
+            img_rgb = cv2.cvtColor(img_hsv, cv2.COLOR_HSV2RGB)  # H,W,C -> C,H,W
+
+        return img_rgb.transpose(2, 0, 1)
+
+
+type HSVJitterField = Annotated[Optional[HSVJitterCfg], BoolDefaultValidator(HSVJitterCfg)]
+
+
+class AugmentationCfg(ExpCfgBaseModel):
+    elastic: ElasticField = Field(default_factory=ElasticCfg)
     """Whether to apply elastic deformation"""
 
-    rotate: RotationOpts | bool = Field(default=False)
+    rotate: RotationField = Field(default_factory=RotationCfg)
     """Whether to apply rotation"""
 
     horizontal_flip: bool = Field(default=True)
     """Whether to apply horizontal flip"""
 
-    deteriorate_graph: DeteriorationOpts | BoolHyperParam = Field(default=True)
+    deteriorate_graph: DeteriorationField = Field(default_factory=DeteriorationCfg)
     """Whether to apply topological deterioration to the graph"""
+
+    hsv_jitter: HSVJitterField = Field(default_factory=HSVJitterCfg)
 
     @property
     def geometric(self) -> bool:
         return bool(self.horizontal_flip or self.rotate is not False or self.elastic is not False)
 
     @property
-    def rotation_opts(self) -> RotationOpts:
-        return self.rotate if isinstance(self.rotate, RotationOpts) else RotationOpts()
+    def rotation_opts(self) -> RotationCfg:
+        return self.rotate if isinstance(self.rotate, RotationCfg) else RotationCfg()
 
     @property
-    def elastic_opts(self) -> ElasticOpts:
-        return self.elastic if isinstance(self.elastic, ElasticOpts) else ElasticOpts()
+    def elastic_opts(self) -> ElasticCfg:
+        return self.elastic if isinstance(self.elastic, ElasticCfg) else ElasticCfg()
 
     @property
-    def deterioration_opts(self) -> DeteriorationOpts:
-        return self.deteriorate_graph if isinstance(self.deteriorate_graph, DeteriorationOpts) else DeteriorationOpts()
+    def deterioration_opts(self) -> DeteriorationCfg:
+        return self.deteriorate_graph if isinstance(self.deteriorate_graph, DeteriorationCfg) else DeteriorationCfg()
 
     def generate_transform(self, shape: tuple[int, int], rng: Optional[np.random.Generator] = None) -> Transform:
         if rng is None:
@@ -161,26 +216,29 @@ class AugmentationOpts(BaseModel):
         if self.horizontal_flip and rng.random() < 0.5:
             transforms.append(FlipTransform(center=center, horizontal=True))
         if self.rotate:
-            transforms.append(self.rotation_opts.generate_projection(shape, rng=rng))
+            transforms.append(self.rotate.generate_projection(shape, rng=rng))
         if self.elastic:
-            transforms.append(self.elastic_opts.generate_projection(shape, rng=rng))
+            transforms.append(self.elastic.generate_projection(shape, rng=rng))
         if len(transforms) == 0:
             return IdentityTransform()
-        return TransformComposition(*transforms)
+        return TransformComposition(*transforms, sequential_warp=True)
 
     @classmethod
-    def parse(cls, data: Self | bool) -> Self:
+    def parse(cls, data: Optional[Self | bool]) -> Self:
         if data is True:
             return cls()
-        elif data is False:
-            return cls(elastic=False, rotate=False, horizontal_flip=False, deteriorate_graph=False)
+        elif data is False or data is None:
+            return cls(elastic=None, rotate=None, horizontal_flip=False, deteriorate_graph=None, hsv_jitter=None)
         else:
             return data
 
 
-def deteriorate_trees(trees: tuple[VTree, VTree], opts: Optional[DeteriorationOpts] = None) -> tuple[VTree, VTree]:
+type AugmentationField = Annotated[Optional[AugmentationCfg], BoolDefaultValidator(AugmentationCfg)]
+
+
+def deteriorate_trees(trees: tuple[VTree, VTree], opts: Optional[DeteriorationCfg] = None) -> tuple[VTree, VTree]:
     if opts is None:
-        opts = DeteriorationOpts()
+        opts = DeteriorationCfg()
 
     # === AV SWAP ===
 
@@ -190,14 +248,14 @@ def deteriorate_trees(trees: tuple[VTree, VTree], opts: Optional[DeteriorationOp
 
 def deteriorate_graph[T: VGraph](
     graph: T,
-    opts: Optional[DeteriorationOpts] = None,
+    opts: Optional[DeteriorationCfg] = None,
     *,
     rng=None,
     debug_info: Optional[dict[str, Any]] = None,
     inplace: bool = False,
 ) -> T:
     if opts is None:
-        opts = DeteriorationOpts()
+        opts = DeteriorationCfg()
     if rng is None:
         rng = np.random.default_rng()
     if not inplace:
@@ -353,6 +411,7 @@ def deteriorate_graph[T: VGraph](
         # print(f"Deleting segments {new_branches[1::2]} of branch {b.id}")
         graph.delete_branch(new_branches[1::2], inplace=True)
 
+    merge_nodes_by_distance(graph, max_distance=1.0, relation="adjacent", inplace=True)
     simplify_passing_nodes(graph, min_angle=90, inplace=True)
     remove_orphan_nodes(graph, inplace=True)
     return graph
@@ -361,13 +420,13 @@ def deteriorate_graph[T: VGraph](
 def geometric_augment(
     sample: tuple[VBranchDigraph, npt.NDArray, npt.NDArray, npt.NDArray],
     *,
-    opts: Optional[AugmentationOpts | Literal[True]] = None,
+    opts: Optional[AugmentationCfg | Literal[True]] = None,
     rng: Optional[np.random.Generator] = None,
 ) -> tuple[VBranchDigraph, npt.NDArray, npt.NDArray, npt.NDArray]:
     digraph, fundus_img, od_yx, mac_yx = sample
     assert digraph.graph is not None, "Graph must be initialized to apply geometric augmentations"
 
-    opts = AugmentationOpts() if opts in (True, None) else opts
+    opts = AugmentationCfg() if opts in (True, None) else opts
     if rng is None:
         rng = np.random.default_rng()
 

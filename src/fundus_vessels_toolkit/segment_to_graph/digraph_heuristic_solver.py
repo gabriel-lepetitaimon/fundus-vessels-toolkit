@@ -8,12 +8,12 @@ import numpy.typing as npt
 
 from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.geometric import Point
-from fundus_vessels_toolkit.utils.cluster import cluster_by_distance
-from fundus_vessels_toolkit.utils.numpy import np_group_by
-from fundus_vessels_toolkit.vascular_data_objects.vgraph import BranchIndicesLike, NodeIndicesLike
 
+from ..utils.cluster import cluster_by_distance
 from ..utils.math import sigmoid
+from ..utils.numpy import np_group_by
 from ..vascular_data_objects import VBranchGeoData, VGraph, VGraphNode, VTree
+from ..vascular_data_objects.vgraph import BranchIndicesLike, NodeIndicesLike
 
 
 @dataclass

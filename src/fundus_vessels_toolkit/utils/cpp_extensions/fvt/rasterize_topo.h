@@ -3,6 +3,7 @@
 
 #include "bezier.h"
 #include "common.h"
+#include "ray_iterators.h"
 
 /**
  * @brief Rasterize the topology of the branches from the curves and boundaries.
@@ -14,10 +15,10 @@
  * @param topoMap The tensor to store the topology map.
  */
 void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& branch_parents,
-                        const torch::Tensor& branch_dirs, std::vector<torch::Tensor> curves,
+                        const torch::Tensor& branch_dirs, std::vector<torch::Tensor> curves_tensor,
                         std::vector<torch::Tensor> boundaries, const torch::Tensor& nodes_yx_tensor,
-                        float bspline_interpolate, bool fill_junctions, torch::Tensor& branchLabelsMap,
-                        torch::Tensor& topoMap);
+                        float bezier_interpolate, bool fill_junctions, int expand, const torch::Tensor& branchMapping,
+                        torch::Tensor& branchLabelsMap, torch::Tensor& topoMap, torch::Tensor& fuzzySkeletonMap);
 
 torch::Tensor& rasterize_branch(const torch::Tensor& curveTensor, const torch::Tensor& boundariesTensor,
                                 torch::Tensor& outTensor, int fill_value = 1, float bspline_interpolate = 0.5);
@@ -25,15 +26,19 @@ torch::Tensor& rasterize_branch(const torch::Tensor& curveTensor, const torch::T
 void rasterize_branch_topo(const torch::Tensor& curve, const torch::Tensor& boundaries, int branchID, float branchRank,
                            torch::Tensor& branchLabelsMap, torch::Tensor& topoMap, float bspline_interpolate = 0.5);
 
-void rasterize_bezier(std::function<void(IntPoint, float)> updater, const IntPoint& p0, const IntPoint& p1,
+void rasterize_bezier(std::function<void(IntPoint, float, float)> updater, const IntPoint& p0, const IntPoint& p1,
                       const Point& t0, const Point& t1, const IntPointPair& b0, const IntPointPair& b1,
                       float bezier_smoothness, const IntPoint& maxShape);
-void rasterize_bezier(std::function<void(IntPoint, float)> updater, const BezierCubic& bezier, const IntPointPair& b0,
-                      const IntPointPair& b1, const IntPoint& maxShape);
+void rasterize_bezier(std::function<void(IntPoint, float, float)> updater, const BezierCubic& bezier,
+                      const IntPointPair& b0, const IntPointPair& b1, const IntPoint& maxShape);
 
 void rasterize_branch_topo(const CurveYX& curve, const Tensor3DAcc<int>& boundaries,
-                           std::function<void(IntPoint, float)> draw, const IntPoint& maxShape,
+                           std::function<void(IntPoint, float, float)> draw, const IntPoint& maxShape,
                            float bspline_interpolate = 0.5);
+
+void rasterize_branch_topo(const CurveYX& curve, const std::vector<Point>& tangents, const std::vector<float>& calibres,
+                           std::function<void(IntPoint, float, float)> draw, const IntPoint& maxShape,
+                           float bspline_interpolate, float expand);
 
 torch::Tensor drawQuad(const IntPair& p1, const IntPair& p2, const IntPair& p3, const IntPair& p4,
                        const IntPair& maxShape);
@@ -45,21 +50,39 @@ class QuadIterator {
 
     bool iter();
     bool finished() const;
+    bool isConvex() const;
+    bool mergeP2P3IfNotConvex();
     const IntPoint& point() const;
     const std::array<int, 4>& crossProd() const;
 
     double fromP12toP34() const;
     double fromP1toP4() const;
+    double fromP14() const;
+    inline const IntPoint& d12() const { return pDiff[0]; }
+    inline const IntPoint& d32() const { return pDiff[1]; }
+    inline const IntPoint& d34() const { return pDiff[2]; }
+    inline const IntPoint& d14() const { return pDiff[3]; }
+    inline const double& invNorm12() const { return _invDiffNorm[0]; }
+    inline const double& invNorm32() const { return _invDiffNorm[1]; }
+    inline const double& invNorm34() const { return _invDiffNorm[2]; }
+    inline const double& invNorm14() const { return _invDiffNorm[3]; }
+    inline const int& cross12() const { return _crossProd[0]; }
+    inline const int& cross23() const { return _crossProd[1]; }
+    inline const int& cross34() const { return _crossProd[2]; }
+    inline const int& cross41() const { return _crossProd[3]; }
     void precomputeInvDiffNorms();
 
-    const IntPoint p1, p2, p3, p4, pMin, pMax;
-    const std::array<IntPoint, 4> pDiff;  // Differences between points for cross product calculations
+    IntPoint p1, p2, p3, p4, pMin, pMax;
+    std::array<IntPoint, 4> pDiff;  // Differences between points for cross product calculations
 
    private:
     IntPoint p;
     std::array<int, 4> _crossProd;
     std::array<double, 4> _invDiffNorm;
-    bool hourGlassQuad;
+    bool _p23Inverted;  //, _p34Inverted;
+    // bool fastIt;
+    //  RayIterator _it12, _it34, _it;
+    bool _positiveCrossProd, _p1p4Adjacent;
 };
 
 #endif  // RASTERIZE_TOPO_H

@@ -5,6 +5,25 @@ import numpy as np
 import numpy.typing as npt
 from scipy.special import expit
 
+from fundus_toolkits.utils.typing import IntPairArray, PointArray
+
+
+def curve_length(curve: PointArray | IntPairArray) -> float:
+    """
+    Compute the length of a curve.
+
+    Parameters
+    ----------
+    curve : PointArray | IntPair
+        The curve as an array of shape (N, 2) or a pair of arrays of shape (N,).
+
+    Returns
+    -------
+    float
+        The length of the curve.
+    """
+    return np.sum(np.linalg.norm(np.diff(curve, axis=0), axis=-1))
+
 
 def ensure_superior_multiple(x, m=32):
     """
@@ -189,7 +208,7 @@ def quantified_local_minimum(x, dthreshold=None):
     return np.array(roots).astype(int)
 
 
-def extract_splits(x, medfilt_size=5) -> Dict[Tuple[int, int], float | int]:
+def extract_splits(x, medfilt_size=5, min_size=0) -> Dict[Tuple[int, int], float | int]:
     from scipy.signal import medfilt
 
     if len(x) > medfilt_size:
@@ -199,11 +218,25 @@ def extract_splits(x, medfilt_size=5) -> Dict[Tuple[int, int], float | int]:
     if len(change) == 0:
         return {(0, len(x)): x[0]}
 
-    return {
+    splits = {
         (0, change[0]): x[0],
         **{(change[i], change[i + 1]): x[change[i]] for i in range(len(change) - 1)},
         (change[-1], len(x)): x[change[-1]],
     }
+
+    if min_size == 0:
+        return splits
+
+    # Merge too small splits
+    merged_splits = []
+    for (start, end), value in splits.items():
+        if not merged_splits or merged_splits[-1][1] - merged_splits[-1][0] >= min_size:
+            merged_splits.append([start, end, {value: end - start}])
+        else:
+            merged_splits[-1][1] = end
+            merged_splits[-1][2][value] = merged_splits[-1][2].setdefault(value, 0) + end - start
+
+    return {(start, end): max(value_counts, key=value_counts.get) for start, end, value_counts in merged_splits}
 
 
 def modulo_pi(x):
@@ -331,6 +364,19 @@ def nearest_point_on_segment(
 
     distance = np.linalg.norm(nearest - p[:, None, :], axis=-1)
     return nearest, distance
+
+
+def same_sign(x, y, tolerance: float | bool = False):
+    """
+    Return True if x and y have the same sign, False otherwise.
+    """
+    sign_x, sign_y = np.sign(x), np.sign(y)
+    if tolerance is False:
+        return x == y
+    elif tolerance is True:
+        return (sign_x == sign_y) | (sign_x == 0) | (sign_y == 0)
+    else:
+        return (sign_x == sign_y) | (np.abs(x) < tolerance) | (np.abs(y) < tolerance)
 
 
 def sigmoid(x, antisymmetric=False):

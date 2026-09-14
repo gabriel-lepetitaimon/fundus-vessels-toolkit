@@ -5,7 +5,7 @@ from functools import reduce
 from operator import ior
 from pathlib import Path
 from types import EllipsisType
-from typing import Optional, Tuple
+from typing import Literal, Optional, Tuple, overload
 
 import numpy as np
 import numpy.typing as npt
@@ -14,10 +14,12 @@ from skimage.morphology import binary_erosion, disk
 
 from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.geometric import Point
-
-from fundus_vessels_toolkit.segment_to_graph.vbranch_digraph import VBranchDigraph
+from fundus_toolkits.utils.safe_import import import_cv2
+from fundus_vessels_toolkit.segment_to_graph.av_tree_parsing import assign_av_label, assign_av_label_centerline
+from fundus_vessels_toolkit.segment_to_graph.skeleton_parsing import detect_skeleton_nodes
 
 from ..segment_to_graph.graph_simplification import GraphSimplifyArg, ReconnectEndpointsArg
+from ..segment_to_graph.vbranch_digraph import VBranchDigraph
 from ..utils import if_none
 from ..vascular_data_objects import VGraph, VTree
 from .seg_to_graph import SegToGraph
@@ -67,6 +69,7 @@ class AVSegToTreeBase(metaclass=ABCMeta):
         *,
         av: npt.NDArray[np.uint8] | torch.Tensor | str | Path | EllipsisType = ...,
         od: npt.NDArray[np.bool_] | torch.Tensor | str | Path | EllipsisType = ...,
+        simplify: bool = True,
     ) -> VGraph: ...
 
 
@@ -93,6 +96,8 @@ class AVSegToTree(AVSegToTreeBase):
     def __init__(
         self,
         segToGraph: Optional[SegToGraph] = None,
+        mask_optic_disc: bool = True,
+        vessel_closing_size: Optional[int] = None,
     ):
         """
 
@@ -100,10 +105,14 @@ class AVSegToTree(AVSegToTreeBase):
         ----------
         segToGraph: SegToGraph
             The SegToGraph instance to use for the segmentation to graph step.
+        mask_optic_disc: bool
+            If True, mask the optic disc in the input image.
+        vessel_closing_size: Optional[int]
+            The size of the structuring element used for vessel closing.
         """
 
-        super(AVSegToTree, self).__init__()
-        self.segToGraph = if_none(segToGraph, MINIMAL_FUNDUS_SEG_TO_GRAPH)
+        super(AVSegToTree, self).__init__(mask_optic_disc=mask_optic_disc, vessel_closing_size=vessel_closing_size)
+        self._segToGraph = segToGraph
         self.av_attr = "av"
 
     def __call__(
@@ -119,6 +128,31 @@ class AVSegToTree(AVSegToTreeBase):
             raise NotImplementedError("Parsing tree of image without optic disc is not implemented.")
         graph = self.to_vgraph(fundus, simplify=True)
         lines_digraph_info = self.build_line_digraph(graph, fundus, inplace=True)
+        tree = self.resolve_digraph_to_vtree(*lines_digraph_info)
+        return self.split_av_tree(tree)
+
+    def seg_to_graph(self, max_calibre: float) -> SegToGraph:
+        max_calibre = int(max_calibre)
+        return SegToGraph(
+            skeletonize_method="fvt",
+            fix_hollow=True,
+            clean_branches_tips=max_calibre,
+            min_terminal_branch_length=3,
+            min_terminal_branch_calibre_ratio=0.5,
+            simplify_graph_arg=GraphSimplifyArg(
+                max_spurs_length=0,
+                reconnect_endpoints=False,
+                junctions_merge_distance=1,
+                min_orphan_branches_length=3,
+                max_cycles_length=max_calibre,
+                simplify_topology=False,
+            ),
+            parse_geometry=True,
+            adaptative_tangents=True,
+        )
+
+    def graph_to_tree(self, graph: VGraph, fundus: FundusData) -> tuple[VTree, VTree]:
+        lines_digraph_info = self.build_line_digraph(graph, fundus, inplace=False)
         tree = self.resolve_digraph_to_vtree(*lines_digraph_info)
         return self.split_av_tree(tree)
 
@@ -139,17 +173,19 @@ class AVSegToTree(AVSegToTreeBase):
             split_av_branch=True,
             av_attr=self.av_attr,
             propagate_labels=propagate_labels,
-            discard_joint_branch_geometry=False,
+            joint_branch_process="split",
             inplace=inplace,
         )
 
-    def simplify_av_graph(self, graph: VGraph, *, inplace: bool = False) -> VGraph:
+    def simplify_av_graph(self, graph: VGraph, *, inplace: bool = False, max_calibre: float = 20) -> VGraph:
         from ..segment_to_graph.av_tree_parsing import simplify_av_graph
 
         return simplify_av_graph(
             graph,
             av_attr=self.av_attr,
-            orphan_branch_min_length=self.segToGraph.simplify_graph_arg.min_orphan_branches_length,
+            orphan_branch_min_length=3,
+            node_merge_distance=max_calibre,
+            unknown_node_merge_distance=max_calibre * 1.5,
             inplace=inplace,
         )
 
@@ -201,18 +237,23 @@ class AVSegToTree(AVSegToTreeBase):
     ):
         fundus = self.prepare_data(fundus, av=av, od=od)
         if self.mask_optic_disc and fundus.has_od:
-            mask = ~binary_erosion(fundus.od, disk(fundus.od_diameter * 0.2, dtype=np.bool_))  # type: ignore
+            cv2 = import_cv2()
+
+            mask = cv2.distanceTransform(fundus.od.astype(np.uint8), cv2.DIST_L2, 5) < 0.2 * fundus.od_diameter
         else:
             mask = None
 
-        skel = self.segToGraph.skeletonize(fundus.vessels, mask=mask)
+        max_calibre = int(190 / fundus.scale)
+        seg2graph = self.seg_to_graph(max_calibre)
+
+        skel = seg2graph.skeletonize(fundus.av, mask=mask)
         vessels = fundus.vessels if mask is None else fundus.vessels * mask
 
-        graph = self.segToGraph.from_skel(skel=skel, vessels=vessels, parse_geometry=True, simplify=False)
+        graph = seg2graph.from_skel(skel=skel, vessels=vessels, parse_geometry=True, simplify=False)
         if label_av:
             self.assign_av_labels(graph, fundus.av, inplace=True)
             if simplify:
-                self.simplify_av_graph(graph, inplace=True)
+                self.simplify_av_graph(graph, inplace=True, max_calibre=max_calibre)
         return graph
 
 
@@ -220,6 +261,8 @@ class GNNAVSegToTree(AVSegToTree):
     def __init__(
         self,
         segToGraph: Optional[SegToGraph] = None,
+        mask_optic_disc: bool = True,
+        vessel_closing_size: Optional[int] = None,
     ):
         """
 
@@ -230,18 +273,29 @@ class GNNAVSegToTree(AVSegToTree):
         """
         from ..models.topology.model import BranchDigraphModel
 
-        super(AVSegToTree, self).__init__()
-        self.segToGraph = if_none(segToGraph, MINIMAL_FUNDUS_SEG_TO_GRAPH)
-        self.av_attr = "av"
+        segToGraph = if_none(segToGraph, MINIMAL_FUNDUS_SEG_TO_GRAPH)
+        super().__init__(
+            segToGraph=segToGraph, mask_optic_disc=mask_optic_disc, vessel_closing_size=vessel_closing_size
+        )
         root = Path(__file__).parent.parent.parent.parent
         # checkpoint = torch.load(root / "train/Topo-GNN/GNN-Topo-v1/c2kx8j5h/checkpoints/epoch=239-step=8880.ckpt")
         # checkpoint = torch.load(root / "train/Topo-GNN/GNN-Topo-v1/ft6svpfg/checkpoints/epoch=179-step=3420.ckpt")
-        checkpoint = torch.load(root / "train/Topo-GNN/GNN-Topo-v1/96dxz1ex/checkpoints/epoch=99-step=1900.ckpt")
-
-        model = BranchDigraphModel(checkpoint["hyper_parameters"]["config"]["model"])
+        # checkpoint = torch.load(root / "train/Topo-GNN/tmp/models/epoch=159-step=2080.ckpt")
+        # model = checkpoint["hyper_parameters"]["config"]["model"]
+        # model["gcn"]["architecture"] = (
+        #    "InstNorm Conv64x8-DropOut InstNorm Conv128x8-DropOut Conv128x8 Conv256x4 Conv512x2"
+        # )
+        checkpoint = torch.load(root / "train/Topo-GNN/tmp/models/epoch=159-step=2080.ckpt")
+        model = checkpoint["hyper_parameters"]["config"]["model"]
+        model["gcn"]["legacy_pole_features_ratio"] = True
+        model["gcn"]["architecture"] = (
+            "InstNorm Conv64x8-DropOut InstNorm Conv128x8-DropOut Conv128x8 Conv256x4 Conv512x2"
+        )
+        model = BranchDigraphModel(model)
         model.load_state_dict({k[6:]: v for k, v in checkpoint["state_dict"].items() if k.startswith("model.")})
         self.model = model.cuda().eval()
 
+    @overload
     def __call__(
         self,
         fundus: Optional[FundusData] = None,
@@ -249,35 +303,143 @@ class GNNAVSegToTree(AVSegToTree):
         *,
         av: npt.NDArray[np.uint8] | torch.Tensor | str | Path | EllipsisType = ...,
         od: npt.NDArray[np.bool_] | torch.Tensor | str | Path | EllipsisType = ...,
-    ) -> Tuple[VTree, VTree]:
+        populate_geometry=True,
+        single_tree: Literal[False] = False,
+    ) -> Tuple[VTree, VTree]: ...
+    @overload
+    def __call__(
+        self,
+        fundus: Optional[FundusData] = None,
+        /,
+        *,
+        av: npt.NDArray[np.uint8] | torch.Tensor | str | Path | EllipsisType = ...,
+        od: npt.NDArray[np.bool_] | torch.Tensor | str | Path | EllipsisType = ...,
+        populate_geometry=True,
+        single_tree: Literal[True] = True,
+    ) -> VTree: ...
+    def __call__(
+        self,
+        fundus: Optional[FundusData] = None,
+        /,
+        *,
+        av: npt.NDArray[np.uint8] | torch.Tensor | str | Path | EllipsisType = ...,
+        od: npt.NDArray[np.bool_] | torch.Tensor | str | Path | EllipsisType = ...,
+        populate_geometry=True,
+        single_tree: bool = False,
+    ) -> Tuple[VTree, VTree] | VTree:
+        from ..models.topology.data import BranchDigraphData
+
         fundus = self.prepare_data(fundus, av=av, od=od)
         if fundus.od_center is None or fundus.od_center.is_nan():
             raise NotImplementedError("Parsing tree of image without optic disc is not implemented.")
-        graph = self.to_vgraph(fundus, simplify=True)
-        line_digraph = self.build_line_digraph(graph, fundus, inplace=True)
-        tree = line_digraph.optimize_tree()
+        graph = self.to_vgraph(fundus, simplify=True, populate_geometry=populate_geometry)
+        # line_digraph = self.build_line_digraph(graph, fundus, inplace=True)
+        # tree = line_digraph.optimize_tree(assign_av="subtree", fix_major_av_error=True, fix_branch_skip=False)
+        # a_tree, v_tree = self.split_av_tree(tree)
+        sample, digraph = BranchDigraphData.from_graph(graph, fundus, return_digraph=True)
+        with torch.inference_mode():
+            out = self.model(sample.to(self.model.device))  # type: ignore
+        digraph = out.to_digraph(graph=digraph.graph)
+        tree = digraph.optimize_tree(assign_av="subtree", fix_major_av_error=True, fix_branch_skip=True)
+        self.simplify_av_graph(tree, inplace=True)
+
+        if single_tree:
+            return tree
+        else:
+            return self.split_av_tree(tree)
+
+    def graph_to_tree(self, graph: VGraph, fundus: FundusData) -> tuple[VTree, VTree]:
+        line_digraph = self.build_line_digraph(graph, fundus, inplace=False)
+        tree = line_digraph.optimize_tree(assign_av="subtree", fix_major_av_error=True, fix_branch_skip=True)
         return self.split_av_tree(tree)
 
     # --- Intermediate steps ---
-    def assign_av_labels(
+    def to_vgraph(
         self,
-        graph: VGraph,
-        av_map: npt.NDArray[np.uint8],
+        fundus=None,
+        /,
         *,
-        propagate_labels=True,
-        inplace: bool = False,
-    ) -> VGraph:
-        from ..segment_to_graph.av_tree_parsing import assign_av_label
+        av: npt.NDArray[np.uint8] | torch.Tensor | str | Path | EllipsisType = ...,
+        od: npt.NDArray[np.bool_] | torch.Tensor | str | Path | EllipsisType = ...,
+        populate_geometry=True,
+        simplify=True,
+    ):
+        from ..utils.cpp_extensions import fvt_cpp
 
-        return assign_av_label(
-            graph,
-            av_map=av_map,
-            split_av_branch=True,
-            av_attr=self.av_attr,
-            propagate_labels=propagate_labels,
-            discard_joint_branch_geometry=False,
-            inplace=inplace,
+        fundus = self.prepare_data(fundus, av=av, od=od)
+        av = fundus.av
+
+        if self.mask_optic_disc and fundus.od is not None:
+            mask = binary_erosion(fundus.od, disk(fundus.od_diameter * 0.2, dtype=np.bool_))  # type: ignore
+            av[mask] = 0
+
+        # === Skeletonize and build graph independently for Art and Vei===
+        max_calibre = int(190 / fundus.scale)
+        seg2graph = SegToGraph(
+            skeletonize_method="fvt",
+            fix_hollow=True,
+            clean_branches_tips=max_calibre,
+            min_terminal_branch_length=5,
+            min_terminal_branch_calibre_ratio=0.5,
+            simplify_graph_arg=GraphSimplifyArg(
+                max_spurs_length=0,
+                reconnect_endpoints=False,
+                junctions_merge_distance=5,
+                min_orphan_branches_length=3,
+                max_cycles_length=max_calibre,
+                simplify_topology=False,
+            ),
+            parse_geometry=True,
+            adaptative_tangents=True,
         )
+
+        art = (av == AVLabel.ART) | (av == AVLabel.BOTH)
+        a_graph = seg2graph(art, parse_geometry=populate_geometry)
+        a_graph.branch_attr["av"] = a_graph.node_attr["av"] = AVLabel.ART
+
+        vei = (av == AVLabel.VEI) | (av == AVLabel.BOTH)
+        v_graph = seg2graph(vei, parse_geometry=populate_geometry)
+        v_graph.branch_attr["av"] = v_graph.node_attr["av"] = AVLabel.VEI
+
+        # === Label graph with AV labels and split branches with varying labels ===
+        assign_av_label_centerline(a_graph, av, default_label=AVLabel.ART, split_av_branch=True, inplace=True)
+        assign_av_label_centerline(
+            v_graph,
+            av,
+            default_label=AVLabel.VEI,
+            min_branch_length=1,
+            median_filter_size=9,
+            split_av_branch=True,
+            inplace=True,
+        )
+
+        # Delete branch with BOTH label in the vein graph and merge graphes
+        branch_to_delete = []
+        for branch in v_graph.branches(v_graph.branch_attr["av"] == AVLabel.BOTH):
+            branch_to_delete.append(branch.id)
+        v_graph.delete_branch(branch_to_delete, inplace=True)
+
+        # Merge the two graphs into one and clean AV labels
+        for branch in a_graph.branches(a_graph.branch_attr["av"] != AVLabel.BOTH):
+            branch.attr["av"] = AVLabel.ART
+            a_graph.node_attr.loc[branch.node_ids, "av"] = AVLabel.ART
+        v_graph.branch_attr["av"] = AVLabel.VEI
+        v_graph.node_attr["av"] = AVLabel.VEI
+        graph = a_graph.append(v_graph)
+
+        if simplify:
+            self.simplify_av_graph(graph, inplace=True, max_calibre=max_calibre)
+        return graph
+
+    def simplify_av_graph(self, graph: VGraph, *, inplace: bool = False, max_calibre: float = 20) -> VGraph:
+        from ..segment_to_graph.graph_simplification import simplify_passing_nodes
+
+        if not inplace:
+            graph = graph.copy()
+
+        simplify_passing_nodes(graph, min_angle=110, with_same_branch_attr="av", inplace=True)
+
+        return graph
 
     def build_line_digraph(self, graph: VGraph, fundus_data: FundusData, inplace: bool = False) -> VBranchDigraph:
         from ..models.topology.data import BranchDigraphData

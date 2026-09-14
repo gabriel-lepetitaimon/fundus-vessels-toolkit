@@ -154,6 +154,8 @@ Incrementor* Incrementors::get(Octant octant) {
  **********************************************************************************************************************/
 RayIterator::RayIterator() : _start(IntPoint::Invalid()), _point(IntPoint::Invalid()) {}
 
+RayIterator::RayIterator(Point direction) : RayIterator(IntPoint(0, 0), direction) {}
+
 RayIterator::RayIterator(const IntPoint& start, Point direction) : _start(start), _point(start), _error(0) {
     if (direction.is_null()) {
         _point = IntPoint::Invalid();
@@ -263,6 +265,28 @@ const Octant& RayIterator::octant() const { return _octant; }
 const float& RayIterator::error() const { return _error; }
 int RayIterator::step() const { return _incrementor->stepsBetween(_start, _point); }
 
+Point RayIterator::direction() const {
+    switch (_octant) {
+        case Octant::SEE:
+            return Point(_delta, 1);
+        case Octant::SSE:
+            return Point(1, _delta);
+        case Octant::SSW:
+            return Point(1, -_delta);
+        case Octant::SWW:
+            return Point(_delta, -1);
+        case Octant::NWW:
+            return Point(-_delta, -1);
+        case Octant::NNW:
+            return Point(-1, -_delta);
+        case Octant::NNE:
+            return Point(-1, _delta);
+        case Octant::NEE:
+            return Point(-_delta, 1);
+    }
+    return Point(0, 0);  // Should never reach here
+}
+
 void RayIterator::reset() {
     _point = _start;
     _error = 0;
@@ -289,7 +313,11 @@ IntPoint RayIterator::extrapolate(int step) const {
     return p;
 }
 
+IntPoint RayIterator::extrapolateDistance(float distance) const { return extrapolate(stepsCountTo(distance)); }
+
 int RayIterator::stepsCountTo(const IntPoint& p) const { return _incrementor->stepsBetween(_point, p); }
+
+int RayIterator::stepsCountTo(float dist) const { return int(round(dist / sqrt(_delta * _delta + 1))); }
 
 RayIterator& RayIterator::skip(int step) {
     _error += step * _delta;
