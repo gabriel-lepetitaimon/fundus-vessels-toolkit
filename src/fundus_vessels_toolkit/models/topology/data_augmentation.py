@@ -411,7 +411,7 @@ def deteriorate_graph[T: VGraph](
         # print(f"Deleting segments {new_branches[1::2]} of branch {b.id}")
         graph.delete_branch(new_branches[1::2], inplace=True)
 
-    merge_nodes_by_distance(graph, max_distance=1.0, only_connected_nodes=True, inplace=True)
+    merge_nodes_by_distance(graph, max_distance=1.0, relation="adjacent", inplace=True)
     simplify_passing_nodes(graph, min_angle=90, inplace=True)
     remove_orphan_nodes(graph, inplace=True)
     return graph

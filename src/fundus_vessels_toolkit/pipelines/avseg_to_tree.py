@@ -415,12 +415,12 @@ class GNNAVSegToTree(AVSegToTree):
 
         # Delete branch with BOTH label in the vein graph and merge graphes
         branch_to_delete = []
-        for branch in v_graph.branches(v_graph.branch_attr["av"] == AVLabel.BOTH, filter="endpoint"):
+        for branch in v_graph.branches(v_graph.branch_attr["av"] == AVLabel.BOTH):
             branch_to_delete.append(branch.id)
         v_graph.delete_branch(branch_to_delete, inplace=True)
 
         # Merge the two graphs into one and clean AV labels
-        for branch in a_graph.branches(a_graph.branch_attr["av"] == AVLabel.BOTH, filter="non-endpoint"):
+        for branch in a_graph.branches(a_graph.branch_attr["av"] != AVLabel.BOTH):
             branch.attr["av"] = AVLabel.ART
             a_graph.node_attr.loc[branch.node_ids, "av"] = AVLabel.ART
         v_graph.branch_attr["av"] = AVLabel.VEI

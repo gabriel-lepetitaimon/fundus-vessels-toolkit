@@ -418,12 +418,17 @@ std::tuple<std::list<InterceptCandidate>, float> _cone_curve_intercept(
     if (minSpaceBetweenSplits > 0) {
         auto it = intercepts.begin(), nextIt = std::next(it);
         while (nextIt != intercepts.end()) {
-            if (nextIt->score < it->score) {
-                it = intercepts.erase(it);
-                if (it == intercepts.end()) break;
-            } else
-                nextIt = intercepts.erase(nextIt);
-            nextIt = std::next(it);
+            if (nextIt->l - it->l < minSpaceBetweenSplits) {
+                if (nextIt->score < it->score) {
+                    intercepts.erase(it);
+                    it = nextIt;
+                    nextIt++;
+                } else
+                    nextIt = intercepts.erase(nextIt);
+            } else {
+                it = nextIt;
+                nextIt++;
+            }
         }
     }
 
@@ -671,7 +676,7 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
             if (!p.is_inside(shape[0], shape[1])) continue;
 
             auto& m = map[p.y][p.x];
-            if (m > 0) {
+            if (m > 0 && m != b + 1) {
                 // If the point is already on a curve, record the crossing
                 auto [it, inserted] = crossingsCandidates.try_emplace(p, std::list<CrossingCandidate>{{m - 1}});
                 it->second.emplace_back(CrossingCandidate{(int)b, i, l});
@@ -849,7 +854,7 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
                 // Save the connexion candidate to the end tip of the branch
                 if (snap) connexionsCandidates.emplace_back(ConnexionCandidate{b0, (int)tip0, b1, 1});
 
-                // Save the remaining intercepts as candidates
+                // Save the remaining intercepts
                 for (auto& intercept : _intercepts) {
                     intercept.b0 = b0;
                     intercept.tip0 = tip0;
@@ -893,6 +898,7 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
                 float avgL, weight;
             };
             std::list<Cluster> clusters;
+            // List intercepts and weight them by 1/score to favor the closest intercepts (lowest score)
             for (auto it = intercepts.begin(); it != intercepts.end(); it++)
                 clusters.emplace_back(Cluster{{*it}, it->l, 1.0f / (it->score + 1e-2f)});
 

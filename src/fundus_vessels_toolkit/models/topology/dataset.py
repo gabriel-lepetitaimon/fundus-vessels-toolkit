@@ -737,6 +737,7 @@ class BranchDigraphDataset(PygDataset):
         *,
         transform=None,
         cfg: Optional[BranchDigraphDatasetConfig] = None,
+        use_all_graph_versions: bool = False,
     ):
         """Dataset of branch digraphs for fundus images, with multiple graph versions and target topologies.
 
@@ -746,12 +747,16 @@ class BranchDigraphDataset(PygDataset):
             Path to the processed dataset directory or archive, which should contain an appropriate manifest along with the processed data.
         root : Optional[str | Path], optional
             Root directory to store the dataset.
+
+        use_all_graph_versions : bool, optional
+            If true, the different versions in cfg.graph_version will be treated as separate samples, increasing this dataset's length. This is useful for testing on all graph versions.
         """  # noqa: E501
         src_path = Path(src_path)
         self.src_path = src_path
         self.samples_info = SampleInfo.decode(src_path)
         self.cfg: BranchDigraphDatasetConfig = cfg or BranchDigraphDatasetConfig()
         self.__roi_cache: tuple[FundusData.ROISpecs, Bool2DArray] | None = None
+        self._use_all_graph_versions = use_all_graph_versions
 
         if root is None:
             if src_path.is_dir():
@@ -926,10 +931,11 @@ class BranchDigraphDataset(PygDataset):
         return len(self.samples_info)
 
     def get(self, idx: int) -> BranchDigraphData:
-        sample = self.get_sample(idx)
+        sample = self.get_sample(idx % len(self.samples_info), discard_gt_tree=True, load_av_maps=False)
 
         N_versions = len(sample.graphes)
         versions = list(sample.graphes.keys())
+
         if isinstance(self.cfg.graph_version, dict):
             pick_p = [self.cfg.graph_version.get(v, 0.0) for v in versions]
             p_total = sum(pick_p)

@@ -1719,10 +1719,10 @@ class VGraph:
         return endpoints.numpy()[:, 1:].astype(np.int_)
 
     @overload
-    def junction_nodes(self, as_mask: Literal[False] = False) -> Indices: ...
+    def junction_nodes(self, as_mask: Literal[False] = False) -> Int1DArray: ...
     @overload
     def junction_nodes(self, as_mask: Literal[True]) -> Bool1DArray: ...
-    def junction_nodes(self, as_mask=False) -> Indices | Bool1DArray:
+    def junction_nodes(self, as_mask=False) -> Int1DArray | Bool1DArray:
         """Return the indices of the junctions (non-endpoints) nodes in the graph.
 
         The junction nodes are the nodes connected to at least two branches.
