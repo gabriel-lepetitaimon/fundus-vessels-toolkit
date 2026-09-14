@@ -10,14 +10,15 @@ import psutil
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
-import wandb
 from lightning_fabric.plugins.precision.precision import _PRECISION_INPUT_STR
 from pydantic import BaseModel, ConfigDict, Field
 from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers import WandbLogger
 from torch_geometric.loader import DataLoader as PyGDataLoader
 from torchmetrics import MetricCollection, Specificity
 from torchmetrics.classification import Accuracy, Precision, Recall
 
+import wandb
 from fundus_vessels_toolkit.models.metrics.tree import (
     MetricCollectionDict,
     ParentAcc,
@@ -47,6 +48,7 @@ torch.backends.fp32_precision = "ieee"  # type: ignore
 torch.backends.cuda.matmul.fp32_precision = "ieee"
 torch.backends.cudnn.fp32_precision = "ieee"  # type: ignore
 torch.backends.cudnn.conv.fp32_precision = "tf32"  # type: ignore
+torch.set_float32_matmul_precision("medium")  # type: ignore
 
 
 type TrainingSets = Literal["FundusAV", "HRF", "LES-AV", "MAPLES-DR", "DRIVE_train", "GAVE-train", "INSPIRE"]
@@ -173,7 +175,7 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
         cfg = exp_run.cfg
 
         # === DATASET ===
-        dataset = BranchDigraphDataset("ALL_DATA_bundle.tar.gz", cfg=cfg.dataset)
+        dataset = BranchDigraphDataset("ALL_DATA_bundle_v2.tar.gz", cfg=cfg.dataset)
         train_set, val_set, test_set = dataset.split_sets(train_ratio=0.7, val_ratio=0.15)
 
         if cfg.training_set is not None and cfg.training_set:
@@ -436,13 +438,14 @@ class DigraphGNNTrainer(L.LightningModule):
         self.val_metrics.reset()
 
     def on_validation_end(self) -> None:
-        self.logger.experiment.log(  # type: ignore
-            {
-                "running_lr": self.trainer.optimizers[0].param_groups[0]["lr"],
-                "epoch": self.trainer.current_epoch,
-                "val_pred": self.val_preds["table"],
-            }
-        )
+        if isinstance(self.logger, WandbLogger):
+            self.logger.experiment.log(
+                {
+                    "running_lr": self.trainer.optimizers[0].param_groups[0]["lr"],
+                    "epoch": self.trainer.current_epoch,
+                    "val_pred": self.val_preds["table"],
+                }
+            )
         self.val_preds = {}
 
     def test_step(self, batch, batch_idx, dataloader_idx=0):
@@ -467,7 +470,8 @@ class DigraphGNNTrainer(L.LightningModule):
         self.update_preds(self.test_preds, model_out)
 
     def on_test_end(self) -> None:
-        self.logger.experiment.log({"test_pred": self.test_preds["table"]})  # type: ignore
+        if isinstance(self.logger, WandbLogger):
+            self.logger.experiment.log({"test_pred": self.test_preds["table"]})
         self.test_preds = {}
         self.test_metrics.reset()
 
