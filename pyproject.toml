@@ -27,7 +27,7 @@ dependencies = [
     'torchmetrics',
     'torch-geometric',
 
-    'fundus-toolkits-common @ git+https://github.com/LIV4D/fundus-toolkits-common.git',
+    'fundus-toolkits-common',
 ]
 
 
@@ -60,6 +60,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
+
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.ruff]
 # Enable flake8-bugbear (`B`) rules.
