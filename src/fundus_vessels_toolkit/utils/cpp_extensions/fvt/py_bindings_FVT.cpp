@@ -257,6 +257,25 @@ torch::Tensor find_inflections_points(const torch::Tensor& curvatures, float K_t
     return vector_to_tensor(inflections);
 }
 
+float curve_length(const torch::Tensor& curveYX, std::size_t start = 0, std::size_t end = 0) {
+    auto acc = curveYX.accessor<int, 2>();
+    std::size_t N = curveYX.size(0);
+    if (end > N)
+        end = N;
+    else if (end == 0)
+        end = curveYX.size(0);
+    if (start >= end) return 0;
+
+    float length = 0;
+    IntPoint prev(acc[start][0], acc[start][1]);
+    for (std::size_t i = start + 1; i < end; i++) {
+        IntPoint curr(acc[i][0], acc[i][1]);
+        length += curr.distance(prev);
+        prev = curr;
+    }
+    return length;
+}
+
 std::tuple<torch::Tensor, double, torch::Tensor> fit_bezier_cubic(const torch::Tensor& curveYX,
                                                                   const torch::Tensor& tangents,
                                                                   double bspline_max_error, float tangent_std = 2,
@@ -768,6 +787,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fast_branch_calibre", &fast_branch_calibre_torch, "Evaluate the width of a branch.");
     m.def("curve_curvature", &compute_curvature, "Evaluate the curvature of a curve.");
     m.def("find_inflections_points", &find_inflections_points, "Find the inflection points of a curve.");
+    m.def("curve_length", &curve_length, "Compute the length of a curve.");
     m.def("fit_bezier_cubic", &fit_bezier_cubic, "Fit a cubic bezier curve to a set of points.");
     m.def("fit_bspline", &fit_bspline, "Fit a B-Spline curve to a set of points.");
     m.def("discretize_bspline", &discretize_bspline, "Discretize a B-Spline curve.");

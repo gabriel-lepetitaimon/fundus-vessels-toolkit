@@ -5,6 +5,25 @@ import numpy as np
 import numpy.typing as npt
 from scipy.special import expit
 
+from fundus_toolkits.utils.typing import IntPairArray, PointArray
+
+
+def curve_length(curve: PointArray | IntPairArray) -> float:
+    """
+    Compute the length of a curve.
+
+    Parameters
+    ----------
+    curve : PointArray | IntPair
+        The curve as an array of shape (N, 2) or a pair of arrays of shape (N,).
+
+    Returns
+    -------
+    float
+        The length of the curve.
+    """
+    return np.sum(np.linalg.norm(np.diff(curve, axis=0), axis=-1))
+
 
 def ensure_superior_multiple(x, m=32):
     """
@@ -345,6 +364,19 @@ def nearest_point_on_segment(
 
     distance = np.linalg.norm(nearest - p[:, None, :], axis=-1)
     return nearest, distance
+
+
+def same_sign(x, y, tolerance: float | bool = False):
+    """
+    Return True if x and y have the same sign, False otherwise.
+    """
+    sign_x, sign_y = np.sign(x), np.sign(y)
+    if tolerance is False:
+        return x == y
+    elif tolerance is True:
+        return (sign_x == sign_y) | (sign_x == 0) | (sign_y == 0)
+    else:
+        return (sign_x == sign_y) | (np.abs(x) < tolerance) | (np.abs(y) < tolerance)
 
 
 def sigmoid(x, antisymmetric=False):

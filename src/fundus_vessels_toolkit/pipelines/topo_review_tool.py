@@ -18,7 +18,7 @@ from fundus_vessels_toolkit.vmatching.registration import naive_register_trees
 from ..models import segment_av
 from ..pipelines.avseg_to_tree import GNNAVSegToTree, NaiveAVSegToTree
 from ..segment_to_graph.av_tree_parsing import naive_infer_roots
-from ..segment_to_graph.graph_simplification import simplify_passing_nodes
+from ..segment_to_graph.graph_simplification import merge_nodes_by_distance, simplify_passing_nodes
 from ..segment_to_graph.tree_simplification import disconnect_crossing
 from ..segment_to_graph.tree_topology import TopologicalLabel, TreeTopology, transfer_topology
 from ..utils.jppype import draw_tree
@@ -361,6 +361,17 @@ class ReviewTool:
 
         a_tree.delete_branch(list(a_duplicates), inplace=True)
         v_tree.delete_branch(list(v_duplicates), inplace=True)
+
+        self.draw_trees()
+
+    def merge_node_duplicates(self):
+        if self.trees_from_av is None:
+            raise ValueError("AV trees have not been computed yet.")
+        self._push_annotation_state()
+
+        a_tree, v_tree = self.trees
+        merge_nodes_by_distance(a_tree, max_distance=1, inplace=True)
+        merge_nodes_by_distance(v_tree, max_distance=1, inplace=True)
 
         self.draw_trees()
 

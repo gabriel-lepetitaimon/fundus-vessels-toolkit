@@ -11,7 +11,8 @@ import numpy.typing as npt
 
 from fundus_toolkits import FundusData
 from fundus_toolkits.utils.geometric import Rect
-from fundus_toolkits.utils.typing import Bool1DArray, Int1DArray
+from fundus_toolkits.utils.typing import Bool1DArray, Int1DArray, IntPairArray
+from fundus_vessels_toolkit.utils.math import curve_length
 
 from ..utils.cluster import reduce_clusters
 from ..utils.data_io import load_numpy_dict, save_numpy_dict
@@ -282,8 +283,10 @@ class TreeTopology:
             branch_mapping=self._branch_mapping,
         )
 
-    def overlay(
-        self, img: npt.NDArray[np.floating], main_color: str | Literal["ART", "VEI"]
+    def subtree_overlay(
+        self,
+        img: npt.NDArray[np.floating],
+        main_color: str | Literal["ART", "VEI"],
     ) -> npt.NDArray[np.float64]:
         from fundus_toolkits import AVLabel
         from fundus_toolkits.utils.color import color_jitter
@@ -316,13 +319,44 @@ class TreeTopology:
         return img
 
     @classmethod
-    def av_overlay(cls, img: npt.NDArray[np.floating] | FundusData, art_topo: TreeTopology, vei_topo: TreeTopology):
+    def branch_overlay(cls, img: npt.NDArray[np.floating] | FundusData, topo: TreeTopology) -> npt.NDArray[np.float64]:
+        from fundus_toolkits.utils.color import colormap
+
+        img = img.image.copy() if isinstance(img, FundusData) else img.copy()
+
+        channel_first = img.shape[0] == 3
+        if channel_first:
+            img = np.transpose(img, (1, 2, 0))
+
+        topo = topo.as_dense()
+        alpha = np.zeros(topo.shape, dtype=np.float64)
+        topo_img = np.zeros(img.shape, dtype=np.float64)
+
+        colors = colormap(format="rgb")
+
+        for branch_id in np.unique(topo.branch_map):
+            if branch_id == 0:
+                continue
+            branch_mask = topo.branch_map == branch_id
+            topo_img[branch_mask] = colors[branch_id % len(colors)] / 255.0
+            branch_rank_map = topo.rank_map[branch_mask]
+            alpha[branch_mask] = 0.8 - 0.7 * (branch_rank_map % 1)
+
+        img = img * (1 - alpha[:, :, None]) + topo_img * alpha[:, :, None]
+        if channel_first:
+            img = np.transpose(img, (2, 0, 1))
+        return img
+
+    @classmethod
+    def av_overlay(
+        cls, img: npt.NDArray[np.floating] | FundusData, art_topo: TreeTopology, vei_topo: TreeTopology
+    ) -> npt.NDArray[np.float64]:
         if isinstance(img, FundusData):
             topo_map = img.image.copy()
         else:
             topo_map = img.copy()
-        topo_map = art_topo.overlay(topo_map, main_color="ART")
-        topo_map = vei_topo.overlay(topo_map, main_color="VEI")
+        topo_map = art_topo.subtree_overlay(topo_map, main_color="ART")
+        topo_map = vei_topo.subtree_overlay(topo_map, main_color="VEI")
         return topo_map
 
     def freeze(self) -> None:
@@ -409,6 +443,7 @@ class BranchesTopo:
         labels: npt.NDArray[TopologicalLabel],
         p_dirs: npt.NDArray[np.float32],
         plausibility: npt.NDArray[np.float32],
+        length: npt.NDArray[np.float32],
         tips_label: npt.NDArray[TopologicalLabel],
         tips_rank: npt.NDArray[np.float32],
     ) -> None:
@@ -421,6 +456,8 @@ class BranchesTopo:
 
         p_dirs: npt.NDArray[np.float32]
             A 1D array of size (B,) indicating, for each branch, its direction. Positive value indicates to keep the branch original direction in ``graph``, negative value indicates to flip it. Zero indicates unknown direction.
+        length: npt.NDArray[np.float32]
+            A 1D array of size (B,) indicating, for each branch, its length.
 
         plausibility: npt.NDArray[np.float32]
             A 1D array of size (B,) indicating, the mean of the fuzzy_skeleton_map values under each branch's skeleton.
@@ -441,6 +478,9 @@ class BranchesTopo:
         assert plausibility.shape == (B,), "plausibility must be of shape (B,)."
         self.plausibility = plausibility
 
+        assert length.shape == (B,), "length must be of shape (B,)."
+        self.lengths = length
+
         assert tips_label.shape == (B, 2), "tips_label must be of shape (B, 2)."
         self.tips_label = tips_label
         assert tips_rank.shape == (B, 2), "tips_rank must be of shape (B, 2)."
@@ -456,7 +496,7 @@ class BranchesTopo:
 
     @property
     def dirs(self) -> Bool1DArray:
-        return self.p_dirs >= 0
+        return self.p_dirs >= 0  # type: ignore
 
     @property
     def head_labels(self) -> npt.NDArray[TopologicalLabel]:
@@ -476,7 +516,11 @@ class BranchesTopo:
 
 
 def highest_topo_plausibility(
-    topologies: list[BranchesTopo], *, plausibility_threshold: float = 0.05, mask_inplace: bool = False
+    topologies: list[BranchesTopo],
+    *,
+    plausibility_threshold: float = 0.05,
+    filter_overlap: bool = True,
+    mask_inplace: bool = False,
 ) -> npt.NDArray[np.int_]:
     """
     Affiliate each branch with the topology where it has the highest plausibility. If the difference in plausibility between the best and second best topology is below the given threshold, the branch is not assigned to any topology.
@@ -488,6 +532,9 @@ def highest_topo_plausibility(
 
     plausibility_threshold : float, optional
         The minimum difference in plausibility required to keep a branch in the best topology.
+
+    filter_overlap : bool, optional
+        If True, filter out overlapping branches with the same highest topology. Default is True.
 
     mask_inplace : bool, optional
         If True, erase the branch labels in each topology where the branch was not assigned. Default is False.
@@ -501,7 +548,7 @@ def highest_topo_plausibility(
     assert all(topo.branch_count == topologies[0].branch_count for topo in topologies[1:]), (
         "All BranchesTopo must have the same number of branches."
     )
-    branch_plausibility = np.stack([topo.plausibility * (~topo.missing) for topo in topologies], axis=1)
+    branch_plausibility = np.stack([topo.plausibility * topo.lengths * (~topo.missing) for topo in topologies], axis=1)
     topo_by_plausibility = np.argsort(branch_plausibility, axis=1)[:, ::-1]
     best_topo = topo_by_plausibility[:, 0]
 
@@ -514,6 +561,39 @@ def highest_topo_plausibility(
         best_topo[too_close] = -1
     else:
         best_topo[best_plausibility <= 0] = -1
+
+    if filter_overlap:
+        for t, topo in enumerate(topologies):
+            mask = best_topo == t
+            B_idx: Int1DArray = np.arange(topo.branch_count)[mask]  # type: ignore
+
+            # → Filter branches that overlap on gt to keep only the most plausible one
+            branch_first_tip = np.where(topo.dirs[mask] >= 0, 0, 1)
+            l0, l1 = topo.tips_label[B_idx, branch_first_tip], topo.tips_label[B_idx, 1 - branch_first_tip]
+            d0, d1 = topo.tips_rank[B_idx, branch_first_tip], topo.tips_rank[B_idx, 1 - branch_first_tip]
+            inters = dict(start=l0, end=l1, strict=False, start_d=d0, end_d=d1)
+            tip0_overlap = TopologicalLabel.is_between(l0, point_d=d0, strict_d="end", **inters)  # type: ignore
+            tip1_overlap = TopologicalLabel.is_between(l1, point_d=d1, strict_d="start", **inters)  # type: ignore
+            overlap = tip0_overlap | tip1_overlap
+            overlapping_branch_pairs = B_idx[np.argwhere(np.triu(overlap | overlap.T, k=1))]
+            for cluster in reduce_clusters(overlapping_branch_pairs):
+                if len(cluster) <= 1:
+                    continue
+                cluster = np.array(cluster)
+                cluster_branch_pairs = overlapping_branch_pairs[np.isin(overlapping_branch_pairs[:, 0], cluster)]
+                # cluster = list(cluster[np.argsort(topo.plausibility[cluster])])
+
+                # Iteratively remove the branch colliding with the most plausible branches until no more collision remains
+                while cluster_branch_pairs.shape[0] > 0:
+                    opposite_plausibility = {b: 0.0 for b in np.unique(cluster_branch_pairs)}
+                    for b1, b2 in cluster_branch_pairs:
+                        opposite_plausibility[b1] += float(topo.plausibility[b2] * np.sqrt(topo.lengths[b2]))
+                        opposite_plausibility[b2] += float(topo.plausibility[b1] * np.sqrt(topo.lengths[b1]))
+
+                    b = max(opposite_plausibility, key=opposite_plausibility.get)  # type: ignore
+                    best_topo[b] = -1
+                    # topo.plausibility[b] = 0.0
+                    cluster_branch_pairs = cluster_branch_pairs[~np.any(cluster_branch_pairs == b, axis=1)]
 
     if mask_inplace:
         for t, topo in enumerate(topologies):
@@ -534,6 +614,7 @@ def read_branch_topology(
     max_rank_tolerance: float = 0.2,
 ) -> tuple[
     npt.NDArray[TopologicalLabel],
+    npt.NDArray[np.float32],
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
     npt.NDArray[TopologicalLabel],
@@ -586,14 +667,14 @@ def read_branch_topology(
 
         # with watch("Prepare branch curves"):
         for b in graph.branches():
-            curve = curves[b.id]
-            if curve is None or len(curve) < 3:
+            c = curves[b.id]
+            if c is None or len(c) < 3:
                 p0, p1 = b.tip_coord()
-                curve = rasterize_line(p0.to_int_pair(), p1.to_int_pair())
-            if curve.strides[0] < 0:
-                curve = curve.copy()
+                c = rasterize_line(p0.to_int_pair(), p1.to_int_pair())
+            if c.strides[0] < 0:
+                c = c.copy()
             with warnings.catch_warnings(action="ignore"):
-                curves_tensor.append(torch.from_numpy(curve).int())
+                curves_tensor.append(torch.from_numpy(c).int())
         # with watch("Read branches topology"):
         out = read_branches_topology(
             curves_tensor,
@@ -604,38 +685,46 @@ def read_branch_topology(
             torch.from_numpy(topology.fuzzy_skeleton_map.data),  # type: ignore
             min_rank_threshold,
             max_rank_tolerance,
+            False,  # disable filtering of overlapping branches
         )
         # with watch("Convert output to numpy"):
-        branch_label, branch_dir, branch_plausibility, tips_label, tips_rank = [_.numpy() for _ in out]
-        return branch_label, branch_dir, branch_plausibility, tips_label, tips_rank
+        branch_label, branch_dir, branch_plausibility, branch_lengths, tips_label, tips_rank = [_.numpy() for _ in out]
+        return branch_label, branch_dir, branch_plausibility, branch_lengths, tips_label, tips_rank
 
     domain = Rect.from_size(topology.branch_map.shape).exclude_bottom_right_edges()  # type: ignore
     B = graph.branch_count
     branch_dir = np.zeros(B, dtype=np.float32)
     branch_label = np.zeros(B, dtype=TopologicalLabel)
     branch_plausibility = np.zeros(B, dtype=np.float32)
-    branch_length = np.zeros(B, dtype=np.int_)
+    branch_lengths = np.zeros(B, dtype=np.float32)
 
     tips_label = np.zeros((B, 2), dtype=TopologicalLabel)
     tips_rank = np.zeros((B, 2), dtype=np.float32)
 
     for branch in graph.branches():
-        curve = branch.curve().astype(np.int_)
+        curve: IntPairArray = branch.curve().astype(np.int_)
         if curve is None or len(curve) < 3:
             p0, p1 = branch.tip_coord()
             curve = rasterize_line(p0.to_int_pair(), p1.to_int_pair())
-        curve = curve[domain.contains(curve)]
+        curve = curve[domain.contains(curve)]  # type: ignore
         N = len(curve)
         if N < 3:
             continue
-
-        branch_length[branch.id] = N
 
         curve_label = topology.branch_map[*curve.T]
         # → Check that at least half the branch is inside the gt tree topology
         known_label = curve_label != 0
         if known_label.sum() < 3:
             continue
+
+        # → Check that the branch is not mainly oriented towards a normal direction
+        skel = topology.fuzzy_skeleton_map[*curve.T]
+        curve_d = np.linalg.norm(np.diff(curve, axis=0), axis=1)
+        adj = curve_d <= np.sqrt(2)  # Only keep adjacent points
+        normalCos = np.mean(np.diff(skel)[adj] / curve_d[adj])
+        if abs(normalCos) > 0.6:
+            continue
+
         known_label_ratio = known_label.mean()
 
         # → Only consider points descendant of the main ancestor ...
@@ -644,9 +733,10 @@ def read_branch_topology(
         valid_label = main_ancestor.is_parent_of(curve_label, or_self=True)
         # ... and check that sufficient points are kept
         if valid_label.sum() < 3:
+            branch_lengths[branch.id] = curve_length(curve)
             continue
         valid_label_ratio = valid_label[known_label].mean()
-        curve = curve[valid_label]
+        curve = curve[valid_label]  # type: ignore
         curve_label = curve_label[valid_label]
 
         # → Get the direction of the branch based on the topological distance map
@@ -659,6 +749,7 @@ def read_branch_topology(
         if known_label_ratio < 0.33 or valid_label_ratio < 0.66 or abs(dir) < 0.66:
             plausibility = topology.fuzzy_skeleton_map[*curve.T].astype(np.float32).sum()
             branch_plausibility[branch.id] = plausibility
+            branch_lengths[branch.id] = curve_length(curve)
             continue
 
         # → Exclude starting curve points which are part of the transition between labels
@@ -666,7 +757,7 @@ def read_branch_topology(
             min_rank = int(np.floor(curve_rank.min()))
             ignore_mask = curve_rank < np.float32(min_rank) + np.float32(min_rank_threshold)
             if ignore_mask.any() and (~ignore_mask).sum() >= 3:
-                curve = curve[~ignore_mask]
+                curve = curve[~ignore_mask]  # type: ignore
                 curve_label = curve_label[~ignore_mask]
                 curve_rank = curve_rank[~ignore_mask]
 
@@ -688,7 +779,8 @@ def read_branch_topology(
         branch_label[branch.id] = unique_labels[labels_count.argmax()]
 
         # → Get the plausibility of the branch based on the fuzzy_skeleton_map
-        branch_plausibility[branch.id] = topology.fuzzy_skeleton_map[*curve.T].astype(np.float32).sum()
+        branch_plausibility[branch.id] = topology.fuzzy_skeleton_map[*curve.T].astype(np.float32).mean()
+        branch_lengths[branch.id] = curve_length(curve)
 
         # → Get the tip labels and distances
         tips_label[branch.id, 0] = curve_label[0]
@@ -696,43 +788,43 @@ def read_branch_topology(
         tips_rank[branch.id, 0] = curve_rank[0]
         tips_rank[branch.id, 1] = curve_rank[-1]
 
-    # → Filter branches that overlap on gt to keep only the most plausible one
-    branch_first_tip = np.where(branch_dir >= 0, 0, 1)
-    B_idx = np.arange(B)
-    l0, l1 = tips_label[B_idx, branch_first_tip], tips_label[B_idx, 1 - branch_first_tip]
-    d0, d1 = tips_rank[B_idx, branch_first_tip], tips_rank[B_idx, 1 - branch_first_tip]
-    inters = dict(start=l0, end=l1, strict=False, start_d=d0, end_d=d1)
-    tip0_overlap = TopologicalLabel.is_between(l0, point_d=d0, strict_d="end", **inters)  # type: ignore
-    tip1_overlap = TopologicalLabel.is_between(l1, point_d=d1, strict_d="start", **inters)  # type: ignore
-    overlap = tip0_overlap | tip1_overlap
-    overlapping_branch_pairs = np.argwhere(np.triu(overlap | overlap.T, k=1))
-    for cluster in reduce_clusters(overlapping_branch_pairs):
-        if len(cluster) <= 1:
-            continue
-        cluster = np.array(cluster)
-        cluster_branch_pairs = overlapping_branch_pairs[np.isin(overlapping_branch_pairs[:, 0], cluster)]
-        # cluster = list(cluster[np.argsort(branch_plausibility[cluster])])
+    # # → Filter branches that overlap on gt to keep only the most plausible one
+    # branch_first_tip = np.where(branch_dir >= 0, 0, 1)
+    # B_idx = np.arange(B)
+    # l0, l1 = tips_label[B_idx, branch_first_tip], tips_label[B_idx, 1 - branch_first_tip]
+    # d0, d1 = tips_rank[B_idx, branch_first_tip], tips_rank[B_idx, 1 - branch_first_tip]
+    # inters = dict(start=l0, end=l1, strict=False, start_d=d0, end_d=d1)
+    # tip0_overlap = TopologicalLabel.is_between(l0, point_d=d0, strict_d="end", **inters)  # type: ignore
+    # tip1_overlap = TopologicalLabel.is_between(l1, point_d=d1, strict_d="start", **inters)  # type: ignore
+    # overlap = tip0_overlap | tip1_overlap
+    # overlapping_branch_pairs = np.argwhere(np.triu(overlap | overlap.T, k=1))
+    # for cluster in reduce_clusters(overlapping_branch_pairs):
+    #     if len(cluster) <= 1:
+    #         continue
+    #     cluster = np.array(cluster)
+    #     cluster_branch_pairs = overlapping_branch_pairs[np.isin(overlapping_branch_pairs[:, 0], cluster)]
+    #     # cluster = list(cluster[np.argsort(branch_plausibility[cluster])])
 
-        # Iteratively remove the branch colliding with the most plausible branches until no more collision remains
-        while cluster_branch_pairs.shape[0] > 0:
-            opposite_plausibility = {b: 0.0 for b in np.unique(cluster_branch_pairs)}
-            opposite_length = {b: 0 for b in np.unique(cluster_branch_pairs)}
-            for b1, b2 in cluster_branch_pairs:
-                opposite_plausibility[b1] += float(branch_plausibility[b2])
-                opposite_plausibility[b2] += float(branch_plausibility[b1])
-                opposite_length[b1] += int(branch_length[b2])
-                opposite_length[b2] += int(branch_length[b1])
-            # opposite_plausibility = {
-            #    b: p / opposite_length[b] for b, p in opposite_plausibility.items() if opposite_length[b] > 0
-            # }
+    #     # Iteratively remove the branch colliding with the most plausible branches until no more collision remains
+    #     while cluster_branch_pairs.shape[0] > 0:
+    #         opposite_plausibility = {b: 0.0 for b in np.unique(cluster_branch_pairs)}
+    #         opposite_length = {b: 0 for b in np.unique(cluster_branch_pairs)}
+    #         for b1, b2 in cluster_branch_pairs:
+    #             opposite_plausibility[b1] += float(branch_plausibility[b2])
+    #             opposite_plausibility[b2] += float(branch_plausibility[b1])
+    #             opposite_length[b1] += int(branch_length[b2])
+    #             opposite_length[b2] += int(branch_length[b1])
+    #         # opposite_plausibility = {
+    #         #    b: p / opposite_length[b] for b, p in opposite_plausibility.items() if opposite_length[b] > 0
+    #         # }
 
-            b = max(opposite_plausibility, key=opposite_plausibility.get)  # type: ignore
-            branch_label[b] = TopologicalLabel(0)
-            branch_plausibility[b] = 0.0
-            cluster_branch_pairs = cluster_branch_pairs[~np.any(cluster_branch_pairs == b, axis=1)]
+    #         b = max(opposite_plausibility, key=opposite_plausibility.get)  # type: ignore
+    #         branch_label[b] = TopologicalLabel(0)
+    #         branch_plausibility[b] = 0.0
+    #         cluster_branch_pairs = cluster_branch_pairs[~np.any(cluster_branch_pairs == b, axis=1)]
 
-    branch_plausibility[branch_length > 0] /= branch_length[branch_length > 0]
-    return branch_label, branch_dir, branch_plausibility, tips_label, tips_rank
+    # branch_plausibility[branch_length > 0] /= branch_length[branch_length > 0]
+    return branch_label, branch_dir, branch_plausibility, branch_lengths, tips_label, tips_rank
 
 
 def optimal_lines(branches_topology: BranchesTopo, lines: npt.NDArray[np.int_]) -> Bool1DArray:
@@ -844,7 +936,7 @@ def optimal_branch_tree(
     B = graph.branch_count
     branch_tree = np.full(B, -1, dtype=np.int_)
 
-    branch_label, branch_dir, _, tips_label, tips_rank = read_branch_topology(graph, topology)
+    branch_label, branch_dir, _, _, tips_label, tips_rank = read_branch_topology(graph, topology)
     missing = branch_label == 0
 
     B_idx = np.arange(B)

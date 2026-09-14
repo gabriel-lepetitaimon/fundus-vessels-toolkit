@@ -17,13 +17,13 @@ bool is_ancestor(const TopoLabel& ancestor, const TopoLabel& descendant, const b
 bool is_between(const TopoLabel& label, const TopoLabel& start, const TopoLabel& end, const float& rank,
                 const float& start_rank, const float& end_rank, bool strict_start = true, bool strict_end = true);
 
-std::array<torch::Tensor, 5> read_branches_topology(const std::vector<torch::Tensor>& branch_curves,
+std::array<torch::Tensor, 6> read_branches_topology(const std::vector<torch::Tensor>& branch_curves,
                                                     const IntPair& domain, const torch::Tensor& topo_idxs,
                                                     const torch::Tensor& topo_labels, const torch::Tensor& topo_ranks,
                                                     const torch::Tensor& fuzzy_skeleton, float min_rank_threshold,
-                                                    float max_rank_tolerance);
+                                                    float max_rank_tolerance, bool filter_overlap);
 
-std::tuple<TopoLabel, float, float, int, std::array<TopoLabel, 2>, std::array<float, 2>> read_branch_topology(
+std::tuple<TopoLabel, float, float, float, std::array<TopoLabel, 2>, std::array<float, 2>> read_branch_topology(
     const Tensor2DAcc<int32_t>& curve, const IntPair& domain, const Tensor2DAcc<uint32_t>& topo_idxs,
     const Tensor1DAcc<TopoLabel>& topo_labels, const Tensor1DAcc<float>& topo_ranks,
     const Tensor1DAcc<at::Half>& fuzzy_skeleton, float min_rank_threshold, float max_rank_tolerance, int b_id);

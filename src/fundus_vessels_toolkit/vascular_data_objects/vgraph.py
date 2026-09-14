@@ -409,8 +409,11 @@ class VGraphBranch:
         yx1, yx2 = geodata.node_coord(self._node_ids)
         return float(np.linalg.norm(yx1 - yx2))
 
-    def arc_length(self, geodata: VGeometricData | int = 0) -> float:
-        return len(self.curve(geodata))
+    def arc_length(self, fast=False, geodata: VGeometricData | int = 0) -> float:
+        curve = self.curve(geodata)
+        if fast:
+            return len(curve)
+        return float(np.sum(np.linalg.norm(np.diff(curve, axis=0), axis=1)))
 
     @overload
     def rasterize(

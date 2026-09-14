@@ -138,7 +138,7 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
     const std::vector<torch::Tensor>& branchCurves, const std::vector<torch::Tensor>& branchTangents,
     const torch::Tensor& branchListTensor, const torch::Tensor& nodesYX, const IntPair& shape, float maxDist,
     float nearConeAngle, float farConeAngle, float maxTanAngle, float maxHypAngle, float snapDist,
-    float minSpaceBetweenSplits);
+    float minSpaceBetweenSplits, float mergeNodeDist);
 
 /**************************************************************************************
  *              === BRANCH_FIXING.CPP ===

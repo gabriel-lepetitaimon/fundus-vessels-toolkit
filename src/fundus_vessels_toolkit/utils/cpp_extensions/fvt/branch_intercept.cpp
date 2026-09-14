@@ -205,6 +205,7 @@ std::vector<std::list<InterceptPoint>> intercept_curves(const std::vector<CurveY
     // === INTERPOLATE CURVES ===
     std::vector<CurveYX> curves;
     std::vector<std::vector<int>> curvesIndices(branchCurves.size());
+
     if (interpolateCurves) {
         curves.resize(branchCurves.size());
         for (std::size_t i = 0; i < branchCurves.size(); i++) {  // For each branch add missing points in its curve
@@ -327,6 +328,10 @@ struct ConnexionCandidate {
     int tip1 = 0;
 };
 
+ConnexionCandidate symmetric_connexion(const ConnexionCandidate& c) {
+    return ConnexionCandidate{c.b1, c.tip1, c.b0, c.tip0};
+}
+
 #pragma omp declare reduction( \
         merge : std::list<ConnexionCandidate> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
 #pragma omp declare reduction( \
@@ -437,6 +442,7 @@ std::tuple<std::list<InterceptCandidate>, float> _cone_curve_intercept(
  * @param maxTanAngle The maximum angle in degrees between the tangents of the emitting and receiving branch tips.
  * @param snapDist The distance under which the intersection snaps to the closest curve tip.
  * @param minSpaceBetweenSplits The minimum space between two splits on the same branch.
+ * @param mergeNodeDist The distance under which two not-connected nodes are considered to be the same.
  * @return
  * splits:
  *      A tuple containing the list of splits as a tuple containing the branch to split and the position of the splits;
@@ -451,7 +457,7 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
     const std::vector<torch::Tensor>& branchCurves, const std::vector<torch::Tensor>& branchTangents,
     const torch::Tensor& branchListTensor, const torch::Tensor& nodesYX, const IntPair& shape, float maxDist,
     float nearConeAngle, float farConeAngle, float maxTanAngle, float maxHypAngle, float snapDist,
-    float minSpaceBetweenSplits) {
+    float minSpaceBetweenSplits, float mergeNodeDist) {
     // === PREPROCESS INPUTS ===
     std::size_t B = branchCurves.size(), N = nodesYX.size(0);
     if (B == 0 || N == 0) return {std::vector<std::pair<int, Splits>>(), torch::empty({0, 2, 0, 2}, torch::kBool)};
@@ -566,6 +572,83 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
         }
     }
 
+    // === Utility function to split a branch ===
+    std::vector<std::pair<int, Splits>> splits;
+    auto split_branch = [&](std::size_t b, std::vector<std::size_t> splitsAt, std::vector<std::size_t> splitsNode,
+                            bool updateCurves = true) -> std::vector<std::size_t> {
+        // Create placeholder for the new branch
+        std::size_t s = splitsAt.size();
+        std::size_t B = branchList.size();
+        branchList.resize(B + s);
+        tipsPos.resize(B + s);
+        tipsTangents.resize(B + s);
+        if (updateCurves) {
+            curves.resize(B + s);
+            tangents.resize(B + s);
+            curvesInitialIndices.resize(B + s);
+        }
+        std::vector<std::size_t> branchIds(s + 1);
+        branchIds[0] = b;
+
+        // Create aliases to the branch data
+        const auto& curve = curves[b];
+        const auto& tangent = tangents[b];
+        const auto& indices = curvesInitialIndices[b];
+
+        auto& branchSplits = splits.emplace_back((int)b, Splits{}).second;
+        branchSplits.resize(splitsAt.size());
+        auto& endNode = branchList[b][1];
+
+        // Create the new nodes if not provided
+        if (splitsNode.size() == 0) {
+            // Create the new node
+            for (const auto& splitAt : splitsAt) {
+                splitsNode.push_back(nodesPoint.size());
+                nodesPoint.push_back(curve[splitAt]);  // Add the new node at the split position
+            }
+        }
+
+        // Iterate split in reverse order to prevent unecessary copy
+        std::sort(splitsAt.begin(), splitsAt.end(),
+                  [](const std::size_t& a, const std::size_t& b) { return a > b; });  // Sort decreasingly
+        for (const auto& splitAt : splitsAt) {
+            s--;  // Index of the crossing in the list of crossings for this branch
+            const auto& splitNode = splitsNode[s];
+
+            // Register the split
+            branchSplits[s] = {indices[splitAt], nodesPoint[splitNode].toIntPair()};
+
+            // Create the new branch
+            std::size_t b_new = B + s;  // Index of the new branch after the split
+            branchIds[s + 1] = b_new;
+            branchList[b_new] = {(int)splitNode, endNode};
+            endNode = splitNode;
+
+            // Update tips position and tangents
+            tipsPos[b_new] = {curve[splitAt + 1], tipsPos[b][1]};
+            tipsTangents[b_new] = {-tangent[splitAt + 1], tipsTangents[b][1]};
+            tipsPos[b][1] = curve[splitAt];
+            tipsTangents[b][1] = tangent[splitAt];
+
+            // Update curves
+            if (updateCurves) {
+                // Create the new branch
+                curves[b_new] = CurveYX(curve.begin() + splitAt, curve.end());
+                tangents[b_new] = PointList(tangent.begin() + splitAt, tangent.end());
+                auto& indices_b_new = curvesInitialIndices[b_new];
+                indices_b_new = std::vector<int>(indices.begin() + splitAt, indices.end());
+                const auto id0 = indices_b_new.front();  // Rebase the indices of the new branch to start at 0
+                for (auto& id : indices_b_new) id -= id0;
+
+                // Update the original branch
+                curves[b].resize(splitAt + 1);
+                tangents[b].resize(splitAt + 1);
+                curvesInitialIndices[b].resize(splitAt + 1);
+            }
+        }
+        return branchIds;
+    };
+
     // === SEARCH CURVES CROSSINGS ===
     struct CrossingCandidate {
         int b;                           // Branch index
@@ -647,7 +730,10 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
         crossingsByPos.clear();
 
         for (auto& [branchIDs, crossings] : equivalentCrossings) {
-            if (crossings.size() < 2) continue;
+            if (crossings.size() < 2) {
+                if (crossings.size() == 1) crossingsByPos.emplace(crossings.front().pos, crossings.front());
+                continue;
+            }
 
             std::vector<Crossing> validCrossings;
 
@@ -708,60 +794,17 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
     }
 
     // --- Split branches at crossings ---
-    std::vector<std::pair<int, Splits>> splits;
-
     if (nCrossings > 0) {
-        // Prepare placeholders for the new branches
-        curves.resize(curves.size() + nCrossings);
-        tangents.resize(tangents.size() + nCrossings);
-        curvesInitialIndices.resize(curvesInitialIndices.size() + nCrossings);
-        tipsPos.resize(tipsPos.size() + nCrossings);
-        tipsTangents.resize(tipsTangents.size() + nCrossings);
-        branchList.resize(branchList.size() + nCrossings);
-
-        for (auto& [b0, crossings] : crossingByBranch) {
-            auto& curve = curves[b0];
-            auto& tangent = tangents[b0];
-            auto& indices = curvesInitialIndices[b0];
-            auto& branchSplits = splits.emplace_back((int)b0, Splits{}).second;
-            branchSplits.resize(crossings.size());
-            auto& endNode = branchList[b0][1];
-
-            // Iterate in reverse order to prevent useless sequential copies
-            std::size_t c = crossings.size();
-            std::sort(crossings.begin(), crossings.end(),
-                      [](const CrossingSplit& a, const CrossingSplit& b) { return a.i > b.i; });  // Sort decreasingly
+        for (auto& [b, crossings] : crossingByBranch) {
+            std::vector<std::size_t> splitsAt, splitsNode;
             for (const auto& crossing : crossings) {
-                c--;                           // Index of the crossing in the list of crossings for this branch
-                const std::size_t b1 = B + c;  // Index of the new branch after the split
-                std::size_t splitAt = crossing.i;
-                // Save the split
-                branchSplits[c] = {(int)indices[splitAt], curve[splitAt].toIntPair()};
-                // Create a new branch for the part of the curve after the crossing
-                branchList[b1] = IntPair{(int)crossing.nodeID, endNode};
-                curves[b1] = CurveYX(curve.begin() + splitAt, curve.end());
-                tangents[b1] = PointList(tangent.begin() + splitAt, tangent.end());
-                curvesInitialIndices[b1] = std::vector<int>(indices.begin() + splitAt, indices.end());
-                const auto id0 = indices[splitAt];  // Rebase the indices of the new branch to start at 0
-                for (auto& id : curvesInitialIndices[b1]) id -= id0;
-                // Truncate the original branch curves
-                endNode = crossing.nodeID;
-                curve.resize(splitAt);
-                tangent.resize(splitAt);
-                indices.resize(splitAt);
-                // Create the tips positions and tangents of the new branch
-                tipsPos[b1] = {curves[b1].front(), curves[b1].back()};
-                tipsTangents[b1] = {-tangents[b1].front(), tangents[b1].back()};
+                splitsAt.push_back(crossing.i);
+                splitsNode.push_back(crossing.nodeID);
             }
-            //  Update the tips positions and tangents of the original branch
-            tipsPos[b0][1] = curve.back();
-            tipsTangents[b0][1] = tangent.back();
-            B += crossings.size();
+            split_branch(b, splitsAt, splitsNode, true);  // Split branch b at the given crossings
         }
-
-        // --- Update graph with the splits ---
-        graph = edge_list_to_adjlist(branchList, nodesPoint.size());
     }
+    B = curves.size();  // Update the number of branches after splitting
 
     // === SCAN FOR INTERCEPT POINTS ===
     std::list<InterceptCandidate> intercepts;
@@ -824,27 +867,21 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
     for (std::size_t b = 0; b < B; b++) branchIdAtTip1.push_back(b);
     for (const auto& intercept : intercepts) interceptsByBranch[intercept.b1].push_back(intercept);
 
-    std::size_t newB = B;
-    std::list<ConnexionCandidate> splitBranchConnexions, splitIncidentConnexions;
+    std::list<ConnexionCandidate> splitIncidentConnexions;
 
     for (std::size_t b1 = 0; b1 < interceptsByBranch.size(); b1++) {
         auto& intercepts = interceptsByBranch[b1];
         if (intercepts.empty()) continue;
-        const auto& b1Curve = curves[b1];
-        const auto& b1Indices = curvesInitialIndices[b1];
         if (intercepts.size() == 1) {
             const auto& intercept = intercepts.front();
             auto b0 = intercept.b0;
             auto tip0 = intercept.tip0;
+
+            auto newB = split_branch(b1, {intercept.i}, {}, false)[1];  // Split branch b1 at the intercept
+            branchIdAtTip1[b1] = newB;  // Update the branch ID at tip 1 to the new branch ID
+
             if (intercept.towardsBefore) splitIncidentConnexions.emplace_back(ConnexionCandidate{b0, tip0, b1, 1});
             if (intercept.towardsAfter) splitIncidentConnexions.emplace_back(ConnexionCandidate{b0, tip0, newB, 0});
-            splitBranchConnexions.emplace_back(ConnexionCandidate{b1, 1, newB, 0});
-
-            // Save the indice of the split in the original curve and its absolute position
-            splits.emplace_back((int)b1, Splits{{b1Indices[intercept.i], b1Curve[intercept.i].toIntPair()}});
-
-            branchIdAtTip1[b1] = newB;  // Update the branch ID at tip 1 to the new branch ID
-            newB++;
         } else {
             // TRY TO CLUSTER INTERCEPTS CANDIDATES
             // Sort the intercepts (Normally they are already sorted but just in case...)
@@ -881,14 +918,26 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
                     break;
             }
 
-            // Save splits and connexion candidates
-            splits.emplace_back((int)b1, Splits());
-            auto& b1Splits = splits.back().second;
-            b1Splits.reserve(clusters.size());
-            std::size_t bBefore = b1;
+            // Compute clusters center (the index of the split)
+            std::vector<std::size_t> splitsAt;
+            splitsAt.reserve(clusters.size());
             for (const auto& cluster : clusters) {
                 float weightedI = 0, weight = 0;
-                std::size_t bAfter = newB;
+                for (const auto& intercept : cluster.intercepts) {
+                    float w = 1.0f / (intercept.score + 1e-2f);
+                    weightedI += intercept.i * w;
+                    weight += w;
+                }
+                splitsAt.push_back((std::size_t)std::round(weightedI / weight));
+            }
+
+            // Split the branch
+            const auto& newBranches = split_branch(b1, splitsAt, {}, true);
+
+            // Register connexions candidates between the intercepting branches and the new branches
+            auto b_it = newBranches.begin();
+            for (const auto& cluster : clusters) {
+                std::size_t bBefore = *b_it, bAfter = *(++b_it);
                 for (const auto& intercept : cluster.intercepts) {
                     auto b0 = intercept.b0;
                     auto tip0 = intercept.tip0;
@@ -896,20 +945,14 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
                         splitIncidentConnexions.emplace_back(ConnexionCandidate{b0, tip0, bBefore, 1});
                     if (intercept.towardsAfter)
                         splitIncidentConnexions.emplace_back(ConnexionCandidate{b0, tip0, bAfter, 0});
-                    float w = 1.0f / (intercept.score + 1e-2f);
-                    weightedI += intercept.i * w;
-                    weight += w;
                 }
-                int avgI = (int)std::round(weightedI / weight);
-                b1Splits.emplace_back(b1Indices[avgI], b1Curve[avgI].toIntPair());
-                splitBranchConnexions.emplace_back(ConnexionCandidate{bBefore, 1, bAfter, 0});
-
-                bBefore = bAfter;
-                newB++;
             }
-            branchIdAtTip1[b1] = bBefore;  // Update the branch ID at tip 1 to the new branch ID
+            branchIdAtTip1[b1] = newBranches.back();  // Update the branch ID at tip 1 to the new branch ID
         }
     }
+
+    // Update graph with all splits (crossing & intercepts)
+    graph = edge_list_to_adjlist(branchList, nodesPoint.size());
 
     // Update the branch ID to account for the split in the tip connections candidates
     for (auto& c : connexionsCandidates) {
@@ -919,26 +962,88 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
     for (auto& c : splitIncidentConnexions) {
         if (c.tip0 == 1 && c.b0 < B) c.b0 = branchIdAtTip1[c.b0];
     }
-    connexionsCandidates.splice(connexionsCandidates.end(), splitBranchConnexions);
     connexionsCandidates.splice(connexionsCandidates.end(), splitIncidentConnexions);
 
     // === CREATE CONNEXION TENSOR ===
-    for (std::size_t node = 0; node < graph.size(); node++) {
+
+    // Create a list of all the branch tips adjacent to each node and add the connexions between them
+    for (int node = 0; node < (int)graph.size(); node++) {
         const auto& edges = graph[node];
-        std::vector<std::array<std::size_t, 2>> adjBranchTips;
-        std::size_t b0, t0;
+        std::vector<SizePair> adjBranchTips;
         for (const auto& edge : edges) {
-            if (edge.is_first(node))
-                b0 = edge.id, t0 = 0;
-            else
-                b0 = branchIdAtTip1[edge.id], t0 = 1;
-            for (const auto& [b1, t1] : adjBranchTips) {
+            std::size_t b0 = edge.id, t0 = edge.is_first(node) ? 0 : 1;
+            for (const auto& [b1, t1] : adjBranchTips)
                 connexionsCandidates.emplace_back(ConnexionCandidate{b0, (int)t0, b1, (int)t1});
-                connexionsCandidates.emplace_back(ConnexionCandidate{b1, (int)t1, b0, (int)t0});
-            }
-            adjBranchTips.push_back({b0, t0});
+            adjBranchTips.emplace_back(SizePair{b0, t0});
         }
     }
+
+    // Propagate the connexions of small "through" branches to their adjacent branches
+    std::list<ConnexionCandidate> propagatedConnexions;
+    for (const auto& connexion : connexionsCandidates) {
+        for (const auto& c : {connexion, symmetric_connexion(connexion)}) {
+            if (c.b0 >= curvesInitialIndices.size() ||
+                (curvesInitialIndices[c.b0].size() > 0 && curvesInitialIndices[c.b0].back() >= 5))
+                continue;
+
+            const std::size_t& oppositeNodeId = branchList[c.b0][1 - c.tip0];
+            for (const auto& edge : graph[oppositeNodeId]) {
+                std::size_t b = edge.id;
+                if (b == c.b0) continue;
+                int t = branchList[b][0] == oppositeNodeId ? 0 : 1;
+                propagatedConnexions.emplace_back(ConnexionCandidate{b, t, c.b1, c.tip1});
+            }
+        }
+    }
+    connexionsCandidates.splice(connexionsCandidates.end(), propagatedConnexions);
+
+    // Search for mergeable nodes and add the connexions between their adjacent branch tips
+    if (mergeNodeDist > 0) {
+        for (int n0 = 0; n0 < (int)nodesPoint.size(); n0++) {
+            for (int n1 = n0 + 1; n1 < (int)nodesPoint.size(); n1++) {
+                if (nodesPoint[n0].distance(nodesPoint[n1]) <= mergeNodeDist) {
+                    bool alreadyConnected = false;
+                    for (const auto& edge : graph[n0]) {
+                        if ((edge.start == n0 && edge.end == n1) || edge.start == n1) {
+                            alreadyConnected = true;
+                            break;
+                        }
+                    }
+                    if (alreadyConnected) continue;
+
+                    // If not connected, add the connexions between their adjacent branch tips
+                    std::vector<SizePair> n0BranchTips;
+                    for (const auto& e0 : graph[n0])
+                        n0BranchTips.emplace_back(SizePair{(std::size_t)e0.id, (std::size_t)(e0.is_first(n0) ? 0 : 1)});
+                    std::vector<SizePair> n1BranchTips;
+                    for (const auto& e1 : graph[n1])
+                        n1BranchTips.emplace_back(SizePair{(std::size_t)e1.id, (std::size_t)(e1.is_first(n1) ? 0 : 1)});
+                    for (const auto& [b0, t0] : n0BranchTips) {
+                        for (const auto& [b1, t1] : n1BranchTips) {
+                            if (tipsTangents[b0][t0].dot(tipsTangents[b1][t1]) >= minTanCos)
+                                connexionsCandidates.emplace_back(ConnexionCandidate{b0, (int)t0, b1, (int)t1});
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Ensure all connexions are symmetric
+    std::list<ConnexionCandidate> symmetricConnexions;
+    for (const auto& c : connexionsCandidates) symmetricConnexions.emplace_back(symmetric_connexion(c));
+    connexionsCandidates.splice(connexionsCandidates.end(), symmetricConnexions);
+
+    // Remove duplicate connexions
+    connexionsCandidates.sort([](const auto& a, const auto& b) {
+        if (a.b0 != b.b0) return a.b0 < b.b0;
+        if (a.tip0 != b.tip0) return a.tip0 < b.tip0;
+        if (a.b1 != b.b1) return a.b1 < b.b1;
+        return a.tip1 < b.tip1;
+    });
+    connexionsCandidates.unique([](const auto& a, const auto& b) {
+        return a.b0 == b.b0 && a.tip0 == b.tip0 && a.b1 == b.b1 && a.tip1 == b.tip1;
+    });
 
     torch::Tensor connexions = torch::zeros({(long)connexionsCandidates.size(), 4}, torch::kLong);
     auto connexions_acc = connexions.accessor<long, 2>();

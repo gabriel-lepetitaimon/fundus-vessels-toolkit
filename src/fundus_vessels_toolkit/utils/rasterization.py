@@ -4,6 +4,8 @@ import numpy as np
 import numpy.typing as npt
 import torch
 
+from fundus_toolkits.utils.typing import IntPairArray
+
 from .cpp_extensions.fvt_cpp import rasterize_branch as rasterize_branch_cpp
 from .cpp_extensions.fvt_cpp import rasterize_topology as rasterize_topology_cpp
 from .torch import autocast_torch
@@ -146,7 +148,7 @@ def rasterize_branch(
 def rasterize_line(
     p0: tuple[int, int],
     p1: tuple[int, int],
-) -> npt.NDArray[np.int64]:
+) -> IntPairArray:
     """
     Rasterizes a line between two points.
 

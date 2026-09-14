@@ -306,6 +306,15 @@ float distance(const Point& p1, const Point& p2) { return sqrt(pow(p1.y - p2.y, 
 float distance(const IntPoint& p1, const IntPoint& p2) { return sqrt(pow(p1.y - p2.y, 2) + pow(p1.x - p2.x, 2)); }
 float distanceSqr(const Point& p1, const Point& p2) { return pow(p1.y - p2.y, 2) + pow(p1.x - p2.x, 2); }
 float distanceSqr(const IntPoint& p1, const IntPoint& p2) { return pow(p1.y - p2.y, 2) + pow(p1.x - p2.x, 2); }
+float curveLength(const CurveYX& curve, std::size_t start, std::size_t end) {
+    if (end > curve.size())
+        end = curve.size();
+    else if (end == 0)
+        end = curve.size();
+    float length = 0;
+    for (std::size_t i = start + 1; i < end; i++) length += curve[i - 1].distance(curve[i]);
+    return length;
+}
 
 std::vector<std::size_t> arange(const std::size_t& start, const std::size_t& end, const std::size_t& step) {
     std::vector<std::size_t> vec;

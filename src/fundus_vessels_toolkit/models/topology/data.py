@@ -385,6 +385,7 @@ class BranchDigraphData(PygData):
         graph_version: Optional[str] = None,
         od_center: Optional[Point] = None,
         mac_center: Optional[Point] = None,
+        clear_geometric_data: bool = False,
     ) -> Self: ...
     @overload
     @classmethod
@@ -400,6 +401,7 @@ class BranchDigraphData(PygData):
         graph_version: Optional[str] = None,
         od_center: Optional[Point] = None,
         mac_center: Optional[Point] = None,
+        clear_geometric_data: bool = False,
     ) -> tuple[Self, VBranchDigraph]: ...
     @classmethod
     def from_graph(
@@ -414,16 +416,13 @@ class BranchDigraphData(PygData):
         graph_version: Optional[str] = None,
         od_center: Optional[Point] = None,
         mac_center: Optional[Point] = None,
+        clear_geometric_data: bool = False,
     ) -> Self | tuple[Self, VBranchDigraph]:
         """Alternative constructor to create a BranchDigraphData from a VGraph and a fundus image. Note that this method will not be able to fill all the fields of the data, especially those related to the ground truth probabilities and the branch curves, which are not stored in the VGraph."""  # noqa: E501
         with watch("BranchDigraphData.from_graph") as p:
             with p.sub("parse cfg"):
                 augment_opts = AugmentationCfg.parse(augment)
 
-            with p.sub("graph preprocessing"):
-                graph = graph.copy()
-                graph.clear_all_branch_attr()
-                graph.clear_all_branch_attr()
             if augment_opts.deteriorate_graph:
                 with p.sub("graph deterioration"):
                     graph = deteriorate_graph(graph, opts=augment_opts.deterioration_opts, inplace=True)
@@ -432,6 +431,7 @@ class BranchDigraphData(PygData):
                 branch_digraph = VBranchDigraph.from_graph(graph, check=False)
             if gt_topology is not None:
                 with p.sub("compute_p_from_gt"):
+                    # gt_topology = gt_topology[0].as_dense(), gt_topology[1].as_dense()
                     branch_digraph.compute_p_from_gt(*gt_topology, check=False)
 
             with p.sub("read fundus and preprocess"):
@@ -457,7 +457,8 @@ class BranchDigraphData(PygData):
                     else:
                         mac_center = Point(od_center.y, od_center.x - fundus_shape[1] // 2)
 
-                branch_digraph.graph.geometric_data().clear_attribute(all_except="CALIBRE")
+            if clear_geometric_data:
+                branch_digraph.graph.geometric_data().clear_attribute(all_except=VBranchGeoData.Fields.CALIBRES)
             if augment_opts.hsv_jitter is not None:
                 with p.sub("Color Augmentation") as p_aug:
                     with p_aug.sub("hsv jitter"):
@@ -566,6 +567,30 @@ class BranchDigraphData(PygData):
     def has_gt(cls, instance: Self) -> TypeGuard[_BranchDigraphDataWithGT]:
         """Check if the data instance has ground truth probabilities (i.e. if edge_p, branch_fp_p, branch_av_p and branch_dir_p are not None)."""  # noqa: E501
         return _BranchDigraphDataWithGT.check(instance)
+
+    def print_shape(self):
+        print(f"=== Sample: {self.name} ===")
+        print(f"Image shape: {self.img.shape}")
+        print(f"Optic disc center: {self.od_yx}")
+        print(f"Macula center: {self.mac_yx}")
+        print(f"Number of nodes: {self.vnode_count}")
+        print(f"Number of branches: {self.branch_count}")
+        print(f"Number of edges: {self.edge_index.shape[1]}")
+        print(f"Branch nodes shape: {self.branch_nodes.shape}")
+        print(f"Branch curves shape: {self.branch_curves.shape if self.branch_curves is not None else None}")
+        print(f"Branch root candidates shape: {self.branch_root_candidates.shape}")
+        print(f"Edge index shape: {self.edge_index.shape}")
+        print(f"Edge direction shape: {self.edge_dir.shape}")
+        if self.has_gt(self):
+            print("Ground truth probabilities are present.")
+            print(f"Edge probabilities shape: {self.edge_p.shape}")
+            print(f"Branch root probabilities shape: {self.branch_root_p.shape}")
+            print(f"Branch false positive probabilities shape: {self.branch_fp_p.shape}")
+            print(f"Branch artery/vein probabilities shape: {self.branch_av_p.shape}")
+            print(f"Branch direction probabilities shape: {self.branch_dir_p.shape}")
+            print(f"Branch subtree indices shape: {self.branch_subtree_idx.shape}")
+        else:
+            print("Ground truth probabilities are not present.")
 
 
 @dataclass(frozen=True)

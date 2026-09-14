@@ -152,7 +152,8 @@ class BranchDigraphSample:
         """Return a BranchDigraphData object containing the data of this sample, with the specified graph version(s)."""
         if graph_version is None:
             graph_version = next(iter(self.graphes.keys()))
-        graph = self.graphes[graph_version]
+        graph = self.graphes[graph_version].copy()
+        graph.clear_all_branch_attr()
         return BranchDigraphData.from_graph(
             graph,
             self.fundus,
@@ -163,6 +164,7 @@ class BranchDigraphSample:
             graph_version=graph_version,
             od_center=self.fundus.od_center if self.fundus.has_od_center else None,
             mac_center=self.fundus.macula_center if self.fundus.has_macula_center else None,
+            clear_geometric_data=True,
         )
 
 
@@ -320,7 +322,7 @@ class SampleInfo:
         return json_bytes
 
 
-@dataclass
+@pydantic_dataclass
 class SampleSource:
     """Data class representing the source files of a sample of a BranchDigraphDataset, and providing methods to process them into a ``SampleInfo``."""  # noqa: E501
 
@@ -345,8 +347,8 @@ class SampleSource:
     dataset: str
     """Optional name of the dataset this sample belongs to."""
 
-    _od_center: tuple[float, float] | None | EllipsisType = Field(default=..., repr=False)
-    _mac_center: tuple[float, float] | None | EllipsisType = Field(default=..., repr=False)
+    _od_center: tuple[float, float] | None | Literal["not-initialized"] = Field(default="not-initialized", repr=False)
+    _mac_center: tuple[float, float] | None | Literal["not-initialized"] = Field(default="not-initialized", repr=False)
 
     @property
     def name(self) -> str:
@@ -487,14 +489,12 @@ class SampleSource:
             self._od_center = fundus.od_center
             self._mac_center = fundus.macula_center
         else:
-            if self._od_center is ...:
+            if self._od_center == "not-initialized":
                 fundus.update(od=self.od, inplace=True)
-                assert fundus.od_center is not None
-                self._od_center = fundus.od_center if not fundus.od_center.is_nan() else None
-            if self._mac_center is ...:
+                self._od_center = fundus.od_center
+            if self._mac_center == "not-initialized":
                 fundus.update(macula=self.macula, inplace=True)
-                assert fundus.macula_center is not None
-                self._mac_center = fundus.macula_center if not fundus.macula_center.is_nan() else None
+                self._mac_center = fundus.macula_center
 
         return self
 
@@ -546,7 +546,7 @@ class SampleSource:
                     if resize_to is not None:
                         fundus, src_roi = fundus.crop_to_roi(return_roi=True, ensure_square=True)
                         r = resize_to / src_roi.w
-                        fundus = fundus.resize(r)
+                        fundus = fundus.resize(resize_to)
                     output_sample.fundus_roi = fundus.roi_specs
                     roi_mask = fundus.roi_specs.to_mask(fundus.shape)
                     fundus = fundus.update(roi_mask=roi_mask).apply_roi_mask()
@@ -1090,7 +1090,7 @@ class BranchDigraphDataset(PygDataset):
                 idx, version = idx.split("/", 1)
             idx = [s.name for s in self.samples_info].index(idx)
 
-        sample = self.get_sample(idx, discard_gt_tree=False)
+        sample = self.get_sample(idx, discard_gt_tree=False, load_av_maps=True)
         if gt_digraph is None:
             _, gt_digraph = sample.to_tensor(version, return_digraph=True)
         assert VBranchDigraph.has_all_p(gt_digraph)
@@ -1106,6 +1106,9 @@ class BranchDigraphDataset(PygDataset):
         B = len(parent_pred)
 
         # === Draw GT tree ===
+        if sample._av_maps is not None and version in sample._av_maps:
+            av_map = sample._av_maps[version]
+            m[1].add_label(av_map, "AV Seg", colormap=AV_COLORS, opacity=0.3)
         gt_tree = gt_digraph.optimize_tree(keep_missing_branch=True, assign_av="subtree")
         if show_gt_graph:
             shown_gt_tree = gt_tree
@@ -1434,10 +1437,9 @@ class BranchDigraphDataset(PygDataset):
         graphes = {}  # {"stem": {"graph_type": Path()} }
         for graph_type, dir_path in graph_dir.items():
             graph_files = dir_path.glob(f"*{GRAPH_EXT}")
-            if av_ext is None:
-                av_ext = most_common_image_ext(dir_path, raise_if_not_found=False)
-            if av_ext:
-                img_files = dir_path.glob(f"*{av_ext}")
+            av_ext_ = if_none(av_ext, most_common_image_ext(dir_path, raise_if_not_found=False))
+            if av_ext_:
+                img_files = dir_path.glob(f"*{av_ext_}")
                 graph_files = ({f.stem: f for f in img_files} | {f.stem: f for f in graph_files}).values()
             for file in graph_files:
                 graphes.setdefault(file.stem, {}).update({graph_type: file})

@@ -320,10 +320,10 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
                     // Draw the quads from the junction center to each near child
                     auto drawJunctionChildQuad = [&](int32_t childID, IntPoint p, IntPoint bound, IntPoint midBound) {
                         QuadIterator it(p, bound, midBound, junctionCenter, maxShape);
-                        if (!it.isConvex()) it = QuadIterator(p, bound, bound, junctionCenter, maxShape);
+                        if (!it.isConvex()) it = QuadIterator(p, midBound, midBound, junctionCenter, maxShape);
                         it.precomputeInvDiffNorms();
                         while (it.iter()) {
-                            const double u = it.fromP12toP34(), d = distance(p, it.point());
+                            const double u = 1 - it.fromP12toP34(), d = distance(p, it.point());
                             drawTopo(it.point(), 0.1 * u, d, childID, branch.rank + 1);
                         }
                     };

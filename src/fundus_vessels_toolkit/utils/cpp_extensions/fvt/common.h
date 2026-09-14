@@ -248,6 +248,8 @@ float distance(const IntPoint& p1, const IntPoint& p2);
 float distanceSqr(const Point& p1, const Point& p2);
 float distanceSqr(const IntPoint& p1, const IntPoint& p2);
 
+float curveLength(const CurveYX& curve, std::size_t start = 0, std::size_t end = 0);
+
 template <typename T>
 T lerp(const T& v0, const T& v1, float t) {
     return v0 * (1.0f - t) + v1 * t;

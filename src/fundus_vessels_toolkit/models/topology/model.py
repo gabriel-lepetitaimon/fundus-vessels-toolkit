@@ -22,7 +22,7 @@ from ...segment_to_graph.vbranch_digraph import VBranchDigraph
 from ...utils.nnet.experiment import ExpCfgBaseModel
 from ...utils.torch import groupby_mean, torch_interp_bilinear, unique_first
 from ...utils.tree import tree_connected_components
-from .bipolar_gcn import TransformerGCN, TransformerGCNOpt
+from .dipole_gcn import TransformerGCN, TransformerGCNOpt
 from .data import BranchDigraphBatch, BranchDigraphData, DigraphLines
 from .positionnal_embedding import APE
 
@@ -121,12 +121,12 @@ class BranchDigraphModel(torch.nn.Module):
 
     @classmethod
     def create_gnn(cls, opt: BranchDigraphModelCfg) -> TransformerGCN:
-        n_in = cls.img_feature_extractor_channels(opt) * (3 if opt.gcn.bipolar_node else 2)
+        n_in = cls.img_feature_extractor_channels(opt) * (3 if opt.gcn.dipole_node else 2)
         return TransformerGCN(n_in=n_in, edge_attr_dim=opt.edge_attr.n_edge_attr, opt=opt.gcn)
 
     @classmethod
     def create_classif_head(cls, opt: BranchDigraphModelCfg) -> nn.Module:
-        if not opt.gcn.bipolar_node:
+        if not opt.gcn.dipole_node:
             return SimpleClassifHead(opt.gcn.n_out, opt.branch_embedding_dim, oriented_affinity=opt.oriented_affinity)
         else:
             return PolarizedClassifHead(
@@ -181,7 +181,7 @@ class BranchDigraphModel(torch.nn.Module):
         if not isinstance(features_map, list):
             features_map = [features_map]
 
-        if not self.opt.gcn.bipolar_node:
+        if not self.opt.gcn.dipole_node:
             # === Simple node features: concatenate features at both tips ===
             features_tip = [], []
             for fmap in features_map:
@@ -272,7 +272,7 @@ class BranchDigraphModel(torch.nn.Module):
 
         if self.absolute_pos_encoding is not None:
             pos_encoding = self.absolute_pos_encoding.compute_pos_encoding(pos).view(N_branch, 2, -1)
-            if self.opt.gcn.bipolar_node:
+            if self.opt.gcn.dipole_node:
                 branch_features[:, 1:] = branch_features[:, 1:] + pos_encoding
             else:
                 branch_features = branch_features + pos_encoding
@@ -296,6 +296,16 @@ class BranchDigraphModel(torch.nn.Module):
 
     def __call__(self, data: BranchDigraphBatch) -> Output:
         return super().__call__(data)
+
+    def print_model_size(self, name="self"):
+        print(f"{name} N parameters: {sum(p.numel() for p in self.parameters()) / 1e6:.2f}M")
+        print(f"\tImage Features: {sum(p.numel() for p in self.img_feature_extractor.parameters()) / 1e6:.2f}M")
+        print(f"\tGraph Features: {sum(p.numel() for p in self.gnn.parameters()) / 1e6:.2f}M")
+        print(f"\t\tnIn: {self.gnn.n_in}")
+        print(f"\t\tfirst conv: {sum(p.numel() for p in self.gnn.layers['conv0'].parameters()) / 1e3:.2f}k")
+        print(f"\t\tlast conv: {sum(p.numel() for p in self.gnn.last_conv.parameters()) / 1e3:.2f}k")
+        print(f"\tClassif Head: {sum(p.numel() for p in self.classif_head.parameters()) / 1e3:.2f}k")
+        print("")
 
     @dataclass(frozen=True)
     class Output:
@@ -484,7 +494,7 @@ class BranchDigraphModel(torch.nn.Module):
             line_mask = self.lines_mask(filter_dir="gt", filter_fp="gt")
             return _max_parent(self.lines[line_mask], self.gt_lines_score[line_mask], self.n_branch)
 
-        def to_digraph(self) -> VBranchDigraph:
+        def to_digraph(self, graph: VGraph | None = None) -> VBranchDigraph:
             """
             Convert the predicted tree structure to a VBranchDigraph object.
 
@@ -506,6 +516,7 @@ class BranchDigraphModel(torch.nn.Module):
                 branch_dir_logit=self.dir_logit.float().numpy(force=True),
                 branch_fp_logit=self.fp_logit.float().numpy(force=True),
                 branch_av_logit=self.av_logit.float().numpy(force=True),
+                graph=graph,
             )
 
         @cached_property

@@ -22,18 +22,11 @@ from fundus_toolkits.utils.typing import (
     as_int_1d,
 )
 
-from fundus_vessels_toolkit.utils.profiling import watch
-
 from ..utils.cluster import cluster_by_distance
-from ..utils.lookup_array import (
-    add_empty_to_lookup,
-    complete_lookup,
-    create_removal_lookup,
-    invert_complete_lookup,
-    invert_lookup,
-)
-from ..utils.math import gaussian, sigmoid, softmax
+from ..utils.lookup_array import add_empty_to_lookup, create_removal_lookup, invert_lookup
+from ..utils.math import gaussian, same_sign, sigmoid, softmax
 from ..utils.numpy import np_first_true, np_group_by, np_groupby_mean
+from ..utils.profiling import watch
 from ..utils.tree import (
     accessible_from_root,
     find_cycles,
@@ -44,10 +37,9 @@ from ..utils.tree import (
 )
 from ..vascular_data_objects import VBranchGeoData, VGraph
 from ..vascular_data_objects.fundus_data import AVLabel
-from ..vascular_data_objects.vgraph import BranchIndicesLike
 from ..vascular_data_objects.vtree import VTree
 from .geometry_parsing import derive_tips_geometry_from_curve_geometry
-from .graph_simplification import extend_topology, extend_topology, find_facing_tips
+from .graph_simplification import extend_topology, find_facing_tips
 from .tree_topology import TreeTopology, highest_topo_plausibility
 
 
@@ -591,7 +583,9 @@ class VBranchDigraph(LineDigraph):
         """  # noqa: E501
         if (av_logit := self.branch_av_logit) is None:
             return None
-        return sigmoid(av_logit[self.b0] + av_logit[self.b1])
+        prod_logits = av_logit[self.b0] * av_logit[self.b1]
+        neg = np.where(prod_logits >= 0, 1, -1)
+        return sigmoid(neg * np.sqrt(np.abs(prod_logits)))
 
     @classmethod
     def has_fp_av_p(cls, instance: Self) -> TypeGuard[_VBranchDigraphWithAVProba]:
@@ -647,6 +641,7 @@ class VBranchDigraph(LineDigraph):
                         maxTanAngle=tan_max_angle,
                         snapDist=pos_tolerance,
                         minSpaceBetweenSplits=pos_tolerance * 2,
+                        nodeMergeDistance=pos_tolerance,
                         inplace=True,
                     )
                     derive_tips_geometry_from_curve_geometry(graph, tangent=True, inplace=True)
@@ -655,7 +650,7 @@ class VBranchDigraph(LineDigraph):
                     B = graph.branch_count
                     line_list = [
                         candidates,
-                        np.stack([candidates[:, 2], candidates[:, 3], candidates[:, 0], candidates[:, 1]], axis=-1),
+                        # np.stack([candidates[:, 2], candidates[:, 3], candidates[:, 0], candidates[:, 1]], axis=-1),
                         np.stack([np.full(B, -1), np.zeros(B), np.arange(B), np.zeros(B)], axis=-1).astype(np.int_),
                         np.stack([np.full(B, -1), np.zeros(B), np.arange(B), np.ones(B)], axis=-1).astype(np.int_),
                     ]
@@ -1048,19 +1043,45 @@ class VBranchDigraph(LineDigraph):
             )
 
         if fix_major_av_error and VBranchDigraph.has_fp_av_p(self):
-            av_local = 2 - self.branch_av_class()[~fp_branch]
+            av_local = self.branch_av_logit[~fp_branch]
             branch_rank = tree_node_rank(branch_parents)
-            cumulative_av = np.zeros_like(branch_rank)
-            for r in reversed(range(branch_rank.max() + 1)):
+
+            # Compute the cumulative av logit of each branch and its ancestors
+            av_backward = np.zeros_like(av_local)
+            for r in range(branch_rank.max() + 1):
                 rank_mask = branch_rank == r
-                cumulative_av[rank_mask] += 2 * av_local[branch_rank == r] - 1
-                np.add.at(cumulative_av, branch_parents[rank_mask], cumulative_av[rank_mask])
+                av_backward[rank_mask] += av_local[rank_mask]
+                if r > 0:
+                    av_backward[rank_mask] += av_backward[branch_parents[rank_mask]]
 
-            subtree = tree_connected_components(branch_parents)
-            av_subtree = np_groupby_mean(self.branch_av_logit[~fp_branch], subtree)[subtree]
-            cumulative_av *= np.sign(av_subtree).astype(int)
+            # Compute the cumulative av logit of each branch and its descendants, cut the graph on conflicting children
+            av_forward = np.zeros_like(av_local)
+            for r in reversed(range(1, branch_rank.max() + 1)):
+                rank_mask = branch_rank == r
+                av_forward[rank_mask] += av_local[rank_mask]
 
-            branch_parents[(cumulative_av < -5) & (cumulative_av[branch_parents] >= 0)] = -1
+                Br = np.argwhere(rank_mask).flatten()
+                Br_parent = branch_parents[rank_mask]
+                for parent, siblings in np_group_by(Br, Br_parent):
+                    av_siblings = av_forward[siblings]
+                    TOL = 2
+                    has_conflict = not same_sign(av_siblings[:, None], av_siblings[None, :], tolerance=TOL).all()
+                    valid_children = same_sign(
+                        av_backward[parent, None], av_siblings, tolerance=0 if has_conflict else TOL
+                    )
+                    if valid_children.any() and not valid_children.all():
+                        # If the parent has at least one valid child, remove the invalid ones
+                        branch_parents[siblings[~valid_children]] = -1  # Disconnect invalid children from the parent
+                        rank_mask[siblings[~valid_children]] = False  # Prevent their contribution in av_forward
+
+                # Propagate the av logit of children to their parent
+                np.add.at(av_forward, branch_parents[rank_mask], av_forward[rank_mask])
+
+            # subtree = tree_connected_components(branch_parents)
+            # av_subtree = np_groupby_mean(self.branch_av_logit[~fp_branch], subtree)[subtree]
+            # av_forward *= np.sign(av_subtree).astype(int)
+
+            # branch_parents[(av_forward < -5) & (av_forward[branch_parents] >= 0)] = -1
 
         if fix_branch_skip:
             graph = self.graph

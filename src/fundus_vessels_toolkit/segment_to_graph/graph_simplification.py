@@ -666,6 +666,7 @@ def extend_topology(
     maxTanAngle: float,
     snapDist: float,
     minSpaceBetweenSplits: float,
+    nodeMergeDistance: float,
     inplace: bool = False,
 ) -> tuple[VGraph, Int2DArray]:
     """
@@ -694,6 +695,9 @@ def extend_topology(
     minSpaceBetweenSplits: float
         The minimum distance between two splits on the same branch. Splits that are closer than this distance are clustered together.
 
+    nodeMergeDistance: float
+        The distance under which two unconnected nodes are "merged" together, meaning any of their adjacent branches are considered reconnectable.
+
     inplace: bool
         If True, the graph is modified in place. Otherwise, a copy of the graph is created and modified.
 
@@ -702,7 +706,7 @@ def extend_topology(
     graph: VGraph
         The modified graph with the new nodes and branches added.
 
-    intercepts: Int2DArray
+    branch connections: Int2DArray
         An integer array of shape (C, 4) where each row is in the form (b0, t0, b1, t1) where:
         - b0 and b1 are the indices of the branches to connect in the modified graph
         - t0 and t1 are the indices of the tips (0 for the first tip, 1 for the second tip)
@@ -736,13 +740,14 @@ def extend_topology(
         float(maxTanAngle),
         float(snapDist),
         float(minSpaceBetweenSplits),
+        float(nodeMergeDistance),
     )
 
     for b, b_splits in splits:
         split_curve_id = [_[0] for _ in b_splits]
         split_coord = [_[1] for _ in b_splits]
         graph.split_branch(b, split_curve_id, split_coord, inplace=True)
-    merge_nodes_by_distance(graph, max_distance=1, nodes_type="junction", only_connected_nodes=False, inplace=True)
+    merge_nodes_by_distance(graph, max_distance=1, nodes_type="junction", inplace=True)
 
     return graph, candidates.numpy()
 
