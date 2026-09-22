@@ -609,7 +609,7 @@ class VBranchDigraph(LineDigraph):
         graph: VGraph,
         *,
         max_distance=150,
-        max_angle=30,
+        max_angle=35,
         tan_max_angle=110,
         pos_tolerance=15,
         check: bool = True,
@@ -703,6 +703,8 @@ class VBranchDigraph(LineDigraph):
         check=True,
         smooth_p=0.0,
         smooth_std=1.2,
+        plausibility_threshold=0.05,
+        legacy=False,
     ) -> npt.NDArray[np.bool_]:
         """Compute the probabilities of each edge in the directed graph from a ground truth tree topology.
 
@@ -739,46 +741,78 @@ class VBranchDigraph(LineDigraph):
         branch_topo_a = art_topology.read_branch_topo(self.graph)
         branch_topo_v = vei_topology.read_branch_topo(self.graph)
 
-        # === Select most plausible topology between artery and vein for each branch ===
-        # with watch("Highest topology plausibility selection"):
-        branch_av = highest_topo_plausibility([branch_topo_a, branch_topo_v], mask_inplace=True)
-        b_is_art = branch_av == 0
-        b_is_vei = branch_av == 1
+        if legacy:
+            # === Select most plausible topology between artery and vein for each branch ===
+            # with watch("Highest topology plausibility selection"):
+            branch_av = highest_topo_plausibility(
+                [branch_topo_a, branch_topo_v], mask_inplace=True, plausibility_threshold=plausibility_threshold
+            )
+            b_is_art = branch_av == 0
+            b_is_vei = branch_av == 1
 
-        # === Compute optimal lines according to branch topologies ===
-        # TODO: The two next lines take 10ms on avg. Could be optimized in cpp.
-        # with watch("Optimal lines selection"):
-        art_lines = optimal_lines(branch_topo_a, self.line_list)
-        vei_lines = optimal_lines(branch_topo_v, self.line_list)
+            # === Compute optimal lines according to branch topologies ===
+            # TODO: The two next lines take 10ms on avg. Could be optimized in cpp.
+            # with watch("Optimal lines selection"):
+            art_lines = optimal_lines(branch_topo_a, self.line_list)
+            vei_lines = optimal_lines(branch_topo_v, self.line_list)
 
-        # === Post fix erroneous branch skips ===
-        # with watch("Post-fix erroneous branch skips"):
-        valid_art_shortcut = ~b_is_vei & (branch_topo_a.plausibility > branch_topo_v.plausibility)
-        valid_vei_shortcut = ~b_is_art & (branch_topo_v.plausibility > branch_topo_a.plausibility)
-        prioritize_existing_branch(self, art_lines, b_is_art, valid_art_shortcut, branch_topo_a.p_dirs)
-        prioritize_existing_branch(self, vei_lines, b_is_vei, valid_vei_shortcut, branch_topo_v.p_dirs)
+            # === Post fix erroneous branch skips ===
+            # with watch("Post-fix erroneous branch skips"):
+            valid_art_shortcut = ~b_is_vei & (branch_topo_a.plausibility > branch_topo_v.plausibility)
+            valid_vei_shortcut = ~b_is_art & (branch_topo_v.plausibility > branch_topo_a.plausibility)
+            prioritize_existing_branch(self, art_lines, b_is_art, valid_art_shortcut, branch_topo_a.p_dirs)
+            prioritize_existing_branch(self, vei_lines, b_is_vei, valid_vei_shortcut, branch_topo_v.p_dirs)
 
-        # === Compute AV and dir probabilities ===
-        # with watch("Branch probabilities"):
-        self._branch_fp_p = np.where(b_is_art | b_is_vei, 0.0, 1.0)
-        self._branch_av_p = b_is_art
-        self._branch_fp_logit = self._branch_av_logit = None
+            # === Compute AV and dir probabilities ===
+            # with watch("Branch probabilities"):
+            self._branch_fp_p = np.where(b_is_art | b_is_vei, 0.0, 1.0)
+            self._branch_av_p = b_is_art
+            self._branch_fp_logit = self._branch_av_logit = None
 
-        branch_dir_p = branch_topo_a.p_dirs * branch_topo_a.plausibility * (~b_is_vei)
-        branch_dir_p += branch_topo_v.p_dirs * branch_topo_v.plausibility * (~b_is_art)
-        self._branch_dir_logit = branch_dir_p * 6
-        self._branch_dir_p = None
+            branch_dir_p = branch_topo_a.p_dirs * branch_topo_a.plausibility * (~b_is_vei)
+            branch_dir_p += branch_topo_v.p_dirs * branch_topo_v.plausibility * (~b_is_art)
+            self._branch_dir_logit = branch_dir_p * 6
+            self._branch_dir_p = None
 
-        # === Compute lines probabilities ===
-        # with watch("Lines probabilities from branch probabilities"):
-        line_p = art_lines | vei_lines
+            # === Compute lines probabilities ===
+            # with watch("Lines probabilities from branch probabilities"):
+            line_p = art_lines | vei_lines
 
-        # Ensure missing branches only have not-null probability for root lines
-        b0, _, b1, b1_tip = self.line_list.T
-        missing_branches_lines = self.branch_fp()[b1]
-        root_lines = (b0 == -1) & (b1_tip == (branch_dir_p[b1] <= 0))
-        line_p[missing_branches_lines & ~root_lines] = False
-        line_p[missing_branches_lines & root_lines] = True
+            # Ensure missing branches only have not-null probability for root lines
+            b0, _, b1, b1_tip = self.line_list.T
+            missing_branches_lines = self.branch_fp()[b1]
+            root_lines = (b0 == -1) & (b1_tip == (branch_dir_p[b1] <= 0))
+            line_p[missing_branches_lines & ~root_lines] = False
+            line_p[missing_branches_lines & root_lines] = True
+        else:
+            import torch
+
+            from ..utils.cpp_extensions.fvt_cpp import optimal_topology as optimal_topology_cpp
+
+            outs = optimal_topology_cpp(
+                [_.to_tensor() for _ in [branch_topo_a, branch_topo_v]],
+                torch.from_numpy(self.line_list),
+                torch.from_numpy(self.graph.geometric_data().tip_coord()),
+                plausibility_threshold,
+            )
+            fp, av, dir_logit, line_p = [_.numpy(force=True) for _ in outs]
+
+            # === Post fix erroneous branch skips ===
+            # with watch("Post-fix erroneous branch skips"):
+            # This is a workaround to use the same prioritization function as in legacy mode...
+            b_is_art, b_is_vei = (~fp & av), (~fp & ~av)
+            valid_art_shortcut = ~b_is_vei & (branch_topo_a.plausibility > branch_topo_v.plausibility)
+            valid_vei_shortcut = ~b_is_art & (branch_topo_v.plausibility > branch_topo_a.plausibility)
+            art_lines, vei_lines = line_p & b_is_art[self.b1], line_p & b_is_vei[self.b1]
+            prioritize_existing_branch(self, art_lines, b_is_art, valid_art_shortcut, branch_topo_a.p_dirs)
+            prioritize_existing_branch(self, vei_lines, b_is_vei, valid_vei_shortcut, branch_topo_v.p_dirs)
+            line_p = art_lines | vei_lines
+
+            self._branch_fp_p = np.where(b_is_art | b_is_vei, 0.0, 1.0)
+            self._branch_av_p = b_is_art.astype(np.float64)
+            self._branch_fp_logit = self._branch_av_logit = None
+            self._branch_dir_logit = dir_logit.astype(np.float64)
+            self._branch_fp_logit = self._branch_av_logit = self._branch_dir_p = None
 
         # === Smooth lines probabilities ===
         if smooth_p > 0:
@@ -1132,6 +1166,7 @@ class VBranchDigraph(LineDigraph):
         branch_parents: Int1DArray,
         branch_dir: Bool1DArray,
         fp_branch: Optional[Bool1DArray] = None,
+        av_logit: Optional[Float1DArray] = None,
         *,
         keep_missing_branch: bool = False,
         assign_av: Literal["branch", "subtree", False] = False,
@@ -1205,7 +1240,7 @@ class VBranchDigraph(LineDigraph):
         tree = VTree.from_graph(vgraph, branch_parents, branch_dir, copy=False)
 
         # Assign AV label accordingly to branch AV logit if specified
-        av_logit = self.branch_av_logit
+        av_logit = self.branch_av_logit if av_logit is None else av_logit
         if assign_av is not False and av_logit is not None:
             if not keep_missing_branch:
                 av_logit = av_logit[~fp_branch]

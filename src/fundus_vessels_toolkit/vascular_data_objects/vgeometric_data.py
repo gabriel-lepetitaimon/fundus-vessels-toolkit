@@ -553,19 +553,39 @@ class VGeometricData:
             raise TypeError("Invalid type for branches index.")
 
     @overload
-    def branch_midpoint(self, ids: int, pos: float = 0.5, *, graph_index=True) -> Point | None: ...
+    def branch_midpoint(
+        self, ids: int, pos: float = 0.5, *, infer_from_nodes: Literal[True] = True, graph_index=True
+    ) -> Point: ...
     @overload
     def branch_midpoint(
-        self, ids: Optional[npt.NDArray[np.int32]] = None, pos: float = 0.5, *, graph_index=True
+        self, ids: int, pos: float = 0.5, *, infer_from_nodes: Literal[False], graph_index=True
+    ) -> Point | None: ...
+    @overload
+    def branch_midpoint(
+        self,
+        ids: Optional[npt.NDArray[np.int32]] = None,
+        pos: float = 0.5,
+        *,
+        infer_from_nodes: Literal[True] = True,
+        graph_index=True,
+    ) -> list[Point]: ...
+    @overload
+    def branch_midpoint(
+        self,
+        ids: Optional[npt.NDArray[np.int32]] = None,
+        pos: float = 0.5,
+        *,
+        infer_from_nodes: Literal[False],
+        graph_index=True,
     ) -> list[Point | None]: ...
     def branch_midpoint(
         self,
         ids: Optional[int | npt.NDArray[np.int32]] = None,
         pos: float = 0.5,
         *,
-        infer_from_nodes=True,
-        graph_index=True,
-    ) -> Point | None | list[Point | None]:
+        infer_from_nodes: bool = True,
+        graph_index: bool = True,
+    ) -> Point | None | list[Point | None] | list[Point]:
         """Return the coordinates of a point from each branch skeleton.
 
         Parameters

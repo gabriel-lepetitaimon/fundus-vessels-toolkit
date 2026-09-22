@@ -5,6 +5,7 @@
 #include "common.h"
 #include "ray_iterators.h"
 
+const float MAX_PLAUSIBILITY = 100;
 /**
  * @brief Rasterize the topology of the branches from the curves and boundaries.
  *

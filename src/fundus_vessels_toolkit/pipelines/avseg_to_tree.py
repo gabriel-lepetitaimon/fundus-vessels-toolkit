@@ -15,13 +15,14 @@ from skimage.morphology import binary_erosion, disk
 from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.geometric import Point
 from fundus_toolkits.utils.safe_import import import_cv2
-from fundus_vessels_toolkit.segment_to_graph.av_tree_parsing import assign_av_label, assign_av_label_centerline
-from fundus_vessels_toolkit.segment_to_graph.skeleton_parsing import detect_skeleton_nodes
 
+from ..segment_to_graph.av_tree_parsing import assign_av_label, assign_av_label_centerline
+from ..segment_to_graph.geometry_parsing import derive_tips_geometry_from_curve_geometry
 from ..segment_to_graph.graph_simplification import GraphSimplifyArg, ReconnectEndpointsArg
 from ..segment_to_graph.vbranch_digraph import VBranchDigraph
 from ..utils import if_none
 from ..vascular_data_objects import VGraph, VTree
+from ..vascular_data_objects.vgraph import VGraphBranch
 from .seg_to_graph import SegToGraph
 
 
@@ -402,27 +403,52 @@ class GNNAVSegToTree(AVSegToTree):
         v_graph.branch_attr["av"] = v_graph.node_attr["av"] = AVLabel.VEI
 
         # === Label graph with AV labels and split branches with varying labels ===
-        assign_av_label_centerline(a_graph, av, default_label=AVLabel.ART, split_av_branch=True, inplace=True)
         assign_av_label_centerline(
-            v_graph,
-            av,
-            default_label=AVLabel.VEI,
-            min_branch_length=1,
-            median_filter_size=9,
-            split_av_branch=True,
-            inplace=True,
+            a_graph, av, default_label=AVLabel.ART, split_av_branch=True, split_high_curvature=0.04, inplace=True
+        )
+        assign_av_label_centerline(
+            v_graph, av, default_label=AVLabel.VEI, split_av_branch=True, split_high_curvature=0.04, inplace=True
         )
 
         # Delete branch with BOTH label in the vein graph and merge graphes
+        a_branch_midpoints = a_graph.geometric_data().branch_midpoint()
+        a_branch_yx = np.array([p.numpy() for p in a_branch_midpoints])
+
+        def closest_art(yx: Point) -> VGraphBranch | None:
+            dist = np.linalg.norm(a_branch_yx - yx.numpy(), axis=1)
+            closest_id = int(np.argmin(dist))
+            return a_graph.branch(closest_id) if dist[closest_id] < max_calibre else None
+
         branch_to_delete = []
         for branch in v_graph.branches(v_graph.branch_attr["av"] == AVLabel.BOTH):
+            # Keep branch that are valid crossing (non-terminal, short and close to an similar artery)
+            if (
+                branch.arc_length(fast=True) < max_calibre * 2 and not branch.is_terminal()
+            ):  # -> Non-terminal and short vein
+                closest_art_branch = closest_art(branch.midpoint())
+                branch.attr["av"] = AVLabel.VEI
+                if (
+                    closest_art_branch is not None
+                    and closest_art_branch.arc_length(fast=True) < max_calibre * 2
+                    and not closest_art_branch.is_terminal()
+                ):
+                    # -> Close to non-terminal and short artery ...
+                    # Restore the AV labels and skip the deletion of this branch
+                    closest_art_branch.attr["av"] = AVLabel.ART
+                    continue
+            # Otherwise, mark the branch for deletion
             branch_to_delete.append(branch.id)
         v_graph.delete_branch(branch_to_delete, inplace=True)
 
         # Merge the two graphs into one and clean AV labels
-        for branch in a_graph.branches(a_graph.branch_attr["av"] != AVLabel.BOTH):
-            branch.attr["av"] = AVLabel.ART
-            a_graph.node_attr.loc[branch.node_ids, "av"] = AVLabel.ART
+        for branch in a_graph.branches():
+            if branch.attr["av"] != AVLabel.BOTH or (
+                branch.arc_length(fast=True) < max_calibre * 2 and not branch.is_terminal()
+            ):
+                # -> Non-both and remaining "both" non-terminal and short branch are relabeled artery
+                branch.attr["av"] = AVLabel.ART
+                a_graph.node_attr.loc[branch.node_ids, "av"] = AVLabel.ART
+
         v_graph.branch_attr["av"] = AVLabel.VEI
         v_graph.node_attr["av"] = AVLabel.VEI
         graph = a_graph.append(v_graph)
@@ -437,7 +463,7 @@ class GNNAVSegToTree(AVSegToTree):
         if not inplace:
             graph = graph.copy()
 
-        simplify_passing_nodes(graph, min_angle=110, with_same_branch_attr="av", inplace=True)
+        simplify_passing_nodes(graph, min_angle=125, with_same_branch_attr="av", inplace=True)
 
         return graph
 

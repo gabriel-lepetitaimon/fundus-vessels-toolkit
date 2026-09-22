@@ -334,7 +334,7 @@ class VGraphBranch:
             geodata = self.graph.geometric_data(geodata)
         return geodata.branch_curve(self._id)
 
-    def midpoint(self, geodata: VGeometricData | int = 0) -> Point | None:
+    def midpoint(self, geodata: VGeometricData | int = 0) -> Point:
         """Return the middle point of the branch.
 
         This method is a shortcut to :meth:`VGeometricData.branch_midpoint`.
@@ -453,6 +453,10 @@ class VGraphBranch:
             out = binary_dilation(out, disk(expand, dtype=bool))  # type: ignore
 
         return (out, bbox) if return_bbox else out
+
+    def is_terminal(self) -> bool:
+        """Return True if the branch is a terminal branch (i.e. connected to only one node)."""
+        return 1 in self.graph.node_degree(np.array(self.node_ids))
 
 
 BranchIndices: TypeAlias = Indices | pd.Series

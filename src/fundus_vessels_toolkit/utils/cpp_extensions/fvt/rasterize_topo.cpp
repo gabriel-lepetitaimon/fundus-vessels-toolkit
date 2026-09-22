@@ -58,6 +58,9 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
     auto branchMappingAcc = branchMapping.accessor<int64_t, 1>();
     const bool useBranchMapping = branchMapping.numel() > 0;
 
+    auto priorityMap = torch::zeros_like(fuzzySkeletonMap);
+    auto priorityMapAcc = priorityMap.accessor<float, 2>();
+
     // === Initialize the adjacency list for the topology ===
     const auto& branchListAcc = branch_list.accessor<int, 2>();
     const auto& branchParentsAcc = branch_parents.accessor<int, 1>();
@@ -226,18 +229,19 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
             const auto N = curve.size();
 
             // === DRAW THE BRANCH ===
-            auto drawTopo = [&](IntPoint pt, float u, float d, int branchID, float rank) {
-                d = 100 - d;  // Convert distance to fuzzy skeleton map value
-                if (!pt.is_inside(maxShape) || fuzzySkeletonMapAcc[pt.y][pt.x] > d) return;
+            auto drawTopo = [&](IntPoint pt, float u, float d, int branchID, float rank, float priority) {
+                d = MAX_PLAUSIBILITY - d;  // Convert distance to fuzzy skeleton map value
+                if (!pt.is_inside(maxShape) || priorityMapAcc[pt.y][pt.x] > priority) return;
                 float topoValue = rank + u;
                 if (fuzzySkeletonMapAcc[pt.y][pt.x] == d && topoMapAcc[pt.y][pt.x] >= topoValue) return;
 
                 topoMapAcc[pt.y][pt.x] = topoValue;
                 fuzzySkeletonMapAcc[pt.y][pt.x] = d;
                 branchLabelsMapAcc[pt.y][pt.x] = useBranchMapping ? branchMappingAcc[branchID + 1] : branchID + 1;
+                priorityMapAcc[pt.y][pt.x] = priority;
             };
             auto drawBranchTopo = [&](IntPoint pt, float u, float d) {
-                drawTopo(pt, 0.1 + 0.85 * u, d, branchID, branch.rank);
+                drawTopo(pt, 0.1 + 0.85 * u, d, branchID, branch.rank, d);
             };
             if (N != 0) {  // If the branch is not empty rasterize it
                 if (expand)
@@ -311,7 +315,7 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
                         it.precomputeInvDiffNorms();
                         while (it.iter()) {
                             const double u = it.fromP12toP34(), d = distance(headTip.yx, it.point());
-                            drawTopo(it.point(), 0.95 + u * 0.05, d, branchID, branch.rank);
+                            drawTopo(it.point(), 0.95 + u * 0.05, d, branchID, branch.rank, d);
                         }
                     };
                     drawJunctionHeadQuad(headTip.b[0], midB.front());
@@ -324,7 +328,7 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
                         it.precomputeInvDiffNorms();
                         while (it.iter()) {
                             const double u = 1 - it.fromP12toP34(), d = distance(p, it.point());
-                            drawTopo(it.point(), 0.1 * u, d, childID, branch.rank + 1);
+                            drawTopo(it.point(), 0.1 * u, d, childID, branch.rank + 1, d);
                         }
                     };
                     for (std::size_t i = 0; i < near_children.size(); ++i) {
@@ -339,7 +343,7 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
                 for (auto childID : far_children) {
                     const auto& childTip = tips[childID][0];
                     auto drawJunctionBezier = [&](IntPoint pt, float u, float d) {
-                        drawTopo(pt, 0.1 * u, distance(pt, childTip.yx), childID, branch.rank + 1);
+                        drawTopo(pt, 0.1 * u, d, childID, branch.rank + 1, distance(pt, childTip.yx));
                     };
                     double d = distance(headTip.yx, childTip.yx) * bezier_interpolate;
                     const Point c0 = headTip.yx + headTip.t * d;

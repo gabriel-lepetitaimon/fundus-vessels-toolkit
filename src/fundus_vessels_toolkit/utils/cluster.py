@@ -13,7 +13,9 @@ from .cpp_extensions.clusters_cpp import solve_clusters as solve_clusters_cpp
 from .torch import TensorArray, to_torch
 
 
-def reduce_clusters(clusters: Iterable[Iterable[int]], drop_singleton=True) -> List[List[int]]:
+def reduce_clusters(
+    clusters: Iterable[Iterable[int]], drop_singleton=True, forbidden_edges: Iterable[tuple[int, int]] = ()
+) -> List[List[int]]:
     """
     Reduce the number of clusters by merging clusters that share at least one element.
 
@@ -28,13 +30,17 @@ def reduce_clusters(clusters: Iterable[Iterable[int]], drop_singleton=True) -> L
         .. warning::
             If ``drop_singleton`` is False, all indices from 0 to max(clusters) will be returned, even those omitted in ``clusters``.
 
+    forbidden_edges : Iterable[tuple[int, int]], optional
+        The edges that are forbidden to merge. By default ().
+
     Returns
     -------
     List[List[int]]
         The reduced clusters.
     """  # noqa: E501
     clusters = [[int(_) for _ in c] for c in clusters]
-    return [c for c in solve_clusters_cpp(clusters, drop_singleton, -1) if len(c) > 0]
+    forbidden_edges = [(int(u), int(v)) for u, v in forbidden_edges]
+    return [c for c in solve_clusters_cpp(clusters, drop_singleton, -1, forbidden_edges) if len(c) > 0]
 
 
 def iterative_reduce_clusters(

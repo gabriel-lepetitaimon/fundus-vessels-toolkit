@@ -356,7 +356,10 @@ class ExperimentRunFactory[T: BaseModel]:
                 return None
 
         # Get the next trial with the appropriate fixed parameters
-        trial_name, trial_params = list(cfg.parameters_grid.items())[param_grid_id]
+        if len(cfg.parameters_grid):
+            trial_name, trial_params = list(cfg.parameters_grid.items())[param_grid_id]
+        else:
+            trial_name, trial_params = "", None
         trial = study.ask(fixed_parameters=trial_params)
         with TrialContext(trial):
             # Parse the model and samples run hyperparameters values according to the current trial

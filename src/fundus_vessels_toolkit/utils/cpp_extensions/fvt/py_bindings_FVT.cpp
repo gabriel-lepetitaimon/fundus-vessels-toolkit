@@ -849,6 +849,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // === tree.h ===
     m.def("read_branches_topology", &read_branches_topology, "Read the topology of branches.");
+    m.def("optimal_topology", &optimal_topology, "Compute the optimal topology of branches.");
     m.def("tree_distance", &tree_distance, "Compute the distance between nodes of a tree.");
     m.def("tree_connected_components", &tree_connected_components, "Compute the connected components of a tree.");
     m.def("tree_node_rank", &tree_node_rank, "Compute the rank of each node in a tree.");

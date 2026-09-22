@@ -11,6 +11,7 @@ __all__ = [
     "SimplifyTopology",
 ]
 
+from pathlib import Path
 import warnings
 from dataclasses import dataclass
 from typing import List, Literal, Optional, Tuple, TypeAlias, overload
@@ -76,7 +77,7 @@ def simplify_graph(
     /,
     *,
     max_spurs_length: Optional[float] = None,
-    reconnect_endpoints: Optional[bool | ReconnectEndpointsArg] = None,
+    reconnect_endpoints: Optional[bool | ReconnectEndpointsArg] = False,
     max_cycles_length: Optional[float] = None,
     junctions_merge_distance: Optional[float] = None,
     min_orphan_branches_length: Optional[float] = None,
@@ -613,8 +614,8 @@ def simplify_passing_nodes[T: VGraph](
         cos = np.sum(t[:, 1, :] * t[:, 0, :], axis=1)  # Dot product between the two tangents
         fuseable_nodes = cos <= np.cos(np.deg2rad(min_angle))
 
-        unknown_t = np.isin(incident_branches, geo_data.branch_with_unknown_curve())
-        fuseable_nodes[unknown_t.any(axis=1)] = True
+        # unknown_t = np.isin(incident_branches, geo_data.branch_with_unknown_curve())
+        # fuseable_nodes[unknown_t.any(axis=1)] = True
 
         nodes_to_fuse = nodes_to_fuse[fuseable_nodes]
         incident_branches = incident_branches[fuseable_nodes]
@@ -805,15 +806,30 @@ def extend_topology(
         float(nodeMergeDistance),
     )
 
+    graph_v0 = graph.copy()
+
     for b, b_splits in splits:
         split_curve_id = [_[0] for _ in b_splits]
         split_coord = [_[1] for _ in b_splits]
         graph.split_branch(b, split_curve_id, split_coord, inplace=True)
 
+    graph_v1 = graph.copy()
+
     merge_nodes_by_distance(graph, max_distance=0.5, relation="not-adjacent", inplace=True)
 
     if candidates.max() >= graph.branch_count:
+        i = 0
+        while Path(f"crash_graph_{i}").exists():
+            i += 1
+        graph_v0.save(f"crash_graph_{i}")
+        print(f"Graph saved to crash_graph_{i}.")
         raise RuntimeError("Some reconnection candidates are invalid.\nPlease report this issue to the developers.")
+    if clusters := cluster_nodes_by_distance(graph, max_distance=0.5):
+        i = 0
+        while Path(f"graph_invalid_{i}").exists():
+            i += 1
+        graph_v1.save(f"graph_invalid_{i}")
+        print(f"Nodes {clusters} are overlapping after topology extension. Graph was saved to graph_invalid_{i}.")
 
     return graph, candidates.numpy()
 

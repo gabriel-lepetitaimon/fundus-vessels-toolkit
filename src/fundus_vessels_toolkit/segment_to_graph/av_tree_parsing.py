@@ -354,12 +354,12 @@ def assign_av_label_centerline(
     *,
     min_branch_length: int = 5,
     median_filter_size: int | None = None,
-    split_av_branch=True,
-    split_high_curvature=0,
-    av_attr="av",
-    default_label=AVLabel.UNK,
-    inplace=False,
-):
+    split_av_branch: bool = True,
+    split_high_curvature: float = 0,
+    av_attr: str = "av",
+    default_label: AVLabel = AVLabel.UNK,
+    inplace: bool = False,
+) -> VGraph:
     if not inplace:
         graph = graph.copy()
 

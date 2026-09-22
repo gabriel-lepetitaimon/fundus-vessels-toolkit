@@ -24,6 +24,7 @@ from torch_geometric.data import Dataset as PygDataset
 
 from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.transform import ResizeTranslation
+from fundus_toolkits.utils.color import darken_hex
 from fundus_toolkits.utils.data_io import most_common_image_ext, overwrite_or_newer
 from fundus_toolkits.utils.geometric import Point, Rect
 from fundus_toolkits.utils.typing import Bool1DArray, Bool2DArray, Int1DArray, Int1DArrayLike
@@ -1117,12 +1118,14 @@ class BranchDigraphDataset(PygDataset):
             m[1].add_label(av_map, "AV Seg", colormap=AV_COLORS, opacity=0.3)
         gt_tree = gt_digraph.optimize_tree(keep_missing_branch=True, assign_av="subtree")
         if show_gt_graph:
-            shown_gt_tree = gt_tree
+            shown_gt_tree = gt_tree.copy()
             if simplify:
                 shown_gt_tree = shown_gt_tree.delete_branch(np.where(gt_digraph.branch_fp())[0])
                 disconnect_crossing(shown_gt_tree, inplace=True)
-                simplify_passing_nodes(shown_gt_tree, min_angle=90, with_same_branch_attr="av")
-            draw_tree(gt_tree, view=m[2], branch_color="av", bspline_dir=True, interactive=True)
+                simplify_passing_nodes(shown_gt_tree, min_angle=90, with_same_branch_attr="av", inplace=True)
+            else:
+                shown_gt_tree.branch_attr.loc[np.where(gt_digraph.branch_fp())[0], "av"] = AVLabel.BKG
+            draw_tree(shown_gt_tree, view=m[2], branch_color="av", bspline_dir=True, interactive=True)
 
         # === Draw Predicted tree ===
         tree = gt_digraph.compute_tree_from_arborescence(parent_pred, dir_pred, fp_pred, keep_missing_branch=True)
@@ -1167,6 +1170,9 @@ class BranchDigraphDataset(PygDataset):
         tree.branch_attr["valid_parent"] = True
         for b in tree.branches(np.arange(B)):
             if fp_pred is not None and fp_pred[b.id] or gt_av[b.id] == 0:
+                # Darken the color of branches without ground truth
+                b.attr["dir_color"] = darken_hex(b.attr["dir_color"], 0.5)
+                b.attr["color"] = darken_hex(b.attr["color"], 0.5)
                 continue
             parent = tree.branch_tree[b.id]
             while parent >= B:
@@ -1178,6 +1184,7 @@ class BranchDigraphDataset(PygDataset):
                 b.attr["valid_parent"] = False
 
         # 4. Propagate colors to added branches
+
         for b in tree.branches(np.arange(B, tree.branch_count)):
             if (next_b := next_valid_branch(b.id)) is not None:
                 next_b = tree.branch(next_b)
@@ -1280,6 +1287,7 @@ class BranchDigraphDataset(PygDataset):
         train_ratio: float = 0.8,
         val_ratio: float = 0.1,
         *,
+        ignore_dataset_type: bool = False,
         rng_seed: Optional[int] = None,
         cfg: Optional[BranchDigraphDatasetConfig] = None,
     ) -> tuple[BranchDigraphDataset, BranchDigraphDataset, BranchDigraphDataset]:
@@ -1292,16 +1300,17 @@ class BranchDigraphDataset(PygDataset):
 
         # === Affect samples with a dataset type annotation ===
         annotated_samples = np.zeros(len(self.samples_info), dtype=bool)
-        for i, sample in enumerate(self.samples_info):
-            if sample.dataset_type is not None:
-                annotated_samples[i] = True
-                match sample.dataset_type:
-                    case "train":
-                        train_indices.append(i)
-                    case "validation":
-                        val_indices.append(i)
-                    case "test":
-                        test_indices.append(i)
+        if not ignore_dataset_type:
+            for i, sample in enumerate(self.samples_info):
+                if sample.dataset_type is not None:
+                    annotated_samples[i] = True
+                    match sample.dataset_type:
+                        case "train":
+                            train_indices.append(i)
+                        case "validation":
+                            val_indices.append(i)
+                        case "test":
+                            test_indices.append(i)
 
         # === Randomly split remaining samples ===
         rs = RandomState(MT19937(SeedSequence(if_none(rng_seed, 123456))))

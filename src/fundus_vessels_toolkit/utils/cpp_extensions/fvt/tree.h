@@ -28,6 +28,10 @@ std::tuple<TopoLabel, float, float, float, std::array<TopoLabel, 2>, std::array<
     const Tensor1DAcc<TopoLabel>& topo_labels, const Tensor1DAcc<float>& topo_ranks,
     const Tensor1DAcc<at::Half>& fuzzy_skeleton, float min_rank_threshold, float max_rank_tolerance, int b_id);
 
+std::array<torch::Tensor, 4> optimal_topology(const std::vector<std::array<torch::Tensor, 6>>& branches_topology,
+                                              const torch::Tensor& linesTensor, torch::Tensor tipPos,
+                                              float plausibility_threshold);
+
 TopoLabel most_present_ancestor(const std::vector<int32_t>& curve, const Tensor1DAcc<TopoLabel>& topo_labels);
 
 /**************************************************************************************

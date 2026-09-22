@@ -29,8 +29,9 @@ std::vector<std::set<int>> edges_to_adjacency_list(std::list<std::vector<int>> e
 /*****************************************************************************
  *                    === REDUCE CLUSTERS ===
  *****************************************************************************/
-std::list<std::vector<int>> solve_clusters(std::list<std::vector<int>> edges_list, bool drop_singletons = true,
-                                           int n_nodes = -1) {
+std::list<std::vector<int>> solve_clusters(const std::list<std::vector<int>>& edges_list, bool drop_singletons = true,
+                                           int n_nodes = -1,
+                                           const std::vector<std::array<int, 2>>& forbidden_edges = {}) {
     // Find number of nodes
     if (n_nodes == -1) {
         n_nodes = 0;
@@ -50,6 +51,14 @@ std::list<std::vector<int>> solve_clusters(std::list<std::vector<int>> edges_lis
         }
     }
 
+    // Create forbidden adjacency list
+    std::vector<std::set<int>> forbidden_adj(n_nodes);
+    bool has_forbidden_edges = !forbidden_edges.empty();
+    for (const auto& [u, v] : forbidden_edges) {
+        forbidden_adj[u].insert(v);
+        forbidden_adj[v].insert(u);
+    }
+
     // DFS to find connected components
     std::vector<bool> visited(n_nodes, false);
     std::list<std::vector<int>> clusters;
@@ -60,16 +69,21 @@ std::list<std::vector<int>> solve_clusters(std::list<std::vector<int>> edges_lis
 
         std::vector<int> cluster;
         std::stack<int> stack;
+        std::set<int> forbidden_neighbors;
         stack.push(i);
+
         visited[i] = true;
 
         while (!stack.empty()) {
             int u = stack.top();
             stack.pop();
             cluster.push_back(u);
+            forbidden_neighbors.merge(forbidden_adj[u]);
 
             for (int v : adjacency_list[u]) {
                 if (!visited[v]) {
+                    if (has_forbidden_edges && forbidden_neighbors.find(v) != forbidden_neighbors.end())
+                        continue;  // Skip forbidden edges
                     stack.push(v);
                     visited[v] = true;
                 }
@@ -310,33 +324,33 @@ std::list<std::vector<int>> cluster_by_distance(torch::Tensor pos, float max_dis
         }
     } else if (inverted_edge_list) {
         // sort edge list
-        std::vector<std::pair<int, int>> edges;
-        auto const& edgeAccessor = edge_list_tensor.accessor<int, 2>();
+        std::vector<std::array<int, 2>> forbidden_edges;
+        auto const& edgeAcc = edge_list_tensor.accessor<int, 2>();
         for (int i = 0; i < E; i++) {
-            int u = edgeAccessor[i][0], v = edgeAccessor[i][1];
+            int u = edgeAcc[i][0], v = edgeAcc[i][1];
             if (u > v) std::swap(u, v);
-            edges.push_back({u, v});
+            forbidden_edges.push_back({u, v});
         }
-        std::sort(edges.begin(), edges.end());
-        auto it = edges.begin();
+        std::sort(forbidden_edges.begin(), forbidden_edges.end());
+        auto it = forbidden_edges.begin();
         for (int i = 0; i < N; i++) {
             for (int j = i + 1; j < N; j++) {
                 if (sqrDist(pos_acc[i], pos_acc[j]) <= max_dist_sqr) {
-                    const auto& edge = std::make_pair(i, j);
-                    while (it != edges.end() && *it < edge) it++;
-                    if (it == edges.end() || *it != edge) edge_list.push_back({i, j});
+                    const std::array<int, 2>& edge = {i, j};
+                    while (it != forbidden_edges.end() && *it < edge) it++;
+                    if (it == forbidden_edges.end() || *it != edge) edge_list.push_back({i, j});
                 }
             }
         }
+        return solve_clusters(edge_list, drop_singletons, N, forbidden_edges);
     } else {
-        auto const& edgeAccessor = edge_list_tensor.accessor<int, 2>();
+        auto const& edgeAcc = edge_list_tensor.accessor<int, 2>();
         for (int i = 0; i < E; i++) {
-            int u = edgeAccessor[i][0], v = edgeAccessor[i][1];
+            int u = edgeAcc[i][0], v = edgeAcc[i][1];
             if (u > v) std::swap(u, v);
             if (sqrDist(pos_acc[u], pos_acc[v]) <= max_dist_sqr) edge_list.push_back({u, v});
         }
     }
-
     return solve_clusters(edge_list, drop_singletons, N);
 }
 

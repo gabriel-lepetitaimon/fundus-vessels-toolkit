@@ -555,9 +555,9 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
                     }
                     curve.pop_back(), tangent.pop_back();  // Remove the last points
                     // Fill indices with...
-                    float half = ceil((curve.size() - indices.size()) / 2.0);
-                    indices.resize(indices.size() + half, i);  // ... i for the first half
-                    indices.resize(curve.size(), i + 1);       // ... i+1 for the second half
+                    // float half = ceil((curve.size() - indices.size()) / 2.0);
+                    // indices.resize(indices.size() + half, i);  // ... i for the first half
+                    indices.resize(curve.size(), i + 1);  // ... i+1 for the -second half- the whole segment
                 }
             }
             if (initialCurve.back() != n1) {
@@ -613,42 +613,48 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
             }
         }
 
+        struct Split {
+            std::size_t at;
+            std::size_t nodeID;
+        };
+        std::vector<Split> splits;
+        for (std::size_t i = 0; i < splitsAt.size(); i++) splits.emplace_back(Split{splitsAt[i], splitsNode[i]});
+
         // Iterate split in reverse order to prevent unecessary copy
-        std::sort(splitsAt.begin(), splitsAt.end(),
-                  [](const std::size_t& a, const std::size_t& b) { return a > b; });  // Sort decreasingly
-        for (const auto& splitAt : splitsAt) {
+        std::sort(splits.begin(), splits.end(),
+                  [](const Split& a, const Split& b) { return a.at > b.at; });  // Sort decreasingly
+        for (const auto& split : splits) {
             s--;  // Index of the crossing in the list of crossings for this branch
-            const auto& splitNode = splitsNode[s];
 
             // Register the split
-            branchSplits[s] = {indices[splitAt], nodesPoint[splitNode].toIntPair()};
+            branchSplits[s] = {indices[split.at], nodesPoint[split.nodeID].toIntPair()};
 
             // Create the new branch
             std::size_t b_new = B + s;  // Index of the new branch after the split
             branchIds[s + 1] = b_new;
-            branchList[b_new] = {(int)splitNode, endNode};
-            endNode = splitNode;
+            branchList[b_new] = {(int)split.nodeID, endNode};
+            endNode = split.nodeID;
 
             // Update tips position and tangents
-            tipsPos[b_new] = {curve[splitAt + 1], tipsPos[b][1]};
-            tipsTangents[b_new] = {-tangent[splitAt + 1], tipsTangents[b][1]};
-            tipsPos[b][1] = curve[splitAt];
-            tipsTangents[b][1] = tangent[splitAt];
+            tipsPos[b_new] = {curve[split.at + 1], tipsPos[b][1]};
+            tipsTangents[b_new] = {-tangent[split.at + 1], tipsTangents[b][1]};
+            tipsPos[b][1] = curve[split.at];
+            tipsTangents[b][1] = tangent[split.at];
 
             // Update curves
             if (updateCurves) {
                 // Create the new branch
-                curves[b_new] = CurveYX(curve.begin() + splitAt, curve.end());
-                tangents[b_new] = PointList(tangent.begin() + splitAt, tangent.end());
+                curves[b_new] = CurveYX(curve.begin() + split.at, curve.end());
+                tangents[b_new] = PointList(tangent.begin() + split.at, tangent.end());
                 auto& indices_b_new = curvesInitialIndices[b_new];
-                indices_b_new = std::vector<int>(indices.begin() + splitAt, indices.end());
+                indices_b_new = std::vector<int>(indices.begin() + split.at, indices.end());
                 const auto id0 = indices_b_new.front();  // Rebase the indices of the new branch to start at 0
                 for (auto& id : indices_b_new) id -= id0;
 
                 // Update the original branch
-                curves[b].resize(splitAt + 1);
-                tangents[b].resize(splitAt + 1);
-                curvesInitialIndices[b].resize(splitAt + 1);
+                curves[b].resize(split.at + 1);
+                tangents[b].resize(split.at + 1);
+                curvesInitialIndices[b].resize(split.at + 1);
             }
         }
         return branchIds;
@@ -781,21 +787,69 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
     struct CrossingSplit {
         std::size_t b;       // Branch index
         std::size_t i;       // Index in the curve
+        float l;             // Length along the curve
         std::size_t nodeID;  // Index of the crossing node
     };
+    struct CrossingNode {
+        std::size_t id;  // Index of the crossing node
+        IntPoint pos;    // Position of the crossing node
+    };
 
-    std::map<std::size_t, std::vector<CrossingSplit>> crossingByBranch;
+    std::map<std::size_t, std::list<CrossingSplit>> crossingByBranch;
+    std::vector<CrossingNode> crossingNodes;
+    crossingNodes.reserve(crossingsByPos.size());
     for (const auto& [pos, crossing] : crossingsByPos) {
         bool crossingKept = false;
         for (const auto& branch : crossing.branches) {
             if (std::min(branch.l, curvesL[branch.b] - branch.l) > snapDist) {
                 auto [it, inserted] = crossingByBranch.try_emplace(branch.b);
-                it->second.emplace_back(CrossingSplit{branch.b, branch.i, nodesPoint.size()});
+                it->second.emplace_back(CrossingSplit{branch.b, branch.i, branch.l, crossingNodes.size()});
                 crossingKept = true;
                 nCrossings++;
             }
         }
-        if (crossingKept) nodesPoint.push_back(pos);  // Add the crossing node to the list of nodes
+        if (crossingKept) crossingNodes.push_back(CrossingNode{crossingNodes.size(), pos});
+    }
+
+    // --- Merge crossing nodes too close to each other ---
+    struct Pair_Dist_CrossingIterator {
+        float dist;
+        std::list<CrossingSplit>::iterator it;
+    };
+    for (auto& [b, crossings] : crossingByBranch) {
+        while (crossings.size() > 1) {
+            // Find closest pair of crossings
+            auto it = crossings.begin(), nextIt = std::next(it);
+            Pair_Dist_CrossingIterator closest = {std::numeric_limits<float>::max(), crossings.end()};
+            while (nextIt != crossings.end()) {
+                float dist = std::abs(nextIt->l - it->l);
+                if (dist < closest.dist) closest = {dist, it};
+                if (dist == 0) break;
+                it++, nextIt++;
+            }
+            if (closest.dist > mergeNodeDist) break;  // If the closest pair is too far, stop merging
+            // ... otherwise merge the closest pair of crossings:
+            // -> Update first crossing of the pair
+            auto &c0 = *closest.it, &c1 = *std::next(closest.it);
+            c0.i = (c0.i + c1.i) / 2;
+            c0.l = (c0.l + c1.l) / 2;
+            // -> Update crossingNodes
+            const auto& midPos = curves[b][c0.i];
+            auto &n0 = crossingNodes[c0.nodeID], &n1 = crossingNodes[c1.nodeID];
+            n0.pos = midPos;
+            n1.pos = midPos;
+            n1.id = n0.id;  // Merge the two nodes into one
+            // -> Delete the second crossing of the pair
+            crossings.erase(std::next(closest.it));
+        }
+    }
+
+    // --- Create crossing nodes ---
+    std::map<std::size_t, std::size_t> crossingID_to_graphID;
+    for (auto& crossing : crossingNodes) {
+        auto [it, inserted] = crossingID_to_graphID.try_emplace(crossing.id, nodesPoint.size());
+        if (inserted) nodesPoint.push_back(crossing.pos);  // Add the node to the list of nodes
+        crossing.id = it->second;                          // Update the crossing node ID to its graph ID
     }
 
     // --- Split branches at crossings ---
@@ -804,7 +858,7 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
             std::vector<std::size_t> splitsAt, splitsNode;
             for (const auto& crossing : crossings) {
                 splitsAt.push_back(crossing.i);
-                splitsNode.push_back(crossing.nodeID);
+                splitsNode.push_back(crossingNodes[crossing.nodeID].id);
             }
             split_branch(b, splitsAt, splitsNode, true);  // Split branch b at the given crossings
         }

@@ -4,19 +4,21 @@ import sys
 import warnings
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, List, Literal, Optional, Self, Sequence, Tuple, overload
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Self, Sequence, Tuple, overload
 
 import numpy as np
 import numpy.typing as npt
 
-from fundus_toolkits import FundusData
+from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.geometric import Rect
-from fundus_toolkits.utils.typing import Bool1DArray, Int1DArray, IntPairArray
-from fundus_vessels_toolkit.utils.math import curve_length
+
+if TYPE_CHECKING:
+    from fundus_toolkits.utils.typing import Bool1DArray, Int1DArray, IntPairArray, Tensor
 
 from ..utils.cluster import reduce_clusters
 from ..utils.data_io import load_numpy_dict, save_numpy_dict
 from ..utils.lookup_array import invert_complete_lookup
+from ..utils.math import curve_length
 from ..utils.numpy import Sparse2DAccessor, bit_invert
 from ..utils.profiling import watch
 from ..utils.rasterization import rasterize_line, rasterize_topology
@@ -25,17 +27,44 @@ from ..vascular_data_objects.vgraph import VGraph
 from ..vascular_data_objects.vtree import VTree, VTreeBranch
 
 
-def transfer_topology(src_art: VTree, src_vei: VTree, dst: VGraph) -> tuple[VTree, VTree]:
+def transfer_topology(src: VTree | tuple[VTree, VTree], dst: VGraph) -> VTree:
+    digraph = _transfer_topology_digraph(src, dst)
+    return digraph.optimize_tree(keep_missing_branch=True, assign_av="subtree")
+
+
+def _transfer_topology_digraph(src: VTree | tuple[VTree, VTree], dst: VGraph):
     from .vbranch_digraph import VBranchDigraph
 
-    art_topo = TreeTopology.from_tree(src_art, expand_labels_by=4)
-    vei_topo = TreeTopology.from_tree(src_vei, expand_labels_by=4)
+    if isinstance(src, tuple):
+        src_art, src_vei = src
+    else:
+        art_branches, vei_branches = [], []
+        for subtree in src.branch_ids_by_subtree():
+            av = np.bincount(src.branch_attr.loc[subtree, "av"].to_numpy(), minlength=3)
+            if av[AVLabel.ART] >= av[AVLabel.VEI]:
+                art_branches.extend(subtree)
+            else:
+                vei_branches.extend(subtree)
+        src_art = src.subtree(art_branches)
+        src_vei = src.subtree(vei_branches)
+    art_topo = TreeTopology.from_tree(src_art)
+    vei_topo = TreeTopology.from_tree(src_vei)
+
     dst_digraph = VBranchDigraph.from_graph(dst)
     dst_digraph.compute_p_from_gt(art_topo, vei_topo)
-    tree = dst_digraph.optimize_tree(keep_missing_branch=True, assign_av="subtree")
-    art_tree = tree.subtree(tree.branch_attr["av"] == 1)
-    vei_tree = tree.subtree(tree.branch_attr["av"] == 2)
-    return art_tree, vei_tree
+    return dst_digraph
+
+
+class TopologyDiff:
+    def __init__(self, tree: VTree, parents: Int1DArray, dir: Bool1DArray, fp: Bool1DArray, av: Bool1DArray) -> None:
+        self.tree = tree
+        self.parents = parents
+        self.dir = dir
+        self.fp = fp
+        self.av = av
+
+    @classmethod
+    def from_trees(cls, gt_tree: VTree, pred_tree: VTree) -> Self: ...
 
 
 ########################################################################################################################
@@ -514,6 +543,37 @@ class BranchesTopo:
     def tail_ranks(self) -> npt.NDArray[np.float32]:
         return self.tips_rank[np.arange(self.branch_count), 1 - self.dirs.astype(np.int_)]
 
+    def to_tuple(
+        self,
+    ) -> tuple[
+        npt.NDArray[TopologicalLabel],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[TopologicalLabel],
+        npt.NDArray[np.float32],
+    ]:
+        return (
+            self.labels,
+            self.p_dirs,
+            self.plausibility,
+            self.lengths,
+            self.tips_label,
+            self.tips_rank,
+        )
+
+    def to_tensor(self) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+        import torch
+
+        return (
+            torch.from_numpy(self.labels),
+            torch.from_numpy(self.p_dirs),
+            torch.from_numpy(self.plausibility),
+            torch.from_numpy(self.lengths),
+            torch.from_numpy(self.tips_label),
+            torch.from_numpy(self.tips_rank),
+        )
+
 
 def highest_topo_plausibility(
     topologies: list[BranchesTopo],
@@ -568,7 +628,7 @@ def highest_topo_plausibility(
             B_idx: Int1DArray = np.arange(topo.branch_count)[mask]  # type: ignore
 
             # → Filter branches that overlap on gt to keep only the most plausible one
-            branch_first_tip = np.where(topo.dirs[mask] >= 0, 0, 1)
+            branch_first_tip = np.where(topo.dirs[mask], 0, 1)
             l0, l1 = topo.tips_label[B_idx, branch_first_tip], topo.tips_label[B_idx, 1 - branch_first_tip]
             d0, d1 = topo.tips_rank[B_idx, branch_first_tip], topo.tips_rank[B_idx, 1 - branch_first_tip]
             inters = dict(start=l0, end=l1, strict=False, start_d=d0, end_d=d1)
@@ -746,10 +806,11 @@ def read_branch_topology(
         branch_dir[branch.id] = dir
 
         # → Skip branch if not enough valid ancestor points or low directionality
+        plausibility = topology.fuzzy_skeleton_map[*curve.T].astype(np.float32).mean()
+        length = curve_length(curve)
         if known_label_ratio < 0.33 or valid_label_ratio < 0.66 or abs(dir) < 0.66:
-            plausibility = topology.fuzzy_skeleton_map[*curve.T].astype(np.float32).sum()
             branch_plausibility[branch.id] = plausibility
-            branch_lengths[branch.id] = curve_length(curve)
+            branch_lengths[branch.id] = length
             continue
 
         # → Exclude starting curve points which are part of the transition between labels
@@ -779,8 +840,8 @@ def read_branch_topology(
         branch_label[branch.id] = unique_labels[labels_count.argmax()]
 
         # → Get the plausibility of the branch based on the fuzzy_skeleton_map
-        branch_plausibility[branch.id] = topology.fuzzy_skeleton_map[*curve.T].astype(np.float32).mean()
-        branch_lengths[branch.id] = curve_length(curve)
+        branch_plausibility[branch.id] = plausibility
+        branch_lengths[branch.id] = length
 
         # → Get the tip labels and distances
         tips_label[branch.id, 0] = curve_label[0]

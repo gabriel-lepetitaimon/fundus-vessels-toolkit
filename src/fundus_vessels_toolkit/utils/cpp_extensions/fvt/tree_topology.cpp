@@ -1,3 +1,5 @@
+#include "disjoint_set.h"
+#include "rasterize_topo.h"
 #include "tree.h"
 
 std::string label2str(const TopoLabel& label, const float& r = -1.0f) {
@@ -21,6 +23,13 @@ bool is_ancestor(const TopoLabel& ancestor, const TopoLabel& descendant, const b
     auto ancestor_rank_mask = branching_bit_mask(get_rank(ancestor));
     return (ancestor & ancestor_rank_mask) == (descendant & ancestor_rank_mask);
 }
+bool is_sibling(const TopoLabel& label1, const TopoLabel& label2) {
+    if (label1 == label2) return false;
+    auto rank = get_rank(label1);
+    if (rank == 0 || rank != get_rank(label2)) return false;
+    auto rank_mask = branching_bit_mask(rank - 1);
+    return (label1 & rank_mask) == (label2 & rank_mask);
+}
 bool is_between(const TopoLabel& label, const TopoLabel& start, const TopoLabel& end, const float& rank,
                 const float& start_rank, const float& end_rank, bool strict_start, bool strict_end) {
     if (label < start || label > end) return false;
@@ -34,6 +43,28 @@ bool is_between(const TopoLabel& label, const TopoLabel& start, const TopoLabel&
     if (rank == start_rank) return strict_start ? false : true;
     if (rank == end_rank) return strict_end ? false : true;
     return start_rank < rank && rank < end_rank;
+}
+TopoLabel most_present_ancestor(const std::vector<int32_t>& curve, const Tensor1DAcc<TopoLabel>& topo_labels) {
+    std::map<TopoLabel, int> label_count;
+    for (const auto& idx : curve) label_count[topo_labels[idx]] += 1;
+
+    for (auto it = label_count.begin(); it != label_count.end(); ++it) {
+        for (auto it2 = std::next(it); it2 != label_count.end(); ++it2)
+            if (is_ancestor(it->first, it2->first, false)) it->second += it2->second;
+    }
+
+    const auto& maxIt = std::max_element(label_count.begin(), label_count.end(),
+                                         [](const auto& a, const auto& b) { return a.second < b.second; });
+
+    // If the most present ancestor is not sufficiently present, return the parent of the lowest rank ancestor
+    if (maxIt->second < curve.size() * 0.66) {
+        TopoLabel lowest_rank_ancestor = maxIt->first;
+        for (const auto& [label, count] : label_count) {
+            if (get_rank(label) < get_rank(lowest_rank_ancestor)) lowest_rank_ancestor = label;
+        }
+        return parent(lowest_rank_ancestor, true);
+    }
+    return maxIt->first;
 }
 
 std::array<torch::Tensor, 6> read_branches_topology(const std::vector<torch::Tensor>& branch_curves,
@@ -64,7 +95,7 @@ std::array<torch::Tensor, 6> read_branches_topology(const std::vector<torch::Ten
     std::vector<std::array<float, 2>> tips_rank(B);
 
     // → Read topology for each branch
-    // #pragma omp parallel for
+#pragma omp parallel for
     for (std::size_t b = 0; b < B; ++b) {
         const auto& curveTensor = branch_curves[b];
         TORCH_CHECK_VALUE(curveTensor.dim() == 2, "Each branch curve must be a 2D tensor");
@@ -188,7 +219,7 @@ std::tuple<TopoLabel, float, float, float, std::array<TopoLabel, 2>, std::array<
 
     // → Skip branch if too short or if oriented towards a normal direction to the skeleton
     if (curve.size() < 3 || abs(normalCos / nNormalCos) >= 0.6f)
-        return {0, 0.0f, mean(fuzzy_skeleton, curve), curveLength(curve), {0, 0}, {0.0f, 0.0f}};
+        return {0, 0.0f, mean(fuzzy_skeleton, curve) / MAX_PLAUSIBILITY, curveLength(curve), {0, 0}, {0.0f, 0.0f}};
 
     float known_label_ratio = static_cast<float>(curve.size()) / static_cast<float>(N);
 
@@ -199,10 +230,14 @@ std::tuple<TopoLabel, float, float, float, std::array<TopoLabel, 2>, std::array<
     for (const auto& idx : curve)
         if (is_ancestor(main_ancestor, topo_labels[idx], false)) curveTmp.push_back(idx);
     if (curveTmp.size() < 3)
-        return {0, 0.0f, mean(fuzzy_skeleton, curveTmp), curveLength(curveTmp), {0, 0}, {0.0f, 0.0f}};
+        return {0, 0.0f, mean(fuzzy_skeleton, curveTmp) / MAX_PLAUSIBILITY, curveLength(curveTmp), {0, 0}, {0, 0}};
     float valid_ancestor_ratio = static_cast<float>(curveTmp.size()) / static_cast<float>(curve.size());
     curve = curveTmp;
     curveTmp.clear();
+
+    // → Sum fuzzy skeleton value as plausibility score
+    float plausibility = mean(fuzzy_skeleton, curve) / MAX_PLAUSIBILITY;
+    float curve_length = curveLength(curve);
 
     // → Get the direction of the branch based on the topological distance map
     float direction = 0.0f;
@@ -216,7 +251,7 @@ std::tuple<TopoLabel, float, float, float, std::array<TopoLabel, 2>, std::array<
 
     // → Skip branch if not enough valid ancestor points or low directionality
     if (known_label_ratio < 0.33f || valid_ancestor_ratio < 0.66f || abs(direction) < 0.66f)
-        return {0, 0.0f, mean(fuzzy_skeleton, curve), curveLength(curve), {0, 0}, {0.0f, 0.0f}};
+        return {0, 0.0f, plausibility, curve_length, {0, 0}, {0.0f, 0.0f}};
 
     // → Exclude starting curve points which are part of the transition between labels
     float min_rank = int(std::floor(minimum(topo_ranks, curve)));
@@ -264,9 +299,6 @@ std::tuple<TopoLabel, float, float, float, std::array<TopoLabel, 2>, std::array<
         }
     }
 
-    // → Sum fuzzy skeleton value as plausibility score
-    float plausibility = mean(fuzzy_skeleton, curve);
-
     // → Get tip labels and ranks
     std::array<TopoLabel, 2> tip_labels;
     std::array<float, 2> tip_ranks;
@@ -281,19 +313,705 @@ std::tuple<TopoLabel, float, float, float, std::array<TopoLabel, 2>, std::array<
         }
     }
 
-    return {branch_label, direction, plausibility, curveLength(curve), tip_labels, tip_ranks};
+    return {branch_label, direction, plausibility, curve_length, tip_labels, tip_ranks};
 }
 
-TopoLabel most_present_ancestor(const std::vector<int32_t>& curve, const Tensor1DAcc<TopoLabel>& topo_labels) {
-    std::map<TopoLabel, int> label_count;
-    for (const auto& idx : curve) label_count[topo_labels[idx]] += 1;
+struct BranchTopo {
+    TopoLabel label;      // Topological label of the branch
+    float p_dir;          // Average direction of the branch based on the topological distance map
+    float plausibility;   // Average plausibility of the branch based on the fuzzy skeleton
+    float length;         // Length of the branch curve in pixels
+    TopoLabel tailLabel;  // Label of the first tip
+    TopoLabel headLabel;  // Label of the second tip
+    float tailRank;       // Rank of the first tip
+    float headRank;       // Rank of the second tip
+};
+const std::size_t UNKNOWN = std::numeric_limits<std::size_t>::max();
+const std::size_t ROOT = std::numeric_limits<std::size_t>::max() - 1;
+struct OptiBranchTopo {
+    float dirLogit;                // Logit direction of the branch (positive for arteries, negative for veins)
+    int bestTopo;                  // Which topology is the best for this branch, -1 if the branch is a false positive
+    std::size_t parent = UNKNOWN;  // Index of the parent branch or the incoming line
+};
+struct TopoLine {
+    std::size_t id;  // Index of the line in the lines tensor
+    std::size_t b0;  // Parent branch
+    int t0;          // Tip of the parent branch (0 or 1)
+    std::size_t b1;  // Child branch
+    int t1;          // Tip of the child branch (0 or 1)
+};
 
-    for (auto it = label_count.begin(); it != label_count.end(); ++it) {
-        for (auto it2 = std::next(it); it2 != label_count.end(); ++it2)
-            if (is_ancestor(it->first, it2->first, false)) it->second += it2->second;
+/**
+ * @brief A* exploration algorithm to find the optimal combination of node states in a sequence of nodes with fixed
+ * order and length.
+ * @param base_cost A 2D vector of shape (N, S) containing the base cost of each node state. N is the number of nodes
+ * and S is the number of possible states for each node.
+ * @param marginal_cost A function that computes the marginal cost of adding a new node state to the current sequence of
+ * node states. It takes the current sequence of node states and the new node state as input and returns the marginal
+ * cost.
+ *
+ * @return A tuple containing the optimal sequence of node states and the total cost of that sequence.
+ */
+std::tuple<std::vector<int>, float> astar_explore(std::vector<std::map<int, float>> base_cost,
+                                                  std::function<float(const std::vector<int>&, int)> marginal_cost) {
+    // Compute the remaining minimum cost for each length of the sequence to use as a heuristic for A* search
+    std::vector<float> remaining_min_cost(base_cost.size() + 1, 0.0f);
+    // Cumulative sum from the last node to the second one,
+    // the first node is skipped as will never consider the remaining_min_cost of an empty sequence
+    for (int i = (int)base_cost.size() - 1; i >= 1; --i) {
+        float min_cost = std::numeric_limits<float>::max();
+        for (const auto& entry : base_cost[i])
+            if (entry.second < min_cost) min_cost = entry.second;
+        remaining_min_cost[i] = remaining_min_cost[i + 1] + min_cost;
+    }
+    // Create a priority queue to store the nodes to explore, ordered by their total cost (base cost + marginal cost)
+    struct Node {
+        std::vector<int> states;  // Current sequence of node states
+        float cost;               // Total cost of the current sequence
+    };
+    auto cmp = [&remaining_min_cost](const Node& a, const Node& b) {
+        return a.cost + remaining_min_cost[a.states.size()] > b.cost + remaining_min_cost[b.states.size()];
+    };  // Min-heap based on total cost
+    std::priority_queue<Node, std::vector<Node>, decltype(cmp)> pq(cmp);
+
+    // Initialize the priority queue with the base costs of the first node
+    for (const auto& entry : base_cost[0]) pq.push({{entry.first}, entry.second + marginal_cost({}, entry.first)});
+
+    // Perform A* search
+    while (!pq.empty()) {
+        Node current = pq.top();
+        pq.pop();
+
+        // If we have reached the last node, return the current sequence and its cost
+        if (current.states.size() == base_cost.size()) return {current.states, current.cost};
+
+        // Explore the next node states
+        int next_node = current.states.size();
+        for (const auto& entry : base_cost[next_node]) {
+            int new_state = entry.first;
+            const float &new_state_cost = entry.second,
+                        &new_state_marginal_cost = marginal_cost(current.states, new_state);
+            if (new_state_marginal_cost != new_state_marginal_cost)
+                continue;  // If new_state_marginal_cost is NaN, skip this state
+
+            // Push the new sequence to the priority queue
+            std::vector<int> new_states = current.states;
+            new_states.push_back(new_state);
+            pq.push({new_states, current.cost + new_state_cost + new_state_marginal_cost});
+        }
     }
 
-    const auto& maxIt = std::max_element(label_count.begin(), label_count.end(),
-                                         [](const auto& a, const auto& b) { return a.second < b.second; });
-    return maxIt->first;
+    // If we exhaust the priority queue without reaching the last node, return an empty sequence and infinite cost
+    std::cerr << "Warning: A* search exhausted without finding a solution." << std::endl;
+    return {std::vector<int>{}, std::numeric_limits<float>::infinity()};
+}
+
+/**
+ * @brief Computes the optimal topology (optimal branch fp and av label, direction and optimal lines) of a set of
+ * branches given their topological information and the lines connecting them.
+ * @param branches_topology A vector of arrays containing the topological information of each branch. Each array
+ * contains the following elements:
+ * - branch_labels: A tensor of shape (B,) containing the topological labels of each branch.
+ * - branch_dir: A tensor of shape (B,) containing the average direction of each branch based on the topological
+ * distance map.
+ * - branch_plausibility: A tensor of shape (B,) containing the average plausibility of each branch based on the
+ * fuzzy skeleton.
+ * - branch_length: A tensor of shape (B,) containing the length of each branch curve in pixels.
+ * - tips_label: A tensor of shape (B, 2) containing the labels of the two tips of each branch.
+ * - tips_rank: A tensor of shape (B, 2) containing the ranks of the two tips of each branch.
+ * @param plausibility_threshold The threshold for determining the plausibility of each branch.
+ * @param tipPos The (y,x) positions of the tips of each branch as a tensor of shape (B, 2, 2).
+ * @param plausibility_threshold The threshold for determining the plausibility of each branch.
+ * @param linesTensor A tensor of shape (L, 4) containing the lines connecting the branches. Each line is
+ * represented by four integers: (b0, t0, b1, t1), where b0 and b1 are the indices of the parent and child branches,
+ * and t0 and t1 are the indices of the tips of the parent and child branches (0 or 1).
+ * @param branchListTensor A tensor of shape (B, 2) defining the connexion between branch in the graph. If provided this
+ * will be use to refine the parent assignment for very short branch with unreliable topology.
+ *
+ * @return An array of five tensors containing the optimal topology:
+ * - branch_fp: A boolean tensor of shape (B,) describing whether each branch is a false positive (fp) or not.
+ * - branch_av: A boolean tensor of shape (B,) describing whether each branch is an artery (av=1) or a vein (av=0).
+ * - branch_dir: A tensor of shape (B,) containing the logit direction of each branch (positive for arteries, negative
+ * for veins).
+ * - lines: A boolean tensor of shape (L,) describing whether each line is optimal (1) or not (0).
+ */
+std::array<torch::Tensor, 4> optimal_topology(const std::vector<std::array<torch::Tensor, 6>>& branches_topology,
+                                              const torch::Tensor& linesTensor, torch::Tensor tipPos,
+                                              float plausibility_threshold) {
+    // === UNPACK BRANCHES TOPOLOGY AND LINES ===
+    const std::size_t B = branches_topology[0][0].size(0);
+    const std::size_t T = branches_topology.size();
+    const std::size_t L = linesTensor.size(0);
+
+    std::vector<std::vector<BranchTopo>> topologies(branches_topology.size());
+    for (std::size_t t = 0; t < T; ++t) {
+        auto& topo = topologies[t];
+        const auto& [branch_labels, branch_dir, branch_plausibility, branch_length, tips_label, tips_rank] =
+            branches_topology[t];
+        TORCH_CHECK_VALUE(
+            branch_labels.dim() == 1 && branch_labels.size(0) == (long)B && branch_labels.dtype() == torch::kUInt64,
+            "branch_labels must be a 1D tensor of size B and of dtype uint64");
+        TORCH_CHECK_VALUE(
+            branch_dir.dim() == 1 && branch_dir.size(0) == (long)B && branch_dir.dtype() == torch::kFloat32,
+            "branch_dir must be a 1D tensor of size B and of dtype float32");
+        TORCH_CHECK_VALUE(branch_plausibility.dim() == 1 && branch_plausibility.size(0) == (long)B &&
+                              branch_plausibility.dtype() == torch::kFloat32,
+                          "branch_plausibility must be a 1D tensor of size B and of dtype float32");
+        TORCH_CHECK_VALUE(
+            branch_length.dim() == 1 && branch_length.size(0) == (long)B && branch_length.dtype() == torch::kFloat32,
+            "branch_length must be a 1D tensor of size B and of dtype float32");
+        TORCH_CHECK_VALUE(tips_label.dim() == 2 && tips_label.size(0) == (long)B && tips_label.size(1) == 2 &&
+                              tips_label.dtype() == torch::kUInt64,
+                          "tips_label must be a 2D tensor of size (B, 2) and of dtype uint64");
+        TORCH_CHECK_VALUE(tips_rank.dim() == 2 && tips_rank.size(0) == (long)B && tips_rank.size(1) == 2 &&
+                              tips_rank.dtype() == torch::kFloat32,
+                          "tips_rank must be a 2D tensor of size (B, 2) and of dtype float32");
+
+        auto branch_labels_acc = branch_labels.accessor<uint64_t, 1>();
+        auto branch_dir_acc = branch_dir.accessor<float, 1>();
+        auto branch_plausibility_acc = branch_plausibility.accessor<float, 1>();
+        auto branch_length_acc = branch_length.accessor<float, 1>();
+        auto tips_label_acc = tips_label.accessor<uint64_t, 2>();
+        auto tips_rank_acc = tips_rank.accessor<float, 2>();
+        for (std::size_t b = 0; b < B; ++b) {
+            topo.push_back({branch_labels_acc[b], branch_dir_acc[b], branch_plausibility_acc[b], branch_length_acc[b],
+                            tips_label_acc[b][0], tips_label_acc[b][1], tips_rank_acc[b][0], tips_rank_acc[b][1]});
+            if (branch_dir_acc[b] < 0) {
+                std::swap(topo.back().tailLabel, topo.back().headLabel);
+                std::swap(topo.back().tailRank, topo.back().headRank);
+            }
+        }
+    }
+
+    TORCH_CHECK_VALUE(linesTensor.dim() == 2 && linesTensor.size(1) == 4 && linesTensor.dtype() == torch::kInt64,
+                      "linesTensor must be a 2D tensor of size (L, 4) and of dtype int64");
+    std::vector<TopoLine> lines;
+    std::vector<std::array<std::size_t, 2>> root_line_ids(B, {UNKNOWN, UNKNOWN});
+    lines.reserve(linesTensor.size(0));
+    auto lines_acc = linesTensor.accessor<long, 2>();
+    for (std::size_t l = 0; l < L; ++l) {
+        if (lines_acc[l][0] >= 0)
+            lines.push_back(TopoLine{l, lines_acc[l][0], (int)lines_acc[l][1], lines_acc[l][2], (int)lines_acc[l][3]});
+        else
+            root_line_ids[lines_acc[l][2]][lines_acc[l][3]] = l;
+    }
+
+    TORCH_CHECK_VALUE(tipPos.dim() == 3 && tipPos.size(0) == (long)B && tipPos.size(1) == 2 && tipPos.size(2) == 2 &&
+                          tipPos.dtype() == torch::kFloat64,
+                      "tipPos must be a 3D tensor of size (B, 2, 2) and of dtype float64");
+    std::vector<std::array<Point, 2>> tip_positions(B);
+    auto tipPos_acc = tipPos.accessor<double, 3>();
+    for (std::size_t b = 0; b < B; ++b)
+        tip_positions[b] = {Point(tipPos_acc[b][0][0], tipPos_acc[b][0][1]),
+                            Point(tipPos_acc[b][1][0], tipPos_acc[b][1][1])};
+
+    // === IDENTIFY OVERLAPPING BRANCHES ===
+    auto is_overlapping = [&](std::size_t b0, std::size_t b1, std::size_t t) -> bool {
+        const auto& topo = topologies[t];
+        const auto &b0TailRank = topo[b0].tailRank, &b0HeadRank = topo[b0].headRank;
+        const auto &b1TailRank = topo[b1].tailRank, &b1HeadRank = topo[b1].headRank;
+        const auto &b0TailLabel = topo[b0].tailLabel, &b0HeadLabel = topo[b0].headLabel;
+        const auto &b1TailLabel = topo[b1].tailLabel, &b1HeadLabel = topo[b1].headLabel;
+        return is_between(b0TailLabel, b1TailLabel, b1HeadLabel,  // is b0 tail in b1
+                          b0TailRank, b1TailRank, b1HeadRank, false, true) ||
+               is_between(b0HeadLabel, b1TailLabel, b1HeadLabel,  // is b0 head in b1
+                          b0HeadRank, b1TailRank, b1HeadRank, true, false) ||
+               is_between(b1TailLabel, b0TailLabel, b0HeadLabel,  // is b1 tail in b0
+                          b1TailRank, b0TailRank, b0HeadRank, false, true) ||
+               is_between(b1HeadLabel, b0TailLabel, b0HeadLabel,  // is b1 head in b0
+                          b1HeadRank, b0TailRank, b0HeadRank, true, false);
+    };
+
+    ConstantDisjointSet branch_disjoint_sets(B);
+    for (std::size_t t = 0; t < T; ++t) {
+        const auto& topo = topologies[t];
+        for (std::size_t b0 = 0; b0 < B; ++b0) {
+            const auto& b0Topo = topo[b0];
+            if (b0Topo.label == 0) continue;
+            for (std::size_t b1 = b0 + 1; b1 < B; ++b1) {
+                const auto& b1Topo = topo[b1];
+                if (b1Topo.label == 0) continue;
+
+                // Check if the branches overlap
+                if (is_overlapping(b0, b1, t)) branch_disjoint_sets.merge(b0, b1);
+            }
+        }
+    }
+    std::list<std::vector<int>> overlaps;
+    std::vector<bool> overlapping_branches(B, false);
+    for (const auto& [_, set] : branch_disjoint_sets.get_sets()) {
+        if (set.size() > 1) {
+            overlaps.push_back(set);
+            for (const auto& b : set) overlapping_branches[b] = true;
+        }
+    }
+
+    // === PROCESS NON-OVERLAPPING BRANCHES ===
+    std::vector<OptiBranchTopo> optiTopo(B);
+    auto setOptiTopo = [&](std::size_t b, int t) {
+        optiTopo[b].bestTopo = t;
+        if (t != -1) {
+            const auto& bestTopo = topologies[t][b];
+            optiTopo[b].dirLogit = bestTopo.p_dir * bestTopo.plausibility * bestTopo.length;
+        }
+    };
+    struct TopoScore {
+        std::size_t id;
+        float plausibility;
+    };
+    std::vector<TopoScore> topoScores(T);
+    for (std::size_t b = 0; b < B; ++b) {
+        if (overlapping_branches[b]) continue;
+        for (std::size_t t = 0; t < T; ++t) {
+            const auto& topo = topologies[t][b];
+            topoScores[t] = {t, topo.label != 0 ? topo.plausibility * topo.length : 0};
+        }
+
+        // Sort descending by plausibility
+        std::sort(topoScores.begin(), topoScores.end(),
+                  [](const TopoScore& a, const TopoScore& b) { return a.plausibility > b.plausibility; });
+        if (topoScores[0].plausibility - topoScores[1].plausibility < plausibility_threshold) {
+            // If the difference in plausibility between the best and second-best is low -> False Positive
+            optiTopo[b].bestTopo = -1;
+            optiTopo[b].dirLogit = 0;
+            for (std::size_t t = 0; t < T; ++t) {
+                const auto& topo = topologies[t][b];
+                optiTopo[b].dirLogit += topo.p_dir * topo.plausibility * topo.length;
+            }
+        } else
+            // Otherwise assign the best topology and direction
+            setOptiTopo(b, topoScores[0].id);
+    }
+
+    // Filter lines to keep only those that connect branches with the same best topology and correct tip directions
+    std::vector<TopoLine> validLines;
+    std::vector<TopoLine> allOverlapLines;
+    for (const auto& line : lines) {
+        if (overlapping_branches[line.b0] || overlapping_branches[line.b1]) {
+            allOverlapLines.push_back(line);
+        } else {
+            if (optiTopo[line.b0].bestTopo != optiTopo[line.b1].bestTopo) continue;  // Different best topologies
+            if (line.t0 != (optiTopo[line.b0].dirLogit > 0 ? 1 : 0)) continue;       // Check parent head tip
+            if (line.t1 != (optiTopo[line.b1].dirLogit > 0 ? 0 : 1)) continue;       // Check child tail tip
+            validLines.push_back(line);
+        }
+    }
+    lines = std::move(validLines);
+
+    // === OPTIMIZE OVERLAPPING BRANCHES ===
+    for (auto& overlap : overlaps) {
+        // --- Split the branches that overlap into homo and hetero directional branches ---
+        // those that have the same direction across all topologies and those that have different directions. This is
+        // because branch with the same direction can be ordered by their head rank and processed sequentially (A*
+        // exploration), while every combination of branches with different directions must be explored.
+        struct HomoDirBranch {
+            std::size_t id;
+            Point head, tail;  // Positions of the two tips of the branch
+            int head_tip;      // Index of the tip that is the head (0 or 1)
+        };
+        std::vector<HomoDirBranch> homoDirBranches;
+        std::vector<std::size_t> heteroDirBranches;
+        for (const auto& b : overlap) {
+            bool same_direction = true;
+            for (std::size_t t = 1; t < T; ++t) {
+                if (topologies[t][b].p_dir * topologies[0][b].p_dir < 0) {
+                    heteroDirBranches.push_back(b);
+                    same_direction = false;
+                    break;
+                }
+            }
+            if (same_direction) {
+                HomoDirBranch& homoBranch = homoDirBranches.emplace_back(HomoDirBranch{(std::size_t)b});
+                float dir = 0;
+                for (std::size_t t = 0; t < T; ++t) {
+                    if (topologies[t][b].plausibility > plausibility_threshold) dir += topologies[t][b].p_dir;
+                }
+                homoBranch.head_tip = dir >= 0 ? 1 : 0;
+                homoBranch.head = tip_positions[b][homoBranch.head_tip];
+                homoBranch.tail = tip_positions[b][1 - homoBranch.head_tip];
+            }
+        }
+
+        // --- Order the homoDirBranches by ascending head rank ---
+        std::sort(homoDirBranches.begin(), homoDirBranches.end(),
+                  [&topologies](const HomoDirBranch& b0, const HomoDirBranch& b1) {
+                      // Compare the head ranks of the two branches in a common topology
+                      for (std::size_t t = 0; t < topologies.size(); ++t)
+                          if (topologies[t][b0.id].label != 0 && topologies[t][b1.id].label != 0)
+                              return topologies[0][b0.id].headRank < topologies[0][b1.id].headRank;
+                      return false;  // If no common topology, keep the original order
+                  });
+
+        // --- Generate combinations of branches with heterogeneous directions ---
+        struct Combination {
+            std::vector<int> heteroTopoIDs;  // Index of the topology for each branch in heteroDirBranches
+            std::vector<float> heteroDir;    // Logit direction of each branch in heteroDirBranches
+            std::vector<Point> heteroTails;  // Positions of the tails of each branch in heteroDirBranches
+            std::vector<int> homoTopoIDs;    // Index of the topology for each branch in homoDirBranches
+            float plausibility = 0.0f;
+            std::vector<std::list<std::size_t>> branchByTopo;
+        };
+        std::vector<Combination> heteroDirBranchCombinations(1);
+        heteroDirBranchCombinations[0].branchByTopo.resize(T);
+        // Reserve space for all combinations to use reference to comb while adding new combinations
+        heteroDirBranchCombinations.reserve(pow(T + 1, heteroDirBranches.size()));
+        for (const auto& b : heteroDirBranches) {
+            for (auto& comb : heteroDirBranchCombinations) {
+                // Append combination with the current branch plausible topologies
+                for (std::size_t t = 0; t < T; ++t) {
+                    if (topologies[t][b].plausibility > plausibility_threshold) {
+                        Combination& newComb = heteroDirBranchCombinations.emplace_back(comb);
+                        // Check for conflicts with previous branches in the combination
+                        bool conflicting = false;
+                        for (const auto& existingB : comb.branchByTopo[t]) {
+                            if (topologies[t][b].headRank < topologies[t][existingB].tailRank)
+                                // If the current branch's head is before the existing branch's tail ...
+                                break;  // ... all subsequent existing branches will be after -> skip them
+
+                            if (is_overlapping(b, existingB, t)) {
+                                conflicting = true;
+                                break;
+                            }
+                        }
+
+                        if (!conflicting) {
+                            newComb.heteroTopoIDs.push_back(t);
+                            newComb.heteroDir.push_back(topologies[t][b].p_dir);
+                            newComb.heteroTails.push_back(tip_positions[b][topologies[t][b].p_dir >= 0 ? 0 : 1]);
+                            newComb.plausibility += topologies[t][b].plausibility;
+                            // Insert the branch in the appropriate branchByTopo, maintaining tailRank order
+                            const auto& topo = topologies[t];
+                            auto it = newComb.branchByTopo[t].begin();
+                            while (it != newComb.branchByTopo[t].end() && topo[*it].tailRank < topo[b].tailRank) ++it;
+                            newComb.branchByTopo[t].insert(it, b);
+                        } else
+                            heteroDirBranchCombinations.pop_back();  // Remove the conflicting combination
+                    }
+                }
+                // Update the current combination to include this branch as False Positive
+                comb.heteroTopoIDs.push_back(-1);
+                comb.heteroDir.push_back(0.0f);
+                comb.heteroTails.push_back(Point(0.0, 0.0));
+            }
+        }
+
+        // Select lines connecting the overlapping branches
+        std::vector<bool> homoDirMask(B, false);
+        std::vector<bool> heteroDirMask(B, false);
+        for (const auto& b : homoDirBranches) homoDirMask[b.id] = true;
+        for (const auto& b : heteroDirBranches) heteroDirMask[b] = true;
+        std::vector<TopoLine> overlapLines;
+        for (const auto& line : allOverlapLines) {
+            if (homoDirMask[line.b0]) {
+                auto b0 = std::find_if(homoDirBranches.begin(), homoDirBranches.end(),
+                                       [&line](const HomoDirBranch& b) { return b.id == line.b0; });
+                if (b0 == homoDirBranches.end() || line.t0 != b0->head_tip) continue;  // Check direction
+            } else if (!heteroDirMask[line.b0])
+                continue;
+            if (homoDirMask[line.b1]) {
+                auto b1 = std::find_if(homoDirBranches.begin(), homoDirBranches.end(),
+                                       [&line](const HomoDirBranch& b) { return b.id == line.b1; });
+                if (b1 == homoDirBranches.end() || line.t1 != 1 - b1->head_tip) continue;  // Check direction
+            } else if (!heteroDirMask[line.b1])
+                continue;
+            overlapLines.push_back(line);
+        }
+
+        const auto &HOMO = homoDirBranches.size(), HETERO = heteroDirBranches.size();
+        auto to_homo_hetero_index = [&](std::size_t b) -> std::pair<bool, std::size_t> {
+            auto it = std::find_if(homoDirBranches.begin(), homoDirBranches.end(),
+                                   [&b](const HomoDirBranch& hb) { return hb.id == b; });
+            if (it != homoDirBranches.end()) return {true, it - homoDirBranches.begin()};
+            auto it2 = std::find(heteroDirBranches.begin(), heteroDirBranches.end(), b);
+            if (it2 != heteroDirBranches.end()) return {false, it2 - heteroDirBranches.begin()};
+            return {false, std::numeric_limits<std::size_t>::max()};  // Not found
+        };
+        std::vector<std::pair<std::vector<bool>, std::vector<bool>>> homoParents;
+        std::vector<std::pair<std::vector<bool>, std::vector<bool>>> heteroParents;
+        if (L == 0) {
+            homoParents.resize(HOMO, {std::vector<bool>(HOMO, true), std::vector<bool>(HETERO, true)});
+            heteroParents.resize(HETERO, {std::vector<bool>(HOMO, true), std::vector<bool>(HETERO, true)});
+        }
+
+        // --- For each combination, find the best topology for the homoDirBranches using A* exploration ---
+        for (auto& comb : heteroDirBranchCombinations) {
+            // Prepare connectivity matrices for the homoDirBranches and heteroDirBranches
+            if (L > 0) {
+                homoParents.resize(HOMO, {std::vector<bool>(HOMO, false), std::vector<bool>(HETERO, false)});
+                heteroParents.resize(HETERO, {std::vector<bool>(HOMO, false), std::vector<bool>(HETERO, false)});
+
+                for (const auto& line : overlapLines) {
+                    auto [b0_is_homo, b0_idx] = to_homo_hetero_index(line.b0);
+                    auto [b1_is_homo, b1_idx] = to_homo_hetero_index(line.b1);
+                    if (!b0_is_homo && comb.heteroDir[b0_idx] != 0 && line.t0 != (comb.heteroDir[b0_idx] > 0 ? 1 : 0))
+                        continue;  // If b0 is a heteroDirBranch, Check direction according to the combination
+                    if (!b1_is_homo && comb.heteroDir[b1_idx] != 0 && line.t1 != (comb.heteroDir[b1_idx] > 0 ? 0 : 1))
+                        continue;  // If b1 is a heteroDirBranch, Check direction according to the combination
+                    auto& parents = b1_is_homo ? homoParents[b1_idx] : heteroParents[b1_idx];
+                    (b0_is_homo ? parents.first : parents.second)[b0_idx] = true;
+                }
+            }
+            // Sort the heteroDirBranches by asending head rank within each topology
+            for (auto& topoBranches : comb.branchByTopo) {
+                topoBranches.sort([&topologies](std::size_t b0, std::size_t b1) {
+                    for (std::size_t t = 0; t < topologies.size(); ++t)
+                        if (topologies[t][b0].label != 0 && topologies[t][b1].label != 0)
+                            return topologies[0][b0].headRank < topologies[0][b1].headRank;
+                    return false;  // If no common topology, keep the original order
+                });
+            }
+            // List minimum rank tail tips by topology
+            // std::vector<std::pair<Point, float>> minTailByTopo;
+            // for (std::size_t t = 0; t < T; ++t) {
+            //     auto& minTail = minTailByTopo.emplace_back(Point(0.0, 0.0), std::numeric_limits<float>::max());
+
+            //     for (const auto& b : homoDirBranches) {
+            //         if (topologies[t][b.id].plausibility > plausibility_threshold &&
+            //             topologies[t][b.id].tailRank < minTail.second)
+            //             minTail = {tip_positions[b.id][1 - b.head_tip], topologies[t][b.id].tailRank};
+            //     }
+
+            //     for (std::size_t heteroDirB = 0; heteroDirB < comb.heteroTopoIDs.size(); ++heteroDirB) {
+            //         const auto& b = heteroDirBranches[heteroDirB];
+            //         if (comb.heteroTopoIDs[heteroDirB] == (int)t && topologies[t][b].tailRank < minTail.second)
+            //             minTail = {tip_positions[b][topologies[t][b].p_dir >= 0 ? 0 : 1], topologies[t][b].tailRank};
+            //     }
+            // }
+
+            // Prepare function to compute minimal distance the current branch tail and the heads of assigned branches
+            auto distance_to_optimal_parent = [&](const std::vector<int>& assignedTopo, std::size_t b, bool b_is_homo,
+                                                  int b_topo) -> float {
+                if (b_topo == -1) return 0.0f;  // No distance for False Positive
+                std::size_t b_id = b_is_homo ? homoDirBranches[b].id : heteroDirBranches[b];
+                const auto& topo = topologies[b_topo][b_id];
+                const auto& bTailRank = topo.tailRank;
+                const auto& bTail = b_is_homo ? homoDirBranches[b].tail
+                                              : tip_positions[b_id][topologies[b_topo][b_id].p_dir >= 0 ? 0 : 1];
+                const auto& reachableParents = b_is_homo ? homoParents[b] : heteroParents[b];
+                float parentHeadRank = std::numeric_limits<float>::max(),
+                      min_distance = std::numeric_limits<float>::max();
+
+                // Find the nearest head tip of the same topology amongst the branches already assigned
+                for (int i = (int)assignedTopo.size() - 1; i > 0; i--) {  // Iterate backwards
+                    const auto& homoB = homoDirBranches[i];
+                    const auto& assignedBTopo = topologies[b_topo][homoB.id];
+                    if (assignedBTopo.headRank < bTailRank && (L == 0 || reachableParents.first[i]) &&
+                        is_ancestor(assignedBTopo.headLabel, topo.tailLabel, false)) {
+                        parentHeadRank = assignedBTopo.headRank;
+                        min_distance = distance(homoB.head, bTail);
+                        break;  // Found the higher head tip, no need to check further
+                    }
+                }
+
+                // Check for more optimal parent in the heteroDirBranches of the same topology
+                const auto& combHeteroBranches = comb.branchByTopo[b_topo];
+                // Iterate backwards
+                int i = (int)combHeteroBranches.size() - 1;
+                for (auto it = combHeteroBranches.rbegin(); it != combHeteroBranches.rend(); ++it, i--) {
+                    const auto& heteroB = *it;
+                    if (heteroB == b && !b_is_homo) continue;  // Skip the current branch
+                    const auto& heteroBTopo = topologies[b_topo][heteroB];
+                    if (heteroBTopo.headRank < bTailRank && (L == 0 || reachableParents.second[i]) &&
+                        is_ancestor(heteroBTopo.headLabel, topo.tailLabel, false)) {
+                        if (parentHeadRank < heteroBTopo.headRank) {  // If higher head tip found ...
+                            int headTipId = heteroBTopo.p_dir >= 0 ? 1 : 0;
+                            return distance(tip_positions[heteroB][headTipId], bTail);  // use this distance instead
+                        }
+                        break;  // Found the higher head tip, no need to check further
+                    }
+                }
+
+                // If a parent was found return the distance to it
+                if (min_distance != std::numeric_limits<float>::max()) return min_distance;
+
+                // If no parent found, return the distance to the lowest tail tip of the same topology
+                // const auto& minTail = minTailByTopo[b_topo];
+                // if (minTail.second != std::numeric_limits<float>::max())
+                //     return distance(minTail.first, bTail);
+                // else
+                return 0.0f;  // No parent found, no distance to compute
+            };
+
+            auto hetero_branch_cost = [&](const std::vector<int>& finalTopo) {
+                float cost = 0.0f;
+                for (std::size_t heteroI = 0; heteroI < HETERO; ++heteroI)
+                    cost += distance_to_optimal_parent(finalTopo, heteroI, false, comb.heteroTopoIDs[heteroI]);
+                return cost;
+            };
+
+            if (homoDirBranches.empty()) {
+                // If there are no homoDirBranches, we can directly compute the cost of the heteroDirBranches...
+                comb.plausibility -= hetero_branch_cost({});
+                continue;  // ... and skip the A* exploration for this combination
+            }
+
+            // Define the marginal cost function for the A* exploration
+            auto marginal_cost = [&](const std::vector<int>& assignedTopo, int b_topo) -> float {
+                if (b_topo == -1) return 0.0f;  // No marginal cost for False Positive
+                std::size_t homoI = assignedTopo.size(), b = homoDirBranches[homoI].id;
+                const auto& topo = topologies[b_topo];
+                // Check if the branch conflicts with any previously assigned branch in the same topology
+                for (int i = (int)assignedTopo.size() - 1; i >= 0; i--) {
+                    if (topo[homoDirBranches[i].id].headRank < topo[b].tailRank)
+                        break;  // No need to check further, as branches are sorted by head rank
+                    if (assignedTopo[i] == b_topo && is_overlapping(b, homoDirBranches[i].id, b_topo))
+                        return std::numeric_limits<float>::infinity();
+                }
+                const auto& combHeteroBranches = comb.branchByTopo[b_topo];
+                for (auto heteroB = combHeteroBranches.rbegin(); heteroB != combHeteroBranches.rend(); ++heteroB) {
+                    if (topo[*heteroB].headRank < topo[b].tailRank) break;  // No need to check further
+                    if (is_overlapping(b, *heteroB, b_topo)) return std::numeric_limits<float>::infinity();
+                }
+
+                // Amongst the branch already assigned, find the nearest head tip of the same topo
+                auto cost = distance_to_optimal_parent(assignedTopo, homoI, true, b_topo);  // Weight the distance cost
+
+                if (homoI == homoDirBranches.size() - 1) {
+                    // If this is the last branch, also add the cost of the heteroDirBranches
+                    auto finalTopo = assignedTopo;
+                    finalTopo.push_back(b_topo);            // Add the current branch to the final topology assignment
+                    cost += hetero_branch_cost(finalTopo);  // Weight the distance cost of the heteroDirBranches
+                }
+                return cost;
+            };
+
+            // Prepare the base cost for the A* exploration
+            std::vector<std::map<int, float>> base_cost(HOMO);
+            for (std::size_t i = 0; i < homoDirBranches.size(); ++i) {
+                const auto& b = homoDirBranches[i];
+                for (std::size_t t = 0; t < T; ++t) {
+                    if (topologies[t][b.id].plausibility > plausibility_threshold)
+                        base_cost[i][t] = -topologies[t][b.id].plausibility * topologies[t][b.id].length;
+                }
+                base_cost[i][-1] = 0.0f;  // False Positive option
+            }
+
+            // Perform A* exploration to find the optimal topology assignment for the homoDirBranches
+            auto [optimalTopoAssignment, totalCost] = astar_explore(base_cost, marginal_cost);
+            comb.homoTopoIDs = optimalTopoAssignment;
+            comb.plausibility -= totalCost;  // Subtract the distance cost from the total plausibility
+        }
+
+        // --- Save the best combination ---
+        auto bestComb = std::max_element(
+            heteroDirBranchCombinations.begin(), heteroDirBranchCombinations.end(),
+            [](const Combination& a, const Combination& b) { return a.plausibility < b.plausibility; });
+        for (std::size_t i = 0; i < bestComb->heteroTopoIDs.size(); ++i)
+            setOptiTopo(heteroDirBranches[i], bestComb->heteroTopoIDs[i]);
+        for (std::size_t i = 0; i < bestComb->homoTopoIDs.size(); ++i)
+            setOptiTopo(homoDirBranches[i].id, bestComb->homoTopoIDs[i]);
+    }
+    // === ASSIGN Line or Branch best parent ===
+    struct Parent {
+        std::size_t id = ROOT;  // Index of the parent branch or the incoming line
+        float headRank = 0;     // Rank of the parent tip
+    };
+    std::vector<std::vector<std::size_t>> branch_by_bestTopo(T);
+    for (std::size_t b = 0; b < B; ++b)
+        if (optiTopo[b].bestTopo >= 0) branch_by_bestTopo[optiTopo[b].bestTopo].push_back(b);
+
+    // Complete lines list with valid overlapping lines
+    for (const auto& line : allOverlapLines) {
+        if (optiTopo[line.b0].bestTopo != optiTopo[line.b1].bestTopo) continue;  // Different best topologies
+        if (line.t0 != (optiTopo[line.b0].dirLogit > 0 ? 1 : 0)) continue;       // Check parent head tip
+        if (line.t1 != (optiTopo[line.b1].dirLogit > 0 ? 0 : 1)) continue;       // Check child tail tip
+        lines.push_back(line);
+    }
+
+    // For each topology, find the best parent for each branch
+    for (std::size_t t = 0; t < T; ++t) {
+        const auto& branches = branch_by_bestTopo[t];
+
+        std::vector<TopoLine> topoLines;
+        for (const auto& line : lines)  // Select lines connecting branches in the current topology
+            if (optiTopo[line.b0].bestTopo == (int)t) topoLines.push_back(line);
+
+        for (const auto& b1 : branches) {
+            const auto& b1Topo = topologies[t][b1];
+            auto b1Subtree = get_subtree(b1Topo.label);
+            Parent bestParent, bestSibling;
+
+            std::vector<std::size_t> admissibleB0;
+            std::vector<std::size_t> lineIds;
+            if (L > 0) {
+                for (const auto& line : topoLines) {
+                    if (line.b1 == b1) {
+                        admissibleB0.push_back(line.b0);
+                        lineIds.push_back(line.id);
+                    }
+                }
+            } else
+                admissibleB0 = branches;  // If no lines, all branches are admissible parents
+            for (std::size_t b = 0; b < admissibleB0.size(); ++b) {
+                const auto& b0 = admissibleB0[b];
+                if (b0 == b1) continue;
+                const auto& b0Topo = topologies[t][b0];
+
+                // Optimal parent must be ...
+                if (b1Subtree != get_subtree(b0Topo.label)) continue;  //... in the same subtree,
+                if (is_ancestor(b0Topo.headLabel, b1Topo.tailLabel, false) && b0Topo.headRank < b1Topo.tailRank) {
+                    // ... the closest ancestor
+                    if (b0Topo.headRank > bestParent.headRank) bestParent = {L > 0 ? lineIds[b] : b0, b0Topo.headRank};
+                } else if (is_sibling(b0Topo.headLabel, b1Topo.tailLabel)) {  // ... or the nearest sibling
+                    if (std::abs(b0Topo.headRank - b1Topo.tailRank) < std::abs(bestSibling.headRank - b1Topo.tailRank))
+                        bestSibling = {L > 0 ? lineIds[b] : b0, b0Topo.headRank};
+                }
+            }
+
+            if (bestParent.id < ROOT)
+                optiTopo[b1].parent = bestParent.id;
+            else if (bestSibling.id < ROOT)
+                optiTopo[b1].parent = bestSibling.id;
+            else
+                optiTopo[b1].parent = ROOT;  // No parent found, assign to ROOT
+        }
+    }
+
+    // === PREPARE OUTPUTS ===
+    torch::Tensor branch_fp = torch::zeros({static_cast<long>(B)}, torch::dtype(torch::kBool));
+    torch::Tensor branch_av = torch::zeros({static_cast<long>(B)}, torch::dtype(torch::kBool));
+    torch::Tensor branch_dir = torch::zeros({static_cast<long>(B)}, torch::dtype(torch::kFloat32));
+    auto fp_acc = branch_fp.accessor<bool, 1>();
+    auto av_acc = branch_av.accessor<bool, 1>();
+    auto dir_acc = branch_dir.accessor<float, 1>();
+    for (std::size_t b = 0; b < B; ++b) {
+        if (optiTopo[b].bestTopo == -1)
+            fp_acc[b] = true;
+        else {
+            av_acc[b] = optiTopo[b].bestTopo == 0 ? true : false;
+            dir_acc[b] = optiTopo[b].dirLogit;
+        }
+    }
+
+    torch::Tensor connectivity;
+    if (L > 0) {
+        connectivity = torch::zeros({static_cast<long>(L)}, torch::dtype(torch::kBool));
+        auto opti_lines = connectivity.accessor<bool, 1>();
+        for (std::size_t b = 0; b < B; ++b) {
+            const auto& bOptiTopo = optiTopo[b];
+            if (bOptiTopo.parent < L)
+                opti_lines[bOptiTopo.parent] = true;
+            else if (bOptiTopo.parent == ROOT) {
+                std::size_t root_line_id = root_line_ids[b][bOptiTopo.dirLogit > 0 ? 0 : 1];
+                if (root_line_id != UNKNOWN)
+                    opti_lines[root_line_id] = true;
+                else
+                    std::cerr << "Warning: Branch " << b
+                              << " has no valid root line for its direction. Skipping connectivity assignment."
+                              << std::endl;
+            }
+        }
+    } else {
+        connectivity = torch::empty({static_cast<long>(B)}, torch::dtype(torch::kInt));
+        auto opti_parent = connectivity.accessor<int, 1>();
+        for (std::size_t b = 0; b < B; ++b) {
+            const auto& bOptiTopo = optiTopo[b];
+            if (bOptiTopo.parent < B)
+                opti_parent[b] = bOptiTopo.parent;
+            else
+                opti_parent[b] = -1;  // No parent
+        }
+    }
+
+    return {branch_fp, branch_av, branch_dir, connectivity};
 }
