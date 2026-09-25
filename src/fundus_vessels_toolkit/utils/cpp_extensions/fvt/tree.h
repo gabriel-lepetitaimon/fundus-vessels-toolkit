@@ -11,7 +11,7 @@ using TopoLabel = uint64_t;
 inline uint8_t get_rank(const TopoLabel& label) { return static_cast<uint8_t>(label); }
 inline int32_t get_subtree(const TopoLabel& label) { return static_cast<int32_t>(label >> 52); }
 
-TopoLabel parent(const TopoLabel& label);
+TopoLabel parent(const TopoLabel& label, bool self_if_no_parent = true);
 uint64_t branching_bit_mask(const uint8_t& rank);
 bool is_ancestor(const TopoLabel& ancestor, const TopoLabel& descendant, const bool& strict = false);
 bool is_between(const TopoLabel& label, const TopoLabel& start, const TopoLabel& end, const float& rank,
@@ -28,7 +28,7 @@ std::tuple<TopoLabel, float, float, float, std::array<TopoLabel, 2>, std::array<
     const Tensor1DAcc<TopoLabel>& topo_labels, const Tensor1DAcc<float>& topo_ranks,
     const Tensor1DAcc<at::Half>& fuzzy_skeleton, float min_rank_threshold, float max_rank_tolerance, int b_id);
 
-std::array<torch::Tensor, 4> optimal_topology(const std::vector<std::array<torch::Tensor, 6>>& branches_topology,
+std::array<torch::Tensor, 3> optimal_topology(const std::vector<std::array<torch::Tensor, 6>>& branches_topology,
                                               const torch::Tensor& linesTensor, torch::Tensor tipPos,
                                               float plausibility_threshold);
 

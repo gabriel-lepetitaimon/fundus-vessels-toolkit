@@ -589,9 +589,7 @@ def resolve_digraph_to_vtree(
             branch_tree[b_to] = b_from
         else:
             if (through_node := info.get("through", -1)) != -1:
-                _, [b_id0, b_id1] = vgraph.add_branch(
-                    [[n1, through_node], [through_node, n2]], return_branch_id=True, inplace=True
-                )
+                [b_id0, b_id1] = vgraph.add_branch([[n1, through_node], [through_node, n2]])
                 branch_tree[b_id0] = b_from
                 branch_tree[b_id1] = b_id0
                 branch_dirs[b_id0] = True
@@ -601,7 +599,7 @@ def resolve_digraph_to_vtree(
                 branch_tree[b_to] = b_id1
                 vgraph.branch_attr.loc[[b_id0, b_id1], av_attr] = vgraph.branch_attr.loc[b_from, av_attr]
             else:
-                vgraph, b_id = vgraph.add_branch([[n1, n2]], return_branch_id=True, inplace=True)
+                b_id = vgraph.add_branch([[n1, n2]])
                 b_id = b_id[0]
                 branch_tree[b_id] = b_from
                 branch_dirs[b_id] = True

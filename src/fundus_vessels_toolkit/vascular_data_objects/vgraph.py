@@ -2605,17 +2605,7 @@ class VGraph:
 
         return graph
 
-    @overload
-    def add_branch(
-        self, branch_nodes: IntPairArrayLike, *, return_branch_id: Literal[False] = False, inplace=False
-    ) -> Self: ...
-    @overload
-    def add_branch(
-        self, branch_nodes: IntPairArrayLike, *, return_branch_id: Literal[True], inplace=False
-    ) -> tuple[Self, npt.NDArray[np.int32]]: ...
-    def add_branch(
-        self, branch_nodes: IntPairArrayLike, *, return_branch_id=False, inplace=False
-    ) -> Self | tuple[Self, npt.NDArray[np.int32]]:
+    def add_branch(self, branch_nodes: IntPairArrayLike) -> Int1DArray:
         """Add branch(es) to the graph.
 
         Parameters
@@ -2623,18 +2613,9 @@ class VGraph:
         branch_nodes : IntPairArrayLike
             A 2D array of shape (N, 2) containing the indices of the nodes connected by the new branches.
 
-        return_branch_id : bool, optional
-            If True, return the indices of the added branches.
-
-        inplace : bool, optional
-            If True (by default), the graph is modified in place. Otherwise, a new graph is returned.
         Returns
         -------
-        VGraph
-            The modified graph.
-
-        new_branch_ids : np.ndarray
-            The indices of the added branches. Only returned if ``return_branch_id`` is True.
+            The indices of the added branches.
 
         Examples
         --------
@@ -2644,37 +2625,29 @@ class VGraph:
 
         Add a new branch connecting nodes 1 and 3
 
-        >>> g1 = graph.add_branch([1, 3])
+        >>> g1.add_branch([1, 3])
+        array([3])
         >>> g1.branch_list.tolist()
         [[0, 1], [1, 2], [2, 3], [1, 3]]
 
         Add two new branches connecting nodes 0 and 2, and 0 and 3:
 
-        >>> g2, new_branch_id = graph.add_branch([[0, 2], [0, 3]], return_branch_id=True)
-        >>> new_branch_id
-        array([4, 5])
-
-        >>> g2.branch_list[new_branch_id]
+        >>> new_branch_id = graph.add_branch([[0, 2], [0, 3]])
+        >>> graph.branch_list[new_branch_id]
         array([[0, 2], [0, 3]])
         """
-        graph = self if inplace else self.copy()
-
-        branch_nodes = np.atleast_2d(branch_nodes).astype(int)
+        branch_nodes = as_int_pairs(branch_nodes)
         assert branch_nodes.shape[1] == 2, "branch_nodes must be a 2D array of shape (N, 2)."
-        assert np.all(np.logical_and(branch_nodes >= 0, branch_nodes < graph.node_count)), "Invalid node indices."
+        assert np.all(np.logical_and(branch_nodes >= 0, branch_nodes < self.node_count)), "Invalid node indices."
 
-        graph._branch_list = np.concatenate((graph._branch_list, branch_nodes), axis=0)
-        if graph._branch_attr is not None:
-            graph._branch_attr = graph._branch_attr.reindex(pd.RangeIndex(len(graph._branch_list)), copy=False)
+        self._branch_list = np.concatenate((self._branch_list, branch_nodes), axis=0)
+        if self._branch_attr is not None:
+            self._branch_attr = self._branch_attr.reindex(pd.RangeIndex(len(self._branch_list)), copy=False)
 
-        for gdata in graph._geometric_data:
+        for gdata in self._geometric_data:
             gdata._append_empty_branches(len(branch_nodes))
 
-        return (
-            graph
-            if not return_branch_id
-            else (graph, np.arange(graph.branch_count - len(branch_nodes), graph.branch_count))
-        )
+        return np.arange(self.branch_count - len(branch_nodes), self.branch_count)
 
     @overload
     def duplicate_branch(
@@ -2973,7 +2946,7 @@ class VGraph:
             node_pairs = np.stack([node_pairs % N, node_pairs // N], axis=1)
 
         # === Insert new branches between the nodes ===
-        graph.add_branch(node_pairs, inplace=True)
+        graph.add_branch(node_pairs)
 
         # === Fuse the nodes together if needed ===
         if fuse_nodes:
@@ -2987,7 +2960,7 @@ class VGraph:
         return graph
 
     # --- Nodes edition ---
-    def add_nodes(self, coord: FloatPairArrayLike, inplace=False) -> npt.NDArray[np.int32]:
+    def add_nodes(self, coord: FloatPairArrayLike) -> npt.NDArray[np.int32]:
         """Add a new node to the graph.
 
         Parameters
@@ -3009,16 +2982,15 @@ class VGraph:
         assert coord_.ndim == 2 and coord_.shape[1] == 2, "coord_ must be a 2D array of shape (N, 2)."
         N = coord_.shape[0]
 
-        graph = self.copy() if not inplace else self
-        new_nodes = np.arange(graph._node_count, graph._node_count + N)
+        new_nodes = np.arange(self._node_count, self._node_count + N)
 
         # Increment node attributes dataframe
-        graph._node_count += N
-        if graph._node_attr is not None:
-            graph._node_attr = graph._node_attr.reindex(pd.RangeIndex(graph._node_count), copy=False)
+        self._node_count += N
+        if self._node_attr is not None:
+            self._node_attr = self._node_attr.reindex(pd.RangeIndex(self._node_count), copy=False)
 
         # Update geometric data
-        for gdata in graph._geometric_data:
+        for gdata in self._geometric_data:
             gdata._append_nodes(coord_)
 
         return new_nodes
@@ -3076,7 +3048,7 @@ class VGraph:
         # Create new nodes
         n_new_nodes = len(branch_connectivity)
         yx = graph.geometric_data().node_coord(node_id)
-        new_node_ids = graph.add_nodes(np.repeat(yx[None, :], n_new_nodes - 1, axis=0), inplace=True)
+        new_node_ids = graph.add_nodes(np.repeat(yx[None, :], n_new_nodes - 1, axis=0))
 
         # Reassign branches to new nodes
         for cluster_id, branch_cluster in enumerate(branch_clusters[1:]):

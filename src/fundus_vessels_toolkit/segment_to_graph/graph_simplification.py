@@ -1426,9 +1426,9 @@ def reconnect_endpoints(
         new_edges[:, 1] = lookup[new_edges[:, 1]]
 
     if len(new_edges):
-        graph.add_branch(new_edges, inplace=True)
+        graph.add_branch(new_edges)
     if len(new_endpoints_edges):
-        graph.add_branch(new_endpoints_edges, inplace=True)
+        graph.add_branch(new_endpoints_edges)
 
     return graph
 

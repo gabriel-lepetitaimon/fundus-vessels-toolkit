@@ -167,7 +167,9 @@ def rasterize_line(
     """
     from .cpp_extensions.fvt_cpp import discretize_line as discretize_line_cpp
 
-    return discretize_line_cpp((p0[0], p0[1]), (p1[0], p1[1])).numpy(force=True)
+    return discretize_line_cpp((int(round(p0[0])), int(round(p0[1]))), (int(round(p1[0])), int(round(p1[1])))).numpy(
+        force=True
+    )
 
 
 @autocast_torch

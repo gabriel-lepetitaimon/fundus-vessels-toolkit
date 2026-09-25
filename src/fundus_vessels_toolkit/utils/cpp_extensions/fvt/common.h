@@ -112,6 +112,7 @@ struct IntPoint {
     double norm() const;
     int cross(const IntPoint& p) const;
     int dot(const IntPoint& p) const;
+    double dot(const Point& p) const;
     double cosSim(const IntPoint& p) const;
     double distance(const IntPoint& p) const;
 

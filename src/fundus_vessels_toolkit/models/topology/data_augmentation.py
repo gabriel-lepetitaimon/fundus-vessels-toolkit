@@ -392,10 +392,10 @@ def deteriorate_graph[T: VGraph](
 
         # Update start and end of the branch curve
         if b_start != 0:
-            new_node_id = graph.add_nodes(b_curve[b_start], inplace=True)
+            new_node_id = graph.add_nodes(b_curve[b_start])
             graph.branch_list[b.id][0] = new_node_id[0]
         if b_end != b_length:
-            new_node_id = graph.add_nodes(b_curve[b_end - 1], inplace=True)
+            new_node_id = graph.add_nodes(b_curve[b_end - 1])
             graph.branch_list[b.id][1] = new_node_id[0]
         if b_start != 0 or b_end != b_length:
             geo.resample_branch_curve(b.id, np.arange(b_start, b_end, dtype=np.int_))

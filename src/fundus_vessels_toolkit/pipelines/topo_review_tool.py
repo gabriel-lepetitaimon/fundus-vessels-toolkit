@@ -378,10 +378,14 @@ class ReviewTool:
     def draw_trees(self, which: Literal["artery", "vein", "both"] = "both"):
         if which in ("artery", "both"):
             draw_tree(self.trees[0], view=self.mosaic[0, 1], artery=True, bspline_dir=True)
-            draw_tree(self.trees[0], name="art", view=self.mosaic[1, 0], artery=True, interactive=True)
+            draw_tree(
+                self.trees[0], name="art", view=self.mosaic[1, 0], artery=True, interactive=True, bspline_dir=True
+            )
         if which in ("vein", "both"):
             draw_tree(self.trees[1], view=self.mosaic[1, 1], artery=False, bspline_dir=True)
-            draw_tree(self.trees[1], name="vein", view=self.mosaic[1, 0], artery=False, interactive=True)
+            draw_tree(
+                self.trees[1], name="vein", view=self.mosaic[1, 0], artery=False, interactive=True, bspline_dir=True
+            )
 
         for i, tree in enumerate(self.trees):
             if (which == "vein" and i == 0) or (which == "artery" and i == 1):
@@ -604,7 +608,7 @@ class ReviewTool:
         if nodes[0] == nodes[1]:
             return "invalid"
 
-        tree.add_branch(nodes, inplace=True)
+        tree.add_branch(nodes)
 
         self.infer_roots(tree, ctx, inplace=True, simplify_nodes=nodes)
         self.state.selected_branch.reset()

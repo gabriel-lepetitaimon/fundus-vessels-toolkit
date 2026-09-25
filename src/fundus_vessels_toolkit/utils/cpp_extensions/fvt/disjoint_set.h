@@ -6,9 +6,9 @@
 
 #include "common.h"
 
-bool has_cycle(torch::Tensor parent_list);
-std::list<std::list<int>> find_cycles(torch::Tensor parent_list);
-
+bool has_cycle_tensor(torch::Tensor parent_list);
+std::vector<std::vector<int>> find_cycles_tensor(torch::Tensor parent_list);
+std::vector<std::vector<int>> find_cycles(const std::vector<int>& parents);
 class ConstantDisjointSet {
    public:
     ConstantDisjointSet(std::size_t n);

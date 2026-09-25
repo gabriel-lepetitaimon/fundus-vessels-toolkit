@@ -13,13 +13,13 @@ from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.geometric import Rect
 
 if TYPE_CHECKING:
-    from fundus_toolkits.utils.typing import Bool1DArray, Int1DArray, IntPairArray, Tensor
+    from fundus_toolkits.utils.typing import Bool1DArray, Float1DArray, Int1DArray, IntPairArray, Tensor
 
 from ..utils.cluster import reduce_clusters
 from ..utils.data_io import load_numpy_dict, save_numpy_dict
-from ..utils.lookup_array import invert_complete_lookup
+from ..utils.lookup_array import create_removal_lookup, invert_complete_lookup
 from ..utils.math import curve_length
-from ..utils.numpy import Sparse2DAccessor, bit_invert
+from ..utils.numpy import Sparse2DAccessor, bit_invert, np_first_true, np_groupby_mean
 from ..utils.profiling import watch
 from ..utils.rasterization import rasterize_line, rasterize_topology
 from ..vascular_data_objects.vbranch_geodata import VBranchGeoData
@@ -27,14 +27,9 @@ from ..vascular_data_objects.vgraph import VGraph
 from ..vascular_data_objects.vtree import VTree, VTreeBranch
 
 
-def transfer_topology(src: VTree | tuple[VTree, VTree], dst: VGraph) -> VTree:
-    digraph = _transfer_topology_digraph(src, dst)
-    return digraph.optimize_tree(keep_missing_branch=True, assign_av="subtree")
-
-
-def _transfer_topology_digraph(src: VTree | tuple[VTree, VTree], dst: VGraph):
-    from .vbranch_digraph import VBranchDigraph
-
+def transfer_topology(
+    src: VTree | tuple[VTree, VTree] | Tuple[TreeTopology, TreeTopology], dst: VGraph, *, keep_missing_branch=True
+) -> VTree:
     if isinstance(src, tuple):
         src_art, src_vei = src
     else:
@@ -47,24 +42,122 @@ def _transfer_topology_digraph(src: VTree | tuple[VTree, VTree], dst: VGraph):
                 vei_branches.extend(subtree)
         src_art = src.subtree(art_branches)
         src_vei = src.subtree(vei_branches)
-    art_topo = TreeTopology.from_tree(src_art)
-    vei_topo = TreeTopology.from_tree(src_vei)
+    art_topo = TreeTopology.from_tree(src_art) if isinstance(src_art, VTree) else src_art
+    vei_topo = TreeTopology.from_tree(src_vei) if isinstance(src_vei, VTree) else src_vei
 
-    dst_digraph = VBranchDigraph.from_graph(dst)
-    dst_digraph.compute_p_from_gt(art_topo, vei_topo)
-    return dst_digraph
+    best_topo, dir_logit, parent = optimal_topology(dst, [art_topo, vei_topo])
+    fp = best_topo == -1
+    return conform_graph_to_arborescence(
+        dst,
+        branch_parents=parent,
+        branch_dir=dir_logit > 0,  # type: ignore
+        fp_branch=fp,
+        av_logit=~fp * np.where(best_topo == 0, 1.0, -1.0).astype(np.float64),  # type: ignore
+        keep_missing_branch=keep_missing_branch,
+        assign_av="subtree",
+    )
 
 
-class TopologyDiff:
-    def __init__(self, tree: VTree, parents: Int1DArray, dir: Bool1DArray, fp: Bool1DArray, av: Bool1DArray) -> None:
-        self.tree = tree
-        self.parents = parents
-        self.dir = dir
-        self.fp = fp
-        self.av = av
+def conform_graph_to_arborescence(
+    graph: VGraph,
+    branch_parents: Int1DArray,
+    branch_dir: Bool1DArray,
+    fp_branch: Optional[Bool1DArray] = None,
+    av_logit: Optional[Float1DArray] = None,
+    *,
+    keep_missing_branch: bool = False,
+    assign_av: Literal["branch", "subtree", False] = False,
+) -> VTree:
+    """Conform a graph to a given arborescence and build a directed tree.
 
-    @classmethod
-    def from_trees(cls, gt_tree: VTree, pred_tree: VTree) -> Self: ...
+    Parameters
+    ----------
+    branch_parents : npt.NDArray[np.int_]
+        An array of shape (B,) representing the parent branch of each branch in the optimal arborescence. The root branch has a parent of -1.
+    branch_dir : npt.NDArray[np.bool_]
+        An array of shape (B,) representing the direction of each branch in the optimal arborescence: True if the branch is oriented from its first node to its second node, False otherwise.
+    fp_branch : Optional[npt.NDArray[np.bool_]], optional
+        An array of shape (B,) representing whether each branch is a false positive. If provided, it will be used to remove false positive branches from the graph and re-index the branch indices accordingly. If not provided, the method will use the ``branch_fp`` method to determine false positive branches. By default, None.
+    keep_missing_branch : bool, optional
+        Whether to keep missing branches in the output tree. If False (by default), missing branches will be removed from the output tree. If True, missing branches will be kept in the output tree with a parent of -1 and with their most probable direction according to ``self.branch_dir_p``.
+    assign_av : Literal["branch", "subtree", False], optional
+        Whether to assign artery/vein class labels to branches in the output tree based on the artery/vein probabilities of branches in the graph.
+         - If "branch", assign AV class based on the AV probability of each branch independently;
+         - If "subtree", assign AV class based on the average AV probability of each subtree to which branches belong, to get more consistent AV labels across the tree;
+         - If False (by default), leave AV attribute as is in the output tree.
+
+    Returns
+    -------
+    VTree
+        The tree representation of the graph.
+    """  # noqa: E501
+    # === Update graph according to optimal arborescence ===
+    graph = graph.copy()
+
+    branch_lookup = np.arange(graph.branch_count, dtype=np.int_)
+    if not keep_missing_branch and fp_branch is not None:
+        assert fp_branch.shape[0] == graph.branch_count, (
+            "fp_branch must have the same length as the number of branches in the graph."
+        )
+        # - Remove missing branches from the graph if needed
+        graph.delete_branch(fp_branch, inplace=True)
+        branch_lookup = create_removal_lookup(fp_branch, add_empty="no increment", replace_value=-1)
+        branch_parents = branch_lookup[branch_parents[~fp_branch] + 1]  # type: ignore
+        branch_dir = branch_dir[~fp_branch]  # type: ignore
+
+    # - Insert branches on connections of not-adjacent branches
+    added_branch_parents = np.array([], dtype=np.int_)
+    for b1, b0 in enumerate(branch_parents):
+        if b0 == -1:
+            continue
+
+        # If branches are not adjacent (namely if the nodes b0_head != b1_tail) ...
+        b0_head = graph.branch_list[b0, 1 if branch_dir[b0] else 0]
+        b1_tail = graph.branch_list[b1, 0 if branch_dir[b1] else 1]
+        if b0_head != b1_tail:
+            # ... check if a branch was already added
+            new_b = None
+            added_branches_b0 = np.argwhere(added_branch_parents == b0).flatten()
+            if len(added_branches_b0):
+                n0, n1 = graph.branch_list[added_branches_b0].T
+                new_b = np_first_true((n0 == b0_head) & (n1 == b1_tail))
+
+            if new_b is None:
+                # ... or insert a branch in the graph
+                new_b = graph.add_branch([b0_head, b1_tail])[0]
+                added_branch_parents = np.append(added_branch_parents, b0)
+
+            # ... update parent of b1 new_b --> b1
+            branch_parents[b1] = new_b
+
+    # === Build the final VTree ===
+    branch_parents = np.hstack([branch_parents, np.array(added_branch_parents, dtype=np.int_)])  # type: ignore
+    branch_dir = np.hstack([branch_dir, np.ones(len(added_branch_parents), dtype=np.bool_)])  # type: ignore
+    tree = VTree.from_graph(graph, branch_parents, branch_dir, copy=False)
+
+    # Assign AV label accordingly to branch AV logit if specified
+    if assign_av is not False and av_logit is not None:
+        if not keep_missing_branch and fp_branch is not None:
+            av_logit = av_logit[~fp_branch]  # type: ignore
+        assert av_logit is not None  # For dumb type checker...
+        if assign_av == "subtree":  # Average AV logit over subtrees to assign more consistent AV labels
+            subtrees = tree.subtrees_branch_labels()
+            av_logit = np_groupby_mean(av_logit, subtrees[: len(av_logit)], n=subtrees.max() + 1)
+            av_class = np.where(av_logit >= 0, AVLabel.ART, AVLabel.VEI)
+            av_class[av_logit == 0] = AVLabel.UNK
+            if keep_missing_branch and fp_branch is not None:
+                fp_subtree = np_groupby_mean(
+                    fp_branch.astype(np.float32), subtrees[: len(fp_branch)], n=subtrees.max() + 1
+                )
+                av_class[fp_subtree > 0.5] = AVLabel.BKG
+            tree.branch_attr["av"] = av_class[subtrees]
+        else:
+            av_class = np.zeros(tree.branch_count, dtype=int)
+            av_class[: len(av_logit)] = np.sign(av_logit)
+            av_class[av_class == -1] = 2
+            tree.branch_attr["av"] = av_class
+
+    return tree
 
 
 ########################################################################################################################
@@ -180,10 +273,13 @@ class TreeTopology:
         Tuple[torch.Tensor, torch.Tensor]
             A tuple containing the binary mask and the distance map.
         """
-        geodata = tree.geometric_data()
+        with watch("resolve compelx bifurcation"):
+            from ..vparameters.bifurcations import split_complex_bifurcations
 
-        with watch("compute mapping"):
-            branch_mapping = branch_topological_mapping(tree)
+            cleaned_tree = split_complex_bifurcations(tree, topo_field="topo")
+            branch_mapping = np.pad(cleaned_tree.branch_attr["topo"].to_numpy().astype(TopologicalLabel), (1, 0))
+
+        geodata = cleaned_tree.geometric_data()
 
         with watch("rasterize_cpp"):
             tangents = None
@@ -192,9 +288,9 @@ class TreeTopology:
                 tangents = [_.data if _ is not None else np.empty((0, 2), dtype=np.float32) for _ in tangents]
 
             labels_map, topo_map, fuzzy_skeleton_map = rasterize_topology(
-                branch_list=tree.branch_list,
-                branch_tree=tree.branch_tree,
-                branch_dirs=tree.branch_dirs(),
+                branch_list=cleaned_tree.branch_list,
+                branch_tree=cleaned_tree.branch_tree,
+                branch_dirs=cleaned_tree.branch_dirs(),
                 curves=geodata.branch_curve(),
                 boundaries=[
                     _.data if _ is not None else np.empty((0, 2, 2), dtype=np.int_)
@@ -216,6 +312,7 @@ class TreeTopology:
             )
 
         with watch("create TreeTopology"):
+            branch_mapping = branch_mapping[: tree.branch_count]
             tree_opt = dict(tree=tree, branch_mapping=branch_mapping) if not discard_tree else dict()
             return cls(labels_map, topo_map, fuzzy_skeleton_map, sparse=sparse, **tree_opt)  # type: ignore
 
@@ -348,7 +445,13 @@ class TreeTopology:
         return img
 
     @classmethod
-    def branch_overlay(cls, img: npt.NDArray[np.floating] | FundusData, topo: TreeTopology) -> npt.NDArray[np.float64]:
+    def branch_overlay(
+        cls,
+        img: npt.NDArray[np.floating] | FundusData,
+        topo: TreeTopology,
+        *,
+        alpha: Literal[None, "rank", "fuzzy_skeleton"] = "rank",
+    ) -> npt.NDArray[np.float64]:
         from fundus_toolkits.utils.color import colormap
 
         img = img.image.copy() if isinstance(img, FundusData) else img.copy()
@@ -358,7 +461,7 @@ class TreeTopology:
             img = np.transpose(img, (1, 2, 0))
 
         topo = topo.as_dense()
-        alpha = np.zeros(topo.shape, dtype=np.float64)
+        _alpha = np.zeros(topo.shape, dtype=np.float64)
         topo_img = np.zeros(img.shape, dtype=np.float64)
 
         colors = colormap(format="rgb")
@@ -368,10 +471,15 @@ class TreeTopology:
                 continue
             branch_mask = topo.branch_map == branch_id
             topo_img[branch_mask] = colors[branch_id % len(colors)] / 255.0
-            branch_rank_map = topo.rank_map[branch_mask]
-            alpha[branch_mask] = 0.8 - 0.7 * (branch_rank_map % 1)
+            if alpha == "rank":
+                branch_rank_map = topo.rank_map[branch_mask]
+                _alpha[branch_mask] = 0.8 - 0.7 * (branch_rank_map % 1)
+            elif alpha == "fuzzy_skeleton":
+                branch_fuzzy_map = topo.fuzzy_skeleton_map[branch_mask]
+                branch_fuzzy_map -= branch_fuzzy_map.min()
+                _alpha[branch_mask] = branch_fuzzy_map / branch_fuzzy_map.max()
 
-        img = img * (1 - alpha[:, :, None]) + topo_img * alpha[:, :, None]
+        img = img * (1 - _alpha[:, :, None]) + topo_img * _alpha[:, :, None]
         if channel_first:
             img = np.transpose(img, (2, 0, 1))
         return img
@@ -726,11 +834,12 @@ def read_branch_topology(
         curves_tensor: list[torch.Tensor] = []
 
         # with watch("Prepare branch curves"):
+        geodata = graph.geometric_data()
         for b in graph.branches():
             c = curves[b.id]
-            if c is None or len(c) < 3:
-                p0, p1 = b.tip_coord()
-                c = rasterize_line(p0.to_int_pair(), p1.to_int_pair())
+            if c is None or len(c) <= 3:
+                p0, p1 = geodata.node_coord(b.node_ids)
+                c = rasterize_line(p0, p1)
             if c.strides[0] < 0:
                 c = c.copy()
             with warnings.catch_warnings(action="ignore"):
@@ -808,7 +917,7 @@ def read_branch_topology(
         # → Skip branch if not enough valid ancestor points or low directionality
         plausibility = topology.fuzzy_skeleton_map[*curve.T].astype(np.float32).mean()
         length = curve_length(curve)
-        if known_label_ratio < 0.33 or valid_label_ratio < 0.66 or abs(dir) < 0.66:
+        if known_label_ratio < 0.33 or valid_label_ratio < 0.66 or abs(dir) < 0.33:
             branch_plausibility[branch.id] = plausibility
             branch_lengths[branch.id] = length
             continue
@@ -964,9 +1073,9 @@ def optimal_lines(branches_topology: BranchesTopo, lines: npt.NDArray[np.int_]) 
     return all_optimal_lines
 
 
-def optimal_branch_tree(
-    graph: VGraph, topology: TreeTopology
-) -> tuple[Int1DArray, npt.NDArray[np.float32], Bool1DArray]:
+def optimal_topology(
+    graph: VGraph, topologies: list[TreeTopology], *, plausibility_threshold: float = 0.05
+) -> tuple[Int1DArray, Float1DArray, Int1DArray]:
     """
     Compute the optimal arborescence of branches for the given graph based on the topological labels.
 
@@ -975,52 +1084,35 @@ def optimal_branch_tree(
     graph : VGraph
         The vessel graph including B branches.
 
-    topology : TreeTopology
-        The tree topology ground truth.
-
-    restrict_lines : Optional[npt.NDArray[np.int_]], optional
-        An optional 2D array of size (N, 4) indicating which branch tips can be connected together. Each row is of the form (b0, b0_tip, b1, b1_tip), where b0 and b1 are branch indices, and b0_tip and b1_tip are tip indices (0 for beginning, 1 for end of the curve).
-
-        If None (by default), all tips are allowed to connect.
+    topology : List[TreeTopology]
+        A series of ground-truth topologies (e.g. arteries and veins) to which the graph should be conformed. Each branch will be assigned to the most plausible topology, or marked as missing if it does not belong to any if them.
 
     Returns
     -------
-    branch_tree: Int1DArray
-        A 1D array of size (B,) indicating, for each branch, the index of its parent branch in the optimal arborescence. -1 indicates no parent (root branch).
+    best_topology: Int1DArray
+            A 1D array of size (B,) indicating, for each branch, the index of the topology it belongs to. -1 indicates that the branch was not assigned to any topology.
 
     branch_dir: Float1DArray
         A 1D array of size (B,) indicating, for each branch, its direction. Positive value indicates to keep the branch original direction in ``graph``, negative value indicates to flip it. Zero indicates unknown direction.
 
-    missing: Bool1DArray
-        A 1D array of size (B,) indicating if each branch is missing (True) in the topology gt or not (False).
+    branch_tree: Int1DArray
+            A 1D array of size (B,) indicating, for each branch, the index of its parent branch in the optimal arborescence. -1 indicates no parent (root branch).
     """  # noqa: E501
-    B = graph.branch_count
-    branch_tree = np.full(B, -1, dtype=np.int_)
+    import torch
 
-    branch_label, branch_dir, _, _, tips_label, tips_rank = read_branch_topology(graph, topology)
-    missing = branch_label == 0
+    from ..utils.cpp_extensions.fvt_cpp import optimal_topology as optimal_topology_cpp
 
-    B_idx = np.arange(B)
-    B_dir = np.where(branch_dir >= 0, 1, 0)
-    heads_label, heads_rank = tips_label[B_idx, B_dir], tips_rank[B_idx, B_dir]
-    tails_label, tails_rank = tips_label[B_idx, 1 - B_dir], tips_rank[B_idx, 1 - B_dir]
-
-    for b_id in np.where(~missing)[0]:
-        tail_label = TopologicalLabel(tails_label[b_id])
-        tail_rank = tails_rank[b_id]
-
-        ancestors = tail_label.is_child_of(heads_label, or_self=True)
-        ancestors[b_id] = False  # A branch cannot be its own parent
-        ancestors[heads_rank > tail_rank] = False  # Parent must have a lower distance
-        ancestors = np.where(ancestors)[0]
-
-        if len(ancestors) == 0:
-            continue
-
-        best_ancestor = ancestors[np.argmax(heads_rank[ancestors])]  # Prefer the nearest (i.e. highest rank)
-        branch_tree[b_id] = best_ancestor
-
-    return branch_tree, branch_dir, missing
+    # TODO: Bundle everything in a single cpp call to avoid the overhead of tensor creations
+    branch_topos = [topo.read_branch_topo(graph) for topo in topologies]
+    outs = optimal_topology_cpp(
+        [_.to_tensor() for _ in branch_topos],
+        torch.empty((0, 4), dtype=torch.int64),
+        torch.from_numpy(graph.geometric_data().tip_coord()),
+        plausibility_threshold,
+    )
+    # TODO: include shortcut post-fix in cpp
+    best_topo, dir_logit, parent = [_.numpy(force=True) for _ in outs]
+    return best_topo, dir_logit, parent
 
 
 def evaluate_topology(
@@ -1111,63 +1203,6 @@ def evaluate_topology(
         gt_parent=best_parent,
         parent=tree.branch_tree,
     )
-
-
-def count_disconnection(graph, topological_labels: npt.NDArray[np.uint64]) -> int:
-    """
-    Count the number of disconnected branches in the graph based on the topological map.
-
-    Parameters
-    ----------
-    graph : VGraph
-        The vessel graph to analyze.
-    topological_map : npt.NDArray[np.uint64]
-        The topological map of the vessel tree.
-
-    Returns
-    -------
-    int
-        The number of disconnected branches.
-    """
-    ...
-
-
-def evaluate_branch_direction(tree: VTree, topological_map: npt.NDArray[np.float32], epsilon=1e-5) -> npt.NDArray:
-    """
-
-    Parameters
-    ----------
-    tree : _type_
-        _description_
-    topological_map : npt.NDArray[np.uint64]
-        _description_
-
-    Returns
-    -------
-    npt.NDArray
-        _description_
-    """
-    direction = np.zeros((tree.branch_count,), dtype=np.float32)
-
-    for b in tree.flip_branch_to_tree_dir().branches():
-        curve = b.curve()
-        if curve.shape[0] < 2:
-            continue
-        topo_values = topological_map[curve[:, 0], curve[:, 1]]
-
-        # Discard zero values
-        topo_values = topo_values[topo_values != 0]
-
-        if len(topo_values) < 2:
-            continue
-
-        # Compute the direction as the mean of the topological values
-        diff = np.diff(topo_values)
-        forward_diff = diff > epsilon
-        backward_diff = diff < -epsilon
-        direction[b.id] = np.mean(1 * forward_diff - 1 * backward_diff)
-
-    return direction
 
 
 ########################################################################################################################
@@ -1408,6 +1443,17 @@ class TopologicalLabel(np.uint64):
     @property
     def parent(self) -> TopologicalLabel:
         return self.get_parent(self)
+
+    @property
+    def children(self) -> tuple[TopologicalLabel, TopologicalLabel]:
+        if self.rank == 44:
+            raise ValueError("Impossible to create children: reach maximum rank.")
+        subtree = self.subtree
+        branching_pattern = tuple(self.branching_pattern)
+        return (
+            TopologicalLabel.encode(subtree, branching_pattern + (True,)),
+            TopologicalLabel.encode(subtree, branching_pattern + (False,)),
+        )
 
     def __repr__(self) -> str:
         return f"TopologicalLabel({hex(int(self))})"

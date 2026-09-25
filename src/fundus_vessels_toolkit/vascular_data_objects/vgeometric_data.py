@@ -110,7 +110,7 @@ class VGeometricData:
         nodes_coord = np.asarray(nodes_coord, dtype=np.float64)
         if not nodes_coord.ndim == 2 and nodes_coord.shape[1] == 2:
             raise ValueError("The node coordinates should be a 2D array with shape (n_nodes, 2).")
-        self._nodes_coord: npt.NDArray[np.float64] = nodes_coord.astype(np.float64)
+        self._node_coord: npt.NDArray[np.float64] = nodes_coord.astype(np.float64)
 
         if nodes_id is not None:
             nodes_id = np.asarray(nodes_id, dtype=np.uint32)
@@ -219,7 +219,7 @@ class VGeometricData:
             The geometric data as a dictionary of numpy arrays.
         """
         data: NumpyDict = dict(
-            nodes_coord=self._nodes_coord,
+            nodes_coord=self._node_coord,
             nodes_id=self._nodes_id,
             branches_curve=self._branch_curve,
             branches_id=self._branches_id,
@@ -267,7 +267,7 @@ class VGeometricData:
             not isinstance(other, VGeometricData)
             or len(self._branch_curve) != len(other._branch_curve)
             or self._domain != other._domain
-            or not array_is_equal(self._nodes_coord, other._nodes_coord)
+            or not array_is_equal(self._node_coord, other._node_coord)
             or not array_is_equal(self._nodes_id, other._nodes_id)
             or not array_is_equal(self._branches_id, other._branches_id)
             or not array_list_is_equal(self._branch_curve, other._branch_curve)
@@ -308,7 +308,7 @@ class VGeometricData:
     def copy(self, parent_graph: Optional[VGraph | Literal["same"]] = "same") -> VGeometricData:
         """Return a copy of the object."""
         other = copy(self)
-        other._nodes_coord = self._nodes_coord.copy()
+        other._node_coord = self._node_coord.copy()
         other._branch_curve = copy(self._branch_curve)
         other._branch_data_dict = {k: copy(v) for k, v in self._branch_data_dict.items()}
         other._branches_attrs_descriptors = {k: copy(v) for k, v in self._branches_attrs_descriptors.items()}
@@ -357,7 +357,7 @@ class VGeometricData:
     @property
     def node_count(self) -> int:
         """Return the number of nodes whose geometric data are stored in this object."""
-        return self._nodes_coord.shape[0]
+        return self._node_coord.shape[0]
 
     @property
     def node_ids(self) -> np.ndarray:
@@ -382,18 +382,18 @@ class VGeometricData:
             return index
 
     def node_coord(
-        self, ids: Optional[int | npt.NDArray[np.int_]] = None, *, graph_index=True, apply_domain=False
+        self, ids: Optional[Int1DArrayLike] = None, *, graph_index=True, apply_domain=False
     ) -> npt.NDArray[np.float64]:
         """Return the coordinates of the nodes in the graph."""
 
         if ids is None:
-            return self._nodes_coord
+            return self._node_coord
 
         ids, is_single = as_1d_array(ids)
 
         if isinstance(ids, np.ndarray):
             internal_id = self._graph_to_internal_nodes_index(ids, graph_index=graph_index)
-            coord: npt.NDArray[np.float64] = self._nodes_coord[internal_id]
+            coord: npt.NDArray[np.float64] = self._node_coord[internal_id]
             if apply_domain:
                 coord += np.array(self.domain.top_left)[None, :]
             return coord if not is_single else coord[0]
@@ -411,7 +411,7 @@ class VGeometricData:
                 assert coord.shape[0] == self.node_count, (
                     "The number of coordinates should be the same as the number of nodes."
                 )
-                self._nodes_coord = np.asarray(coord, dtype=np.float64)
+                self._node_coord = np.asarray(coord, dtype=np.float64)
                 return
             else:
                 ids = np.arange(coord.shape[0])
@@ -420,7 +420,7 @@ class VGeometricData:
             assert coord.shape[0] == len(ids), "The number of coordinates should be the same as the number of nodes."
 
         internal_id = self._graph_to_internal_nodes_index(ids, graph_index=graph_index)
-        self._nodes_coord[internal_id] = coord
+        self._node_coord[internal_id] = coord
 
     @property
     def branch_count(self) -> int:
@@ -807,7 +807,7 @@ class VGeometricData:
 
         assert yx.ndim == 2 and yx.shape[1] == 2, "The yx points should be a 2D array of shape (N, 2)."
 
-        dist = np.linalg.norm(self._nodes_coord[:, None, :] - yx[None, :, :], axis=2)
+        dist = np.linalg.norm(self._node_coord[:, None, :] - yx[None, :, :], axis=2)
         closest_node = np.argmin(dist, axis=0)
         closest_distance = dist[closest_node, np.arange(yx.shape[0])]
 
@@ -1808,7 +1808,7 @@ class VGeometricData:
         sorted_index = np.argsort(self.node_ids)
         if np.any(np.diff(sorted_index) < 1):
             self._nodes_id = self._nodes_id[sorted_index]
-            self._nodes_coord = self._nodes_coord[sorted_index]
+            self._node_coord = self._node_coord[sorted_index]
 
     def _reindex_nodes(self, new_node_index: npt.NDArray[np.int_]) -> None:
         """Reindex the nodes in the graph.  # noqa: E501
@@ -1819,12 +1819,12 @@ class VGeometricData:
             The new index of the nodes: node_index[old_index] = new_index or -1 if the node should be removed.
         """
         if self._nodes_id is None:
-            if len(new_node_index) > len(self._nodes_coord):
+            if len(new_node_index) > len(self._node_coord):
                 # If the new index is longer than the current number of nodes, use sparse indexing
                 self._nodes_id = self.node_ids
                 return self._reindex_nodes(new_node_index)
             else:
-                self._nodes_coord = reorder_array(self._nodes_coord, new_node_index)
+                self._node_coord = reorder_array(self._node_coord, new_node_index)
         else:
             self._nodes_id = reorder_array(self._nodes_id, new_node_index)
             self._sort_internal_node_ids()
@@ -1839,7 +1839,7 @@ class VGeometricData:
         """
         if self._nodes_id is not None:
             raise NotImplementedError("Appending nodes is not supported for indexed graphs.")
-        self._nodes_coord = np.vstack([self._nodes_coord, node_coords])
+        self._node_coord = np.vstack([self._node_coord, node_coords])
 
     def _drop_nodes(self, node_ids: Iterable[int], *, graph_index=True):
         """Remove nodes from the graph.
@@ -1850,11 +1850,11 @@ class VGeometricData:
             The ids of the nodes to remove.
         """
         if self._nodes_id is None:
-            self._nodes_coord = np.delete(self._nodes_coord, node_ids, axis=0)
+            self._node_coord = np.delete(self._node_coord, node_ids, axis=0)
         else:
             internal_ids = self._graph_to_internal_nodes_index(node_ids, graph_index=graph_index)
             self._nodes_id = np.delete(self._nodes_id, internal_ids)
-            self._nodes_coord = np.delete(self._nodes_coord, internal_ids, axis=0)
+            self._node_coord = np.delete(self._node_coord, internal_ids, axis=0)
 
     def _merge_nodes(
         self,
@@ -1887,7 +1887,7 @@ class VGeometricData:
             weight /= weight_total
 
         new_node = np.sum(weight[:, None] * self.node_coord(cluster, graph_index=False), axis=0)
-        self._nodes_coord[cluster[0]] = new_node
+        self._node_coord[cluster[0]] = new_node
 
     def _sort_internal_branch_ids(self) -> None:
         """Sort the branches by their indices in the graph."""
@@ -1943,7 +1943,7 @@ class VGeometricData:
             other = other.transform(warped_domain=self.domain)
 
         # Append nodes
-        self._nodes_coord = np.concatenate([self._nodes_coord, other._nodes_coord])
+        self._node_coord = np.concatenate([self._node_coord, other._node_coord])
 
         # Append branches
         if self._branches_id is not None:
@@ -2130,7 +2130,7 @@ class VGeometricData:
             self._branches_id = np.concatenate([self._branches_id, new_branch_ids])
 
         # === Add the new nodes ===
-        self._nodes_coord = np.concatenate([self._nodes_coord, np.array(explicit_split_coord, dtype=np.float32)])
+        self._node_coord = np.concatenate([self._node_coord, np.array(explicit_split_coord, dtype=np.float32)])
         if self._nodes_id is not None:
             self._nodes_id = np.concatenate([self._nodes_id, new_node_ids])
 
@@ -2197,12 +2197,12 @@ class VGeometricData:
         report = CheckReport(on_error=on_error, stacklevel=stacklevel + 1)
 
         # === NODES CHECK ===
-        if check_parent and self._nodes_coord.shape[0] != self.parent_graph.node_count:
+        if check_parent and self._node_coord.shape[0] != self.parent_graph.node_count:
             report.log_error(
                 "Geometric Data",
-                f"Invalid nodes count: {self._nodes_coord.shape[0]} (expected: {self.parent_graph.node_count})",
+                f"Invalid nodes count: {self._node_coord.shape[0]} (expected: {self.parent_graph.node_count})",
             )
-        if (np.diff(self._nodes_coord[np.lexsort(self._nodes_coord.T)], axis=0) == 0).all(axis=1).any():
+        if (np.diff(self._node_coord[np.lexsort(self._node_coord.T)], axis=0) == 0).all(axis=1).any():
             report.log_error(
                 "Geometric Data",
                 "The geometric data contains duplicated nodes coordinates.",
@@ -2329,7 +2329,7 @@ class VGeometricData:
         )
         all_curves_transformed = projection.transform(all_curves).astype(np.float64)
 
-        self._nodes_coord = projection.transform(self._nodes_coord).astype(np.float64)
+        self._node_coord = projection.transform(self._node_coord).astype(np.float64)
         start_idx = 0
         for branch_id, curve in enumerate(self._branch_curve):
             if curve is None or len(curve) == 0:

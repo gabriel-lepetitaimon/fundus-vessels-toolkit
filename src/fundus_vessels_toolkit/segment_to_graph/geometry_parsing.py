@@ -446,7 +446,7 @@ def center_junction_nodes(
             # intercepts = intercepts[np.isfinite(intercepts).all(axis=1)]
             intercepts = intercepts[Rect.bounding_box(tips_yx).contains(intercepts)]
             if len(intercepts):
-                gdata._nodes_coord[node_id] = intercepts.mean(axis=0)
+                gdata._node_coord[node_id] = intercepts.mean(axis=0)
 
     return graph
 

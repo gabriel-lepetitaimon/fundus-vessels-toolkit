@@ -795,7 +795,9 @@ class VBranchDigraph(LineDigraph):
                 torch.from_numpy(self.graph.geometric_data().tip_coord()),
                 plausibility_threshold,
             )
-            fp, av, dir_logit, line_p = [_.numpy(force=True) for _ in outs]
+            best_topo, dir_logit, line_p = [_.numpy(force=True) for _ in outs]
+            fp = best_topo == -1
+            av = best_topo == 0
 
             # === Post fix erroneous branch skips ===
             # with watch("Post-fix erroneous branch skips"):
@@ -1228,7 +1230,7 @@ class VBranchDigraph(LineDigraph):
 
                 if new_b is None:
                     # ... or insert a branch in the graph
-                    new_b = vgraph.add_branch([b0_head, b1_tail], return_branch_id=True, inplace=True)[1][0]
+                    new_b = vgraph.add_branch([b0_head, b1_tail])[0]
                     added_branch_parents = np.append(added_branch_parents, b0)
 
                 # ... update parent of b1 new_b --> b1

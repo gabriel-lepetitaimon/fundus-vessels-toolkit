@@ -25,7 +25,7 @@ from ...utils.profiling import watch
 from ...utils.tree import tree_connected_components
 from ...vascular_data_objects import VBranchGeoData
 from ...vascular_data_objects.vgeometric_data import VGeometricData
-from .data_augmentation import AugmentationCfg, deteriorate_graph
+from .data_augmentation import AugmentationCfg, AugmentationField, deteriorate_graph
 
 
 class BranchDigraphData(PygData):
@@ -380,7 +380,7 @@ class BranchDigraphData(PygData):
         gt_topology: Optional[tuple[TreeTopology, TreeTopology]] = None,
         *,
         return_digraph: Literal[False] = False,
-        augment: Optional[AugmentationCfg] = None,
+        augment: AugmentationField = None,
         name: Optional[str] = None,
         graph_version: Optional[str] = None,
         od_center: Optional[Point] = None,
@@ -396,7 +396,7 @@ class BranchDigraphData(PygData):
         gt_topology: Optional[tuple[TreeTopology, TreeTopology]] = None,
         *,
         return_digraph: Literal[True],
-        augment: Optional[AugmentationCfg] = None,
+        augment: AugmentationField = None,
         name: Optional[str] = None,
         graph_version: Optional[str] = None,
         od_center: Optional[Point] = None,
@@ -411,7 +411,7 @@ class BranchDigraphData(PygData):
         gt_topology: Optional[tuple[TreeTopology, TreeTopology]] = None,
         *,
         return_digraph: bool = False,
-        augment: Optional[AugmentationCfg] = None,
+        augment: AugmentationField = None,
         name: Optional[str] = None,
         graph_version: Optional[str] = None,
         od_center: Optional[Point] = None,

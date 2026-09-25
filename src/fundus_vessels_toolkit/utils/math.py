@@ -5,7 +5,7 @@ import numpy as np
 import numpy.typing as npt
 from scipy.special import expit
 
-from fundus_toolkits.utils.typing import IntPairArray, PointArray
+from fundus_toolkits.utils.typing import Float2DArray, Float3DArray, IntPairArray, PointArray, PointArrayLike, as_points
 
 
 def curve_length(curve: PointArray | IntPairArray) -> float:
@@ -303,17 +303,62 @@ def intercept_segment(
 
     with np.errstate(divide="ignore", invalid="ignore"):
         t = ((ya0 - yb0) * (xb1 - xb0) - (xa0 - xb0) * (yb1 - yb0)) / d
-        u = ((ya0 - yb0) * (xa1 - xa0) - (xa0 - xb0) * (ya1 - ya0)) / d
         out = np.stack([ya0 + t * (ya1 - ya0), xa0 + t * (xa1 - xa0)], axis=-1)
         if a0_bound:
             out[t < 0] = np.nan
         if a1_bound:
             out[t > 1] = np.nan
-        if b0_bound:
-            out[u < 0] = np.nan
-        if b1_bound:
-            out[u > 1] = np.nan
+        if b0_bound or b1_bound:
+            u = ((ya0 - yb0) * (xa1 - xa0) - (xa0 - xb0) * (ya1 - ya0)) / d
+            if b0_bound:
+                out[u < 0] = np.nan
+            if b1_bound:
+                out[u > 1] = np.nan
     return out
+
+
+def intercept_segment_norm_dist(
+    a0: PointArrayLike,
+    a1: PointArrayLike,
+    b0: PointArrayLike,
+    b1: PointArrayLike,
+) -> Float3DArray:
+    """
+    Return the distance from the intersection point of two segments a0-a1 and b0-b1 to the segments, normalized by the length of the segments.
+
+    Parameters
+    ----------
+    a0 : PointArrayLike
+        The first points of the first segments as an array of shape (Na, 2).
+    a1 : PointArrayLike
+        The second points of the first segments as an array of shape (Na, 2).
+    b0 : PointArrayLike
+        The first points of the second segments as an array of shape (Nb, 2).
+    b1 : PointArrayLike
+        The second points of the second segments as an array of shape (Nb, 2).
+
+    Returns
+    -------
+    Float3DArray
+        The signed distances from the intersection points to the segments, normalized by the length of the segments as an array of shape (Na, Nb, 2). The first channel is the distance to a0 normalized by the length of a0-a1. The second channel is the distance to b0 normalized by the length of b0-b1.
+    """  # noqa: E501
+    ps = [as_points(_) for _ in [a0, a1, b0, b1]]
+    assert all(p.ndim == 2 and p.shape[1] == 2 for p in ps), "All points must 2D arrays of shape (N, 2)."
+    a0, a1, b0, b1 = ps
+    assert a0.shape[0] == a1.shape[0], "a0 and a1 must have the same number of points."
+    assert b0.shape[0] == b1.shape[0], "b0 and b1 must have the same number of points."
+
+    ya0, xa0 = a0.T[:, :, None]
+    ya1, xa1 = a1.T[:, :, None]
+    yb0, xb0 = b0.T[:, None, :]
+    yb1, xb1 = b1.T[:, None, :]
+
+    d = (xa1 - xa0) * (yb1 - yb0) - (ya1 - ya0) * (xb1 - xb0)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = ((ya0 - yb0) * (xb1 - xb0) - (xa0 - xb0) * (yb1 - yb0)) / d
+        u = ((ya0 - yb0) * (xa1 - xa0) - (xa0 - xb0) * (ya1 - ya0)) / d
+    return np.stack([t, u], axis=-1)  # type: ignore
 
 
 @overload
@@ -364,6 +409,38 @@ def nearest_point_on_segment(
 
     distance = np.linalg.norm(nearest - p[:, None, :], axis=-1)
     return nearest, distance
+
+
+def project_norm_on_segment(p: npt.ArrayLike, a: npt.ArrayLike, b: npt.ArrayLike) -> npt.NDArray[np.float64]:
+    """
+    Return the normalized projection of point p on segment a-b.
+
+    Parameters
+    ----------
+    p : npt.ArrayLike
+        The points as an array of shape (P, 2).
+
+    a : npt.ArrayLike
+        The first point of the segments as an array of shape (S, 2).
+
+    b : npt.ArrayLike
+        The second point of the segments as an array of shape (S, 2).
+
+    Returns
+    -------
+    npt.NDArray[np.float64]
+        The normalized projections on each segment as an array of shape (P, S).
+        The values are in the range [0, 1], where 0 corresponds to point a and 1 corresponds to point b.
+    """
+    p = np.atleast_2d(p).astype(float)
+    a = np.atleast_2d(a).astype(float)
+    b = np.atleast_2d(b).astype(float)
+
+    ap = p[:, None, :] - a[None, :, :]
+    ab = b[None, :, :] - a[None, :, :]
+    ab_squared = np.sum(ab**2, axis=-1) + 1e-10  # Prevent division by zero
+    t = np.clip(np.sum(ap * ab, axis=-1) / ab_squared, 0, 1)
+    return t
 
 
 def same_sign(x, y, tolerance: float | bool = False):

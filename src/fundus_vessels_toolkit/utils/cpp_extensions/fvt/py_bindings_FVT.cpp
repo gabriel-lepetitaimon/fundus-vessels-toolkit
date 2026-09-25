@@ -844,8 +844,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("drawQuad", &drawQuad, "Draw a quadrilateral in a 2D image.");
 
     // === disjoint_set.h ===
-    m.def("has_cycle", &has_cycle, "Find cycles in a list of parent.");
-    m.def("find_cycles", &find_cycles, "Find all cycles in a list of parent.");
+    m.def("has_cycle", &has_cycle_tensor, "Find cycles in a list of parent.");
+    m.def("find_cycles", &find_cycles_tensor, "Find all cycles in a list of parent.");
 
     // === tree.h ===
     m.def("read_branches_topology", &read_branches_topology, "Read the topology of branches.");

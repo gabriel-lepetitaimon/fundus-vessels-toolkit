@@ -68,14 +68,19 @@ IntPoint IntPoint::neighbor(Point direction) const {
     return p;
 }
 int IntPoint::squaredNorm() const { return y * y + x * x; }
-double IntPoint::norm() const { return sqrt(y * y + x * x); }
+double IntPoint::norm() const {
+    if (y == 0) return std::abs(x);
+    if (x == 0) return std::abs(y);
+    return sqrt(y * y + x * x);
+}
 Point IntPoint::normalize() const {
-    double n = std::sqrt(y * y + x * x);
+    double n = norm();
     if (n != 0) return Point(y / n, x / n);
     return Point(0, 0);
 }
 int IntPoint::cross(const IntPoint& p) const { return y * p.x - x * p.y; }
 int IntPoint::dot(const IntPoint& p) const { return y * p.y + x * p.x; }
+double IntPoint::dot(const Point& p) const { return y * p.y + x * p.x; }
 double IntPoint::cosSim(const IntPoint& p) const { return dot(p) / sqrt(squaredNorm() * p.squaredNorm()); }
 double IntPoint::distance(const IntPoint& p) const {
     if (p.x == x) return std::abs(p.y - y);

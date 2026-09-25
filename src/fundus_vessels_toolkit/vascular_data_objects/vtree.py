@@ -28,14 +28,17 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+from fundus_toolkits.utils.geometric import Point
 from fundus_toolkits.utils.typing import (
     Bool1DArray,
     Bool1DArrayLike,
     Float1DArrayLike,
     Indices,
+    Int1DArray,
     Int1DArrayLike,
     IntPairArrayLike,
     PointArrayLike,
+    as_int_pairs,
 )
 
 from ..utils.data_io import NumpyDict, load_numpy_dict, save_numpy_dict
@@ -348,6 +351,14 @@ class VTreeBranch(VGraphBranch):
         if not isinstance(geodata, VGeometricData):
             geodata = self.graph.geometric_data(0 if geodata is None else geodata)
         return geodata.tip_data(attrs, self._id, first_tip=not self._dir)
+
+    def tail_tip_coord(self) -> Point:
+        """Return the coordinates of the tail tip of the branch."""
+        return self.tip_coord(first_tip=self._dir)
+
+    def head_tip_coord(self) -> Point:
+        """Return the coordinates of the head tip of the branch."""
+        return self.tip_coord(first_tip=not self._dir)
 
     @overload
     def successors_tip_geodata(
@@ -991,6 +1002,16 @@ class VTree(VGraph):
 
             assert not np.any(set_branches[subtree_branches]), "Some branches are assigned to multiple subtrees."
             set_branches[subtree_branches] = True
+
+        if not set_branches.all():
+            warnings.warn(
+                f"The tree is invalid: branches {np.argwhere(~set_branches).flatten()} are not accessible "
+                "from any roots probably because of cycles in the tree.",
+                UserWarning,
+                stacklevel=2,
+            )
+            for branch_id in np.argwhere(~set_branches).flatten():
+                subtrees.append([branch_id])
 
         # assert set_branches.all(), "Some branches were not assigned to a subtree."
         return sorted(subtrees, key=lambda x: len(x), reverse=True)
@@ -1726,18 +1747,10 @@ class VTree(VGraph):
         super(tree.__class__, tree).delete_branch(branch_id, delete_orphan_nodes=delete_orphan_nodes, inplace=True)  # type: ignore
         return tree
 
-    @overload
-    def add_branch(
-        self, branch_nodes: IntPairArrayLike, *, return_branch_id: Literal[False] = False, inplace=False
-    ) -> Self: ...
-    @overload
-    def add_branch(
-        self, branch_nodes: IntPairArrayLike, *, return_branch_id: Literal[True], inplace=False
-    ) -> Tuple[Self, npt.NDArray[np.int32]]: ...
-    def add_branch(
-        self, branch_nodes: IntPairArrayLike, *, return_branch_id=False, inplace=False
-    ) -> Self | Tuple[Self, npt.NDArray[np.int32]]:
-        """Add branch(es) to the tree. The branch(es) are connected to the tree according to the following rules:
+    def add_branch(self, branch_nodes: IntPairArrayLike, *, auto_connect=True) -> Int1DArray:
+        """Add branch(es) to the tree.
+
+        If auto_connect is True (default), the branch(es) are connected to the tree according to the following rules:
         - If the tail node of the new branch has exactly one incoming branch, the new branch becomes a successor of that branch.
         - If the head node of the new branch has exactly one outgoing branch, that branch becomes a successor of the new branch.
 
@@ -1745,6 +1758,10 @@ class VTree(VGraph):
         ----------
         branch_nodes : IntPairArrayLike
             A 2D array of shape (N, 2) containing the indices of the nodes connected by the new branches.
+
+        auto_connect : bool, optional
+            If True (default), the new branch(es) are connected to the tree according to the rules described above.
+            Otherwise the new branch(es) are added as root branches.
 
         return_branch_id : bool, optional
             If True, return the indices of the added branches.
@@ -1778,25 +1795,24 @@ class VTree(VGraph):
         [-1, 0, 1, 0]
 
         """  # noqa: E501
-        tree = self.copy() if not inplace else self
-        branch_nodes = np.atleast_2d(branch_nodes).astype(int)
-        _, new_branch_ids = super(VTree, tree).add_branch(branch_nodes, return_branch_id=True, inplace=True)
+        branch_nodes = as_int_pairs(branch_nodes)
+        new_branch_ids = super(VTree, self).add_branch(branch_nodes)
 
-        tree._branch_tree = np.concatenate([tree._branch_tree, np.full(len(new_branch_ids), -1, dtype=int)])
-        if tree._branch_dir is not None:
-            tree._branch_dir = np.concatenate([tree._branch_dir, np.ones(len(new_branch_ids), dtype=bool)])
+        self._branch_tree = np.concatenate([self._branch_tree, np.full(len(new_branch_ids), -1, dtype=int)])
+        if self._branch_dir is not None:
+            self._branch_dir = np.concatenate([self._branch_dir, np.ones(len(new_branch_ids), dtype=bool)])
 
-        # Update the branch tree
-        for b_id, (tail, head) in zip(new_branch_ids, branch_nodes, strict=True):
-            incoming_tail_branch = tree.node_incoming_branches(tail)
-            if len(incoming_tail_branch) == 1:
-                tree._branch_tree[b_id] = incoming_tail_branch[0]
+        if auto_connect:
+            for b_id, (tail, head) in zip(new_branch_ids, branch_nodes, strict=True):
+                incoming_tail_branch = self.node_incoming_branches(tail)
+                if len(incoming_tail_branch) == 1:
+                    self._branch_tree[b_id] = incoming_tail_branch[0]
 
-            outgoing_head_branch = tree.node_outgoing_branches(head)
-            if len(outgoing_head_branch) == 1:
-                tree._branch_tree[outgoing_head_branch[0]] = b_id
+                outgoing_head_branch = self.node_outgoing_branches(head)
+                if len(outgoing_head_branch) == 1:
+                    self._branch_tree[outgoing_head_branch[0]] = b_id
 
-        return (tree, new_branch_ids) if return_branch_id else tree
+        return new_branch_ids
 
     @overload
     def split_node(

@@ -132,7 +132,7 @@ class BranchDigraphSample:
         self,
         graph_version: Optional[str] = None,
         *,
-        augment: Optional[AugmentationCfg] = None,
+        augment: AugmentationField = None,
         return_digraph: Literal[False] = False,
     ) -> BranchDigraphData: ...
     @overload
@@ -140,14 +140,14 @@ class BranchDigraphSample:
         self,
         graph_version: Optional[str] = None,
         *,
-        augment: Optional[AugmentationCfg] = None,
+        augment: AugmentationField = None,
         return_digraph: Literal[True],
     ) -> tuple[BranchDigraphData, VBranchDigraph]: ...
     def to_tensor(
         self,
         graph_version: Optional[str] = None,
         *,
-        augment: Optional[AugmentationCfg] = None,
+        augment: AugmentationField = None,
         return_digraph: bool = False,
     ) -> BranchDigraphData | tuple[BranchDigraphData, VBranchDigraph]:
         """Return a BranchDigraphData object containing the data of this sample, with the specified graph version(s)."""
