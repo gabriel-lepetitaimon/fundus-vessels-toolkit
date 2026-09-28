@@ -8,6 +8,7 @@ import numpy.typing as npt
 import torch
 
 from fundus_vessels_toolkit.utils import if_none
+from fundus_vessels_toolkit.utils.profiling import watch
 
 from ..segment_to_graph import (
     GraphSimplifyArg,
@@ -121,12 +122,16 @@ class SegToGraph:
             The vascular graph
         """
         seg = self.img_to_seg(vessel_mask)
-        skel = self.skeletonize(seg)
-        graph = self.skel_to_vgraph(skel, vessel_mask)
+        with watch("Skeletonize"):
+            skel = self.skeletonize(seg)
+        with watch("Parse graph"):
+            graph = self.skel_to_vgraph(skel, vessel_mask)
         if if_none(simplify, self.simplify_graph):
-            self.simplify(graph, inplace=True)
+            with watch("Simplify graph"):
+                self.simplify(graph, inplace=True)
         if if_none(parse_geometry, self.geometry_parsing_enabled):
-            graph = self.populate_geometry(graph, vessel_mask)
+            with watch("Populate geometry"):
+                graph = self.populate_geometry(graph, vessel_mask)
         return graph
 
     # --- Intermediate steps ---

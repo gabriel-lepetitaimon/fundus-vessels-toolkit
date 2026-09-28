@@ -299,7 +299,7 @@ std::tuple<torch::Tensor, double> fit_bspline(const torch::Tensor& curveYX_tenso
     float ignoreGapsSqr = pow(get_if_exists(options, "ignore_gaps", 2.0), 2);
 
     PointList tangents;
-    tensor_to_pointList(tangents_tensor, tangents);
+    tensor_to_vector(tangents_tensor, tangents);
     if (tangents.size() != curve.size()) {
         // If tangents are not provided, compute them
         tangents.clear();

@@ -397,11 +397,11 @@ def split_complex_bifurcations(
                         elif valid_u1:  # If both are valid, assign to the closest one
                             (succ_main1 if d1 < d2 else succ_main2).append(succ)
                         else:  # If none are valid, assign to the closest segment
-                            head_tail1 = bifurcation12 - tail1 / np.linalg.norm(bifurcation12 - tail1)
-                            head_tail2 = bifurcation12 - tail2 / np.linalg.norm(bifurcation12 - tail2)
+                            head_tail1 = bifurcation12 - tail1 / (np.linalg.norm(bifurcation12 - tail1) + 1e-8)
+                            head_tail2 = bifurcation12 - tail2 / (np.linalg.norm(bifurcation12 - tail2) + 1e-8)
                             d1 = np.linalg.norm(np.cross(head_tail1, bifurcation12 - tail))
                             d2 = np.linalg.norm(np.cross(head_tail2, bifurcation12 - tail))
-                            (succ_main1 if d1 < d2 else succ_main2).append(succ)
+                            (succ_main1 if d1 <= d2 else succ_main2).append(succ)
 
             # If there are successors bifurcating before main1 and main2, process them first, one after the other
             for succ, coord in succ_pre:

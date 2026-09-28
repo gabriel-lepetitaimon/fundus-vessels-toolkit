@@ -269,7 +269,7 @@ static const std::vector<float> GAUSSIAN_HALF_STD2 = gaussianHalfKernel1D(2, 7);
 static const std::vector<float> GAUSSIAN_HALF_STD3 = gaussianHalfKernel1D(3, 10);
 
 // === Average Filters ===
-std::vector<float> movingAvg(const std::vector<float>& x, std::size_t size, const std::vector<int>& evaluateAtID);
+std::vector<float> movingAvg(const std::vector<float>& x, std::size_t size, const std::vector<int>& evaluateAtID = {});
 std::vector<float> movingAvg(const std::vector<float>& x, const std::vector<float>& kernel);
 
 template <typename T>

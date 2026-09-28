@@ -20,8 +20,8 @@ import networkx as nx
 import numpy as np
 import numpy.typing as npt
 
-from fundus_toolkits.utils.geometric import distance_matrix
-from fundus_toolkits.utils.typing import Int2DArray, IntPairArrayLike
+from fundus_toolkits.utils.geometric import Point, distance_matrix
+from fundus_toolkits.utils.typing import FloatPair, Int2DArray, IntPairArrayLike
 
 from ..utils import if_none
 from ..utils.cluster import cluster_by_distance, iterative_reduce_clusters, reduce_clusters
@@ -730,6 +730,8 @@ def extend_topology(
     snapDist: float,
     minSpaceBetweenSplits: float,
     nodeMergeDistance: float,
+    blind_spot: Optional[Point] = None,
+    blind_spot_angle=30,
     inplace: bool = False,
 ) -> tuple[VGraph, Int2DArray]:
     """
@@ -782,13 +784,15 @@ def extend_topology(
         graph = graph.copy()
 
     gdata = graph.geometric_data()
-    branch_curves = [torch.from_numpy(_).round().int() for _ in gdata.branch_curve()]
+    with warnings.catch_warnings(action="ignore"):
+        branch_curves = [torch.from_numpy(_).round().int() for _ in gdata.branch_curve()]
     branch_tangents = [
-        torch.from_numpy(_.data).float() if _ is not None else torch.empty(0, 2)
+        torch.from_numpy(_.data).double() if _ is not None else torch.empty(0, 2)
         for _ in gdata.branch_data(VBranchGeoData.Fields.TANGENTS)
     ]
     branch_list = torch.from_numpy(graph.branch_list)
     nodes_yx = torch.from_numpy(gdata.node_coord())
+    use_blind_spot = blind_spot is not None and not blind_spot.is_nan()
 
     splits, candidates = branch_connexion_candidates(
         branch_curves,
@@ -804,6 +808,8 @@ def extend_topology(
         float(snapDist),
         float(minSpaceBetweenSplits),
         float(nodeMergeDistance),
+        tuple(blind_spot) if use_blind_spot else (-1, -1),  # type: ignore
+        float(blind_spot_angle) if use_blind_spot else 0,
     )
 
     graph_v0 = graph.copy()
@@ -1249,7 +1255,7 @@ def find_endpoints_branches_intercept_legacy(
     nearest_branch, intercept = find_closest_branches_cpp(
         torch.from_numpy(gdata.skeleton_label_map(connect_nodes=True)).int(),
         torch.from_numpy(endpoints_yx).int(),
-        torch.from_numpy(endpoints_t).float(),
+        torch.from_numpy(endpoints_t).double(),
         max_distance,
         np.deg2rad(2 * angle_tolerance),
     )

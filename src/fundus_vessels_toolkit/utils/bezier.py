@@ -444,9 +444,9 @@ class BSpline(tuple[BezierCubic, ...]):
 
         curve = torch.from_numpy(yx_points.copy()).int()
         tangent_torch = (
-            torch.from_numpy(tangents.copy()).float()
+            torch.from_numpy(tangents.copy()).double()
             if tangents is not None
-            else torch.empty((0, 2), dtype=torch.float)
+            else torch.empty((0, 2), dtype=torch.float64)
         )
 
         curv_roots_torch = torch.tensor([-1], dtype=torch.int)
@@ -958,7 +958,7 @@ def fit_bezier_cubic(
     from .cpp_extensions.fvt_cpp import fit_bezier_cubic as fit_bezier__cubic_cpp
 
     curve = curve.cpu().int()
-    tangents = tangents.cpu().float() if tangents is not None else torch.empty((0, 2), dtype=torch.float32)
+    tangents = tangents.cpu().double() if tangents is not None else torch.empty((0, 2), dtype=torch.float32)
 
     bezier, max_error, u = fit_bezier__cubic_cpp(curve, tangents, max_error, tangent_std, start, end)
     return BezierCubic.from_array(bezier), max_error, u

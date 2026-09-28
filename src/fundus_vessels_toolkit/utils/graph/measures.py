@@ -396,7 +396,7 @@ def intercept_cones_branches(
     node_yx = node_yx.int() if node_yx is not None else torch.empty((0, 2), dtype=torch.int32)
 
     cone_tips_yx = cone_tips_yx.cpu().int()
-    cone_dirs_vu = cone_dirs_vu.cpu().float()
+    cone_dirs_vu = cone_dirs_vu.cpu().double()
     assert cone_tips_yx.dim() == 2 and cone_tips_yx.shape[1] == 2, "cone_tips_yx must be a (M, 2) tensor"
     assert cone_dirs_vu.dim() == 2 and cone_dirs_vu.shape[1] == 2, "cone_dirs must be a (M, 2) tensor"
     assert cone_tips_yx.shape[0] == cone_dirs_vu.shape[0], "cone_tips_yx and cone_dirs must have the same length"

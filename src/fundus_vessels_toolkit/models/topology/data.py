@@ -428,7 +428,7 @@ class BranchDigraphData(PygData):
                     graph = deteriorate_graph(graph, opts=augment_opts.deterioration_opts, inplace=True)
 
             with p.sub("VBranchDigraph.from_graph"):
-                branch_digraph = VBranchDigraph.from_graph(graph, check=False)
+                branch_digraph = VBranchDigraph.from_graph(graph, blind_spot=od_center, check=False)
             if gt_topology is not None:
                 with p.sub("compute_p_from_gt"):
                     # gt_topology = gt_topology[0].as_dense(), gt_topology[1].as_dense()
@@ -715,6 +715,9 @@ class BranchDigraphBatch(BranchDigraphData):
 
     vnode_count: Tensor
     """Tensor of shape (batch_size,) containing the number of vascular nodes for each graph in the batch."""
+
+    graph_version: list[str]
+    """List of strings containing the name of the algorithm used to generate the graph for each graph in the batch."""
 
     @classmethod
     def has_gt(cls, instance: Self) -> TypeGuard[_BranchDigraphBatchWithGT]:

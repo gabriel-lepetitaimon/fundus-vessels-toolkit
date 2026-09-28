@@ -1119,13 +1119,13 @@ class BranchDigraphDataset(PygDataset):
         gt_tree = gt_digraph.optimize_tree(keep_missing_branch=True, assign_av="subtree")
         if show_gt_graph:
             shown_gt_tree = gt_tree.copy()
-            if simplify:
+            if False:
                 shown_gt_tree = shown_gt_tree.delete_branch(np.where(gt_digraph.branch_fp())[0])
                 disconnect_crossing(shown_gt_tree, inplace=True)
                 simplify_passing_nodes(shown_gt_tree, min_angle=90, with_same_branch_attr="av", inplace=True)
             else:
                 shown_gt_tree.branch_attr.loc[np.where(gt_digraph.branch_fp())[0], "av"] = AVLabel.BKG
-            draw_tree(shown_gt_tree, view=m[2], branch_color="av", bspline_dir=True, interactive=True)
+            draw_tree(shown_gt_tree, view=m[2], branch_color="av", bspline_dir=True, interactive=True, edge_labels=True)
 
         # === Draw Predicted tree ===
         tree = gt_digraph.compute_tree_from_arborescence(parent_pred, dir_pred, fp_pred, keep_missing_branch=True)

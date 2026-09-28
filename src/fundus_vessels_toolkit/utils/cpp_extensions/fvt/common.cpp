@@ -436,7 +436,7 @@ torch::Tensor remove_rows(const torch::Tensor& tensor, std::vector<int> rows) {
 
 template <>
 void tensor_to_vector<Point>(const torch::Tensor& tensor, std::vector<Point>& vec) {
-    auto accessor = tensor.accessor<float, 2>();
+    auto accessor = tensor.accessor<double, 2>();
     vec.clear();
     vec.reserve(tensor.size(0));
     for (std::size_t i = 0; i < (std::size_t)tensor.size(0); i++) vec.push_back(Point(accessor[i][0], accessor[i][1]));

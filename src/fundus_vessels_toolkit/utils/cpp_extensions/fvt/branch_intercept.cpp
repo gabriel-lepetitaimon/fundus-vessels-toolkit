@@ -359,8 +359,7 @@ ConnexionCandidate symmetric_connexion(const ConnexionCandidate& c) {
  */
 std::tuple<std::list<InterceptCandidate>, float> _cone_curve_intercept(
     const CurveYX& curve, const std::vector<Point>& curveTan, const IntPoint& coneApex, const Point& coneDir,
-    float coneSqrHeight, float coneApexCos, float coneEndCos, float minCosSim, float minHypCosSim,
-    float minSpaceBetweenSplits) {
+    float coneSqrHeight, float coneApexCos, float coneEndCos, float minCosSim, float minSpaceBetweenSplits) {
     float minScore = std::numeric_limits<float>::max();
 
     std::list<InterceptCandidate> intercepts;
@@ -390,10 +389,10 @@ std::tuple<std::list<InterceptCandidate>, float> _cone_curve_intercept(
 
     // Lambda function to register intercept candidates
     auto registerIntercept = [&](std::size_t i, float l, float score) {
-        float tanSim = curveTan[i].dot(coneDir);
+        // float tanCosSim = curveTan[i].dot(coneDir);
         float hypCosSim = curveTan[i].dot((curve[i] - coneApex).normalize());
-        bool towardsLastTip = tanSim >= minCosSim && hypCosSim >= minHypCosSim;
-        bool towardsFirstTip = -tanSim >= minCosSim && -hypCosSim >= minHypCosSim;
+        bool towardsLastTip = hypCosSim >= minCosSim;
+        bool towardsFirstTip = -hypCosSim >= minCosSim;
         if (towardsLastTip || towardsFirstTip) {
             intercepts.emplace_back(InterceptCandidate{i, l, towardsFirstTip, towardsLastTip, score});
             if (score < minScore) minScore = score;
@@ -462,7 +461,7 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
     const std::vector<torch::Tensor>& branchCurves, const std::vector<torch::Tensor>& branchTangents,
     const torch::Tensor& branchListTensor, const torch::Tensor& nodesYX, const IntPair& shape, float maxDist,
     float nearConeAngle, float farConeAngle, float maxTanAngle, float maxHypAngle, float snapDist,
-    float minSpaceBetweenSplits, float mergeNodeDist) {
+    float minSpaceBetweenSplits, float mergeNodeDist, std::array<double, 2> blind_spot, float blind_spot_angle) {
     // === PREPROCESS INPUTS ===
     std::size_t B = branchCurves.size(), N = nodesYX.size(0);
     if (B == 0 || N == 0) return {std::vector<std::pair<int, Splits>>(), torch::empty({0, 2, 0, 2}, torch::kBool)};
@@ -486,6 +485,9 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
     tensor_to_vector(nodesYX, nodesPoint);
 
     GraphAdjList graph = edge_list_to_adjlist(branchList, N);
+
+    Point blindSpot(blind_spot[0], blind_spot[1]);
+    float blind_spot_max_cos = blind_spot_angle > 0 ? std::cos(blind_spot_angle * M_PI / 180.0) : 1;
 
     // === INTERPOLATE CURVES ===
     std::vector<std::array<IntPoint, 2>> tipsPos(B);
@@ -885,8 +887,14 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
                 const auto& b1Curve = curves[b1];
                 // Find intercepts points
                 auto [_intercepts, totalL] =
-                    _cone_curve_intercept(b1Curve, tangents[b1], p, dir, maxDistSqr, nearConeCos, farConeCos, minTanCos,
-                                          minHypCos, minSpaceBetweenSplits);
+                    _cone_curve_intercept(b1Curve, tangents[b1], p, dir, maxDistSqr, nearConeCos, farConeCos, minHypCos,
+                                          minSpaceBetweenSplits);
+                if (blind_spot_max_cos < 1.0f) {
+                    auto p0 = (p - blindSpot).normalize();
+                    _intercepts.remove_if([&](const InterceptCandidate& c) {
+                        return (b1Curve[c.i] - blindSpot).normalize().dot(p0) < blind_spot_max_cos;
+                    });
+                }
                 if (_intercepts.empty()) continue;
 
                 // Snap to the start tip if within the snapping distance

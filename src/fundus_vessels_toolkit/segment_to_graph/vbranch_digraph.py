@@ -10,9 +10,9 @@ import numpy.typing as npt
 import pandas as pd
 from networkx import maximum_branching
 
+from fundus_toolkits.utils.geometric import Point
 from fundus_toolkits.utils.typing import (
     Bool1DArray,
-    Bool1DArrayLike,
     Float1DArray,
     Indices,
     IndicesLike,
@@ -612,6 +612,8 @@ class VBranchDigraph(LineDigraph):
         max_angle=35,
         tan_max_angle=110,
         pos_tolerance=15,
+        blind_spot: Optional[Point] = None,
+        blind_spot_angle=45,
         check: bool = True,
         split_for_reconnections: bool = True,
     ) -> _VBranchDigraphWithGraph:
@@ -642,6 +644,8 @@ class VBranchDigraph(LineDigraph):
                         snapDist=pos_tolerance,
                         minSpaceBetweenSplits=pos_tolerance * 2,
                         nodeMergeDistance=pos_tolerance,
+                        blind_spot=blind_spot,
+                        blind_spot_angle=blind_spot_angle,
                         inplace=True,
                     )
                     derive_tips_geometry_from_curve_geometry(graph, tangent=True, inplace=True)
@@ -792,12 +796,17 @@ class VBranchDigraph(LineDigraph):
             outs = optimal_topology_cpp(
                 [_.to_tensor() for _ in [branch_topo_a, branch_topo_v]],
                 torch.from_numpy(self.line_list),
-                torch.from_numpy(self.graph.geometric_data().tip_coord()),
+                torch.from_numpy(self.graph.geometric_data().node_coord()),
+                torch.from_numpy(self.graph.branch_list),
                 plausibility_threshold,
             )
             best_topo, dir_logit, line_p = [_.numpy(force=True) for _ in outs]
             fp = best_topo == -1
             av = best_topo == 0
+
+            if np.isnan(dir_logit).any():
+                # TODO: INVESTIGATE!
+                dir_logit[np.isnan(dir_logit)] = 0.0
 
             # === Post fix erroneous branch skips ===
             # with watch("Post-fix erroneous branch skips"):

@@ -95,7 +95,7 @@ def grid_indices(shape: tuple[int, int], device=None) -> Tensor:
     return torch.stack(torch.meshgrid(y, x, indexing="ij"), dim=-1)  # (H, W, 2)
 
 
-def groupby_mean(x: Tensor, group_idx: Tensor, *, num_group: Optional[int] = None) -> Tensor:
+def groupby_mean(x: Tensor, group_idx: Tensor, *, num_groups: Optional[int] = None) -> Tensor:
     """Compute the mean of values in `x` grouped by `group_idx`.
 
     Parameters
@@ -111,10 +111,10 @@ def groupby_mean(x: Tensor, group_idx: Tensor, *, num_group: Optional[int] = Non
         A tensor of shape (G,) containing the mean values for each group, where G is the maximum group index + 1.
     """  # noqa: E501
     group_idx = group_idx.long()
-    if num_group is None:
-        num_group = int(group_idx.max().item()) + 1
-    group_sum = torch.zeros(num_group, dtype=x.dtype, device=x.device).scatter_add_(0, group_idx, x)
-    count = torch.bincount(group_idx, minlength=num_group)
+    if num_groups is None:
+        num_groups = int(group_idx.max().item()) + 1
+    group_sum = torch.zeros(num_groups, dtype=x.dtype, device=x.device).scatter_add_(0, group_idx, x)
+    count = torch.bincount(group_idx, minlength=num_groups)
     not_null_mask = count != 0
     group_sum[not_null_mask] /= count[not_null_mask].float()
     return group_sum

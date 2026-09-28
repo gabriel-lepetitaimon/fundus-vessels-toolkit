@@ -1107,7 +1107,8 @@ def optimal_topology(
     outs = optimal_topology_cpp(
         [_.to_tensor() for _ in branch_topos],
         torch.empty((0, 4), dtype=torch.int64),
-        torch.from_numpy(graph.geometric_data().tip_coord()),
+        torch.from_numpy(graph.geometric_data().node_coord()),
+        torch.from_numpy(graph.branch_list),
         plausibility_threshold,
     )
     # TODO: include shortcut post-fix in cpp
