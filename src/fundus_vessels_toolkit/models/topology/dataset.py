@@ -719,11 +719,24 @@ class BranchDigraphDatasetConfig(BaseModel):
 
     model_config = ConfigDict(use_attribute_docstrings=True)
 
-    graph_version: dict[str, float] | str = Field(default_factory=dict)
+    graph_version: dict[str, float] | str | Literal["all"] = Field(default_factory=dict)
     """Version of the graph to use as input.
-    If a string is provided, it should be one of the keys in the graphes dict of the samples, and the corresponding graph will be used for all samples.
+    If a string is provided, it should be one of the keys in the graphes dict of the samples, and the corresponding graph will be used for all samples. 
+    If "all" is provided, all available graph versions will be used.
     If a dict is provided, it should map graph version names to weights, and the corresponding graphs will be loaded and merged with the specified weights for each sample. If a version name in the dict is not found in a sample, that sample will be skipped with a warning.
     """  # noqa: E501
+
+    @property
+    def graph_version_names(self) -> list[str] | None:
+        if isinstance(self.graph_version, str):
+            return [self.graph_version]
+        elif isinstance(self.graph_version, dict):
+            return list(self.graph_version.keys())
+        elif self.graph_version == "all":
+            return None
+        else:
+            raise ValueError(f"Invalid graph_version type: {type(self.graph_version)}")
+
     preload: bool | Literal["without-image"] = Field(default=False)
     augment: AugmentationField = Field(default_factory=AugmentationCfg)
 
@@ -779,6 +792,7 @@ class BranchDigraphDataset(PygDataset):
 
         super().__init__(root=root, transform=transform, force_reload=force_reload)
         self.samples_info = [info.prefix(self.processed_dir) for info in self.samples_info]
+        self.__all_graph_sample_idx: Int1DArray | None = None
 
         if (preload := self.cfg.preload) is not False:
             self.preload(with_image=preload != "without-image")
@@ -928,14 +942,46 @@ class BranchDigraphDataset(PygDataset):
     def processed_file_names(self):
         return [file for sample in self.samples_info for file in sample.all_files()]
 
+    @property
+    def _all_graph_sample_idx(self) -> Int1DArray:
+        if (
+            self.__all_graph_sample_idx is None
+            or len(self.__all_graph_sample_idx) != len(self.samples_info)
+            or getattr(self, "__graph_version_names", None) != self.cfg.graph_version_names
+        ):
+            versions = self.cfg.graph_version_names
+            self.__graph_version_names = versions
+            if versions is None:
+                versions = self.list_versions()
+            self.__all_graph_sample_idx = np.cumsum(
+                [sum(v in versions for v in sample.graphes.keys()) for sample in self.samples_info], dtype=int
+            )  # type: ignore
+        return self.__all_graph_sample_idx  # type: ignore
+
     def len(self):
-        return len(self.samples_info)
+        return len(self.samples_info) if not self._use_all_graph_versions else self._all_graph_sample_idx[-1]
 
     def get(self, idx: int) -> BranchDigraphData:
-        sample = self.get_sample(idx % len(self.samples_info), discard_gt_tree=True, load_av_maps=False)
+        if self._use_all_graph_versions:
+            sample_idx = int(np.searchsorted(self._all_graph_sample_idx, idx, side="right"))
+            if idx >= len(self.samples_info):
+                raise IndexError(f"Index {idx} is out of bounds for dataset with {len(self.samples_info)} samples.")
+        else:
+            sample_idx = idx % len(self.samples_info)
 
-        N_versions = len(sample.graphes)
+        sample = self.get_sample(sample_idx, discard_gt_tree=True, load_av_maps=False)
         versions = list(sample.graphes.keys())
+        if self.cfg.graph_version_names is not None:
+            versions = [v for v in versions if v in self.cfg.graph_version_names]
+            if not versions:
+                raise ValueError(
+                    f"Sample {sample.name} has no graph version matching the specified cfg.graph_version_names: {self.cfg.graph_version_names}"
+                )
+        N_versions = len(sample.graphes)
+
+        if self._use_all_graph_versions:
+            sub_idx = idx - (self._all_graph_sample_idx[sample_idx - 1] if sample_idx > 0 else 0)
+            return sample.to_tensor(versions[sub_idx], augment=self.cfg.augment)
 
         if isinstance(self.cfg.graph_version, dict):
             pick_p = [self.cfg.graph_version.get(v, 0.0) for v in versions]
@@ -1338,6 +1384,7 @@ class BranchDigraphDataset(PygDataset):
         test_dataset = self.split(test_indices)
         for test_set in (val_dataset, test_dataset):
             test_set.cfg.augment = None
+            test_set._use_all_graph_versions = True
 
         return train_dataset, val_dataset, test_dataset
 

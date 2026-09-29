@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import gc
 import math
+import os
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Annotated, Literal, NotRequired, TypedDict
+from typing import Annotated, Literal, NotRequired, Optional, TypedDict
 
 import psutil
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
+import wandb
 from lightning_fabric.plugins.precision.precision import _PRECISION_INPUT_STR
 from pydantic import BaseModel, ConfigDict, Field
 from pytorch_lightning.callbacks import ModelCheckpoint
@@ -18,7 +20,6 @@ from torch_geometric.loader import DataLoader as PyGDataLoader
 from torchmetrics import MetricCollection, Specificity
 from torchmetrics.classification import Accuracy, Precision, Recall
 
-import wandb
 from fundus_vessels_toolkit.models.metrics.tree import (
     MetricCollectionDict,
     ParentAcc,
@@ -42,6 +43,7 @@ from fundus_vessels_toolkit.models.topology.model import BranchDigraphModel, Bra
 from fundus_vessels_toolkit.utils.nnet.experiment import ExpCfgBaseModel, ExperimentRunFactory
 from fundus_vessels_toolkit.utils.nnet.optuna import ListLiteralHyperParam
 from fundus_vessels_toolkit.utils.nnet.pydantic_yaml import model_validate_yaml_file
+from fundus_vessels_toolkit.utils.torch import groupby_mean
 
 # torch.set_float32_matmul_precision("medium")
 torch.backends.fp32_precision = "ieee"  # type: ignore
@@ -206,6 +208,7 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
         model = DigraphGNNTrainer(cfg.model_dump(), compile=hdw_cfg.compile, n_step_per_epoch=n_step_per_epoch)
 
         checkpoint = ModelCheckpoint(monitor="val_agg", mode="max", save_weights_only=True)
+        pruner = exp_run.pruning_callback("val_agg")
 
         trainer = L.Trainer(
             max_epochs=cfg.epoch,
@@ -216,7 +219,7 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
             # gradient_clip_val=0.5,
             # gradient_clip_algorithm="value",
             # num_sanity_val_steps=0,
-            callbacks=[checkpoint],
+            callbacks=[checkpoint, pruner],
             precision=hdw_cfg.precision,
             **hdw_cfg.gpu_specs(),
         )
@@ -258,7 +261,7 @@ class DigraphGNNTrainer(L.LightningModule):
         self.model = BranchDigraphModel(self.config.model, compile=compile)
 
         # === LOSSES ===
-        self.fp_bce_loss = nn.BCEWithLogitsLoss()
+        self.fp_bce_loss = nn.BCEWithLogitsLoss(reduction="none")
         self.av_bce_loss = nn.BCEWithLogitsLoss()
         self.dir_bce_loss = nn.BCEWithLogitsLoss()
         self.root_bce_loss = nn.BCEWithLogitsLoss()
@@ -371,9 +374,18 @@ class DigraphGNNTrainer(L.LightningModule):
     def forward(self, data: BranchDigraphBatch) -> BranchDigraphModel.Output:
         return self.model(data)
 
-    def losses(self, out: BranchDigraphModel.Output):
+    def losses(self, out: BranchDigraphModel.Output, *, skip_fp_loss: Optional[torch.Tensor] = None):
         # AV loss
         fp_loss = self.fp_bce_loss(out.fp_logit, out.gt_fp_p)
+        if hasattr(out.batch, "batch") and isinstance(out.batch, BranchDigraphBatch):
+            fp_loss = groupby_mean(fp_loss, out.batch.batch, num_groups=out.batch.batch_size)
+            if skip_fp_loss is not None:
+                assert skip_fp_loss.shape == (fp_loss.shape[0],), (
+                    f"skip_fp_loss shape {skip_fp_loss.shape} does not match fp_loss shape {fp_loss.shape}"
+                )
+                skip_fp_loss = skip_fp_loss.to(fp_loss.device)
+                fp_loss = fp_loss * (~skip_fp_loss)
+        fp_loss = fp_loss.mean()
 
         tp_mask = out.gt_fp_p < 0.5
         av_loss = self.av_bce_loss(out.av_logit[tp_mask], out.gt_av_p[tp_mask])
@@ -416,7 +428,8 @@ class DigraphGNNTrainer(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         model_out = self(batch)
-        losses = self.losses(model_out)
+        is_gt_graph = torch.tensor([v == "gt" for v in batch.graph_version])
+        losses = self.losses(model_out, skip_fp_loss=is_gt_graph)
         self.log_dict({k: loss for k, loss in losses.items()}, batch_size=batch.num_graphs, prog_bar=True)
         return losses["loss"]
 
@@ -427,13 +440,13 @@ class DigraphGNNTrainer(L.LightningModule):
         self.log_dict(
             {"val_" + k: loss for k, loss in losses.items()}, batch_size=batch.num_graphs, on_step=False, on_epoch=True
         )
-        val_metrics = self.update_metrics_collection(self.val_metrics, model_out, prefix="val_")
-        self.log_dict(val_metrics, batch_size=batch.num_graphs, on_step=False, on_epoch=True)
+        self.update_metrics_collection(self.val_metrics, model_out, prefix="val_")
 
         self.update_preds(self.val_preds, model_out)
 
     def on_validation_epoch_end(self) -> None:
         metrics = self.val_metrics.compute()
+        self.log_dict({"val_" + k1 + k2: v for k1, group in metrics.items() for k2, v in group.items()})
         self.log("val_agg", metrics["tree"]["-parent-acc"] * metrics["av"]["-acc"] * metrics["dir"]["-acc"])
         self.val_metrics.reset()
 

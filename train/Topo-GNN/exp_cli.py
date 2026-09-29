@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -7,6 +8,8 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 from fundus_vessels_toolkit.utils.nnet.experiment import ExperimentHeader, NoTrialsToRunError
 from train import DigraphGNNTrainerConfig
@@ -95,6 +98,7 @@ def single_run(
 def run_all(
     file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to check.")],
 ):
+    retry_count = 0
     while True:
         out = subprocess.run([sys.executable, __file__, "single-run", file], capture_output=False)
         if out.returncode == 20:
@@ -102,7 +106,13 @@ def run_all(
             break
         elif out.returncode != 0:
             print(f"Error during run: {out.stderr}")
-            break
+            retry_count += 1
+            if retry_count > 3:
+                print("Too many retries. Exiting.")
+                break
+            print("Retrying...")
+        else:
+            retry_count = 0
 
 
 @app.command()
