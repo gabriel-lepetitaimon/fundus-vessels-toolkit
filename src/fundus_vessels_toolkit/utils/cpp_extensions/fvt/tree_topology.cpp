@@ -193,7 +193,7 @@ std::tuple<TopoLabel, float, float, float, std::array<TopoLabel, 2>, std::array<
         const auto& idx = topo_idxs[p.y][p.x];
         if (idx >= max_size) continue;
         curve.push_back(idx);
-        if (p.is_adjacent(prevP))
+        if (p != prevP && p.is_adjacent(prevP))
             normalCosVec.push_back((fuzzy_skeleton[idx] - fuzzy_skeleton[prevIdx]) / p.distance(prevP));
 
         prevP = p, prevIdx = idx;

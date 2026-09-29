@@ -805,7 +805,10 @@ class VBranchDigraph(LineDigraph):
             av = best_topo == 0
 
             if np.isnan(dir_logit).any():
-                # TODO: INVESTIGATE!
+                warnings.warn(
+                    "NaN values found in dir_logit, setting them to 0.0. This may indicate an issue with the plausibility threshold or the input topologies.",
+                    UserWarning,
+                )
                 dir_logit[np.isnan(dir_logit)] = 0.0
 
             # === Post fix erroneous branch skips ===
