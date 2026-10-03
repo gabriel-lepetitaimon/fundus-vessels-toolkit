@@ -1,7 +1,7 @@
 from typing import Tuple
 
+import lightning.pytorch as pl
 import numpy as np
-import pytorch_lightning as pl
 import torch
 import torchmetrics as tm
 from torchmetrics import Metric as TorchMetric

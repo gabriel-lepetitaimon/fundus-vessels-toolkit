@@ -727,13 +727,13 @@ class BranchDigraphDatasetConfig(BaseModel):
     """  # noqa: E501
 
     @property
-    def graph_version_names(self) -> list[str] | None:
+    def graph_version_names(self) -> list[str]:
         if isinstance(self.graph_version, str):
             return [self.graph_version]
         elif isinstance(self.graph_version, dict):
             return list(self.graph_version.keys())
         elif self.graph_version == "all":
-            return None
+            return []
         else:
             raise ValueError(f"Invalid graph_version type: {type(self.graph_version)}")
 
@@ -951,7 +951,7 @@ class BranchDigraphDataset(PygDataset):
         ):
             versions = self.cfg.graph_version_names
             self.__graph_version_names = versions
-            if versions is None:
+            if not versions:
                 versions = self.list_versions()
             self.__all_graph_sample_idx = np.cumsum(
                 [sum(v in versions for v in sample.graphes.keys()) for sample in self.samples_info], dtype=int
@@ -962,20 +962,20 @@ class BranchDigraphDataset(PygDataset):
         return len(self.samples_info) if not self._use_all_graph_versions else self._all_graph_sample_idx[-1]
 
     def get(self, idx: int) -> BranchDigraphData:
+        if idx >= self.len():
+            raise IndexError(f"Index {idx} is out of bounds for dataset with {self.len()} samples.")
         if self._use_all_graph_versions:
             sample_idx = int(np.searchsorted(self._all_graph_sample_idx, idx, side="right"))
-            if idx >= len(self.samples_info):
-                raise IndexError(f"Index {idx} is out of bounds for dataset with {len(self.samples_info)} samples.")
         else:
             sample_idx = idx % len(self.samples_info)
 
         sample = self.get_sample(sample_idx, discard_gt_tree=True, load_av_maps=False)
         versions = list(sample.graphes.keys())
-        if self.cfg.graph_version_names is not None:
-            versions = [v for v in versions if v in self.cfg.graph_version_names]
+        if cfg_versions := self.cfg.graph_version_names:
+            versions = [v for v in versions if v in cfg_versions]
             if not versions:
                 raise ValueError(
-                    f"Sample {sample.name} has no graph version matching the specified cfg.graph_version_names: {self.cfg.graph_version_names}"
+                    f"Sample {sample.name} has no graph version matching the specified cfg.graph_version_names: {cfg_versions}"
                 )
         N_versions = len(sample.graphes)
 
@@ -1171,7 +1171,7 @@ class BranchDigraphDataset(PygDataset):
                 simplify_passing_nodes(shown_gt_tree, min_angle=90, with_same_branch_attr="av", inplace=True)
             else:
                 shown_gt_tree.branch_attr.loc[np.where(gt_digraph.branch_fp())[0], "av"] = AVLabel.BKG
-            draw_tree(shown_gt_tree, view=m[2], branch_color="av", bspline_dir=True, interactive=True, edge_labels=True)
+            # draw_tree(shown_gt_tree, view=m[2], branch_color="av", bspline_dir=True, interactive=True, edge_labels=True)
 
         # === Draw Predicted tree ===
         tree = gt_digraph.compute_tree_from_arborescence(parent_pred, dir_pred, fp_pred, keep_missing_branch=True)
@@ -1336,6 +1336,7 @@ class BranchDigraphDataset(PygDataset):
         ignore_dataset_type: bool = False,
         rng_seed: Optional[int] = None,
         cfg: Optional[BranchDigraphDatasetConfig] = None,
+        validate_all_graph_versions: bool = True,
     ) -> tuple[BranchDigraphDataset, BranchDigraphDataset, BranchDigraphDataset]:
         """Split the dataset into train, validation and test sets and return corresponding DataLoaders."""
         assert train_ratio + val_ratio < 1.0, "train_ratio and val_ratio must sum to less than 1.0"
@@ -1384,7 +1385,7 @@ class BranchDigraphDataset(PygDataset):
         test_dataset = self.split(test_indices)
         for test_set in (val_dataset, test_dataset):
             test_set.cfg.augment = None
-            test_set._use_all_graph_versions = True
+            test_set._use_all_graph_versions = validate_all_graph_versions
 
         return train_dataset, val_dataset, test_dataset
 

@@ -9,6 +9,9 @@ from typing import Annotated, Any, Literal, Optional, Sequence, Union, overload
 
 import numpy as np
 import optuna
+import wandb
+from lightning.pytorch.callbacks import Callback
+from lightning.pytorch.loggers import WandbLogger
 from pydantic import (
     BaseModel,
     BeforeValidator,
@@ -22,12 +25,9 @@ from pydantic import (
 )
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema
-from pytorch_lightning.callbacks import Callback
-from pytorch_lightning.loggers import WandbLogger
 from rich.console import Console
 from ruamel.yaml import YAML
 
-import wandb
 from fundus_toolkits.utils.typing import Int1DArray
 
 from .optuna import OptunaCfg, TrialContext, current_trial

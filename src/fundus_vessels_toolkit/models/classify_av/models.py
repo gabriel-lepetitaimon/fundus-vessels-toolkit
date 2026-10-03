@@ -8,7 +8,7 @@ from typing import Dict, List
 import huggingface_hub
 import segmentation_models_pytorch as smp
 from huggingface_hub import CollectionItem, PyTorchModelHubMixin
-from pytorch_lightning import LightningModule
+from lightning.pytorch import LightningModule
 
 
 class AVBaseModel(LightningModule, PyTorchModelHubMixin):

@@ -39,6 +39,7 @@ train = [
     'pydantic',
     'pytorch-metric-learning',
     'optuna',
+    'optuna-integration[pytorch_lightning]',
     'ruamel.yaml',
 ]
 dev = [
