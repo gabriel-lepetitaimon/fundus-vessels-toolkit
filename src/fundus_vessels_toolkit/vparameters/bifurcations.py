@@ -274,12 +274,24 @@ def split_complex_bifurcations(
     vtree: VTree,
     topo_field: Optional[str] = None,
     *,
+    extend_parent_labels: bool = False,
     geodata: Optional[VGeometricData | int] = None,
     calibre_tip=VBranchGeoData.Fields.TIPS_CALIBRE,
     tangent_tip=VBranchGeoData.Fields.TIPS_TANGENT,
     inplace: bool = False,
 ) -> VTree:
     """Split complex bifurcations (with more than 2 successors) into simple bifurcations and reorder branches index to ensure that the main branch has the lowest index.
+
+    Parameters
+    ----------
+    vtree: VTree
+        The VTree to analyze.
+
+    topo_field: str
+        The branch attribute where to store the topological labels of the branches. If None, the topological labels are not stored.
+
+    extend_parent_labels: bool
+        If True, the topological labels of the parent branches are extended to the new branches created inside the bifurcations. Otherwise (by default), the new branches are assigned their valid topological labels.
 
     Returns
     -------
@@ -416,7 +428,7 @@ def split_complex_bifurcations(
                 parent_id = new_branch_id
                 parent_topo, succ_topo = parent_topo.children
                 # Save the topological labels
-                topoLabels[new_branch_id] = parent_topo
+                topoLabels[new_branch_id] = topo if extend_parent_labels else parent_topo
                 topoLabels[succ.branch_id] = succ_topo
 
             # Move parent_id head node to the bifurcation point
@@ -435,7 +447,7 @@ def split_complex_bifurcations(
                 # Create a new branch from the bifurcation to the new node
                 new_branch_id = vtree.add_branch([(vtree._branch_list[parent_id, 1], new_node)], auto_connect=False)[0]
                 vtree._branch_tree[new_branch_id] = parent_id  # Parent of the new branch is the current parent
-                topoLabels[new_branch_id] = label
+                topoLabels[new_branch_id] = topo if extend_parent_labels else label
                 # Set it as the parent of the successors
                 vtree._branch_tree[[_.branch_id for _ in successors]] = new_branch_id
                 return new_branch_id

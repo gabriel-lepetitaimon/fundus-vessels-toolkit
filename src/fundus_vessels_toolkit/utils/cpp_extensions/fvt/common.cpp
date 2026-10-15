@@ -212,6 +212,37 @@ IntPoint Point::ceil() const { return IntPoint((int)std::ceil(y), (int)std::ceil
 IntPair Point::toIntPair() const { return {(int)round(y), (int)round(x)}; }
 FloatPair Point::toFloatPair() const { return {(float)y, (float)x}; }
 
+Point Point::inf() { return Point(INFINITY, INFINITY); }
+Point Point::nan() { return Point(NAN, NAN); }
+
+std::array<double, 2> lines_intercept_coef(const Point& p1, const Point& t1, const Point& p2, const Point& t2) {
+    // Solve the system of equations:
+    // p1 + s * t1 = p2 + r * t2
+    // Rearranging gives:
+    // s * t1 - r * t2 = p2 - p1
+    // This can be solved using Cramer's rule or by matrix inversion.
+
+    double det = t1.cross(t2);
+    if (det == 0)
+        // Lines are parallel, no intersection
+        return {NAN, NAN};
+
+    Point diff = p2 - p1;
+    double s = diff.cross(t2) / det;
+    double r = diff.cross(t1) / det;
+
+    return {s, r};
+}
+
+Point lines_intercept(const Point& p1, const Point& t1, const Point& p2, const Point& t2, bool semiInfinite) {
+    auto [s, r] = lines_intercept_coef(p1, t1, p2, t2);
+    if (std::isnan(s) || std::isnan(r))  // Lines are parallel
+        return Point(NAN, NAN);
+    if (semiInfinite && (s < 0 || r < 0))  // Intersection is not in the semi-infinite direction
+        return Point(NAN, NAN);
+    return p1 + t1 * s;
+}
+
 // === PointWithID ===
 PointWithID::PointWithID(int y, int x, int id) : IntPoint(y, x), id(id) {}
 

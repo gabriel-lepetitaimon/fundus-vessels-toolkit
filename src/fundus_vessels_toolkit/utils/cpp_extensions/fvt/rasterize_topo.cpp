@@ -232,15 +232,15 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
             // === DRAW THE BRANCH ===
             auto drawTopo = [&](IntPoint pt, float u, float d, int branchID, float rank, float priority) {
                 d = MAX_PLAUSIBILITY - d;  // Convert distance to fuzzy skeleton map value
+                float topoValue = rank + u;
                 if (!pt.is_inside(maxShape)) return;
                 const auto branchLabel = useBranchMapping ? branchMappingAcc[branchID + 1] : branchID + 1;
                 if (branchLabelsMapAcc[pt.y][pt.x] == branchLabel) {
                     if (d <= fuzzySkeletonMapAcc[pt.y][pt.x]) return;
-                } else if (priority <= priorityMapAcc[pt.y][pt.x])
+                } else if (priority < priorityMapAcc[pt.y][pt.x])
                     return;
-
-                float topoValue = rank + u;
-                if (fuzzySkeletonMapAcc[pt.y][pt.x] == d && topoMapAcc[pt.y][pt.x] >= topoValue) return;
+                else if (priority == priorityMapAcc[pt.y][pt.x] && topoMapAcc[pt.y][pt.x] >= topoValue)
+                    return;
                 topoMapAcc[pt.y][pt.x] = topoValue;
                 fuzzySkeletonMapAcc[pt.y][pt.x] = d;
                 branchLabelsMapAcc[pt.y][pt.x] = branchLabel;
@@ -264,6 +264,7 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
             }
 
             // === FILL HEAD JUNCTION ===
+            if (branch.children.empty()) continue;  // If the branch has no children, skip this filling
             if (fill_junctions) {
                 const auto& headTip = tips[branchID][1];
                 if (headTip.w < 0) continue;  // If the head tip is invalid, skip this filling
@@ -273,13 +274,14 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
                 for (const auto& childID : branch.children) {
                     const auto& childTip = tips[childID][0];
                     if (childTip.w < 0) continue;  // If the child tip is invalid, skip this filling
-                    if (bezier_interpolate <= 0.0f || (distance(headTip.yx, childTip.yx) <= headTip.w * SQRT2))
+                    if (bezier_interpolate <= 0.0f || (distance(headTip.yx, childTip.yx) <= childTip.w))
                         near_children.push_back(childID);
                     else
                         far_children.push_back(childID);
                 }
 
                 // Draw the connection to near children as quads
+                IntPoint junctionCenter, leftBound, rightBound;
                 if (!near_children.empty()) {
                     // Compute the junction center by averaging the curve tip of near children
                     Point junctionBarycentre = headTip.yx * (headTip.w + 0.5f);
@@ -288,7 +290,7 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
                         junctionBarycentre += tips[childID][0].yx * (tips[childID][0].w + 0.5f);
                         weightSum += tips[childID][0].w + 0.5f;
                     }
-                    IntPoint junctionCenter = (junctionBarycentre / weightSum).toInt();
+                    junctionCenter = (junctionBarycentre / weightSum).toInt();
 
                     // Order children by clockwise position around the junction center
                     std::vector<std::pair<float, int>> near_angles;
@@ -313,7 +315,6 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
                         prevB = childTip.b[1];
                     }
                     midB.push_back(((prevB + headTip.b[1]) / 2).toInt());
-
                     // Draw the quad from the head tip to the junction center
                     auto drawJunctionHeadQuad = [&](const IntPoint& bound, const IntPoint& midBound) {
                         QuadIterator it(headTip.yx, bound, midBound, junctionCenter, maxShape);
@@ -329,8 +330,11 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
                     drawJunctionHeadQuad(headTip.b[1], midB.back());
 
                     // Draw the quads from the junction center to each near child
-                    auto drawJunctionChildQuad = [&](int32_t childID, IntPoint p, IntPoint bound, IntPoint midBound) {
+                    auto drawJunctionChildQuad = [&](int32_t childID, IntPoint p, IntPoint bound, IntPoint midBound,
+                                                     bool isLeft) {
                         QuadIterator it(p, bound, midBound, junctionCenter, maxShape);
+                        if (!it.isConvex())
+                            it = QuadIterator(p, bound, headTip.b[isLeft ? 0 : 1], headTip.yx, maxShape);
                         if (!it.isConvex()) it = QuadIterator(p, midBound, midBound, junctionCenter, maxShape);
                         it.precomputeInvDiffNorms();
                         while (it.iter()) {
@@ -342,23 +346,66 @@ void rasterize_topology(const torch::Tensor& branch_list, const torch::Tensor& b
                     for (std::size_t i = 0; i < near_children.size(); ++i) {
                         const auto& childID = near_children[i];
                         const auto& childTip = tips[childID][0];
-                        drawJunctionChildQuad(childID, childTip.yx, childTip.b[0], midB[i]);
-                        drawJunctionChildQuad(childID, childTip.yx, childTip.b[1], midB[i + 1]);
+                        drawJunctionChildQuad(childID, childTip.yx, childTip.b[0], midB[i], true);
+                        drawJunctionChildQuad(childID, childTip.yx, childTip.b[1], midB[i + 1], false);
+                    }
+
+                    leftBound = midB.front();
+                    rightBound = midB.back();
+                } else {
+                    // Place the junction center on the closest intercept between the head and child tangents
+                    double nearest_distance = std::numeric_limits<double>::infinity();
+                    Point t;
+                    for (const auto& childID : far_children) {
+                        const auto& childTip = tips[childID][0];
+                        t += childTip.t;
+                        const auto intercept = lines_intercept(headTip.yx, headTip.t, childTip.yx, -childTip.t, true);
+                        if (!intercept.is_valid()) {
+                            nearest_distance = std::numeric_limits<double>::infinity();
+                            break;  // If no valid intercept was found, break the loop
+                        } else if (distance(headTip.yx, intercept) < nearest_distance) {
+                            junctionCenter = intercept.toInt();
+                            nearest_distance = distance(headTip.yx, junctionCenter);
+                        }
+                    }
+                    t = t / far_children.size() + headTip.t;
+                    if (!isfinite(nearest_distance)) {
+                        // If no valid intercept was found, place the junction center at the head tip
+                        junctionCenter = headTip.yx;
+                        leftBound = headTip.b[0];
+                        rightBound = headTip.b[1];
+                    } else {
+                        junctionCenter = (junctionCenter - headTip.t * nearest_distance * 0.25).toInt();
+                        const auto& lrBound = junctionCenter.left_right_pair(t, headTip.w * 0.5);
+                        leftBound = lrBound[0];
+                        rightBound = lrBound[1];
+                        // Draw the quad from the head tip to the junction center
+                        auto drawJunctionHeadQuad = [&](const IntPoint& midBound, const IntPoint& headBound) {
+                            QuadIterator it(headTip.yx, headBound, midBound, junctionCenter, maxShape);
+                            it.precomputeInvDiffNorms();
+                            while (it.iter()) {
+                                const double u = it.fromP12toP34(), d = it.fromP14();
+                                const double priority = MAX_PRIORITY - distance(headTip.yx, it.point());
+                                drawTopo(it.point(), 0.95 + u * 0.05, d, branchID, branch.rank, priority);
+                            }
+                        };
+                        drawJunctionHeadQuad(leftBound, headTip.b[0]);
+                        drawJunctionHeadQuad(rightBound, headTip.b[1]);
                     }
                 }
 
                 // Draw the bezier cubic interpolation from the head branch to each far child
                 for (auto childID : far_children) {
                     const auto& childTip = tips[childID][0];
-                    auto drawJunctionBezier = [&](IntPoint pt, float u, float d) {
-                        const auto priority = MAX_PRIORITY - distance(pt, childTip.yx);
-                        drawTopo(pt, 0.1 * u, d, childID, branch.rank + 1, priority);
+                    auto drawJunctionBezier = [&](IntPoint p, float u, float d) {
+                        const auto priority = MAX_PRIORITY - distance(p, childTip.yx);
+                        drawTopo(p, 0.1 * u, d, childID, branch.rank + 1, priority);
                     };
-                    double d = distance(headTip.yx, childTip.yx) * bezier_interpolate;
-                    const Point c0 = headTip.yx + headTip.t * d;
+                    double d = distance(junctionCenter, childTip.yx) * bezier_interpolate;
+                    const Point c0 = junctionCenter + headTip.t * d * 0.5;
                     const Point c1 = childTip.yx - childTip.t * d;
-                    rasterize_bezier(drawJunctionBezier, {headTip.yx, c0, c1, childTip.yx}, headTip.b, childTip.b,
-                                     maxShape);
+                    rasterize_bezier(drawJunctionBezier, {junctionCenter, c0, c1, childTip.yx}, {leftBound, rightBound},
+                                     childTip.b, maxShape);
                 }
             }
 
@@ -463,6 +510,7 @@ void rasterize_bezier(std::function<void(IntPoint, float, float)> draw, const Be
                 while (it.iter()) draw(it.point(), lerp(u, nextU, it.fromP1toP4()), it.fromP14());
             } else {
                 QuadIterator it(p, b[lr], nextB[lr], nextP, maxShape);
+                if (!it.isConvex()) it = QuadIterator(p, b[lr], b[lr], nextP, maxShape);
                 it.precomputeInvDiffNorms();
                 while (it.iter()) draw(it.point(), lerp(u, nextU, it.fromP12toP34()), it.fromP14());
             }

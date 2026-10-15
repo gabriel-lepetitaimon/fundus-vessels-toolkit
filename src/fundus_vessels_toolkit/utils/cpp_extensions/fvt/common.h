@@ -190,6 +190,7 @@ struct Point {
     bool is_inside(const Point& p) const;
     bool is_adjacent(const Point& p) const;
     bool is_null() const;
+    inline bool is_valid() const { return isfinite(x) && isfinite(y); }
 
     friend std::ostream& operator<<(std::ostream& os, const Point& p) {
         os << "(" << p.y << ", " << p.x << ")";
@@ -201,7 +202,13 @@ struct Point {
     IntPoint ceil() const;
     IntPair toIntPair() const;
     FloatPair toFloatPair() const;
+
+    static Point inf();
+    static Point nan();
 };
+
+std::array<double, 2> lines_intercept_coef(const Point& p1, const Point& t1, const Point& p2, const Point& t2);
+Point lines_intercept(const Point& p1, const Point& t1, const Point& p2, const Point& t2, bool semiInfinite = false);
 
 #pragma omp declare reduction(merge : std::vector<Point> : omp_out.insert(omp_out.end(), omp_in.begin(), omp_in.end()))
 #pragma omp declare reduction(merge : std::list<Point> : omp_out.splice(omp_out.end(), omp_in))
@@ -362,13 +369,68 @@ inline std::size_t lower_triangular_index(std::size_t row, std::size_t col) {
 }
 
 template <unsigned int N>
-inline std::size_t matrix_index(const std::array<uint, N>& index, std::array<std::size_t, N> shape) {
+std::size_t matrix_index(const std::array<uint, N>& index, std::array<std::size_t, N> shape) {
     std::size_t idx = 0, stride = 1;
     for (int i = N - 1; i >= 0; i--) {
         idx += index[i] * stride;
         stride *= shape[i];
     }
     return idx;
+}
+
+// === Sort utilities ===
+template <typename T, typename Callback,
+          typename = std::enable_if_t<std::is_invocable_r_v<float, Callback, const T&, const T&>>>
+void smooth_sort(std::vector<T>& x, Callback comp, std::size_t max_iter = 20) {
+    const auto N = x.size();
+    std::vector<std::vector<float>> comp_(N, std::vector<float>(N, 0));
+    for (std::size_t i = 0; i < N; i++) {
+        for (std::size_t j = 0; j < i; j++) {
+            comp_[i][j] = comp(x[i], x[j]);
+            comp_[j][i] = -comp_[i][j];
+        }
+    }
+
+    std::vector<std::size_t> argsort_idx(N);
+    std::iota(argsort_idx.begin(), argsort_idx.end(), 0);
+
+    // Initial normal quick-sort
+    std::sort(argsort_idx.begin(), argsort_idx.end(), [&](const T& a, const T& b) -> bool { return comp_[a][b] < 0; });
+
+    for (int iter = 0; iter < max_iter; iter++) {
+        bool changed = false;
+        // Place the elements so that the difference between the sum of all comparisons with elements before it
+        // and the sum of all of those after it is maximum.
+        for (std::size_t i = 0; i < N; i++) {
+            std::size_t i_argsort = 0;
+            std::vector<float> cum_comp(N, 0);
+            cum_comp[0] = -std::accumulate(comp_[i].begin(), comp_[i].end(), 0.0f);
+            std::size_t c = 1;
+            for (std::size_t j = 0; j < N; j++) {
+                if (argsort_idx[j] == i) {
+                    i_argsort = j;
+                } else {
+                    cum_comp[c] = cum_comp[c - 1] + 2 * comp_[i][argsort_idx[j]];
+                    c++;
+                }
+            }
+
+            std::size_t new_i_argsort = std::max_element(cum_comp.begin(), cum_comp.end()) - cum_comp.begin();
+            if (cum_comp[i_argsort] != cum_comp[new_i_argsort]) {
+                const auto it_i = argsort_idx.begin() + i_argsort, it_new_i = argsort_idx.begin() + new_i_argsort;
+                if (it_i > it_new_i)
+                    std::rotate(it_new_i, it_new_i + 1, it_i + 1);
+                else
+                    std::rotate(it_i, it_i + 1, it_new_i + 1);
+                changed = true;
+            }
+        }
+        if (!changed) break;
+    }
+
+    // Reorder x according to argsort
+    std::vector<T> x_sorted(x.begin(), x.end());
+    for (std::size_t i = 0; i < N; i++) x[i] = x_sorted[argsort_idx[i]];
 }
 
 /*******************************************************************************************************************

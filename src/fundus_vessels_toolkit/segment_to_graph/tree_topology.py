@@ -276,7 +276,7 @@ class TreeTopology:
         with watch("resolve compelx bifurcation"):
             from ..vparameters.bifurcations import split_complex_bifurcations
 
-            cleaned_tree = split_complex_bifurcations(tree, topo_field="topo")
+            cleaned_tree = split_complex_bifurcations(tree, topo_field="topo", extend_parent_labels=True)
             branch_mapping = np.pad(cleaned_tree.branch_attr["topo"].to_numpy().astype(TopologicalLabel), (1, 0))
 
         geodata = cleaned_tree.geometric_data()
@@ -312,7 +312,7 @@ class TreeTopology:
             )
 
         with watch("create TreeTopology"):
-            branch_mapping = branch_mapping[: tree.branch_count]
+            branch_mapping = branch_mapping[1 : tree.branch_count + 1]
             tree_opt = dict(tree=tree, branch_mapping=branch_mapping) if not discard_tree else dict()
             return cls(labels_map, topo_map, fuzzy_skeleton_map, sparse=sparse, **tree_opt)  # type: ignore
 
@@ -478,7 +478,8 @@ class TreeTopology:
                 branch_fuzzy_map = topo.fuzzy_skeleton_map[branch_mask]
                 branch_fuzzy_map -= branch_fuzzy_map.min()
                 _alpha[branch_mask] = branch_fuzzy_map / branch_fuzzy_map.max()
-
+            elif alpha is None:
+                _alpha[branch_mask] = 0.8
         img = img * (1 - _alpha[:, :, None]) + topo_img * _alpha[:, :, None]
         if channel_first:
             img = np.transpose(img, (2, 0, 1))

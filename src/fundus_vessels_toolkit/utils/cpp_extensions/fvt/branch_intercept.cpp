@@ -684,7 +684,7 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
             if (!p.is_inside(shape[0], shape[1])) continue;
 
             auto& m = map[p.y][p.x];
-            if (m > 0 && m != b + 1) {
+            if (m > 0 && (std::size_t)m != b + 1) {
                 // If the point is already on a curve, record the crossing
                 auto [it, inserted] = crossingsCandidates.try_emplace(p, std::list<CrossingCandidate>{{m - 1}});
                 it->second.emplace_back(CrossingCandidate{(int)b, i, l});
