@@ -818,8 +818,8 @@ class VBranchDigraph(LineDigraph):
             valid_art_shortcut = ~b_is_vei & (branch_topo_a.plausibility > branch_topo_v.plausibility)
             valid_vei_shortcut = ~b_is_art & (branch_topo_v.plausibility > branch_topo_a.plausibility)
             art_lines, vei_lines = line_p & b_is_art[self.b1], line_p & b_is_vei[self.b1]
-            prioritize_existing_branch(self, art_lines, b_is_art, valid_art_shortcut, branch_topo_a.p_dirs)
-            prioritize_existing_branch(self, vei_lines, b_is_vei, valid_vei_shortcut, branch_topo_v.p_dirs)
+            prioritize_existing_branch(self, art_lines, b_is_art, valid_art_shortcut, dir_logit)
+            prioritize_existing_branch(self, vei_lines, b_is_vei, valid_vei_shortcut, dir_logit)
             line_p = art_lines | vei_lines
 
             self._branch_fp_p = np.where(b_is_art | b_is_vei, 0.0, 1.0)

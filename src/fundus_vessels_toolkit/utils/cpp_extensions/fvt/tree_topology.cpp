@@ -361,6 +361,19 @@ class TopoLine {
     }
 };
 
+struct Parent {
+    long id = ROOT;           // Index of the parent branch or the incoming line
+    long branch_id = ROOT;    // Index of the parent branch
+    TopoLabel headLabel = 0;  // Label of the parent head
+    float headRank = 0;       // Rank of the parent head
+};
+
+bool operator<(const Parent& a, const Parent& b) {
+    auto label_rank_a = get_rank(a.headLabel), label_rank_b = get_rank(b.headLabel);
+    if (label_rank_a != label_rank_b) return label_rank_a < label_rank_b;
+    return a.headRank < b.headRank;
+};
+
 /**
  * @brief A* exploration algorithm to find the optimal combination of node states in a sequence of nodes with fixed
  * order and length.
@@ -543,18 +556,13 @@ std::array<torch::Tensor, 3> optimal_topology(const std::vector<std::array<torch
         return nodesPos[branchList[b][topologies[t][b].p_dir >= 0 ? 0 : 1]];
     };
 
-    struct Parent {
-        long id = ROOT;         // Index of the parent branch or the incoming line
-        long branch_id = ROOT;  // Index of the parent branch
-        float headRank = 0;     // Rank of the parent tip
-    };
-
     auto best_parent = [&topologies, &headPos, &tailPos](std::size_t b1, std::size_t t,
                                                          const std::vector<std::size_t>& admissibleB0,
                                                          const std::vector<std::size_t>& b0LinesIds = {}) -> Parent {
         const auto& b1Topo = topologies[t][b1];
         auto b1Subtree = get_subtree(b1Topo.label);
         Parent bestParent, bestSibling;
+        float distToBestSibling = std::numeric_limits<float>::max();
 
         for (std::size_t b = 0; b < admissibleB0.size(); ++b) {
             const auto& b0 = admissibleB0[b];
@@ -563,15 +571,20 @@ std::array<torch::Tensor, 3> optimal_topology(const std::vector<std::array<torch
 
             // Optimal parent must be ...
             if (b1Subtree != get_subtree(b0Topo.label)) continue;  //... in the same subtree,
-            Parent b0AsParent = {b0LinesIds.empty() ? b0 : b0LinesIds[b], b0, b0Topo.headRank};
-            auto b0_is_ancestor_or_self = is_ancestor(b0Topo.headLabel, b1Topo.tailLabel, false);
-            if (b0_is_ancestor_or_self && b0Topo.headRank <= b1Topo.tailRank) {
-                // ... the closest ancestor
-                if (b0Topo.headRank > bestParent.headRank) bestParent = b0AsParent;
-            } else if (b0_is_ancestor_or_self || is_sibling(b0Topo.headLabel, b1Topo.tailLabel, true)) {
+            Parent b0AsParent = {b0LinesIds.empty() ? b0 : b0LinesIds[b], b0, b0Topo.headLabel, b0Topo.headRank};
+            bool sameLabel = b0Topo.headLabel == b1Topo.tailLabel;
+            if ((sameLabel && b0Topo.headRank < b1Topo.tailRank) ||
+                is_ancestor(b0Topo.headLabel, b1Topo.tailLabel, true)) {
+                // ... the highest (and thus nearest) ancestor
+                if (bestParent < b0AsParent) bestParent = b0AsParent;
+            } else if ((sameLabel && b0Topo.headRank < b1Topo.headRank) ||
+                       is_sibling(b0Topo.headLabel, b1Topo.tailLabel, false)) {
                 // ... or the nearest uncertain sibling
-                if (std::abs(b0Topo.headRank - b1Topo.tailRank) < std::abs(bestSibling.headRank - b1Topo.tailRank))
+                float dist = distance(headPos(b0, t), tailPos(b1, t));
+                if (dist < distToBestSibling) {
+                    distToBestSibling = dist;
                     bestSibling = b0AsParent;
+                }
             }
         }
 
@@ -594,7 +607,7 @@ std::array<torch::Tensor, 3> optimal_topology(const std::vector<std::array<torch
 
             // If both parent and sibling found, choose the one with the closest head tip to this branch's tail tip
             const auto& pHead = headPos(bestParent.branch_id, t);
-            return (distance(pHead, b1Tail) <= 1.5 * sHeadDist) ? bestParent : bestSibling;
+            return (distance(pHead, b1Tail) <= 2.f * sHeadDist) ? bestParent : bestSibling;
         }
     };
 
