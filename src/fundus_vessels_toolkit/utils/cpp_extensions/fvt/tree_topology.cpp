@@ -564,10 +564,11 @@ std::array<torch::Tensor, 3> optimal_topology(const std::vector<std::array<torch
             // Optimal parent must be ...
             if (b1Subtree != get_subtree(b0Topo.label)) continue;  //... in the same subtree,
             Parent b0AsParent = {b0LinesIds.empty() ? b0 : b0LinesIds[b], b0, b0Topo.headRank};
-            if (is_ancestor(b0Topo.headLabel, b1Topo.tailLabel, false) && b0Topo.headRank <= b1Topo.tailRank) {
+            auto b0_is_ancestor_or_self = is_ancestor(b0Topo.headLabel, b1Topo.tailLabel, false);
+            if (b0_is_ancestor_or_self && b0Topo.headRank <= b1Topo.tailRank) {
                 // ... the closest ancestor
                 if (b0Topo.headRank > bestParent.headRank) bestParent = b0AsParent;
-            } else if (is_sibling(b0Topo.headLabel, b1Topo.tailLabel, true)) {
+            } else if (b0_is_ancestor_or_self || is_sibling(b0Topo.headLabel, b1Topo.tailLabel, true)) {
                 // ... or the nearest uncertain sibling
                 if (std::abs(b0Topo.headRank - b1Topo.tailRank) < std::abs(bestSibling.headRank - b1Topo.tailRank))
                     bestSibling = b0AsParent;
@@ -593,7 +594,7 @@ std::array<torch::Tensor, 3> optimal_topology(const std::vector<std::array<torch
 
             // If both parent and sibling found, choose the one with the closest head tip to this branch's tail tip
             const auto& pHead = headPos(bestParent.branch_id, t);
-            return (distance(pHead, b1Tail) <= sHeadDist) ? bestParent : bestSibling;
+            return (distance(pHead, b1Tail) <= 1.5 * sHeadDist) ? bestParent : bestSibling;
         }
     };
 
