@@ -55,7 +55,7 @@ def automorph_prepost_processing(standard_resolution: int = 720):
 
 
 @lru_cache(1)
-def automorph_model(automorph_path: Path | None, device: torch.device):
+def automorph_model(automorph_path: Path | None = None, device: torch.device | None = None):
     if automorph_path is None:
         automorph_path = DEFAULT_AUTOMORPH_PATH
     M2_PATH = automorph_path / "M2_Artery_vein"
@@ -72,7 +72,9 @@ def automorph_model(automorph_path: Path | None, device: torch.device):
             checkpoint_path = path / f"CP_best_F1_{name}.pth"
             module.load_state_dict(torch.load(checkpoint_path, map_location=device))
             module.eval()
-            module.to(device=device)
+            if device is not None:
+                module.to(device=device)
+            print(f"{name} N parameters: {sum(p.numel() for p in module.parameters()) / 1e6:.2f}M")
 
         return net_G, net_G_A, net_G_V
 

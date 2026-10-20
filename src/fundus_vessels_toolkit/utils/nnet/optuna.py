@@ -114,10 +114,33 @@ class BasePrunerCfg(BaseModel):
     type: PRUNER_NAME
     """Type of the optuna pruner. Must be one of: "Median", "SuccessiveHalving", None."""
 
-    @abstractmethod
+    patience: int = Field(default=0)
+    """If greater than 0, a trial will be pruned only if the metric has not improved for the given number of consecutive epochs. Default is 0 (no patience)."""  # noqa: E501
+
+    min_delta: float = Field(ge=0, default=0.005)
+    """Minimum change in the optimized metric to consider an improvement. Default is 0.002"""
+
     def create_pruner(self) -> optuna.pruners.BasePruner:
+        pruner = self._create_pruner()
+        if self.patience > 0:
+            pruner = optuna.pruners.PatientPruner(pruner, patience=self.patience)
+        elif pruner is None:
+            raise RuntimeError("Pruner is None. Use a valid pruner type or set patience > 0.")
+        return pruner
+
+    @abstractmethod
+    def _create_pruner(self) -> optuna.pruners.BasePruner | None:
         """Create an Optuna pruner based on this configuration."""
         raise NotImplementedError
+
+
+class PatientPrunerCfg(BasePrunerCfg):
+    type: Literal["Patient"] = "Patient"
+
+    patience: int = Field(gt=0, default=5)
+
+    def _create_pruner(self) -> None:
+        return None
 
 
 class MedianPrunerCfg(BasePrunerCfg):
@@ -135,8 +158,36 @@ class MedianPrunerCfg(BasePrunerCfg):
     n_min_trials: int = Field(default=3)
     """Minimum number of reported trial results at an epoch to judge whether to prune. If the number of reported intermediate values from all trials at the current epoch is less than n_min_trials, the trial will not be pruned."""  # noqa: E501
 
-    def create_pruner(self) -> optuna.pruners.MedianPruner:
+    def _create_pruner(self) -> optuna.pruners.MedianPruner:
         return optuna.pruners.MedianPruner(
+            n_startup_trials=self.n_startup_trials,
+            n_warmup_steps=self.n_warmup_epochs,
+            interval_steps=self.interval_epochs,
+            n_min_trials=self.n_min_trials,
+        )
+
+
+class PercentilePrunerCfg(BasePrunerCfg):
+    type: Literal["Percentile"] = "Percentile"
+
+    percentile: float = Field(ge=0, le=100, default=25)
+    """Percentile for the percentile pruner. Default is 25."""
+
+    n_startup_trials: int = Field(default=5)
+    """Pruning is disabled until the given number of trials finish in the same study. Default is 5."""
+
+    n_warmup_epochs: int = Field(default=0)
+    """Pruning is disabled until the trial exceeds the given number of epoch."""
+
+    interval_epochs: int = Field(default=1)
+    """Interval in number of epochs between the pruning checks, offset by the warmup epochs. If no value has been reported at the time of a pruning check, that particular check will be postponed until a value is reported."""  # noqa: E501
+
+    n_min_trials: int = Field(default=3)
+    """Minimum number of reported trial results at an epoch to judge whether to prune. If the number of reported intermediate values from all trials at the current epoch is less than n_min_trials, the trial will not be pruned."""  # noqa: E501
+
+    def _create_pruner(self) -> optuna.pruners.PercentilePruner:
+        return optuna.pruners.PercentilePruner(
+            percentile=self.percentile,
             n_startup_trials=self.n_startup_trials,
             n_warmup_steps=self.n_warmup_epochs,
             interval_steps=self.interval_epochs,
@@ -159,7 +210,7 @@ class SuccessiveHalvingPrunerCfg(BasePrunerCfg):
     bootstrap_count: int = Field(default=0)
     """Number of bootstrap trials for the successive halving pruner. Default is 0."""
 
-    def create_pruner(self) -> optuna.pruners.SuccessiveHalvingPruner:
+    def _create_pruner(self) -> optuna.pruners.SuccessiveHalvingPruner:
         return optuna.pruners.SuccessiveHalvingPruner(
             min_resource=self.min_epoch,
             reduction_factor=self.reduction_factor,
@@ -168,8 +219,10 @@ class SuccessiveHalvingPrunerCfg(BasePrunerCfg):
         )
 
 
-PRUNER_NAME = Literal["Median", "SuccessiveHalving", None]
-type AnyPrunerCfg = Annotated[MedianPrunerCfg | SuccessiveHalvingPrunerCfg, Field(discriminator="type")]
+PRUNER_NAME = Literal["Median", "SuccessiveHalving", "Percentile", "Patient", None]
+type AnyPrunerCfg = Annotated[
+    MedianPrunerCfg | SuccessiveHalvingPrunerCfg | PercentilePrunerCfg | PatientPrunerCfg, Field(discriminator="type")
+]
 
 
 def pruners_by_name(pruner_type):
@@ -180,6 +233,10 @@ def pruners_by_name(pruner_type):
             return MedianPrunerCfg()
         case "SuccessiveHalving":
             return SuccessiveHalvingPrunerCfg()
+        case "Percentile":
+            return PercentilePrunerCfg()
+        case "Patient":
+            return PatientPrunerCfg()
     raise ValueError(f"Unsupported pruner type: {pruner_type}")
 
 
@@ -325,7 +382,7 @@ def attach_hyperparameter_validators(cls, fields: tuple[str, ...] | None = None)
                 field_info.annotation = Annotated[
                     param_type,
                     BeforeValidator(
-                        optuna_parse_literal(literals),
+                        optuna_parse_literal(param_type),
                         json_schema_input_type=param_type | Annotated[str, StringConstraints(pattern=pattern)],
                     ),
                 ]  # type: ignore

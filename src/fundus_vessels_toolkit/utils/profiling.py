@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from contextvars import ContextVar, Token
 from time import perf_counter
-from typing import Optional
+from typing import Optional, overload
 
 from rich.console import Console
 
@@ -190,6 +190,16 @@ class Profiler:
         console = Console(highlight=False, width=width)
         for watch in self.watches.values():
             console.print(watch.pretty_print())
+
+    def timing(self, step: str | tuple[str, ...], *, avg=True) -> float:
+        if isinstance(step, str):
+            step = tuple(step.split("->"))
+        w = self.watches[step[0]]
+        for name in step[1:]:
+            w = w.sub_watches.get(name, None)
+            if w is None:
+                raise ValueError(f"Profiler has no watch named '{'->'.join(step)}'")
+        return w.total_time / w.runs if avg else w.total_time
 
 
 _current_profiler: ContextVar[Profiler | None] = ContextVar("current_profiler", default=None)

@@ -104,7 +104,7 @@ def run_all(
         if out.returncode == 20:
             print("No more trials to run. Exiting.")
             break
-        elif out.returncode != 0:
+        elif out.returncode not in [0, 21]:
             print(f"Error during run: {out.stderr}")
             retry_count += 1
             if retry_count > 3:

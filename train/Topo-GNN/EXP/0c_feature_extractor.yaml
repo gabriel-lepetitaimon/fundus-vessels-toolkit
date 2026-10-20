@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=experiment.schema.json
+project: Topo-GNN
+experiment: HP-Search
+version: 3
+tag: hp-search
+n_trials: 12
+optuna:
+  direction: maximize
+  sampler:
+    type: GP
+    n_startup_trials: 4
+  pruner:
+    type: Median
+    n_startup_trials: 3
+
+log_model: false
+parameters_grid: 
+  - efficientnet_4: 
+      end_stage: 4
+      pretrained: true
+  - efficientnet_5: 
+      end_stage: 5
+      pretrained: true
+  - efficientnet_6: 
+      end_stage: 6
+      pretrained: true
+  - efficientnet_5_no_pretrained: 
+      end_stage: 5
+      pretrained: false
+---
+# yaml-language-server: $schema=config.schema.json
+epoch: 200
+lr: 5e-4~30e-4
+batch_size: 20 
+model:
+  gcn:
+    bipolar_node: true
+    architecture: InstNorm Conv16x8-DropOut InstNorm Conv32x8-DropOut Conv64x4 Conv32x8 Conv64x4 Conv64x8 Conv128x4 Conv256x2
+  img_feature_extractor: 
+    type: efficientnet_v2_s
+    pretrained: $pretrained
+    end_stage: $end_stage
+    

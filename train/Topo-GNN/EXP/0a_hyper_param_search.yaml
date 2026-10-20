@@ -1,25 +1,35 @@
 # yaml-language-server: $schema=experiment.schema.json
 project: Topo-GNN
 experiment: HP-Search
-version: 2
+version: 3
 tag: hp-search
-n_trials: 32
+n_trials: 16
 optuna:
   direction: maximize
   sampler:
     type: TPE
-    n_startup_trials: 12
+    n_startup_trials: 4
   pruner:
     type: Median
-    n_startup_trials: 12
+    n_startup_trials: 4
+    patience: 20
+    min_delta: 0.002
 
 log_model: false
 progress_bar: false
+parameters_grid: 
+  scheduler: ["onecycle", "reduceonplateau", "none"]
 ---
 # yaml-language-server: $schema=config.schema.json
-epoch: 200
-lr: 1e-4~1e-2
-batch_size: 4:4:20
-dataset:
-  augment:
-    deteriorate_graph: true|false
+epoch: 300
+batch_size: 20 
+lr: 5e-4~1e-2
+scheduler: $scheduler
+model:
+  gcn:
+    bipolar_node: true
+    architecture: InstNorm Conv16x8-DropOut InstNorm Conv32x8-DropOut Conv64x4 Conv32x8 Conv64x4 Conv64x8 Conv128x4 Conv256x2
+  img_feature_extractor: 
+    type: efficientnet_v2_s
+    pretrained: true
+    end_stage: 5

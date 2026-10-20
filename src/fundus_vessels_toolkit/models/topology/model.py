@@ -3,12 +3,12 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from functools import cached_property
 from types import EllipsisType
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional, TypeAlias
 
 import numpy as np
 import torch
 import torch_geometric.nn as pyg_nn
-from pydantic import Field
+from pydantic import BeforeValidator, Field
 from torch import Tensor, nn
 from torch_geometric.data import Batch as PyGBatch
 from torch_geometric.nn.conv import GATv2Conv
@@ -22,16 +22,52 @@ from ...segment_to_graph.vbranch_digraph import VBranchDigraph
 from ...utils.nnet.experiment import ExpCfgBaseModel
 from ...utils.torch import groupby_mean, torch_interp_bilinear, unique_first
 from ...utils.tree import tree_connected_components
-from .dipole_gcn import TransformerGCN, TransformerGCNOpt
 from .data import BranchDigraphBatch, BranchDigraphData, DigraphLines
+from .dipole_gcn import TransformerGCN, TransformerGCNOpt
 from .positionnal_embedding import APE
 
 
-class BranchDigraphModelCfg(ExpCfgBaseModel):
-    type FEATURE_EXTRACTOR = Literal["efficientnet_v2_s"]
+class EfficientNetFeatureExtractorCfg(ExpCfgBaseModel):
+    type: Literal["efficientnet_v2_s"] = "efficientnet_v2_s"
+    pretrained: bool = Field(default=True)
+    end_stage: int = Field(default=6, le=6, ge=1)
 
+    def create(self) -> nn.Module:
+        return BranchFeaturesEfficientNetV2S(pretrained=self.pretrained, end_stage=self.end_stage)
+
+    @property
+    def out_channels(self) -> int:
+        return BranchFeaturesEfficientNetV2S.out_channels(self.end_stage)
+
+
+_FEATURE_EXTRACTOR_TYPES = EfficientNetFeatureExtractorCfg
+_FEATURE_EXTRACTOR_NAMES = Literal["efficientnet_v2_s"]
+
+
+def _feature_extractor_by_name(cfg: _FEATURE_EXTRACTOR_NAMES | dict) -> _FEATURE_EXTRACTOR_TYPES:
+    if isinstance(cfg, dict):
+        name = cfg.get("type", None)
+    else:
+        name = cfg
+        cfg = {}
+    match name:
+        case "efficientnet_v2_s":
+            return EfficientNetFeatureExtractorCfg.model_validate(cfg)
+        case _:
+            raise ValueError(f"Unsupported image feature extractor: {name}")
+
+
+FEATURE_EXTRACTOR = Annotated[
+    _FEATURE_EXTRACTOR_TYPES,
+    BeforeValidator(
+        _feature_extractor_by_name, json_schema_input_type=_FEATURE_EXTRACTOR_NAMES | _FEATURE_EXTRACTOR_TYPES
+    ),
+]
+
+
+class BranchDigraphModelCfg(ExpCfgBaseModel):
     gcn: TransformerGCNOpt = Field(default_factory=TransformerGCNOpt)
-    img_feature_extractor: FEATURE_EXTRACTOR = Field(default="efficientnet_v2_s")
+    img_feature_extractor: FEATURE_EXTRACTOR = Field(default_factory=EfficientNetFeatureExtractorCfg)
 
     absolute_position_embedding: bool = Field(default=False)
     """If true, adds an absolute positional embedding to the branch features."""
@@ -106,16 +142,16 @@ class BranchDigraphModel(torch.nn.Module):
     @classmethod
     def create_img_feature_extractor(cls, opt: BranchDigraphModelCfg) -> nn.Module:
         match opt.img_feature_extractor:
-            case "efficientnet_v2_s":
-                return BranchFeaturesEfficientNetV2S()
+            case EfficientNetFeatureExtractorCfg():
+                return opt.img_feature_extractor.create()
             case _:
                 raise ValueError(f"Unsupported image feature extractor: {opt.img_feature_extractor}")
 
     @classmethod
     def img_feature_extractor_channels(cls, opt: BranchDigraphModelCfg) -> int:
         match opt.img_feature_extractor:
-            case "efficientnet_v2_s":
-                return BranchFeaturesEfficientNetV2S.N_FEATURES
+            case EfficientNetFeatureExtractorCfg():
+                return opt.img_feature_extractor.out_channels
             case _:
                 raise ValueError(f"Unsupported image feature extractor: {opt.img_feature_extractor}")
 
@@ -776,13 +812,10 @@ class PolarizedClassifHead(ClassifHead):
 # === Features Extractors === #
 ###############################
 class BranchFeaturesEfficientNetV2S(torch.nn.Module):
-    N_FEATURES = 392
-
-    def __init__(self, pretrained: bool = True):
+    def __init__(self, pretrained: bool = True, end_stage: int = 6):
         super().__init__()
         net = efficientnet_v2_s(weights=EfficientNet_V2_S_Weights.DEFAULT if pretrained else None).features
-        self.efficient_net = net
-        self.net = nn.Sequential(*[nn.Sequential(*[net[_] for _ in idxs]) for idxs in [(0, 1), (2,), (3,), (4, 5, 6)]])
+        self.net = nn.Sequential(*[nn.Sequential(*[net[_] for _ in idxs]) for idxs in self.used_stage(end_stage)])
 
     def forward(self, x):
         # Normalize x to ImageNet stats
@@ -793,6 +826,27 @@ class BranchFeaturesEfficientNetV2S(torch.nn.Module):
             x = f(x)
             features.append(x)
         return features
+
+    @classmethod
+    def used_stage(cls, end_stage: int = 6) -> list[tuple[int, ...]]:
+        match end_stage:
+            case 1:
+                return [(0, 1)]
+            case 2:
+                return [(0, 1), (2,)]
+            case 3:
+                return [(0, 1), (2,), (3,)]
+            case 4:
+                return [(0, 1), (2,), (3,), (4,)]
+            case 5:
+                return [(0, 1), (2,), (3,), (4, 5)]
+            case _:
+                return [(0, 1), (2,), (3,), (4, 5, 6)]
+
+    @classmethod
+    def out_channels(cls, end_stage: int = 6):
+        OUT_CHANNELS = [24, 24, 48, 64, 128, 160, 256]
+        return sum(OUT_CHANNELS[stages[-1]] for stages in cls.used_stage(end_stage))
 
 
 ######################

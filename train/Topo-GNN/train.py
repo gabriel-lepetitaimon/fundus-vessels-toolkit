@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import gc
 import math
-import os
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Annotated, Literal, NotRequired, Optional, TypedDict
@@ -78,6 +77,8 @@ class DigraphGNNTrainerConfig(ExpCfgBaseModel):
 
     batch_size: int = 12
     """Batch size for training."""
+
+    scheduler: Literal["onecycle", "reduceonplateau", "none"] = Field(default="onecycle")
 
 
 class _GPU_Specs(TypedDict):
@@ -490,14 +491,20 @@ class DigraphGNNTrainer(L.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.config.lr / 25)
-        # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer,
-            max_lr=self.config.lr,
-            epochs=self.config.epoch,
-            steps_per_epoch=self.n_step_per_epoch,
-        )
-        return [optimizer], [{"scheduler": scheduler, "monitor": "train_loss", "interval": "step", "frequency": 1}]
+        print(f"Selected scheduler: {self.config.scheduler}")
+        if self.config.scheduler == "reduceonplateau":
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
+            return [optimizer], [{"scheduler": scheduler, "monitor": "val_agg", "interval": "epoch", "frequency": 1}]
+        elif self.config.scheduler == "onecycle":
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                optimizer,
+                max_lr=self.config.lr,
+                epochs=self.config.epoch,
+                steps_per_epoch=self.n_step_per_epoch,
+            )
+            return [optimizer], [{"scheduler": scheduler, "monitor": "val_agg", "interval": "step", "frequency": 1}]
+        else:
+            return optimizer
 
 
 class _BatchSizeGradAccType(TypedDict):

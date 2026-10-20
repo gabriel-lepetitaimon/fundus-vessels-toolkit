@@ -1,38 +1,54 @@
 # yaml-language-server: $schema=experiment.schema.json
 project: Topo-GNN
 experiment: HP-Search
-version: 2
+version: 3
 tag: hp-search
-n_trials: 20
+n_trials: 12
 optuna:
   direction: maximize
   sampler:
     type: GP
-    n_startup_trials: 6
+    n_startup_trials: 4
   pruner:
     type: Median
-    n_startup_trials: 6
+    n_startup_trials: 3
 
 log_model: false
 parameters_grid: 
-  # - bipole-long: 
-  #     archi: InstNorm Conv64x8-DropOut InstNorm Conv128x8-DropOut Conv256x4 Conv128x8 Conv256x4 Conv128x8 Conv256x4 Conv512x2
-  #     bipole: true
+  - bipole-long: 
+      archi: InstNorm Conv16x8-DropOut InstNorm Conv32x8-DropOut Conv64x4 Conv32x8 Conv64x4 Conv32x8 Conv64x4 Conv64x4 Conv128x2 Conv256x2
+      bipole: true
+  - bipole-medium: 
+       archi: InstNorm Conv16x8-DropOut InstNorm Conv32x8-DropOut Conv64x4 Conv32x8 Conv64x4 Conv64x8 Conv128x4 Conv256x2
+       bipole: true
+  - bipole-medium-double: 
+       archi: InstNorm Conv32x8-DropOut InstNorm Conv64x8-DropOut Conv128x4 Conv64x8 Conv128x4 Conv128x8 Conv256x4 Conv512x2
+       bipole: true
+  - bipole-short-double: 
+      archi: InstNorm Conv32x8-DropOut InstNorm Conv64x8 Conv128x4 Conv256x2
+      bipole: true
   - bipole-short: 
+      archi: InstNorm Conv16x8-DropOut InstNorm Conv32x8 Conv64x4 Conv128x2
+      bipole: true
+  - bipole-short-quad: 
       archi: InstNorm Conv64x8-DropOut InstNorm Conv128x8 Conv256x4 Conv512x2
       bipole: true
-  - simple-long: 
-      archi: InstNorm Conv64x8-DropOut InstNorm Conv128x8-DropOut Conv256x4 Conv128x8 Conv256x4 Conv128x8 Conv256x4 Conv512x2
-      bipole: false
   - simple-short: 
-      archi: InstNorm Conv64x8-DropOut InstNorm Conv128x8 Conv256x4 Conv512x2
+      archi: InstNorm Conv16x8-DropOut InstNorm Conv32x8 Conv64x4 Conv128x2
+      bipole: false
+  - simple-short-double: 
+      archi: InstNorm Conv32x8-DropOut InstNorm Conv64x8 Conv128x4 Conv256x2
+      bipole: false
+  - simple-long: 
+      archi: InstNorm Conv16x8-DropOut InstNorm Conv32x8-DropOut Conv64x4 Conv32x8 Conv64x4 Conv32x8 Conv64x4 Conv128x2
       bipole: false
 ---
 # yaml-language-server: $schema=config.schema.json
 epoch: 200
-lr: 5e-4~15e-4
+lr: 5e-4~20e-4
 batch_size: 20 
 model:
   gcn:
     bipolar_node: $bipole
     architecture: $archi
+    

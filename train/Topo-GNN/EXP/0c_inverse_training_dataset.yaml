@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=experiment.schema.json
+project: Topo-GNN
+experiment: Inverse-Training
+version: 0
+n_trials: 5
+optuna:
+  direction: maximize
+  sampler:
+    type: GP
+    n_startup_trials: 3
+  pruner:
+    type: Median
+    n_startup_trials: 3
+
+log_model: false
+---
+# yaml-language-server: $schema=config.schema.json
+epoch: 200
+lr: 10e-4~15e-4
+batch_size: 20 
+model:
+  gcn:
+    bipolar_node: true
+    architecture: InstNorm Conv16x8-DropOut InstNorm Conv32x8-DropOut Conv64x4 Conv32x8 Conv64x4 Conv64x8 Conv128x4 Conv256x2
+    

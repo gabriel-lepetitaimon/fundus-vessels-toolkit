@@ -15,7 +15,6 @@ from skimage.morphology import binary_erosion, disk
 from fundus_toolkits import AVLabel, FundusData
 from fundus_toolkits.utils.geometric import Point
 from fundus_toolkits.utils.safe_import import import_cv2
-
 from fundus_vessels_toolkit.utils.profiling import watch
 
 from ..segment_to_graph.av_tree_parsing import assign_av_label, assign_av_label_centerline
@@ -288,12 +287,14 @@ class GNNAVSegToTree(AVSegToTree):
         # model["gcn"]["architecture"] = (
         #    "InstNorm Conv64x8-DropOut InstNorm Conv128x8-DropOut Conv128x8 Conv256x4 Conv512x2"
         # )
-        checkpoint = torch.load(root / "train/Topo-GNN/tmp/models/epoch=159-step=2080.ckpt")
+        # checkpoint = torch.load(root / "train/Topo-GNN/tmp/models/epoch=159-step=2080.ckpt")
+        # model = checkpoint["hyper_parameters"]["config"]["model"]
+        # model["gcn"]["legacy_pole_features_ratio"] = True
+        # model["gcn"]["architecture"] = (
+        #    "InstNorm Conv64x8-DropOut InstNorm Conv128x8-DropOut Conv128x8 Conv256x4 Conv512x2"
+        # )
+        checkpoint = torch.load(root / "train/Topo-GNN/tmp/Topo-GNN/l701r6nx/checkpoints/epoch=199-step=2600.ckpt")
         model = checkpoint["hyper_parameters"]["config"]["model"]
-        model["gcn"]["legacy_pole_features_ratio"] = True
-        model["gcn"]["architecture"] = (
-            "InstNorm Conv64x8-DropOut InstNorm Conv128x8-DropOut Conv128x8 Conv256x4 Conv512x2"
-        )
         model = BranchDigraphModel(model)
         model.load_state_dict({k[6:]: v for k, v in checkpoint["state_dict"].items() if k.startswith("model.")})
         self.model = model.cuda().eval()

@@ -59,7 +59,7 @@ def _validate_parameters_grid(data: ParameterGridJSONInputType) -> dict[str, dic
     if isinstance(data, dict):
         keys, values = list(data.keys()), list(data.values())
         values = [dict(zip(keys, v, strict=True)) for v in itertools.product(*values)]
-        out = {"|".join(f"{k}={v[k]}" for k in keys): v for v in values}
+        out = {"|".join(f"{k}_{v[k]}" for k in keys): v for v in values}
         if len(out) == 1:
             out = {"": next(iter(out.values()))}
         return out
@@ -377,23 +377,26 @@ class ExperimentRunFactory[T: BaseModel]:
         exp_run.init()
         return exp_run
 
-    def __exit__(self, exc_type: Optional[type], exc_val: Optional[BaseException], exc_tb: Optional[Any]) -> None:
+    def __exit__(
+        self, exc_type: Optional[type], exc_val: Optional[BaseException], exc_tb: Optional[Any]
+    ) -> None | bool:
         if self.__ctx_token is not None:
             exp_run = self.__ctx_token.var.get()
             assert exp_run is not None
+
+            _current_experiment.reset(self.__ctx_token)
+            self.__ctx_token = None
 
             if exc_val is None:
                 exp_run.finish(state="success")
             elif isinstance(exc_val, optuna.exceptions.TrialPruned):
                 exp_run.finish(state="aborted")
+                return True  # Suppress the exception to allow the experiment to continue with the next trial
             else:
                 # Print the exception in red in the console
                 console = Console()
                 console.print_exception(width=180, extra_lines=3, show_locals=False, theme="monokai")
                 exp_run.finish(state="failed")
-
-            _current_experiment.reset(self.__ctx_token)
-            self.__ctx_token = None
 
 
 ####################################
@@ -492,7 +495,9 @@ class ExperimentRun[T: BaseModel]:
                 console.print(f"[red]=== Run {self.run_name} [bold] FAILED [/bold] ===[/red]")
             case "aborted":
                 state_ = optuna.trial.TrialState.PRUNED
-                exit_code = 1
+                exit_code = 0
+                if self.logger is not None:
+                    self.logger.experiment.tags += ("pruned",)
                 console.print(f"[yellow]=== Run {self.run_name} [bold] PRUNED [/bold] ===[/yellow]")
             case _:
                 state_ = None
