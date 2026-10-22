@@ -9,8 +9,8 @@ from typing import Annotated, Any, Callable, Literal, Optional, Self
 
 import numpy as np
 import optuna
-from optuna.storages import RDBStorage
 import yaml
+from optuna.storages import RDBStorage
 from optuna.trial import Trial, TrialState
 from pydantic import (
     BaseModel,
@@ -397,32 +397,27 @@ class OptunaCfg(BaseModel):
     """Direction of optimization for Optuna. Default is 'minimize'."""
 
     @property
-    def optuna_db(self) -> OptunaDB | None:
-        return OptunaDB(storage=self.storage) if self.storage is not None else None
+    def rdb_storage(self) -> RDBStorage | None:
+        if self.storage is None:
+            return None
+        if self.storage.startswith("sqlite:///"):
+            Path(self.storage[len("sqlite:///") :]).parent.mkdir(parents=True, exist_ok=True)
+            return RDBStorage(url=self.storage, engine_kwargs={"connect_args": {"timeout": 120}})
+        return RDBStorage(url=self.storage)
+
+    def list_study_names(self) -> list[str]:
+        """List all study names in the Optuna storage.
+
+        Returns
+        -------
+        list[str]
+            List of study names in the Optuna storage.
+        """
+        storage = self.rdb_storage
+        return [] if storage is None else optuna.get_all_study_names(storage=storage)
 
     def load_study(self, study_name: str, temp_storage: bool = False) -> OptunaStudy:
         return OptunaStudy.load(study_name=study_name, cfg=self, temp_storage=temp_storage)
-
-
-class OptunaDB:
-    """Utility class for managing Optuna studies and trials in a database. This class provides methods for retrieving study information, trial results, and other related data from the Optuna storage."""  # noqa: E501
-
-    def __init__(self, storage: str):
-        self.storage_url = storage
-        if storage.startswith("sqlite:///"):
-            self.storage = RDBStorage(url=storage, engine_kwargs={"connect_args": {"timeout": 120}})
-        else:
-            self.storage = RDBStorage(url=storage)
-
-    @classmethod
-    def ensure_storage_path(cls, storage: str):
-        if storage.startswith("sqlite:///"):
-            Path(storage[len("sqlite:///") :]).parent.mkdir(parents=True, exist_ok=True)
-
-    def list_studies_name(self) -> list[str]:
-        self.ensure_storage_path(self.storage_url)
-        """List all study names in the Optuna storage."""
-        return optuna.get_all_study_names(storage=self.storage)
 
 
 class OptunaStudy(optuna.study.Study):
@@ -430,15 +425,12 @@ class OptunaStudy(optuna.study.Study):
 
     @classmethod
     def load(cls, study_name: str, cfg: OptunaCfg, temp_storage: bool = False) -> Self:
-        if not temp_storage and cfg.storage is not None:
-            OptunaDB.ensure_storage_path(cfg.storage)
-
         study = optuna.create_study(
             study_name=study_name,
-            storage=None if temp_storage else cfg.storage,
             sampler=cfg.sampler.create_sampler(),
             pruner=cfg.pruner.create_pruner() if cfg.pruner is not None else None,
             direction=cfg.direction,
+            storage=None if temp_storage else cfg.rdb_storage,
             load_if_exists=True,
         )
         study.__class__ = cls

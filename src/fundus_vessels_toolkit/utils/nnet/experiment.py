@@ -173,15 +173,12 @@ class ExperimentHeader(BaseModel):
         """Number of completed trials for this experiment. If split_by_parameters is True, returns a list of counts for each parameter combination."""  # noqa: E501
         studies = self._study_names()
         counts = np.zeros(len(studies), dtype=int)
-        db = self.optuna.optuna_db
-        if db is None:
-            return 0 if not split_by_parameters else counts
-
-        existing_studies = db.list_studies_name()
-        for i, study_name in enumerate(studies):
-            if study_name in existing_studies:
-                study = self.optuna.load_study(study_name)
-                counts[i] = study.valid_trials_count(only_completed=only_completed)
+        existing_studies = self.optuna.list_study_names()
+        if len(existing_studies) > 0:
+            for i, study_name in enumerate(studies):
+                if study_name in existing_studies:
+                    study = self.optuna.load_study(study_name)
+                    counts[i] = study.valid_trials_count(only_completed=only_completed)
         return counts if split_by_parameters else int(sum(counts))
 
     @overload
