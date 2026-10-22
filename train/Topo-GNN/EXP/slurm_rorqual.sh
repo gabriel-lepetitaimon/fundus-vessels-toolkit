@@ -8,7 +8,6 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --time=3:00:00
 #SBATCH --mem=31G
-#SBATCH --partition=liv4d
 #SBATCH --gpus=h100_2g.20gb:1
 
 module load python/3.13.2

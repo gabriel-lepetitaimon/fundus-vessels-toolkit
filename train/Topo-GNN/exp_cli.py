@@ -187,6 +187,7 @@ def submit_job(
     submit_result = subprocess.run(["sbatch", str(job_script.absolute())], capture_output=True, text=True)
     if submit_result.returncode != 0:
         print(f"   Failed to submit job: {submit_result.stderr}")
+        shutil.rmtree(job_dir)
         return False
     else:
         print(f"   Job submitted successfully: {submit_result.stdout}")
