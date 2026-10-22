@@ -34,7 +34,7 @@ dependencies = [
 [project.optional-dependencies]
 build = ['wheel', 'twine', 'ninja']
 train = [
-    'pytorch-lightning',
+    'lightning',
     'wandb',
     'pydantic',
     'pytorch-metric-learning',

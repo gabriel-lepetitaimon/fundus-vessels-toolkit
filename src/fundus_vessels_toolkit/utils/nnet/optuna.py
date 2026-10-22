@@ -7,9 +7,10 @@ from contextvars import ContextVar, Token
 from pathlib import Path
 from typing import Annotated, Any, Callable, Literal, Optional, Self
 
+import numpy as np
 import optuna
 import yaml
-from optuna.trial import Trial
+from optuna.trial import Trial, TrialState
 from pydantic import (
     BaseModel,
     BeforeValidator,
@@ -20,6 +21,8 @@ from pydantic import (
     ValidationError,
     ValidationInfo,
 )
+
+from ..math import lerp
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -219,9 +222,124 @@ class SuccessiveHalvingPrunerCfg(BasePrunerCfg):
         )
 
 
-PRUNER_NAME = Literal["Median", "SuccessiveHalving", "Percentile", "Patient", None]
+class PercentileProgressivePrunerCfg(BasePrunerCfg):
+    type: Literal["PercentileProgressive"] = "PercentileProgressive"
+
+    final_step: int = Field(default=100)
+    """Final step for the progressive percentile pruner. Default is 100."""
+
+    final_percentile: float = Field(ge=0, le=100, default=25)
+    """Final percentile for the progressive percentile pruner. Default is 25."""
+
+    n_startup_trials: int = Field(default=5)
+    """Pruning is disabled until the given number of trials finish in the same study. Default is 5."""
+
+    n_warmup_steps: int = Field(default=0)
+    """Pruning is disabled until the trial exceeds the given number of steps."""
+
+    n_min_trials: int = Field(default=3)
+    """Minimum number of reported trial results at a step to judge whether to prune. If the number of reported intermediate values from all trials at the current step is less than n_min_trials, the trial will not be pruned."""  # noqa: E501
+
+    def _create_pruner(self) -> PercentileProgressivePruner:
+        return PercentileProgressivePruner(
+            final_step=self.final_step,
+            final_percentile=self.final_percentile,
+            n_startup_trials=self.n_startup_trials,
+            n_warmup_steps=self.n_warmup_steps,
+            n_min_trials=self.n_min_trials,
+        )
+
+
+class PercentileProgressivePruner(optuna.pruners.BasePruner):
+    """A progressive percentile pruner that prunes trials based on their performance relative to a dynamically computed percentile of completed trials at each step. The pruning threshold is adjusted progressively based on the current step, allowing for more aggressive pruning as the trial progresses.
+
+    Example
+    -------
+    >>> import numpy as np
+    >>> import optuna
+    >>> constant_scores = [0, 50, 100, 10, 20, 40, 80, 60, 70, 90]
+    >>> FINAL_STEP = 50
+    >>> def objective(trial):
+    ...     global constant_scores
+    ...     score = constant_scores.pop(0)
+    ...     print(f"Trial={score:<3} |", end='')
+    ...     for step in range(FINAL_STEP):
+    ...         print(f"-", end="")
+    ...         trial.report(score, step)
+    ...         if trial.should_prune():
+    ...             print(f" PRUNED at {step} (top-{lerp(100, 25, step / FINAL_STEP):.0f}%)")
+    ...             raise optuna.TrialPruned()
+    ...     print(f"| Completed")
+    ...     return score
+
+    >>> study = optuna.create_study(
+    ...     direction="maximize",
+    ...     pruner=PercentileProgressivePruner(FINAL_STEP, n_startup_trials=3),
+    ... )
+    >>> study.optimize(objective, n_trials=10)
+    Trial=0   |--------------------------------------------------| Completed
+    Trial=50  |--------------------------------------------------| Completed
+    Trial=100 |--------------------------------------------------| Completed
+    Trial=10  |-------- PRUNED at 7 (top-90%)
+    Trial=20  |--------------- PRUNED at 14 (top-79%)
+    Trial=40  |---------------------------- PRUNED at 27 (top-60%)
+    Trial=80  |--------------------------------------------------| Completed
+    Trial=60  |------------------------------- PRUNED at 30 (top-55%)
+    Trial=70  |--------------------------------------- PRUNED at 38 (top-43%)
+    Trial=90  |--------------------------------------------------| Completed
+    """  # noqa: E501
+
+    def __init__(
+        self,
+        final_step: int,
+        final_percentile: float = 25,
+        n_startup_trials: int = 5,
+        n_warmup_steps: int = 0,
+        n_min_trials: int = 3,
+    ):
+        self.final_step = final_step
+        self.final_percentile = final_percentile
+        self.n_startup_trials = n_startup_trials
+        self.n_warmup_steps = n_warmup_steps
+        self.n_min_trials = n_min_trials
+
+    def prune(self, study: optuna.study.Study, trial: optuna.trial.FrozenTrial) -> bool:
+        completed_trials = study.get_trials(deepcopy=False, states=(TrialState.COMPLETE,))
+        n_trials = len(completed_trials)
+
+        if n_trials == 0 or n_trials < self.n_startup_trials:
+            return False
+
+        step = trial.last_step
+        if step is None or step < self.n_warmup_steps:
+            return False
+        step -= self.n_warmup_steps
+
+        maximize = study.direction == optuna.study.StudyDirection.MAXIMIZE
+
+        values = np.asarray(list(trial.intermediate_values.values()), dtype=float)
+        trial_best_value = np.nanmax(values) if maximize else np.nanmin(values)
+        # print(f"Trial {trial.number} best value at step {step}: {trial_best_value:.4f}")
+        trials_values = [t.intermediate_values.get(step) for t in completed_trials if step in t.intermediate_values]
+        if len(trials_values) < self.n_min_trials:
+            return False
+
+        percentile = lerp(100, self.final_percentile, step / self.final_step)
+        if maximize:
+            percentile = 100 - percentile
+        threshold = np.nanpercentile(np.array(trials_values, dtype=float), percentile)
+        # print(f"Trial {trial.number} pruning threshold at step {step}: {threshold:.4f} (percentile={percentile:.2f})")
+        return trial_best_value <= threshold if maximize else trial_best_value >= threshold
+
+
+PRUNER_NAME = Literal["Median", "SuccessiveHalving", "Percentile", "Patient", "PercentileProgressive", None]
 type AnyPrunerCfg = Annotated[
-    MedianPrunerCfg | SuccessiveHalvingPrunerCfg | PercentilePrunerCfg | PatientPrunerCfg, Field(discriminator="type")
+    MedianPrunerCfg
+    | SuccessiveHalvingPrunerCfg
+    | PercentilePrunerCfg
+    | PercentileProgressivePrunerCfg
+    | PatientPrunerCfg,
+    Field(discriminator="type"),
 ]
 
 
@@ -235,6 +353,8 @@ def pruners_by_name(pruner_type):
             return SuccessiveHalvingPrunerCfg()
         case "Percentile":
             return PercentilePrunerCfg()
+        case "PercentileProgressive":
+            return PercentileProgressivePrunerCfg()
         case "Patient":
             return PatientPrunerCfg()
     raise ValueError(f"Unsupported pruner type: {pruner_type}")

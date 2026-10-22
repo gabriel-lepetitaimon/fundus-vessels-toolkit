@@ -10,15 +10,16 @@ optuna:
     type: TPE
     n_startup_trials: 4
   pruner:
-    type: Median
+    type: PercentileProgressive
     n_startup_trials: 4
-    patience: 20
-    min_delta: 0.002
+    final_step: 30
+    final_percentile: 33
+    n_min_trials: 3
 
 log_model: false
 progress_bar: false
 parameters_grid: 
-  scheduler: ["onecycle", "reduceonplateau", "none"]
+  scheduler: ["reduceonplateau", "onecycle", "none"]
 ---
 # yaml-language-server: $schema=config.schema.json
 epoch: 300

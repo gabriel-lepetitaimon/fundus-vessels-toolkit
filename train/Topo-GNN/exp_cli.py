@@ -11,6 +11,7 @@ import typer
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
+from fundus_vessels_toolkit.utils.cpp_optimized import split_by
 from fundus_vessels_toolkit.utils.nnet.experiment import ExperimentHeader, NoTrialsToRunError
 from train import DigraphGNNTrainerConfig
 
@@ -128,13 +129,33 @@ def sbatch(
         return
 
     exp_header = ExperimentHeader.load_header(file)
-    n_runs = exp_header.trials_to_run()
-    if n_runs == 0:
-        print("No remaining trials to run for this configuration. Aborting.")
+    exp_name = exp_header.experiment_name
+    n_runs = exp_header.trials_to_run(split_by_parameters=True)
+    if sum(n_runs) == 0:
+        print("No remaining trials to run for experiment {exp_name}. Aborting.")
         return
 
+    # Replace field in bash script
+    with open(script, "r") as script_file:
+        script_txt = script_file.read()
+
+    if "MAX_CONCURRENT_RUNS" not in script_txt:
+        submit_job(script_txt, file, exp_name, sum(n_runs))
+    else:
+        param_grid_names = list(exp_header.parameters_grid.keys())
+        for param_grid_id, n_run in enumerate(n_runs):
+            print("-" * 80)
+            if n_run > 0:
+                job_name = f"{exp_name}_{param_grid_names[param_grid_id]}"
+                if not submit_job(script_txt, file, job_name, int(n_run), param_grid_id, 3):
+                    return
+
+
+def submit_job(
+    script_txt: str, file: Path, job_name: str, n_runs: int, param_grid_id: int | None = None, max_concurrent_runs=1
+) -> bool:
     job_uuid = uuid.uuid4().hex
-    print(f"Submitting {n_runs} runs for experiment configuration {file} with UUID {job_uuid}...")
+    print(f"Submitting {n_runs} runs for experiment {job_name} with UUID {job_uuid}...")
 
     # Move config file and bash script to dedicated folder
     job_dir = Path("tmp") / "JOBS" / job_uuid
@@ -142,13 +163,16 @@ def sbatch(
     shutil.copy(file, job_dir / "cfg.yaml")
     job_script = job_dir / "run.sh"
 
-    # Replace field in bash script
-    with open(script, "r") as script_file:
-        script_txt = script_file.read()
     script_txt = script_txt.replace(r"{DIR}", str(job_dir.absolute()))
-    script_txt = script_txt.replace(r"{EXP}", exp_header.experiment_name)
+    script_txt = script_txt.replace(r"{EXP}", job_name)
     script_txt = script_txt.replace(r"{N_RUNS}", str(n_runs))
-    script_txt = script_txt.replace(r"{EXP_FILE}", str((job_dir / "cfg.yaml").absolute()))
+    script_txt = script_txt.replace(r"{MAX_CONCURRENT_RUNS}", str(max_concurrent_runs))
+
+    EXP_FILE = str((job_dir / "cfg.yaml").absolute())
+    if param_grid_id is not None:
+        EXP_FILE += f":{param_grid_id}"
+    script_txt = script_txt.replace(r"{EXP_FILE}", EXP_FILE)
+
     with open(job_script, "w") as script_file:
         script_file.write(script_txt)
     job_script.chmod(0o755)
@@ -156,9 +180,11 @@ def sbatch(
     # Submit job
     submit_result = subprocess.run(["sbatch", str(job_script.absolute())], capture_output=True, text=True)
     if submit_result.returncode != 0:
-        print(f"Failed to submit job: {submit_result.stderr}")
+        print(f"   Failed to submit job: {submit_result.stderr}")
+        return False
     else:
-        print(f"Job submitted successfully: {submit_result.stdout}")
+        print(f"   Job submitted successfully: {submit_result.stdout}")
+        return True
 
 
 if __name__ == "__main__":

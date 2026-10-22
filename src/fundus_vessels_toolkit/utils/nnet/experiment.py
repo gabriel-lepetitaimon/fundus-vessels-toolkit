@@ -297,11 +297,58 @@ class ExperimentHeader(BaseModel):
         The Yaml file should contains two documents:
             - The first document should be a valid ExperimentCfg, which defines the experiment settings and the hyperparameter grid.
             - The second document should be the experiment configuration, which will be validated against the given model. This document can refer to the parameters defined in the first document using the syntax '$<parameter_name>'.
+
+        Parameters
+        ----------
+        file : str | Path
+            Path to the experiment configuration YAML file.
+            If the file path contains a colon followed by an integer (e.g. "experiment.yaml:2"), the integer will override the param_grid_id.
+
+        model : type
+            Pydantic model class to validate the experiment configuration against.
+
+        strict : Optional[bool], default None
+            Whether to use strict validation. If None, uses the default behavior of the model validation (which is strict for BaseModel and non-strict for other types).
+
+        header_override : Optional[dict], default None
+            Dictionary of values to override in the ExperimentHeader. This can be used to modify the experiment settings without changing the YAML file.
+
+        override : Optional[dict], default None
+            Dictionary of values to override in the experiment configuration. This can be used to modify the experiment settings without changing the YAML file.
+
+        param_grid_id : Optional[int], default None
+            If provided, only the parameter combination with this index will be used for the experiment. If None, the first non-completed parameter combination will be used.
+
+        Returns
+        -------
+        ExperimentRunFactory
+            An ExperimentRunFactory that can be used to execute the experiment. The factory will yield ExperimentRun objects for each trial, which can be used to manage the trial context and log results.
+
+        Raises
+        ------
+        NoTrialsToRunError
+            If all trials for the experiment have already been completed and there are no remaining trials to run.
         """  # noqa: E501
+        if isinstance(file, str) and ":" in file:
+            file_, param_grid_id_ = file.rsplit(":", 1)
+            if param_grid_id_.isdigit():
+                file = Path(file_)
+                param_grid_id = int(param_grid_id_)
+
         header, yaml_doc = cls._read_file(file, strict=strict)
         if header_override is not None:
             header = header.model_copy(update=header_override)
-        if header.trials_to_run() == 0:
+        if param_grid_id is None:
+            trials_to_run = header.trials_to_run()
+        else:
+            all_trials_to_run = header.trials_to_run(split_by_parameters=True)
+            if param_grid_id < 0 or param_grid_id >= len(all_trials_to_run):
+                raise ValueError(
+                    f"Invalid param_grid_id {param_grid_id}. Must be between 0 and {len(all_trials_to_run) - 1}."
+                )
+            trials_to_run = all_trials_to_run[param_grid_id]
+
+        if trials_to_run == 0:
             if not header.test_debug:
                 raise NoTrialsToRunError(header, file)
             else:

@@ -494,7 +494,7 @@ class DigraphGNNTrainer(L.LightningModule):
         print(f"Selected scheduler: {self.config.scheduler}")
         if self.config.scheduler == "reduceonplateau":
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
-            return [optimizer], [{"scheduler": scheduler, "monitor": "val_agg", "interval": "epoch", "frequency": 1}]
+            return [optimizer], [{"scheduler": scheduler, "monitor": "loss", "interval": "epoch", "frequency": 1}]
         elif self.config.scheduler == "onecycle":
             scheduler = torch.optim.lr_scheduler.OneCycleLR(
                 optimizer,
@@ -502,7 +502,7 @@ class DigraphGNNTrainer(L.LightningModule):
                 epochs=self.config.epoch,
                 steps_per_epoch=self.n_step_per_epoch,
             )
-            return [optimizer], [{"scheduler": scheduler, "monitor": "val_agg", "interval": "step", "frequency": 1}]
+            return [optimizer], [{"scheduler": scheduler, "monitor": "loss", "interval": "step", "frequency": 1}]
         else:
             return optimizer
 
