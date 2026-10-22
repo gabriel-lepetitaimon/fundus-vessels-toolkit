@@ -2,7 +2,7 @@
     
 #SBATCH --job-name={EXP}
 #SBATCH --output={DIR}/out_{EXP}-%A-%a.out
-#SBATCH --array=1:{N_RUNS}%{MAX_CONCURRENT_RUNS}
+#SBATCH --array=1-{N_RUNS}%{MAX_CONCURRENT_RUNS}
     
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
