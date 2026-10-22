@@ -95,7 +95,7 @@ ParameterGridField = Annotated[
 class ExperimentHeader(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True, frozen=True)
 
-    entity: Optional[str]
+    entity: Optional[str] = Field(default=None)
     """Name of the entity (e.g. user or organization) that owns this experiment."""
 
     project: str

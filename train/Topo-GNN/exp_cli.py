@@ -70,7 +70,7 @@ def check(file: Annotated[Path, typer.Argument(help="Path to the experiment conf
 @app.command()
 def test_run(
     file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to check.")],
-    max_epoch: int = 25,
+    max_epoch: int = 10,
     config: int = 0,
 ):
     from train import DigraphGNNTrainerConfig, train
