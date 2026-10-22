@@ -11,9 +11,7 @@ import typer
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-from fundus_vessels_toolkit.utils.cpp_optimized import split_by
 from fundus_vessels_toolkit.utils.nnet.experiment import ExperimentHeader, NoTrialsToRunError
-from train import DigraphGNNTrainerConfig
 
 app = typer.Typer(pretty_exceptions_show_locals=False)
 
@@ -26,6 +24,8 @@ def export_schema(
     config: str = typer.Argument(EXP / "config.schema.json", help="Path where to save the configuration schema."),
     template: str = typer.Argument(EXP / "exp_template.yaml", help="Path where to save the experiment template."),
 ):
+    from train import DigraphGNNTrainerConfig
+
     experiment_path = Path(experiment)
     config_path = Path(config)
     template_path = Path(template)
@@ -61,6 +61,8 @@ def export_schema(
 
 @app.command()
 def check(file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to check.")]):
+    from train import DigraphGNNTrainerConfig
+
     if ExperimentHeader.check_file(file, DigraphGNNTrainerConfig):
         print("Configuration file is valid.")
 
@@ -71,7 +73,7 @@ def test_run(
     max_epoch: int = 25,
     config: int = 0,
 ):
-    from train import train
+    from train import DigraphGNNTrainerConfig, train
 
     exp = ExperimentHeader.load_experiment(
         file,
@@ -86,7 +88,7 @@ def test_run(
 def single_run(
     file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to check.")],
 ):
-    from train import train
+    from train import DigraphGNNTrainerConfig, train
 
     try:
         exp = ExperimentHeader.load_experiment(file, DigraphGNNTrainerConfig)
@@ -120,13 +122,17 @@ def run_all(
 def sbatch(
     script: Annotated[Path, typer.Argument(help="Path to the bash script to submit.")],
     file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to run.")],
+    no_check: Annotated[bool, typer.Option(help="Skip checking the configuration file.")] = False,
 ):
-    print(f"Checking configuration file {file}...")
-    if ExperimentHeader.check_file(file, DigraphGNNTrainerConfig):
-        print("\t\t [OK]")
-    else:
-        print("Configuration file is not valid. Aborting.")
-        return
+    if not no_check:
+        from train import DigraphGNNTrainerConfig
+
+        print(f"Checking configuration file {file}...")
+        if ExperimentHeader.check_file(file, DigraphGNNTrainerConfig):
+            print("\t\t [OK]")
+        else:
+            print("Configuration file is not valid. Aborting.")
+            return
 
     exp_header = ExperimentHeader.load_header(file)
     exp_name = exp_header.experiment_name
