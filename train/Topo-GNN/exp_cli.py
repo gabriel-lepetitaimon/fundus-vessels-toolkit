@@ -164,7 +164,7 @@ def submit_job(
     print(f"Submitting {n_runs} runs for experiment {job_name} with UUID {job_uuid}...")
 
     # Move config file and bash script to dedicated folder
-    job_dir = Path("tmp") / "JOBS" / job_uuid
+    job_dir = Path("tmp") / "JOBS" / (job_name + "_" + job_uuid)
     job_dir.mkdir(exist_ok=True, parents=True)
     shutil.copy(file, job_dir / "cfg.yaml")
     job_script = job_dir / "run.sh"
@@ -174,7 +174,17 @@ def submit_job(
     script_txt = script_txt.replace(r"{N_RUNS}", str(n_runs))
     script_txt = script_txt.replace(r"{MAX_CONCURRENT_RUNS}", str(max_concurrent_runs))
 
-    EXP_FILE = str((job_dir / "cfg.yaml").absolute())
+    job_file = job_dir / "cfg.yaml"
+
+    if "HOME" in os.environ:
+        # Substitute absolute path to a path relative to $HOME for compute canada
+        home = Path(os.environ["HOME"])
+        pwd = Path(subprocess.run("pwd", capture_output=True, shell=True).stdout.strip().decode()).relative_to(home)
+        job_file = job_file.absolute().relative_to(Path.cwd())
+        EXP_FILE = "$HOME/" + str(pwd) + "/" + str(job_file)
+    else:
+        EXP_FILE = str((job_dir / "cfg.yaml").absolute())
+
     if param_grid_id is not None:
         EXP_FILE += f":{param_grid_id}"
     script_txt = script_txt.replace(r"{EXP_FILE}", EXP_FILE)
