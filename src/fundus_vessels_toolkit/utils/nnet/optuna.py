@@ -9,6 +9,7 @@ from typing import Annotated, Any, Callable, Literal, Optional, Self
 
 import numpy as np
 import optuna
+from optuna.storages import RDBStorage
 import yaml
 from optuna.trial import Trial, TrialState
 from pydantic import (
@@ -407,7 +408,11 @@ class OptunaDB:
     """Utility class for managing Optuna studies and trials in a database. This class provides methods for retrieving study information, trial results, and other related data from the Optuna storage."""  # noqa: E501
 
     def __init__(self, storage: str):
-        self.storage = storage
+        self.storage_url = storage
+        if storage.startswith("sqlite:///"):
+            self.storage = RDBStorage(url=storage, engine_kwargs={"connect_args": {"timeout": 120}})
+        else:
+            self.storage = RDBStorage(url=storage)
 
     @classmethod
     def ensure_storage_path(cls, storage: str):
@@ -415,7 +420,7 @@ class OptunaDB:
             Path(storage[len("sqlite:///") :]).parent.mkdir(parents=True, exist_ok=True)
 
     def list_studies_name(self) -> list[str]:
-        self.ensure_storage_path(self.storage)
+        self.ensure_storage_path(self.storage_url)
         """List all study names in the Optuna storage."""
         return optuna.get_all_study_names(storage=self.storage)
 
