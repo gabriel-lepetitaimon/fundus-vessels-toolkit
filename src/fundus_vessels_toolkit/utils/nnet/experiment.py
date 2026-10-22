@@ -95,6 +95,9 @@ ParameterGridField = Annotated[
 class ExperimentHeader(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True, frozen=True)
 
+    entity: Optional[str]
+    """Name of the entity (e.g. user or organization) that owns this experiment."""
+
     project: str
     """Name of the project this experiment belongs to."""
 
@@ -489,11 +492,13 @@ class ExperimentRun[T: BaseModel]:
         config["parameters_grid"] = self.parameters_grid
         config["EXP"] = self.header.experiment_name
         config["TRIAL"] = self.trial_name
+        # 1. Force environment-level fallbacks BEFORE initializing WandbLogger
         self.logger = WandbLogger(
             name=self.run_name,
             tags=self.header.tags,
             group=self.header.topic,
-            project="Test & Debug" if self.header.test_debug else self.header.project,
+            project=self.header.project if not self.header.test_debug else "Test & Debug",
+            entity=self.header.entity,
             config=config,
             log_model=self.header.log_model,
             save_dir="tmp",
