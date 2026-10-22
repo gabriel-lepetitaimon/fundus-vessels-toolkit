@@ -329,8 +329,8 @@ class ExperimentHeader(BaseModel):
         NoTrialsToRunError
             If all trials for the experiment have already been completed and there are no remaining trials to run.
         """  # noqa: E501
-        if isinstance(file, str) and ":" in file:
-            file_, param_grid_id_ = file.rsplit(":", 1)
+        if ":" in str(file):
+            file_, param_grid_id_ = str(file).rsplit(":", 1)
             if param_grid_id_.isdigit():
                 file = Path(file_)
                 param_grid_id = int(param_grid_id_)
