@@ -70,18 +70,21 @@ def check(file: Annotated[Path, typer.Argument(help="Path to the experiment conf
 @app.command()
 def test_run(
     file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to check.")],
-    max_epoch: int = 10,
+    max_epoch: int = 4,
     config: int = 0,
 ):
-    from train import DigraphGNNTrainerConfig, train
+    from train import DigraphGNNTrainerConfig, load_hardware_config, train
 
+    hdw_cfg = load_hardware_config()
+    hdw_cfg.val_every_n_epoch = max(max_epoch // 2, 1)
     exp = ExperimentHeader.load_experiment(
         file,
         DigraphGNNTrainerConfig,
         header_override={"test_debug": True, "progress_bar": True},
         override={"epoch": max_epoch},
+        param_grid_id=config,
     )
-    train(exp)
+    train(exp, hdw_cfg=hdw_cfg)
 
 
 @app.command()

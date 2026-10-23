@@ -420,15 +420,21 @@ class BranchDigraphData(PygData):
     ) -> Self | tuple[Self, VBranchDigraph]:
         """Alternative constructor to create a BranchDigraphData from a VGraph and a fundus image. Note that this method will not be able to fill all the fields of the data, especially those related to the ground truth probabilities and the branch curves, which are not stored in the VGraph."""  # noqa: E501
         with watch("BranchDigraphData.from_graph") as p:
-            with p.sub("parse cfg"):
-                augment_opts = AugmentationCfg.parse(augment)
-
+            augment_opts = AugmentationCfg.parse(augment)
             if augment_opts.deteriorate_graph:
+                graph0 = graph.copy()  # Keep a copy of the original graph in case we need to retry
                 with p.sub("graph deterioration"):
                     graph = deteriorate_graph(graph, opts=augment_opts.deterioration_opts, inplace=True)
-
             with p.sub("VBranchDigraph.from_graph"):
-                branch_digraph = VBranchDigraph.from_graph(graph, blind_spot=od_center, check=False)
+                try:
+                    branch_digraph = VBranchDigraph.from_graph(graph, blind_spot=od_center, check=False)
+                except RuntimeError as e:
+                    if augment_opts.deteriorate_graph:
+                        # Retry without deterioration
+                        branch_digraph = VBranchDigraph.from_graph(graph0, blind_spot=od_center, check=False)
+                    else:
+                        raise e
+
             if gt_topology is not None:
                 with p.sub("compute_p_from_gt"):
                     # gt_topology = gt_topology[0].as_dense(), gt_topology[1].as_dense()

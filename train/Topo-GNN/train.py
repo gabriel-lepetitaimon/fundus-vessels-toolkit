@@ -153,7 +153,7 @@ class HardwareConfig(BaseModel):
 _hardware_config: ContextVar[HardwareConfig | None] = ContextVar("_hardware_config", default=None)
 
 
-def load_hardware_config(cfg: Path | str | dict | None) -> HardwareConfig:
+def load_hardware_config(cfg: Path | str | dict | None = None) -> HardwareConfig:
     if cfg is None:
         default_path = Path("hardware_cfg.yaml")
         if default_path.exists():
@@ -199,7 +199,8 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
         val_loader = PyGDataLoader(
             val_set.preload(with_image=False),
             batch_size=hdw_cfg.test_batch_size,
-            num_workers=hdw_cfg.test_num_workers,
+            num_workers=hdw_cfg.train_num_workers,
+            pin_memory=True,
         )
         gc.freeze()
 
@@ -231,21 +232,20 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
             exp_run.tell(checkpoint.best_model_score.item())
 
         test_args = dict(batch_size=hdw_cfg.test_batch_size, num_workers=hdw_cfg.test_num_workers)
-        if cfg.test_version == "all":
+        if cfg.test_version == "all" or (cfg.test_version == "training" and train_set.cfg.graph_version_names == []):
             test_loaders = {
                 f"{k}-{v}": PyGDataLoader(d.use_version(v), **test_args)  # type: ignore
                 for k, d in test_set.split_by_dataset().items()
                 for v in test_set.list_versions()
             }
-        elif cfg.test_version == "training" and isinstance(train_set.cfg.graph_version, dict):
+        elif cfg.test_version == "training":
             test_loaders = {
                 f"{k}-{v}": PyGDataLoader(d.use_version(v), **test_args)  # type: ignore
                 for k, d in test_set.split_by_dataset().items()
-                for v in train_set.cfg.graph_version.keys()
+                for v in train_set.cfg.graph_version_names
             }
         else:
-            test_version = cfg.test_version if cfg.test_version != "training" else cfg.dataset.graph_version
-            test_set.cfg.graph_version = test_version
+            test_set.cfg.graph_version = cfg.test_version
             test_loaders = {k: PyGDataLoader(d, **test_args) for k, d in test_set.split_by_dataset().items()}  # type: ignore
 
         model._test_dataloaders_names = list(test_loaders.keys())
@@ -270,7 +270,7 @@ class DigraphGNNTrainer(L.LightningModule):
         self.line_contrastive_loss = BranchContrastiveLoss(self.config.contrastive_loss)
 
         # === METRICS ===
-        self.val_metrics = self.metrics_collection(opti_tree=True)
+        self.val_metrics = self.metrics_collection(opti_tree=False)
         self.val_preds = {}
         self.test_metrics = self.metrics_collection(opti_tree=True)
         self.test_preds = {}
