@@ -1,0 +1,65 @@
+# yaml-language-server: $schema=experiment.schema.json
+project: Topo-GNN
+experiment: DataAugAblation
+tags: 
+  - ablation-study
+n_trials: 15
+optuna:
+  direction: maximize
+  sampler:
+    type: GP
+    n_startup_trials: 3
+  pruner:
+    type: PercentileProgressive
+    n_startup_trials: 3
+    final_step: 250
+    final_percentile: 33
+    n_min_trials: 3
+
+log_model: false
+parameters_grid: 
+  - no-data-aug: 
+      elastic: false
+      topo: false
+      color: false
+  - elastic-only:
+      elastic: true
+      topo: false
+      color: false
+  - topo-only:
+      elastic: false
+      topo: true
+      color: false
+  - color-only:
+      elastic: false
+      topo: false
+      color: true
+  - color-elastic:
+      elastic: true
+      topo: false
+      color: true
+  - all:
+      elastic: true
+      topo: true
+      color: true
+        
+---
+# yaml-language-server: $schema=config.schema.json
+epoch: 250
+lr: 5e-4~20e-4
+batch_size: 20 
+dataset:
+  augment:
+    elastic: $elastic
+    deteriorate_graph: $topo
+    hsv_jitter: $color
+    horizontal_flip: true
+model:
+  gcn:
+    bipolar_node: true
+    architecture: InstNorm Conv16x8-DropOut InstNorm Conv32x8-DropOut Conv64x4 Conv32x8 Conv64x4 Conv32x8 Conv64x4 Conv128x4 Conv256x2
+    
+  img_feature_extractor: 
+    type: efficientnet_v2_s
+    pretrained: true
+    end_stage: 5

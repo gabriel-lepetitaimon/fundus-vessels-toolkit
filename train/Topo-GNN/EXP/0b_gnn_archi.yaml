@@ -24,6 +24,9 @@ parameters_grid:
   - bipole-medium: 
         archi: InstNorm Conv16x8-DropOut InstNorm Conv32x8-DropOut Conv64x4 Conv32x8 Conv64x4 Conv32x8 Conv64x4 Conv128x4 Conv256x2
         bipole: true
+  - bipole-short: 
+        archi: InstNorm Conv16x8-DropOut InstNorm Conv32x8-DropOut Conv64x4 Conv32x8 Conv64x4 Conv128x4 Conv256x2
+        bipole: true
   - bipole-shorter: 
         archi: InstNorm Conv16x8-DropOut InstNorm Conv32x8-DropOut Conv64x4 Conv128x4 Conv256x2
         bipole: true
@@ -36,6 +39,9 @@ parameters_grid:
   - simple-medium: 
         archi: InstNorm Conv16x8-DropOut InstNorm Conv32x8-DropOut Conv64x4 Conv32x8 Conv64x4 Conv32x8 Conv64x4 Conv128x4 Conv256x2
         bipole: false
+  - simple-short: 
+        archi: InstNorm Conv16x8-DropOut InstNorm Conv32x8-DropOut Conv64x4 Conv32x8 Conv64x4 Conv128x4 Conv256x2
+        bipole: false
   - simple-shorter: 
         archi: InstNorm Conv16x8-DropOut InstNorm Conv32x8-DropOut Conv64x4 Conv128x4 Conv256x2
         bipole: false
@@ -45,7 +51,7 @@ parameters_grid:
 ---
 # yaml-language-server: $schema=config.schema.json
 epoch: 200
-lr: 5e-4~20e-4
+lr: 5e-4~50e-4
 batch_size: 20 
 model:
   gcn:
