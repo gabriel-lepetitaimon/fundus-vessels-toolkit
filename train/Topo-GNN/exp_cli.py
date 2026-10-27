@@ -122,6 +122,22 @@ def run_all(
 
 
 @app.command()
+def mark_running_trials_as_failed(
+    file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file.")],
+):
+    import optuna
+
+    header = ExperimentHeader.load_header(file)
+    for study_name in header._study_names():
+        print(f"Marking running trials in study {study_name} as failed: ", end="")
+        study = header.optuna.load_study(study_name)
+        trials = study.get_trials(states=[optuna.trial.TrialState.RUNNING])
+        for i, trial in enumerate(trials):
+            print({trial.user_attrs.get("ID", "?")}, end=", " if i < len(trials) - 1 else "\n")
+            study.tell(trial.number, state=optuna.trial.TrialState.FAIL)
+
+
+@app.command()
 def sbatch(
     script: Annotated[Path, typer.Argument(help="Path to the bash script to submit.")],
     file: Annotated[Path, typer.Argument(help="Path to the experiment configuration file to run.")],
