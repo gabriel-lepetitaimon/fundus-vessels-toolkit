@@ -133,7 +133,7 @@ def mark_running_trials_as_failed(
         study = header.optuna.load_study(study_name)
         trials = study.get_trials(states=[optuna.trial.TrialState.RUNNING])
         for i, trial in enumerate(trials):
-            print({trial.user_attrs.get("ID", "?")}, end=", " if i < len(trials) - 1 else "\n")
+            print(trial.user_attrs.get("ID", "?"), end=", " if i < len(trials) - 1 else "\n")
             study.tell(trial.number, state=optuna.trial.TrialState.FAIL)
 
 

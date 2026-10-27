@@ -136,6 +136,9 @@ class HardwareConfig(BaseModel):
     preload_with_img: bool = True
     """Whether to preload the dataset with images. If False, the dataset will be preloaded without images, which can save memory but slow down the training."""  # noqa: E501
 
+    dataset_cache_dir: str | None = None
+    """Directory to cache the dataset. If None, the default cache directory will be used."""
+
     def batch_size_grad_acc(self, batch_size: int) -> tuple[int, int]:
         """Calculate the actual batch size and the number of gradient accumulation steps based on the given batch size and the maximum batch size."""  # noqa: E501
         if batch_size <= self.max_batch_size:
@@ -178,7 +181,7 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
         cfg = exp_run.cfg
 
         # === DATASET ===
-        dataset = BranchDigraphDataset("ALL_DATA_bundle_v2.tar.gz", cfg=cfg.dataset)
+        dataset = BranchDigraphDataset("ALL_DATA_bundle_v2.tar.gz", cfg=cfg.dataset, root=hdw_cfg.dataset_cache_dir)
         train_set, val_set, test_set = dataset.split_sets(train_ratio=0.7, val_ratio=0.15)
 
         if cfg.training_set is not None and cfg.training_set:
