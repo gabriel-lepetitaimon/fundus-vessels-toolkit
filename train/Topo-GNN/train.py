@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import math
+import os
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Annotated, Literal, NotRequired, Optional, TypedDict
@@ -14,7 +15,7 @@ import wandb
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 from lightning_fabric.plugins.precision.precision import _PRECISION_INPUT_STR
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 from torch_geometric.loader import DataLoader as PyGDataLoader
 from torchmetrics import MetricCollection, Specificity
 from torchmetrics.classification import Accuracy, Precision, Recall
@@ -86,6 +87,15 @@ class _GPU_Specs(TypedDict):
     devices: NotRequired[int | list[int]]
 
 
+def expand_path(path: str | Path | None) -> Path | None:
+    if path is None:
+        return None
+    if "$" in str(path):
+        # Replace environment variables in the path
+        path = Path(os.path.expandvars(str(path)))
+    return Path(path)
+
+
 class HardwareConfig(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True)
 
@@ -136,7 +146,7 @@ class HardwareConfig(BaseModel):
     preload_with_img: bool = True
     """Whether to preload the dataset with images. If False, the dataset will be preloaded without images, which can save memory but slow down the training."""  # noqa: E501
 
-    dataset_cache_dir: str | None = None
+    dataset_cache_dir: Annotated[Path | None, BeforeValidator(expand_path, json_schema_input_type=str)] = None
     """Directory to cache the dataset. If None, the default cache directory will be used."""
 
     def batch_size_grad_acc(self, batch_size: int) -> tuple[int, int]:
