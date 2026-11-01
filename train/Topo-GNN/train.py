@@ -219,7 +219,7 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
             batch_size=batch_size,
         )
         val_loader = PyGDataLoader(
-            val_set.preload(with_image=False),
+            val_set.preload(with_image=hdw_cfg.preload_with_img),
             batch_size=hdw_cfg.test_batch_size,
             num_workers=hdw_cfg.train_num_workers,
         )
