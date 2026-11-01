@@ -15,7 +15,7 @@ module load scipy-stack/2026a
 module load gcc opencv/4.13.0
 
 mkdir $SLURM_TMPDIR/ENV
-tar -zxf /home/galep/links/projects/def-fcheriet/galep/GNN-Topo/ENV.tar.gz -C $SLURM_TMPDIR
+tar -zxf /home/galep/links/projects/def-fcheriet/galep/GNN-Topo/ENV.tar.gz -C $SLURM_TMPDIR/ENV
 source $SLURM_TMPDIR/ENV/bin/activate
 export PYTHONPATH="${PYTHONPATH}:${SLURM_TMPDIR}/ENV/lib/python3.13/site-packages:/home/galep/links/projects/def-fcheriet/galep/GNN-Topo/fundus-vessels-toolkit/src"
 
