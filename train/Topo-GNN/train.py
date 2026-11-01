@@ -149,6 +149,9 @@ class HardwareConfig(BaseModel):
     dataset_cache_dir: Annotated[Path | None, BeforeValidator(expand_path, json_schema_input_type=str)] = None
     """Directory to cache the dataset. If None, the default cache directory will be used."""
 
+    disable_cv2_multithreading: bool = False
+    """Whether to disable OpenCV multithreading. Can be useful to avoid conflicts with PyTorch DataLoader workers."""
+
     def batch_size_grad_acc(self, batch_size: int) -> tuple[int, int]:
         """Calculate the actual batch size and the number of gradient accumulation steps based on the given batch size and the maximum batch size."""  # noqa: E501
         if batch_size <= self.max_batch_size:
@@ -187,6 +190,12 @@ def load_hardware_config(cfg: Path | str | dict | None = None) -> HardwareConfig
 def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=None):
     hdw_cfg = load_hardware_config(hdw_cfg)
 
+    if hdw_cfg.disable_cv2_multithreading:
+        from fundus_toolkits.utils.safe_import import cv2
+
+        cv2.setNumThreads(0)
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
     with experiment as exp_run:
         cfg = exp_run.cfg
 
@@ -206,14 +215,13 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
             train_set.preload(with_image=hdw_cfg.preload_with_img),
             shuffle=True,
             num_workers=hdw_cfg.train_num_workers,
-            persistent_workers=True,
+            persistent_workers=hdw_cfg.train_num_workers > 0,
             batch_size=batch_size,
         )
         val_loader = PyGDataLoader(
             val_set.preload(with_image=False),
             batch_size=hdw_cfg.test_batch_size,
             num_workers=hdw_cfg.train_num_workers,
-            pin_memory=True,
         )
         gc.freeze()
 
@@ -233,7 +241,7 @@ def train(experiment: ExperimentRunFactory[DigraphGNNTrainerConfig], hdw_cfg=Non
             accumulate_grad_batches=grad_acc,
             # gradient_clip_val=0.5,
             # gradient_clip_algorithm="value",
-            # num_sanity_val_steps=0,
+            num_sanity_val_steps=0,
             callbacks=[checkpoint, pruner],
             precision=hdw_cfg.precision,
             **hdw_cfg.gpu_specs(),
@@ -419,26 +427,28 @@ class DigraphGNNTrainer(L.LightningModule):
             other_group_idx=out.lines[mask].b0,
         )
 
-        contrastive_losses = self.line_contrastive_loss(out)
-        contrastive_loss = contrastive_losses.pop("loss")
+        losses = {
+            "fp_loss": fp_loss,
+            "av_loss": av_loss,
+            "dir_loss": dir_loss,
+            # "root_loss": root_loss,
+            "line_loss": line_loss,
+        }
 
         if self.config.topo_losses_delay > 0:
             delay_coef = (self.current_epoch - self.config.topo_losses_delay) / self.config.topo_losses_delay
             delay_coef = max(min(1.0, delay_coef), 0)
         else:
             delay_coef = 1.0
-        loss = fp_loss + av_loss + dir_loss + (line_loss + contrastive_loss * 0.1) * delay_coef
-        return (
-            {
-                "fp_loss": fp_loss,
-                "av_loss": av_loss,
-                "dir_loss": dir_loss,
-                # "root_loss": root_loss,
-                "line_loss": line_loss,
-            }
-            | contrastive_losses
-            | {"loss": loss}
-        )
+        loss = fp_loss + av_loss + dir_loss + line_loss * delay_coef
+
+        if self.config.contrastive_loss.contrastive_loss or self.config.contrastive_loss.triplet_loss:
+            contrastive_losses = self.line_contrastive_loss(out)
+            contrastive_loss = contrastive_losses.pop("loss")
+            loss += contrastive_loss * 0.1 * delay_coef
+            losses.update(contrastive_losses)
+
+        return losses | {"loss": loss}
 
     def training_step(self, batch, batch_idx):
         model_out = self(batch)

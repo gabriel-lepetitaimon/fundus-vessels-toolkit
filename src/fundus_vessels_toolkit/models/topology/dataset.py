@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import os
 import shutil
+import sys
 import tarfile
 import tempfile
 import warnings
@@ -614,7 +616,7 @@ class SampleSource:
                     else:
                         # Parse AV segmentation to graph
                         if av2tree is None:
-                            av2tree = GNNAVSegToTree()
+                            av2tree = GNNAVSegToTree(mask_optic_disc=False)
                         with watch("Load AV map"):
                             with watch("FundusData.update"):
                                 fundus.update(av=graph_path, crop_pad=src_roi, reshape_method="resize", inplace=True)
@@ -702,6 +704,42 @@ class SampleSource:
                         vei_topo.save(output_sample.vei_topology, on_exists="overwrite")
 
         return output_sample
+
+    def process_in_memory(
+        self,
+        *,
+        resize_to: Optional[int] = None,
+        av2tree: Optional[AVSegToTreeBase] = None,
+        mask_optic_disc: bool = True,
+    ) -> BranchDigraphSample:
+        """Process the sample from the source files and return a BranchDigraphSample object in memory. The fundus image may be resized to the specified size, and the graphes may be parsed from AV segmentation if av2tree is provided.
+
+        Parameters
+        ----------
+        resize_to : Optional[int]
+            If specified, the fundus image will be resized to have the specified width, and the graphes and topologies will be transformed accordingly. If not specified, the original size will be kept.
+
+        av2tree : Optional[AVSegToTreeBase]
+            The method used to parse AV segmentation images to a graph. Only used if the graphes provided are image files instead of graph files.
+
+        Returns
+        -------
+        BranchDigraphSample
+            The processed sample in memory.
+        """  # noqa: E501
+        dir = None
+        # If on linux use /run/user
+        if sys.platform == "linux":
+            dir = Path("/run/user") / str(os.getuid())
+        with tempfile.TemporaryDirectory(dir=dir) as tmpdir:
+            output_sample = self.process(
+                output_dir=Path(tmpdir),
+                resize_to=resize_to,
+                av2tree=av2tree,
+                mask_optic_disc=mask_optic_disc,
+                overwrite=True,
+            )
+            return output_sample.load(image=True, discard_gt_tree=False, load_av_maps=True)
 
 
 class BranchDigraphDatasetConfig(BaseModel):

@@ -343,6 +343,14 @@ class BranchDigraphModel(torch.nn.Module):
         print(f"\tClassif Head: {sum(p.numel() for p in self.classif_head.parameters()) / 1e3:.2f}k")
         print("")
 
+    def model_size(self) -> dict[str, int]:
+        return dict(
+            total=sum(p.numel() for p in self.parameters()),
+            image_features=sum(p.numel() for p in self.img_feature_extractor.parameters()),
+            graph_features=sum(p.numel() for p in self.gnn.parameters()),
+            classif_head=sum(p.numel() for p in self.classif_head.parameters()),
+        )
+
     @dataclass(frozen=True)
     class Output:
         batch: BranchDigraphBatch | BranchDigraphData
