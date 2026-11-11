@@ -25,10 +25,15 @@ from ..utils.rasterization import rasterize_line, rasterize_topology
 from ..vascular_data_objects.vbranch_geodata import VBranchGeoData
 from ..vascular_data_objects.vgraph import VGraph
 from ..vascular_data_objects.vtree import VTree, VTreeBranch
+from .graph_simplification import extend_topology, simplify_passing_nodes
 
 
 def transfer_topology(
-    src: VTree | tuple[VTree, VTree] | Tuple[TreeTopology, TreeTopology], dst: VGraph, *, keep_missing_branch=True
+    src: VTree | tuple[VTree, VTree] | Tuple[TreeTopology, TreeTopology],
+    dst: VGraph,
+    *,
+    keep_missing_branch=True,
+    allow_splits: bool | float = True,
 ) -> VTree:
     if isinstance(src, tuple):
         src_art, src_vei = src
@@ -45,9 +50,21 @@ def transfer_topology(
     art_topo = TreeTopology.from_tree(src_art) if isinstance(src_art, VTree) else src_art
     vei_topo = TreeTopology.from_tree(src_vei) if isinstance(src_vei, VTree) else src_vei
 
+    dst = dst.copy()
+    if allow_splits:
+        tolerance = allow_splits if isinstance(allow_splits, float) else 15.0
+        extend_topology(
+            dst,
+            snapDist=tolerance,
+            minSpaceBetweenSplits=tolerance * 2,
+            nodeMergeDistance=tolerance,
+            initial_branch_id_attr="ini_branch_id",
+            inplace=True,
+        )
+
     best_topo, dir_logit, parent = optimal_topology(dst, [art_topo, vei_topo])
     fp = best_topo == -1
-    return conform_graph_to_arborescence(
+    tree = conform_graph_to_arborescence(
         dst,
         branch_parents=parent,
         branch_dir=dir_logit > 0,  # type: ignore
@@ -56,6 +73,9 @@ def transfer_topology(
         keep_missing_branch=keep_missing_branch,
         assign_av="subtree",
     )
+    if allow_splits:
+        simplify_passing_nodes(tree, inplace=True, with_same_branch_attr=["ini_branch_id", "av"])
+    return tree
 
 
 def conform_graph_to_arborescence(
@@ -242,6 +262,55 @@ class TreeTopology:
             size += sys.getsizeof(self.rank_map)
             size += sys.getsizeof(self.fuzzy_skeleton_map)
         return size
+
+    @classmethod
+    def from_av_tree(
+        cls,
+        tree: VTree,
+        *,
+        av_attr: str = "av",
+        expand_labels_by: int = 0,
+        bezier_interpolate: float = 0.5,
+        fill_junctions: bool = True,
+        boundaries_field: VBranchGeoData.Key = VBranchGeoData.Fields.BOUNDARIES,
+        sparse: bool = False,
+        discard_tree: bool = False,
+        crop_roi: Optional[Rect] = None,
+    ) -> tuple[Self, Self]:
+        """
+        Rasterize the given vessel tree into a binary mask and a distance map.
+
+        Parameters
+        ----------
+        tree : VTree
+            The vessel tree to rasterize including both arteries and veins.
+        av_attr : str, optional
+            The branch attribute used to distinguish arterial from venous branches.
+
+        Returns
+        -------
+        Tuple[TreeTopology, TreeTopology]
+            A tuple containing the artery and vein tree topologies.
+        """
+        art_branches, vei_branches = [], []
+        for subtree in tree.branch_ids_by_subtree():
+            av = np.bincount(tree.branch_attr.loc[subtree, av_attr].to_numpy(), minlength=3)
+            if av[AVLabel.ART] >= av[AVLabel.VEI]:
+                art_branches.extend(subtree)
+            else:
+                vei_branches.extend(subtree)
+        src_art = tree.subtree(art_branches)
+        src_vei = tree.subtree(vei_branches)
+        opts = dict(
+            expand_labels_by=expand_labels_by,
+            bezier_interpolate=bezier_interpolate,
+            fill_junctions=fill_junctions,
+            boundaries_field=boundaries_field,
+            sparse=sparse,
+            discard_tree=discard_tree,
+            crop_roi=crop_roi,
+        )
+        return cls.from_tree(src_art, **opts), cls.from_tree(src_vei, **opts)  # type: ignore
 
     @classmethod
     def from_tree(
@@ -1075,7 +1144,7 @@ def optimal_lines(branches_topology: BranchesTopo, lines: npt.NDArray[np.int_]) 
 
 
 def optimal_topology(
-    graph: VGraph, topologies: list[TreeTopology], *, plausibility_threshold: float = 0.05
+    graph: VGraph, topologies: Sequence[TreeTopology], *, plausibility_threshold: float = 0.1
 ) -> tuple[Int1DArray, Float1DArray, Int1DArray]:
     """
     Compute the optimal arborescence of branches for the given graph based on the topological labels.

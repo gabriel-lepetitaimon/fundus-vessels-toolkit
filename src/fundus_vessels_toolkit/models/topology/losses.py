@@ -4,6 +4,7 @@ import torch
 from pytorch_metric_learning import distances as pml_distances
 from pytorch_metric_learning import losses as pml_losses
 from pytorch_metric_learning import miners as pml_miners
+from pytorch_metric_learning.types import PairIndices, TripletIndices
 from torch import Tensor
 
 from ...utils.nnet.experiment import ExpCfgBaseModel
@@ -106,9 +107,7 @@ class BranchDigraphMiner(pml_miners.BaseMiner):
         self.triplet = triplet
         self.same_tail_node = same_tail_node
 
-    def mine(
-        self, embedding, subtree_idx, tail_node_idx
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
+    def mine(self, embedding, subtree_idx, tail_node_idx):
         device = embedding.device
 
         # → Shuffle samples to ensure random sampling of pairs
@@ -132,7 +131,7 @@ class BranchDigraphMiner(pml_miners.BaseMiner):
             a_idx = anchors.argwhere().squeeze(-1)
             if a_idx.numel() == 0:
                 empty = torch.empty(0, dtype=torch.long, device=device)
-                return empty, empty, empty
+                return TripletIndices(empty, empty, empty)
 
             # Sample one positive and one negative pair for each anchor
             def rng_one_sample_per_row(mask):
@@ -142,19 +141,20 @@ class BranchDigraphMiner(pml_miners.BaseMiner):
 
             p_idx = rng_one_sample_per_row(pos_pairs[a_idx])
             n_idx = rng_one_sample_per_row(neg_pairs[a_idx])
-            return sample_idx[a_idx], sample_idx[p_idx], sample_idx[n_idx]
+            return TripletIndices(sample_idx[a_idx], sample_idx[p_idx], sample_idx[n_idx])
         else:
             pos_pairs = sample_idx[pos_pairs.triu(diagonal=1).argwhere()].T
             neg_pairs = sample_idx[neg_pairs.triu(diagonal=1).argwhere()].T
-            return pos_pairs[0], pos_pairs[1], neg_pairs[0], neg_pairs[1]
+            return PairIndices(pos_pairs[0], pos_pairs[1], neg_pairs[0], neg_pairs[1])
 
     def forward(
         self, out: BranchDigraphModel.Output
     ) -> tuple[Tensor, Tensor, Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
-        self.reset_stats()
+        # TODO: Update this to the new version of pytorch-metric-learning, which has a different interface for miners.
+        # self.reset_stats()
         with torch.no_grad():
             mining_output = self.mine(out.b1_embedding, out.gt_subtree_idx, out.gt_tail_nodes(use_parent_head=True))
-        self.output_assertion(mining_output)
+        # self.output_assertion(mining_output)
         return mining_output
 
 

@@ -383,12 +383,12 @@ class GNNAVSegToTree(AVSegToTree):
             skeletonize_method="fvt",
             fix_hollow=True,
             clean_branches_tips=max_calibre,
-            min_terminal_branch_length=5,
+            min_terminal_branch_length=3,
             min_terminal_branch_calibre_ratio=0.5,
             simplify_graph_arg=GraphSimplifyArg(
                 max_spurs_length=0,
                 reconnect_endpoints=False,
-                junctions_merge_distance=5,
+                junctions_merge_distance=3,
                 min_orphan_branches_length=3,
                 max_cycles_length=max_calibre,
                 simplify_topology=False,
@@ -400,7 +400,7 @@ class GNNAVSegToTree(AVSegToTree):
         with watch("Parse artery graph"):
             art = (av == AVLabel.ART) | (av == AVLabel.BOTH)
             a_graph = seg2graph(art, parse_geometry=populate_geometry)
-            a_graph.branch_attr["av"] = a_graph.node_attr["av"] = AVLabel.ART
+            # a_graph.branch_attr["av"] = a_graph.node_attr["av"] = AVLabel.ART
             with watch("Assign AV labels"):
                 assign_av_label_centerline(
                     a_graph,
@@ -414,7 +414,7 @@ class GNNAVSegToTree(AVSegToTree):
         with watch("Parse vein graph"):
             vei = (av == AVLabel.VEI) | (av == AVLabel.BOTH)
             v_graph = seg2graph(vei, parse_geometry=populate_geometry)
-            v_graph.branch_attr["av"] = v_graph.node_attr["av"] = AVLabel.VEI
+            # v_graph.branch_attr["av"] = v_graph.node_attr["av"] = AVLabel.VEI
             with watch("Assign AV labels"):
                 assign_av_label_centerline(
                     v_graph,
@@ -424,6 +424,8 @@ class GNNAVSegToTree(AVSegToTree):
                     split_high_curvature=0.04,
                     inplace=True,
                 )
+
+        # return a_graph.append(v_graph)
 
         # Delete branch with BOTH label in the vein graph and merge graphes
         with watch("Merge graphs and deduplicate branches"):
@@ -438,18 +440,16 @@ class GNNAVSegToTree(AVSegToTree):
             branch_to_delete = []
             for branch in v_graph.branches(v_graph.branch_attr["av"] == AVLabel.BOTH):
                 # Keep branch that are valid crossing (non-terminal, short and close to an similar artery)
-                if (
-                    branch.arc_length(fast=True) < max_calibre * 2 and not branch.is_terminal()
-                ):  # -> Non-terminal and short vein
+                if branch.arc_length(fast=True) < max_calibre * 2:  # -> Short vein
                     closest_art_branch = closest_art(branch.midpoint())
-                    branch.attr["av"] = AVLabel.VEI
                     if (
                         closest_art_branch is not None
-                        and closest_art_branch.arc_length(fast=True) < max_calibre * 2
-                        and not closest_art_branch.is_terminal()
+                        # and closest_art_branch.arc_length(fast=True) < max_calibre * 2
+                        and (not branch.is_terminal() or not closest_art_branch.is_terminal())
                     ):
                         # -> Close to non-terminal and short artery ...
                         # Restore the AV labels and skip the deletion of this branch
+                        branch.attr["av"] = AVLabel.VEI
                         closest_art_branch.attr["av"] = AVLabel.ART
                         continue
                 # Otherwise, mark the branch for deletion
@@ -458,7 +458,7 @@ class GNNAVSegToTree(AVSegToTree):
 
             # Merge the two graphs into one and clean AV labels
             for branch in a_graph.branches():
-                if branch.attr["av"] != AVLabel.BOTH or (
+                if int(branch.attr["av"]) != AVLabel.BOTH or (
                     branch.arc_length(fast=True) < max_calibre * 2 and not branch.is_terminal()
                 ):
                     # -> Non-both and remaining "both" non-terminal and short branch are relabeled artery

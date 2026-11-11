@@ -16,9 +16,9 @@ from ..vascular_data_objects import VGraph, VTree
 
 AV_COLORS: Dict[AVLabel, str] = {
     AVLabel.BKG: "grey",
-    AVLabel.ART: "red",
-    AVLabel.VEI: "blue",
-    AVLabel.BOTH: "purple",
+    AVLabel.ART: "coral",
+    AVLabel.VEI: "cornflowerblue",
+    AVLabel.BOTH: "darkorchid",
     AVLabel.UNK: "green",
 }
 
@@ -290,7 +290,7 @@ def draw_graph(
     edge_labels: bool = False,
     node_labels: bool = False,
     name: str = "vessel_graph",
-) -> None:
+) -> LayerGraph:
     """
     Draw a vessel graph on a given view.
 
@@ -339,3 +339,4 @@ def draw_graph(
         layer.edges_cmap = branch_color_
 
     view[name] = layer
+    return layer

@@ -573,11 +573,12 @@ std::array<torch::Tensor, 3> optimal_topology(const std::vector<std::array<torch
             if (b1Subtree != get_subtree(b0Topo.label)) continue;  //... in the same subtree,
             Parent b0AsParent = {b0LinesIds.empty() ? b0 : b0LinesIds[b], b0, b0Topo.headLabel, b0Topo.headRank};
             bool sameLabel = b0Topo.headLabel == b1Topo.tailLabel;
+            bool isAncestor = !sameLabel && is_ancestor(b0Topo.headLabel, b1Topo.tailLabel, true);
             if ((sameLabel && b0Topo.headRank < b1Topo.tailRank) ||
-                is_ancestor(b0Topo.headLabel, b1Topo.tailLabel, true)) {
+                (isAncestor && floor(b0Topo.headRank) == get_rank(b0Topo.headLabel))) {
                 // ... the highest (and thus nearest) ancestor
                 if (bestParent < b0AsParent) bestParent = b0AsParent;
-            } else if ((sameLabel && b0Topo.headRank < b1Topo.headRank) ||
+            } else if (isAncestor || (sameLabel && b0Topo.headRank < b1Topo.headRank) ||
                        is_sibling(b0Topo.headLabel, b1Topo.tailLabel, false)) {
                 // ... or the nearest uncertain sibling
                 float dist = distance(headPos(b0, t), tailPos(b1, t));
@@ -607,7 +608,7 @@ std::array<torch::Tensor, 3> optimal_topology(const std::vector<std::array<torch
 
             // If both parent and sibling found, choose the one with the closest head tip to this branch's tail tip
             const auto& pHead = headPos(bestParent.branch_id, t);
-            return (distance(pHead, b1Tail) <= 2.f * sHeadDist) ? bestParent : bestSibling;
+            return (distance(pHead, b1Tail) <= 1.25f * sHeadDist) ? bestParent : bestSibling;
         }
     };
 
@@ -731,7 +732,7 @@ std::array<torch::Tensor, 3> optimal_topology(const std::vector<std::array<torch
                 optiTopo[b].dirLogit += topo.p_dir * topo.plausibility * topo.length;
             }
         } else if ((topoScores[0].plausibility - topoScores[1].plausibility <
-                    plausibility_threshold * topoScores[0].plausibility)) {
+                    2 * plausibility_threshold * topoScores[0].plausibility)) {
             // If top2 plausibilities are equivalent process the branch as overlapping to decide given the surrounding
             if (!overlapping_branches[b]) {
                 overlapping_branches[b] = true;

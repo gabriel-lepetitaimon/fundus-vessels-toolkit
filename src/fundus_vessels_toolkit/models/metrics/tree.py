@@ -5,7 +5,10 @@ from typing import Iterable
 import torch
 import torch.nn as nn
 from torch import Tensor
-from torchmetrics import Metric
+from torchmetrics import Metric, MetricCollection
+
+from ..topology.dataset import BranchDigraphSample
+from ..topology.model import BranchDigraphModel
 
 
 class MetricCollectionDict(nn.ModuleDict):

@@ -489,6 +489,11 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
     Point blindSpot(blind_spot[0], blind_spot[1]);
     float blind_spot_max_cos = blind_spot_angle > 0 ? std::cos(blind_spot_angle * M_PI / 180.0) : 1;
 
+    float maxDistSqr = maxDist * maxDist;
+    float nearConeCos = std::cos(deg2rad(nearConeAngle)), farConeCos = std::cos(deg2rad(farConeAngle));
+    float minTanCos = std::cos(deg2rad(maxTanAngle));
+    float minHypCos = std::cos(deg2rad(maxHypAngle));
+
     // === INTERPOLATE CURVES ===
     std::vector<std::array<IntPoint, 2>> tipsPos(B);
     std::vector<std::array<Point, 2>> tipsTangents(B);
@@ -660,6 +665,14 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
             }
         }
         return branchIds;
+    };
+
+    auto is_connectable = [&](std::size_t b0, int tip0, std::size_t b1, int tip1) {
+        const IntPoint& p0 = tipsPos[b0][tip0];
+        const IntPoint& p1 = tipsPos[b1][tip1];
+        const Point& tan1 = tipsTangents[b1][tip1];
+        float tanHypCos = tan1.dot((p0 - p1).normalize());
+        return (tanHypCos >= minHypCos);
     };
 
     // === SEARCH CURVES CROSSINGS ===
@@ -870,10 +883,6 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
     // === SCAN FOR INTERCEPT POINTS ===
     std::list<InterceptCandidate> intercepts;
     std::list<ConnexionCandidate> connexionsCandidates;
-    float maxDistSqr = maxDist * maxDist;
-    float nearConeCos = std::cos(deg2rad(nearConeAngle)), farConeCos = std::cos(deg2rad(farConeAngle));
-    float minTanCos = std::cos(deg2rad(maxTanAngle));
-    float minHypCos = std::cos(deg2rad(maxHypAngle));
 
 #pragma omp parallel for collapse(2) reduction(merge : intercepts, connexionsCandidates)
     for (std::size_t b0 = 0; b0 < tipsPos.size(); b0++) {
@@ -1011,8 +1020,28 @@ std::tuple<std::vector<std::pair<int, Splits>>, torch::Tensor> branch_connexion_
                     auto tip0 = intercept.tip0;
                     if (intercept.towardsBefore)
                         splitIncidentConnexions.emplace_back(ConnexionCandidate{b0, tip0, bBefore, 1});
+                    else {
+                        // If the intercept doesn't allow a connexion to the branch before, check the branches before
+                        auto bPrev_it = b_it;
+                        do {
+                            if (is_connectable(tip0 == 1 ? branchIdAtTip1[b0] : b0, tip0, *bPrev_it, 1)) {
+                                splitIncidentConnexions.emplace_back(ConnexionCandidate{b0, tip0, *bPrev_it, 1});
+                                break;
+                            }
+                        } while ((bPrev_it--) != newBranches.begin());
+                    }
                     if (intercept.towardsAfter)
                         splitIncidentConnexions.emplace_back(ConnexionCandidate{b0, tip0, bAfter, 0});
+                    else {
+                        // If the intercept doesn't allow a connexion to the branch after, check the branches after
+                        auto bNext_it = b_it;
+                        do {
+                            if (is_connectable(tip0 == 1 ? branchIdAtTip1[b0] : b0, tip0, *bNext_it, 0)) {
+                                splitIncidentConnexions.emplace_back(ConnexionCandidate{b0, tip0, *bNext_it, 0});
+                                break;
+                            }
+                        } while ((++bNext_it) != newBranches.end());
+                    }
                 }
             }
             branchIdAtTip1[b1] = newBranches.back();  // Update the branch ID at tip 1 to the new branch ID

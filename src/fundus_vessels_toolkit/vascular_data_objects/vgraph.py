@@ -1333,6 +1333,83 @@ class VGraph:
             node_ids=node_id, return_branch_direction=return_branch_direction, individual_nodes=False
         )
 
+    def are_branches_adjacent(self, branch_ids: BranchIndicesLike) -> bool:
+        """Check if the given branches are adjacent to each other.
+
+        Parameters
+        ----------
+        branch_ids : BranchIndicesLike
+            The indices of the branches to check for adjacency.
+            Valid indices are the same as for :meth:`VGraph.as_branch_ids`.
+
+        Returns
+        -------
+        bool
+            True if the branches are adjacent, False otherwise.
+
+        Examples
+        --------
+        >>> # Branch id:           0 1 2     3
+        >>> graph = VGraph.parse("0➔1➔2➔3 ; 1➔4")
+
+        >>> graph.are_branches_adjacent([0, 1])
+        True
+
+        >>> graph.are_branches_adjacent([0, 2])
+        False
+
+        >>> graph.are_branches_adjacent([0, 1, 3])
+        True
+
+        >>> graph.are_branches_adjacent([0, 1, 2])
+        False
+
+        """
+        branch_ids = self.as_branch_ids(branch_ids)
+        if len(branch_ids) < 2:
+            return False
+        branch_nodes = self._branch_list[branch_ids]
+        idx1, idx2 = np.triu_indices(len(branch_ids), k=1)
+        share_node = np.any(branch_nodes[idx1] == branch_nodes[idx2], axis=1)
+        share_node |= np.any(branch_nodes[:, ::-1][idx1] == branch_nodes[idx2], axis=1)
+        return bool(share_node.all())
+
+    def are_branch_pairs_adjacent(self, branch_idx1: BranchIndicesLike, branch_idx2: BranchIndicesLike) -> Bool1DArray:
+        """Check if the given pairs of branches are adjacent to each other.
+
+        Parameters
+        ----------
+        branch_idx1 : BranchIndicesLike
+            The indices of the first branches in the pairs to check for adjacency.
+            Valid indices are the same as for :meth:`VGraph.as_branch_ids`.
+
+        branch_idx2 : BranchIndicesLike
+            The indices of the second branches in the pairs to check for adjacency.
+            Valid indices are the same as for :meth:`VGraph.as_branch_ids`.
+
+        Returns
+        -------
+        np.ndarray
+            A boolean array indicating whether each pair of branches is adjacent.
+
+        Examples
+        --------
+        >>> # Branch id:           0 1 2     3
+        >>> graph = VGraph.parse("0➔1➔2➔3 ; 1➔4")
+
+        >>> graph.are_branch_pairs_adjacent([0, 1, 0], [1, 3, 2])
+        array([ True, True, False])
+        """
+        branch_idx1 = self.as_branch_ids(branch_idx1)
+        branch_idx2 = self.as_branch_ids(branch_idx2)
+        if len(branch_idx1) != len(branch_idx2):
+            raise ValueError("The two input arrays must have the same length.")
+        branch_nodes1 = self._branch_list[branch_idx1]
+        branch_nodes2 = self._branch_list[branch_idx2]
+        share_node = np.any(branch_nodes1 == branch_nodes2, axis=1)
+        share_node |= np.any(branch_nodes1[:, ::-1] == branch_nodes2, axis=1)
+        return share_node
+
     def adjacent_nodes(self, node_id: NodeIndicesLike) -> Int1DArray:
         """Compute the indices of the nodes adjacent to the given node.
 
@@ -3438,6 +3515,12 @@ class VGraph:
         chains = reduce_chains(branch_pairs.tolist(), return_index=True)
         consecutive_branches = [np.array(c, dtype=np.int_) for c in chains[0]]
         consecutive_pair_ids = [np.array(c, dtype=np.int_) for c in chains[1]]
+
+        for c in range(len(consecutive_branches)):
+            if consecutive_branches[c][0] > consecutive_branches[c][-1]:
+                # Favor the lower branch index as the main branch of the merged group
+                consecutive_branches[c] = consecutive_branches[c][::-1]
+                consecutive_pair_ids[c] = consecutive_pair_ids[c][::-1]
 
         # 2. For each group of consecutive branches flip them if needed and merge them
         branches_to_delete = []

@@ -480,7 +480,7 @@ class DigraphGNNTrainer(L.LightningModule):
                 {
                     "running_lr": self.trainer.optimizers[0].param_groups[0]["lr"],
                     "epoch": self.trainer.current_epoch,
-                    "val_pred": self.val_preds["table"],
+                    # "val_pred": self.val_preds["table"],
                 }
             )
         self.val_preds = {}
@@ -504,11 +504,11 @@ class DigraphGNNTrainer(L.LightningModule):
             test_metrics, batch_size=batch.num_graphs, on_step=False, on_epoch=True, add_dataloader_idx=suffix == ""
         )
 
-        self.update_preds(self.test_preds, model_out)
+        # self.update_preds(self.test_preds, model_out)
 
     def on_test_end(self) -> None:
-        if isinstance(self.logger, WandbLogger):
-            self.logger.experiment.log({"test_pred": self.test_preds["table"]})
+        # if isinstance(self.logger, WandbLogger):
+        #     self.logger.experiment.log({"test_pred": self.test_preds["table"]})
         self.test_preds = {}
         self.test_metrics.reset()
 

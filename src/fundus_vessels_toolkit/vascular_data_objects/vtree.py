@@ -1142,7 +1142,7 @@ class VTree(VGraph):
 
         while stack:
             branch_id = stack.pop() if depth_first else stack.pop(0)
-            yield branch_id
+            yield int(branch_id)
             successors = self.branch_successors(branch_id)
             if depth_first:
                 successors = successors[::-1]
@@ -2050,16 +2050,16 @@ class VTree(VGraph):
             else:
                 branch_dir = tree._branch_dir
 
-        ancestors_lookup = np.arange(branch_tree.size)
+        # ancestors_lookup = np.arange(branch_tree.size)
         for branches, flip in zip(merged_branch, flip_branch, strict=True):
             b0 = branches[0]
-            ancestors_lookup[branches] = b0
+            b0_parent = branch_tree[b0]
+            branch_tree[branches] = b0_parent if b0_parent not in branches else branch_tree[branches[-1]]
             if flip:
                 main_branch = merge_lookup[b0]
                 branch_dir[main_branch] = ~branch_dir[main_branch]
 
         # === Apply branch deletion to branch tree ===
-        branch_tree = branch_tree[ancestors_lookup]
         merge_lookup = add_empty_to_lookup(merge_lookup, increment_index=False)
         tree._branch_tree = np.delete(merge_lookup[branch_tree + 1], del_branch)
         return tree

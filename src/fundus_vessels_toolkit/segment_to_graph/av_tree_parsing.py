@@ -352,7 +352,7 @@ def assign_av_label_centerline(
     graph: VGraph,
     av: Optional[npt.NDArray[np.uint8] | FundusData] = None,
     *,
-    min_branch_length: int = 5,
+    min_branch_length: int = 3,
     median_filter_size: int | None = None,
     split_av_branch: bool = True,
     split_high_curvature: float = 0,
@@ -392,6 +392,9 @@ def assign_av_label_centerline(
     # === Assign the AV label to each branch based on the AV map ===
     graph.branch_attr[av_attr] = default_label
     branches_av_attr = graph.branch_attr[av_attr]
+    calibres = None
+    if geodata.has_branch_data(VBranchGeoData.Fields.CALIBRES):
+        calibres = geodata.branch_data(VBranchGeoData.Fields.CALIBRES)
     for branch in graph.branches():
         branch_curve = branch.curve()
         if len(branch_curve) <= 2:
@@ -400,12 +403,14 @@ def assign_av_label_centerline(
             branch_curve = np.round(branch_curve).astype(int)
         # 0. Check the AV labels under each pixel of the skeleton
         branch_av = av_map[branch_curve[:, 0], branch_curve[:, 1]]  # type: ignore
-
-        if split_av_branch and len(branch_curve) > min_branch_length:
+        min_length = min_branch_length
+        if calibres is not None and (c := calibres[branch.id]) is not None:
+            min_length = min(min_length, max(np.ceil(c.data.min()), 1))
+        if split_av_branch and len(branch_curve) > min_length:
             # 2. Split the branch into artery and veins sections
             _, n_art, n_vei, n_both, n_unk = np.bincount(branch_av, minlength=5)[:5]
-            median_filter_size = median_filter_size or (min_branch_length * 2 - 1)
-            av_splits = extract_splits(branch_av, medfilt_size=median_filter_size, min_size=min_branch_length)
+            median_filter_size = median_filter_size or int(min_length * 2 - 1)
+            av_splits = extract_splits(branch_av, medfilt_size=median_filter_size, min_size=min_length)
             if len(av_splits) > 1:
                 splits = [int(_[1]) for _ in list(av_splits.keys())[:-1]]
                 _, new_ids = graph.split_branch(branch.id, split_curve_id=splits, inplace=True, return_branch_ids=True)

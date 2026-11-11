@@ -129,12 +129,15 @@ def mark_running_trials_as_failed(
 
     header = ExperimentHeader.load_header(file)
     for study_name in header._study_names():
-        print(f"Marking running trials in study {study_name} as failed: ", end="")
         study = header.optuna.load_study(study_name)
         trials = study.get_trials(states=[optuna.trial.TrialState.RUNNING])
+        if len(trials) == 0:
+            continue
+        print(f"Marking running trials in study {study_name} as failed: ", end="")
         for i, trial in enumerate(trials):
-            print(trial.user_attrs.get("ID", "?"), end=", " if i < len(trials) - 1 else "\n")
+            print(trial.user_attrs.get("ID", "?"), end=", " if i < len(trials) - 1 else "")
             study.tell(trial.number, state=optuna.trial.TrialState.FAIL)
+        print("", end="\n")
 
 
 @app.command()
@@ -198,9 +201,13 @@ def submit_job(
     if "HOME" in os.environ:
         # Substitute absolute path to a path relative to $HOME for compute canada
         home = Path(os.environ["HOME"])
-        pwd = Path(subprocess.run("pwd", capture_output=True, shell=True).stdout.strip().decode()).relative_to(home)
-        job_file = job_file.absolute().relative_to(Path.cwd())
-        EXP_FILE = "$HOME/" + str(pwd) + "/" + str(job_file)
+        try:
+            pwd = Path(subprocess.run("pwd", capture_output=True, shell=True).stdout.strip().decode()).relative_to(home)
+            job_file = job_file.absolute().relative_to(Path.cwd())
+        except ValueError:
+            EXP_FILE = str((job_dir / "cfg.yaml").absolute())
+        else:
+            EXP_FILE = "$HOME/" + str(pwd) + "/" + str(job_file)
     else:
         EXP_FILE = str((job_dir / "cfg.yaml").absolute())
 

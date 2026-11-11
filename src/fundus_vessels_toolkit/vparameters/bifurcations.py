@@ -11,6 +11,7 @@ from fundus_toolkits.utils.typing import FloatPair
 
 from ..utils.graph.measures import extract_bifurcations_parameters as extract_bifurcations_parameters
 from ..utils.math import intercept_segment_norm_dist, modulo_pi
+from ..utils.numpy import np_cross_2d
 from ..vascular_data_objects import VBranchGeoData, VGeometricData, VTree
 
 
@@ -411,8 +412,8 @@ def split_complex_bifurcations(
                         else:  # If none are valid, assign to the closest segment
                             head_tail1 = bifurcation12 - tail1 / (np.linalg.norm(bifurcation12 - tail1) + 1e-8)
                             head_tail2 = bifurcation12 - tail2 / (np.linalg.norm(bifurcation12 - tail2) + 1e-8)
-                            d1 = np.linalg.norm(np.cross(head_tail1, bifurcation12 - tail))
-                            d2 = np.linalg.norm(np.cross(head_tail2, bifurcation12 - tail))
+                            d1 = np.linalg.norm(np_cross_2d(head_tail1, bifurcation12 - tail))
+                            d2 = np.linalg.norm(np_cross_2d(head_tail2, bifurcation12 - tail))
                             (succ_main1 if d1 <= d2 else succ_main2).append(succ)
 
             # If there are successors bifurcating before main1 and main2, process them first, one after the other

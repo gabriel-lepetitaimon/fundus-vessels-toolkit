@@ -73,6 +73,24 @@ def array_is_equal(a: npt.NDArray | None, b: npt.NDArray | None) -> bool:
     return np.array_equal(a, b)
 
 
+def np_cross_2d(a: npt.NDArray, b: npt.NDArray) -> npt.NDArray:
+    """
+    Compute the 2D cross product of two arrays.
+
+    Parameters
+    ----------
+    a:
+        First array of shape (..., 2).
+    b:
+        Second array of shape (..., 2).
+    Returns
+    -------
+    npt.NDArray:
+        The 2D cross product of the two arrays of shape (...,).
+    """
+    return a[..., 0] * b[..., 1] - a[..., 1] * b[..., 0]
+
+
 def np_first_true(arr: npt.NDArray[np.bool_]) -> Optional[np.intp]:
     """
     Return the index of the first true element in a boolean array, or None if there are no true elements.

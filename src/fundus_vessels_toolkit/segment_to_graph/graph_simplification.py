@@ -723,15 +723,16 @@ def find_facing_endpoints(
 def extend_topology(
     graph: VGraph,
     *,
-    max_distance: float,
-    nearConeAngle: float,
-    farConeAngle: float,
-    maxTanAngle: float,
-    snapDist: float,
-    minSpaceBetweenSplits: float,
-    nodeMergeDistance: float,
+    max_distance: float = 150,
+    nearConeAngle: float = 35 * 1.5,
+    farConeAngle: float = 35,
+    maxTanAngle: float = 110,
+    snapDist: float = 15,
+    minSpaceBetweenSplits: float = 15 * 2,
+    nodeMergeDistance: float = 15,
     blind_spot: Optional[Point] = None,
-    blind_spot_angle=30,
+    blind_spot_angle=45,
+    initial_branch_id_attr: Optional[str] = None,
     inplace: bool = False,
 ) -> tuple[VGraph, Int2DArray]:
     """
@@ -814,14 +815,19 @@ def extend_topology(
 
     graph_v0 = graph.copy()
 
+    ini_branch_ids = np.arange(graph.branch_count)
     for b, b_splits in splits:
         split_curve_id = [_[0] for _ in b_splits]
         split_coord = [_[1] for _ in b_splits]
         graph.split_branch(b, split_curve_id, split_coord, inplace=True)
+        ini_branch_ids = np.append(ini_branch_ids, np.repeat(ini_branch_ids[b], len(b_splits)))
 
     graph_v1 = graph.copy()
 
     merge_nodes_by_distance(graph, max_distance=0.5, relation="not-adjacent", inplace=True)
+
+    if initial_branch_id_attr is not None:
+        graph.branch_attr[initial_branch_id_attr] = ini_branch_ids
 
     if candidates.max() >= graph.branch_count:
         i = 0

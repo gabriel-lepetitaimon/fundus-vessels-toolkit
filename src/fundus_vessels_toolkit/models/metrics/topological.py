@@ -3,9 +3,10 @@ from typing import Literal
 import numpy as np
 import torch
 
+from fundus_toolkits.utils.safe_import import import_cv2
+
 from ...segment_to_graph.skeletonize import skeletonize
 from ...utils.cpp_optimized import split_by
-from ...utils.safe_import import import_cv2
 
 # def vascular_graph_edit_distance(branch_to_node1, node1_yx, branch_to_node2, node2_yx):
 #     ny1, nx1 = node1_yx

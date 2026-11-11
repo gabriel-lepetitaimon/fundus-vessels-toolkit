@@ -33,6 +33,9 @@ class AVLabel(IntEnum):
     #: Unknown
     UNK = 4
 
+    def __str__(self) -> str:
+        return self.name
+
     @classmethod
     def select_label(
         cls, artery: Optional[bool] = None, vein: Optional[bool] = None, unknown: Optional[bool] = None

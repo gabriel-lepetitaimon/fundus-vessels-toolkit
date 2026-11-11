@@ -92,7 +92,7 @@ def rasterize_tree(
         The rasterized branch index map.
     """
     geodata = tree.geometric_data()
-    labels_map, _ = rasterize_topology(
+    labels_map, _, _ = rasterize_topology(
         branch_list=tree.branch_list,
         branch_tree=tree.branch_tree,
         branch_dirs=tree.branch_dirs(),
@@ -105,10 +105,8 @@ def rasterize_tree(
         shape=geodata.domain.shape,
         bezier_interpolate=bezier_interpolate,
         fill_junctions=fill_junctions,
+        expand=expand,
     )
-
-    if expand > 0:
-        labels_map = expand_labels(labels_map, distance=expand)
 
     return labels_map
 

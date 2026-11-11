@@ -3,7 +3,7 @@ project: Topo-GNN
 experiment: HP-Search
 version: 3
 tag: hp-search
-n_trials: 12
+n_trials: 15
 optuna:
   direction: maximize
   sampler:
@@ -14,6 +14,7 @@ optuna:
     n_startup_trials: 3
 
 log_model: false
+progress_bar: true
 parameters_grid: 
   - efficientnet_4: 
       end_stage: 4
